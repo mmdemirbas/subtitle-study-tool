@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>SRT Side-by-Side Viewer — v4 (Timeline Align)</title>
+    <style>
+        :root{--bg:#0b0f14;--fg:#e6edf3;--muted:#9aa4ad;--hl:#2b90d9;--row:#111827;--row2:#0f172a;--border:#1f2937}
+        html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+        .wrap{max-width:1200px;margin:0 auto;padding:16px}
+        h1{font-size:18px;margin:0 0 10px;display:flex;gap:8px;align-items:center}
+        .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+        label.l{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#cbd5e1}
+        .in{background:#0f1620;border:1px solid var(--border);border-radius:10px;padding:8px;color:var(--fg)}
+        .btn{background:#1f2937;border:1px solid #2b3645;border-radius:10px;padding:8px 12px;color:#e6edf3;cursor:pointer}
+        .btn:disabled{opacity:.5;cursor:not-allowed}
+        .hint{color:var(--muted);font-size:12px}
+        details.cfg{border:1px solid var(--border);border-radius:12px;padding:10px;margin:10px 0;background:#0f1620}
+        details.cfg summary{cursor:pointer;color:#cbd5e1;font-weight:600;margin:-10px -10px 8px -10px;padding:10px}
+        .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:10px}
+        .col-3{grid-column:span 3}.col-4{grid-column:span 4}.col-6{grid-column:span 6}.col-12{grid-column:span 12}
+        select,input[type="text"],input[type="number"]{background:#0b1220;border:1px solid var(--border);border-radius:10px;padding:8px;color:#e6edf3}
+        table{width:100%;border-collapse:separate;border-spacing:0 6px}
+        td{vertical-align:top;padding:10px 12px;background:var(--row);border:1px solid var(--border)}
+        tr:nth-child(even) td{background:var(--row2)}
+        td.left{border-right:none;border-radius:10px 0 0 10px}
+        td.right{border-left:none;border-radius:0 10px 10px 0}
+        .time{color:var(--muted);font-size:12px;margin-bottom:4px}
+        .line{white-space:pre-wrap;user-select:text}
+        tr.hover td{outline:2px solid var(--hl);z-index:1;position:relative}
+        .empty{color:#6b7280;font-style:italic}
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <h1>SRT Side-by-Side Viewer — Timeline Alignment</h1>
+
+    <div class="row" style="margin-bottom:8px">
+        <label class="l">Left (e.g., English)
+            <input id="left" type="file" accept=".srt,.vtt,text/plain" class="in">
+        </label>
+        <label class="l">Right (e.g., Turkish)
+            <input id="right" type="file" accept=".srt,.vtt,text/plain" class="in">
+        </label>
+        <button id="load" class="btn" disabled>Load</button>
+        <span id="loadStatus" class="hint"></span>
+    </div>
+
+    <details class="cfg" open>
+        <summary>Alignment settings</summary>
+        <div class="grid">
+            <label class="l col-3">Align mode
+                <select id="alignMode">
+                    <option value="timeline" selected>Timeline (no-miss, handles split/merge)</option>
+                    <option value="simple">Simple overlap (legacy)</option>
+                </select>
+            </label>
+            <label class="l col-3">Tolerance (ms)
+                <input id="tol" type="number" value="120" min="0" step="10">
+            </label>
+            <label class="l col-6">Filter
+                <input id="q" type="text" class="in" placeholder="Regex or text filter across both sides">
+            </label>
+            <label class="l col-3">
+        <span class="row" style="justify-content:space-between;gap:14px">
+          <span class="row" style="gap:6px;align-items:center"><input type="checkbox" id="hideEmpty" checked> hide rows with an empty side</span>
+          <span class="row" style="gap:6px;align-items:center"><input type="checkbox" id="autoFile" checked> auto-use right file if present</span>
+        </span>
+            </label>
+        </div>
+    </details>
+
+    <table id="tbl" aria-label="Aligned subtitles"><tbody></tbody></table>
+</div>
+
+<script>
+    /* ---------- Parse SRT ---------- */
+    function parseSRT(text){
+        const s = [];
+        const norm = text.replace(/\r/g,'').trim();
+        const blocks = norm.split(/\n\s*\n/);
+        for(const b of blocks){
+            const lines = b.split('\n').filter(x=>x.trim().length>0);
+            if(lines.length===0) continue;
+            let i=0;
+            if(/^\d+$/.test(lines[0].trim())) i=1;
+            const m = (lines[i]||'').match(/(\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d{1,3}))?\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d{1,3}))?/);
+            if(!m) continue;
+            const toMs = (h,mn,s,ms)=> (parseInt(h)*3600+parseInt(mn)*60+parseInt(s))*1000 + parseInt((ms||'0').padEnd(3,'0'));
+            const start = toMs(m[1],m[2],m[3],m[4]);
+            const end   = toMs(m[5],m[6],m[7],m[8]);
+            const textLines = lines.slice(i+1);
+            const textBody = textLines.join('\n')
+                .replace(/\{\\an\d\}/g,'')
+                .replace(/<\/?[^>]+>/g, (t)=> t.match(/<br\s*\/?>/i)?'\n':'');
+            s.push({start,end,text:textBody});
+        }
+        return s.sort((a,b)=>a.start-b.start);
+    }
+
+    /* ---------- Alignment: legacy simple overlap ---------- */
+    function alignSimple(left,right){
+        const rows=[]; let i=0,j=0;
+        const overlap=(a,b)=>a && b && a.end>=b.start && b.end>=a.start;
+        while(i<left.length || j<right.length){
+            const L = left[i]||null, R = right[j]||null;
+            if(L && R && overlap(L,R)){ rows.push({L,R}); i += (L.end<=R.end?1:0); j += (R.end<L.end?1:0); }
+            else if(L && (!R || L.start < R.start)){ rows.push({L,R:null}); i++; }
+            else if(R){ rows.push({L:null,R}); j++; }
+            else break;
+        }
+        return rows;
+    }
+
+    /* ---------- Alignment: Timeline (no-miss, split/merge robust) ---------- */
+    /* Build a unified, strictly chronological sequence of rows.
+       Steps:
+       1) Take all cue boundaries (left+right), sort unique → t0<t1<...<tk
+       2) For each slice [tq,tq+1), pick the active left/right cue using a tolerance (ms) at the slice midpoint.
+       3) Merge adjacent slices if both active indices are identical.
+       4) Map each merged row to {L,R,start,end}. */
+    function alignTimeline(left, right, tolMs=120){
+        // collect all boundaries
+        const times = new Set();
+        for(const c of left){ times.add(c.start); times.add(c.end); }
+        for(const c of right){ times.add(c.start); times.add(c.end); }
+        const T = Array.from(times).sort((a,b)=>a-b);
+        if(T.length<=1) return [];
+
+        // helpers: find active cue index at time t (with tolerance)
+        function activeAt(cues, t, guessIdx){
+            // advance guess forward while end+tol <= t
+            let k = Math.max(0, guessIdx|0);
+            while(k < cues.length && (cues[k].end + tolMs) <= t) k++;
+            // if current covers t within tolerance, return it; else maybe previous?
+            if(k < cues.length && (cues[k].start - tolMs) <= t && t < (cues[k].end + tolMs)) return k;
+            if(k-1 >= 0 && (cues[k-1].start - tolMs) <= t && t < (cues[k-1].end + tolMs)) return k-1;
+            return -1;
+        }
+
+        let li = 0, ri = 0;
+        const out = [];
+        let cur = null;
+
+        for(let q=0; q<T.length-1; q++){
+            const a = T[q], b = T[q+1];
+            if(b===a) continue;
+            const mid = (a + b) / 2;
+
+            const la = activeAt(left,  mid, li); if(la>=0) li=la;
+            const ra = activeAt(right, mid, ri); if(ra>=0) ri=ra;
+
+            const L = la>=0 ? left[la] : null;
+            const R = ra>=0 ? right[ra] : null;
+
+            // skip fully empty slices
+            if(!L && !R) continue;
+
+            // merge with previous slice if same active pair
+            if(cur && cur._li===la && cur._ri===ra){
+                cur.end = b;
+            }else{
+                if(cur) out.push(cur);
+                cur = {L, R, start:a, end:b, _li:la, _ri:ra};
+            }
+        }
+        if(cur) out.push(cur);
+
+        // Finalize: keep only {L,R,start,end}
+        return out.map(r => ({L:r.L, R:r.R, start:r.start, end:r.end}));
+    }
+
+    /* ---------- UI wiring ---------- */
+    const $ = s => document.querySelector(s);
+    const leftInput = $('#left'), rightInput = $('#right'), btn = $('#load'), loadStatus = $('#loadStatus');
+    const alignMode = $('#alignMode'), tol = $('#tol'), q = $('#q'), hideEmpty = $('#hideEmpty'), autoFile = $('#autoFile');
+    const tbl = $('#tbl tbody');
+
+    let LEFT=[], RIGHT=[], ROWS=[];
+
+    [leftInput, rightInput].forEach(inp=>{
+        inp.addEventListener('change', ()=>{
+            // enable Load when left present; right optional
+            btn.disabled = !leftInput.files.length;
+        });
+    });
+
+    btn.addEventListener('click', async ()=>{
+        loadStatus.textContent = 'Parsing…';
+        const ltxt = await fileToText(leftInput.files[0]);
+        LEFT = parseSRT(ltxt);
+
+        RIGHT = [];
+        const rightProvided = rightInput.files && rightInput.files.length>0;
+        const willUseRight = rightProvided && (autoFile.checked || alignMode.value);
+
+        if(willUseRight){
+            const rtxt = await fileToText(rightInput.files[0]);
+            RIGHT = parseSRT(rtxt);
+        }
+
+        // choose aligner
+        const mode = alignMode.value || 'timeline';
+        if(mode==='simple'){
+            ROWS = alignSimple(LEFT, RIGHT);
+        }else{
+            ROWS = alignTimeline(LEFT, RIGHT, parseInt(tol.value||'0',10));
+        }
+
+        render();
+        loadStatus.textContent = `Loaded L=${LEFT.length} ${willUseRight? 'R='+RIGHT.length : '(no right file)'}. Rows=${ROWS.length}`;
+    });
+
+    [q, hideEmpty, alignMode, tol].forEach(el=>el.addEventListener('input', ()=>{
+        // Re-align if mode/tol changed
+        if(LEFT.length){
+            const mode = alignMode.value || 'timeline';
+            if(mode==='simple'){
+                ROWS = alignSimple(LEFT, RIGHT);
+            }else{
+                ROWS = alignTimeline(LEFT, RIGHT, parseInt(tol.value||'0',10));
+            }
+            render();
+        }
+    }));
+
+    function render(){
+        tbl.innerHTML='';
+        const rx = q.value ? safeRx(q.value) : null;
+
+        for(const row of ROWS){
+            const ltxt = row.L ? row.L.text : '';
+            const rtxt = row.R ? row.R.text : '';
+            if(hideEmpty.checked && (!ltxt || !rtxt)) continue;
+            if(rx && !(rx.test(ltxt)||rx.test(rtxt))) continue;
+
+            const tr = document.createElement('tr');
+            tr.onmouseenter=()=>tr.classList.add('hover');
+            tr.onmouseleave=()=>tr.classList.remove('hover');
+
+            const tdL = document.createElement('td'); tdL.className='left';
+            const tdR = document.createElement('td'); tdR.className='right';
+            tdL.innerHTML = `<div class="time">${fmt(row.start)}–${fmt(row.end)}</div><div class="line ${ltxt?'':'empty'}">${escapeHtml(ltxt||'(empty)')}</div>`;
+            tdR.innerHTML = `<div class="time">${fmt(row.start)}–${fmt(row.end)}</div><div class="line ${rtxt?'':'empty'}">${escapeHtml(rtxt||'(empty)')}</div>`;
+            tr.appendChild(tdL); tr.appendChild(tdR);
+            tbl.appendChild(tr);
+        }
+    }
+
+    /* ---------- utils ---------- */
+    function fileToText(f){return new Promise((res,rej)=>{const r=new FileReader(); r.onload=e=>res(String(e.target.result)); r.onerror=rej; r.readAsText(f);});}
+    function safeRx(q){try{return new RegExp(q,'i');}catch{return new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i');}}
+    function escapeHtml(s){return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');}
+    function z(n){return String(n).padStart(2,'0');}
+    function fmt(ms){const h=Math.floor(ms/3600000),m=Math.floor(ms%3600000/60000),s=Math.floor(ms%60000/1000);return `${z(h)}:${z(m)}:${z(s)}`;}
+</script>
+</body>
+</html>

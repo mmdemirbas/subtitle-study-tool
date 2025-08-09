@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>Side-by-Side SRT • Translate • Lookup • Chat</title>
+    <style>
+        :root{
+            --bg:#0b0f14; --fg:#e6edf3; --muted:#9aa4ad; --hl:#2b90d9;
+            --row:#111827; --row2:#0f172a; --border:#1f2937; --ok:#2ea043; --bad:#ef4444;
+        }
+        html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial}
+        .wrap{max-width:1250px;margin:0 auto;padding:16px}
+        h1{font-size:18px;margin:0 0 10px;display:flex;gap:8px;align-items:center}
+        .badge{background:#102b16;color:#9ae6b4;border:1px solid #1d4d2d;border-radius:999px;padding:2px 8px;font-size:12px}
+        .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+        .bar input[type="file"], .in{background:#0f1620;border:1px solid var(--border);border-radius:10px;padding:8px;color:var(--fg)}
+        .btn{background:#1f2937;border:1px solid #2b3645;border-radius:10px;padding:8px 12px;color:#e6edf3;cursor:pointer}
+        .btn:disabled{opacity:.5;cursor:not-allowed}
+        .hint{color:var(--muted);font-size:12px;margin-left:auto}
+        details.cfg{border:1px solid var(--border);border-radius:12px;padding:10px;margin:10px 0;background:#0f1620}
+        details.cfg summary{cursor:pointer;color:#cbd5e1;font-weight:600;margin:-10px -10px 8px -10px;padding:10px}
+        .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:10px}
+        .col-3{grid-column:span 3} .col-4{grid-column:span 4} .col-6{grid-column:span 6} .col-12{grid-column:span 12}
+        label.l{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#cbd5e1}
+        select, input[type="text"], input[type="password"], input[type="number"]{background:#0b1220;border:1px solid var(--border);border-radius:10px;padding:8px;color:#e6edf3}
+        .topbar{display:flex;gap:8px;align-items:center;margin:10px 0 14px}
+        .search{flex:1;min-width:220px}
+        .chk{display:flex;gap:6px;align-items:center;font-size:12px;color:#cbd5e1}
+        table{width:100%;border-collapse:separate;border-spacing:0 6px}
+        td{vertical-align:top;padding:10px 12px;background:var(--row);border:1px solid var(--border)}
+        tr:nth-child(even) td{background:var(--row2)}
+        td.left{border-right:none;border-radius:10px 0 0 10px}
+        td.right{border-left:none;border-radius:0 10px 10px 0}
+        .time{color:var(--muted);font-size:12px;margin-bottom:4px}
+        .line{white-space:pre-wrap;user-select:text}
+        tr.hover td{outline:2px solid var(--hl);z-index:1;position:relative}
+        .empty{color:#6b7280;font-style:italic}
+        progress{height:10px}
+        footer{color:var(--muted);font-size:12px;margin-top:10px}
+        .ok{color:var(--ok)} .bad{color:var(--bad)}
+        .pill{display:inline-flex;gap:6px;align-items:center;background:#152033;border:1px solid #203049;border-radius:999px;padding:4px 8px;color:#d1d5db;font-size:12px}
+        /* selection popup */
+        .selpop{position:absolute;z-index:9999;background:#0f1620;border:1px solid var(--border);border-radius:10px;padding:8px;box-shadow:0 10px 30px rgba(0,0,0,.35);display:none;min-width:240px}
+        .selpop .row{margin-top:6px}
+        .selpop .t{font-size:12px;color:#cbd5e1}
+        .selpop .x{margin-left:auto;cursor:pointer;color:#9aa4ad}
+        .links a{color:#9cc8ff;text-decoration:none;margin-right:8px;font-size:12px}
+        /* chat drawer */
+        .chat{position:fixed;right:16px;top:16px;width:420px;max-width:95vw;height:86vh;background:#0f1620;border:1px solid var(--border);border-radius:16px;box-shadow:0 15px 40px rgba(0,0,0,.45);display:none;flex-direction:column}
+        .chat header{display:flex;align-items:center;gap:8px;padding:10px;border-bottom:1px solid var(--border)}
+        .chat main{padding:10px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+        .msg{background:#0b1220;border:1px solid var(--border);border-radius:12px;padding:10px;white-space:pre-wrap}
+        .msg.user{border-color:#243b53}
+        .msg.assistant{border-color:#1f3f2e}
+        .chat footer{display:flex;flex-direction:column;gap:8px;padding:10px;border-top:1px solid var(--border)}
+        textarea{background:#0b1220;border:1px solid var(--border);border-radius:10px;color:#e6edf3;padding:8px;min-height:80px}
+        .rightDock{display:flex;gap:8px;align-items:center;margin-left:auto}
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <h1>Side-by-Side SRT <span class="badge">Translate • Lookup • Chat</span>
+        <span class="rightDock">
+      <button id="openChat" class="btn">Open Chat</button>
+      <button id="exportRight" class="btn" disabled>Export TR .srt</button>
+    </span>
+    </h1>
+
+    <div class="bar row">
+        <label class="l">Left (original, e.g., English) <input id="left" type="file" accept=".srt,.vtt,text/plain" class="in"></label>
+        <label class="l">Right (existing TR, optional) <input id="right" type="file" accept=".srt,.vtt,text/plain" class="in"></label>
+        <button id="load" class="btn" disabled>Load</button>
+        <span id="loadStatus" class="hint"></span>
+        <span class="hint">Hover to cross-highlight</span>
+    </div>
+
+    <details class="cfg" open>
+        <summary>Translate settings</summary>
+        <div class="grid">
+            <label class="l col-3">Mode
+                <select id="mode">
+                    <option value="file">Use right file (no MT)</option>
+                    <option value="mt" selected>Auto-translate left → right</option>
+                </select>
+            </label>
+
+            <label class="l col-3">Provider
+                <select id="provider">
+                    <option value="libre" selected>LibreTranslate</option>
+                    <option value="deepl">DeepL</option>
+                    <option value="google">Google Cloud v2</option>
+                    <option value="azure">Azure Translator</option>
+                    <option value="openai">OpenAI (ChatCompletions)</option>
+                    <option value="custom">Custom (Libre-like)</option>
+                </select>
+            </label>
+
+            <label class="l col-6">Endpoint (auto-filled for presets)
+                <input id="endpoint" type="text" value="">
+            </label>
+
+            <label class="l col-3 show-if key-needed">API key
+                <input id="apiKey" type="password" placeholder="enter key if required">
+            </label>
+
+            <label class="l col-3 show-if azure-only">Azure region
+                <input id="azureRegion" type="text" placeholder="e.g., westeurope">
+            </label>
+
+            <label class="l col-3 show-if openai-only">OpenAI model
+                <input id="openaiModel" type="text" value="gpt-4o-mini">
+            </label>
+
+            <label class="l col-3">Source lang
+                <input id="src" type="text" value="en">
+            </label>
+
+            <label class="l col-3">Target lang
+                <input id="tgt" type="text" value="tr">
+            </label>
+
+            <label class="l col-3">Concurrency (1–10)
+                <input id="concurrency" type="number" min="1" max="10" value="5">
+            </label>
+
+            <label class="l col-3">Cache (browser)
+                <select id="cacheMode">
+                    <option value="on" selected>on</option>
+                    <option value="off">off</option>
+                    <option value="clear">clear now</option>
+                </select>
+            </label>
+
+            <label class="l col-6">Presets
+                <select id="presets">
+                    <option value="">— choose —</option>
+                    <option value="libreLocal">Libre (local) http://localhost:5000/translate</option>
+                    <option value="librePublic">Libre (public) https://libretranslate.com/translate</option>
+                    <option value="deeplFree">DeepL Free https://api-free.deepl.com/v2/translate</option>
+                    <option value="deeplPro">DeepL Pro https://api.deepl.com/v2/translate</option>
+                    <option value="googleV2">Google v2 https://translation.googleapis.com/language/translate/v2</option>
+                    <option value="azure">Azure https://api.cognitive.microsofttranslator.com/translate?api-version=3.0</option>
+                    <option value="openai">OpenAI https://api.openai.com/v1/chat/completions</option>
+                </select>
+            </label>
+
+            <div class="col-12 row">
+                <button id="test" class="btn">Test endpoint</button>
+                <button id="translate" class="btn">Translate now</button>
+                <progress id="prog" max="1" value="0" style="width:240px"></progress>
+                <span id="status" class="hint"></span>
+            </div>
+        </div>
+    </details>
+
+    <div class="topbar">
+        <input id="q" class="search in" type="search" placeholder="Filter rows (regex ok)…">
+        <label class="chk"><input id="hideEmpty" type="checkbox" checked> hide rows with an empty side</label>
+        <label class="chk"><input id="persist" type="checkbox" checked> remember settings</label>
+    </div>
+
+    <table id="tbl" aria-label="Aligned subtitles"><tbody></tbody></table>
+    <div id="selPopup" class="selpop">
+        <div class="row">
+            <div class="t">Selection</div>
+            <div class="x" id="closeSel">✕</div>
+        </div>
+        <div id="selText" class="msg" style="margin-top:6px"></div>
+        <div class="row">
+            <button id="selTranslate" class="btn">Translate selection</button>
+            <button id="selDict" class="btn">EN dictionary</button>
+        </div>
+        <div class="links" style="margin-top:6px">
+            <!-- dynamic links -->
+        </div>
+        <div id="selResult" class="msg" style="display:none;margin-top:6px"></div>
+    </div>
+
+    <footer>Tip: serve this file via a local web server if your browser blocks cross-origin requests.</footer>
+</div>
+
+<!-- Chat drawer -->
+<div class="chat" id="chatBox">
+    <header>
+        <strong>Explain / Cultural Nuance Chat</strong>
+        <span class="hint" id="chatHint"></span>
+        <span class="rightDock">
+      <button id="closeChat" class="btn">Close</button>
+    </span>
+    </header>
+    <main id="chatMain"></main>
+    <footer>
+        <label class="l">Selected / context (editable)
+            <textarea id="chatContext" placeholder="Put the phrase or lines you want explained"></textarea>
+        </label>
+        <label class="l">Your question
+            <textarea id="chatQuestion" placeholder="e.g., What does this idiom imply here? Any cultural nuance?"></textarea>
+        </label>
+        <div class="row">
+            <button id="chatAsk" class="btn">Ask</button>
+            <span class="hint">Uses OpenAI with your key/model from Translate settings.</span>
+        </div>
+    </footer>
+</div>
+
+<script>
+    /* ---------- Core parsing + alignment ---------- */
+    function parseSRT(text){
+        const s = [];
+        const norm = text.replace(/\r/g,'').trim();
+        const blocks = norm.split(/\n\s*\n/);
+        for(const b of blocks){
+            const lines = b.split('\n').filter(x=>x.trim().length>0);
+            if(lines.length === 0) continue;
+            let i = 0;
+            if(/^\d+$/.test(lines[0].trim())) i = 1;
+            const m = (lines[i]||'').match(/(\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d{1,3}))?\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d{1,3}))?/);
+            if(!m) continue;
+            const toMs = (h,mn,s,ms)=> (parseInt(h)*3600+parseInt(mn)*60+parseInt(s))*1000 + parseInt((ms||'0').padEnd(3,'0'));
+            const start = toMs(m[1],m[2],m[3],m[4]);
+            const end   = toMs(m[5],m[6],m[7],m[8]);
+            const textLines = lines.slice(i+1);
+            const textBody = textLines.join('\n')
+                .replace(/\{\\an\d\}/g,'')
+                .replace(/<\/?[^>]+>/g, (t)=> t.match(/<br\s*\/?>/i)?'\n':'');
+            s.push({start,end,text:textBody});
+        }
+        return s.sort((a,b)=>a.start-b.start);
+    }
+    function align(left,right){
+        const rows = [];
+        let i=0,j=0;
+        const overlap = (a,b)=> a && b && a.end>=b.start && b.end>=a.start;
+        while(i<left.length || j<right.length){
+            const L = left[i] || null;
+            const R = right[j] || null;
+            if(L && R && overlap(L,R)){
+                rows.push({L,R}); i += (L.end<=R.end?1:0); j += (R.end<L.end?1:0);
+            } else if(L && (!R || L.start < R.start)){
+                rows.push({L,R:null}); i++;
+            } else if(R){
+                rows.push({L:null,R}); j++;
+            } else break;
+        }
+        return rows;
+    }
+    function fmt(ms){
+        const z=n=>String(n).padStart(2,'0');
+        const h=Math.floor(ms/3600000), m=Math.floor((ms%3600000)/60000), s=Math.floor((ms%60000)/1000);
+        return `${z(h)}:${z(m)}:${z(s)}`;
+    }
+    function escapeHtml(s){ return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+    function toSRT(arr){
+        const pad = (n,z=2)=>String(n).padStart(z,'0');
+        function fmtS(ms){
+            const h = Math.floor(ms/3600000), m = Math.floor(ms%3600000/60000), s=Math.floor(ms%60000/1000), ms3=ms%1000;
+            return `${pad(h)}:${pad(m)}:${pad(s)},${pad(ms3,3)}`;
+        }
+        return arr.map((c,i)=>`${i+1}
+${fmtS(c.start)} --> ${fmtS(c.end)}
+${c.text}
+
+`).join('');
+    }
+
+    /* ---------- State ---------- */
+    const $ = sel => document.querySelector(sel);
+    const tbl = $('#tbl tbody');
+    const leftInput = $('#left'), rightInput = $('#right'), btn = $('#load'), loadStatus = $('#loadStatus');
+    const q = $('#q'), hideEmpty = $('#hideEmpty'), persist = $('#persist');
+    const mode = $('#mode'), providerSel = $('#provider'), endpoint = $('#endpoint');
+    const apiKey = $('#apiKey'), azureRegion = $('#azureRegion'), openaiModel = $('#openaiModel');
+    const translateBtn = $('#translate'), prog = $('#prog'), statusEl = $('#status'), exportBtn = $('#exportRight');
+    const presets = $('#presets'), testBtn = $('#test');
+    const src = $('#src'), tgt = $('#tgt'), concurrencyInput = $('#concurrency');
+    const openChatBtn = $('#openChat'), chatBox = $('#chatBox'), closeChatBtn = $('#closeChat');
+    const chatContext = $('#chatContext'), chatQuestion = $('#chatQuestion'), chatAsk = $('#chatAsk'), chatMain = $('#chatMain'), chatHint = $('#chatHint');
+
+    const selPopup = $('#selPopup'), selText = $('#selText'), selResult = $('#selResult'), closeSel = $('#closeSel');
+    const selTranslate = $('#selTranslate'), selDict = $('#selDict');
+    const linksBox = selPopup.querySelector('.links');
+
+    let DATA = [], LEFT = [], RIGHT = [];
+    let MT_CACHE = loadCache();
+    let SETTINGS = loadSettings();
+
+    const PROVIDERS = {
+        libre: {name:'LibreTranslate', type:'libre', endpoint:'http://localhost:5000/translate'},
+        deepl: {name:'DeepL', type:'deepl', endpoint:'https://api-free.deepl.com/v2/translate'},
+        google:{name:'Google v2', type:'google', endpoint:'https://translation.googleapis.com/language/translate/v2'},
+        azure: {name:'Azure', type:'azure', endpoint:'https://api.cognitive.microsofttranslator.com/translate?api-version=3.0'},
+        openai:{name:'OpenAI', type:'openai', endpoint:'https://api.openai.com/v1/chat/completions'},
+        custom:{name:'Custom (Libre-like)', type:'libre', endpoint:''}
+    };
+
+    const PRESET_MAP = {
+        libreLocal: {provider:'libre', endpoint:'http://localhost:5000/translate'},
+        librePublic:{provider:'libre', endpoint:'https://libretranslate.com/translate'},
+        deeplFree:  {provider:'deepl', endpoint:'https://api-free.deepl.com/v2/translate'},
+        deeplPro:   {provider:'deepl', endpoint:'https://api.deepl.com/v2/translate'},
+        googleV2:   {provider:'google', endpoint:'https://translation.googleapis.com/language/translate/v2'},
+        azure:      {provider:'azure', endpoint:'https://api.cognitive.microsofttranslator.com/translate?api-version=3.0'},
+        openai:     {provider:'openai', endpoint:'https://api.openai.com/v1/chat/completions'}
+    };
+
+    /* ---------- UI wiring ---------- */
+    function applySettings(){
+        mode.value = SETTINGS.mode || 'mt';
+        providerSel.value = SETTINGS.provider || 'libre';
+        endpoint.value = SETTINGS.endpoint || PROVIDERS[providerSel.value].endpoint || '';
+        apiKey.value = SETTINGS.apiKey || '';
+        azureRegion.value = SETTINGS.azureRegion || '';
+        openaiModel.value = SETTINGS.openaiModel || 'gpt-4o-mini';
+        src.value = SETTINGS.src || 'en';
+        tgt.value = SETTINGS.tgt || 'tr';
+        concurrencyInput.value = SETTINGS.concurrency || 5;
+        if(SETTINGS.cacheMode) $('#cacheMode').value = SETTINGS.cacheMode;
+        persist.checked = SETTINGS.persist !== false;
+        toggleProviderFields();
+        updateChatHint();
+    }
+    applySettings();
+
+    [leftInput,rightInput,mode].forEach(inp => inp.addEventListener('change', ()=> {
+        btn.disabled = !leftInput.files.length || (mode.value==="file" && !rightInput.files.length);
+    }));
+
+    btn.addEventListener('click', async ()=>{
+        loadStatus.textContent = 'Parsing…';
+        const ltxt = await fileToText(leftInput.files[0]);
+        LEFT = parseSRT(ltxt);
+        if(mode.value === 'file' && rightInput.files.length){
+            const rtxt = await fileToText(rightInput.files[0]); RIGHT = parseSRT(rtxt);
+            DATA = align(LEFT, RIGHT);
+        } else {
+            DATA = LEFT.map(L=>({L,R:null}));
+        }
+        render();
+        loadStatus.textContent = `Loaded: ${LEFT.length} EN rows` + (RIGHT.length? `, ${RIGHT.length} TR rows`:'');
+    });
+
+    [q,hideEmpty].forEach(el=>el.addEventListener('input', render));
+
+    presets.addEventListener('change', ()=>{
+        const p = PRESET_MAP[presets.value];
+        if(!p) return;
+        providerSel.value = p.provider;
+        endpoint.value = p.endpoint;
+        toggleProviderFields();
+        saveSettings();
+    });
+
+    providerSel.addEventListener('change', ()=>{
+        endpoint.value = PROVIDERS[providerSel.value].endpoint || '';
+        toggleProviderFields();
+        saveSettings();
+    });
+
+    [testBtn].forEach(btnEl => btnEl.addEventListener('click', async ()=>{
+        const txt = 'Hello world!';
+        statusEl.textContent = 'Testing…';
+        try{
+            const tr = await translateOne(txt, src.value||'en', tgt.value||'tr');
+            statusEl.innerHTML = `<span class="ok">OK</span> → ${escapeHtml(tr.slice(0,120))}${tr.length>120?'…':''}`;
+        }catch(e){
+            statusEl.innerHTML = `<span class="bad">Failed</span>: ${escapeHtml(e.message||e)}`;
+        }
+    }));
+
+    translateBtn.addEventListener('click', doTranslateAll);
+
+    $('#cacheMode').addEventListener('change', ()=>{
+        const v = $('#cacheMode').value;
+        if(v==='clear'){ localStorage.removeItem('srt_mt_cache_v3'); MT_CACHE={}; $('#cacheMode').value='on'; }
+        saveSettings();
+    });
+
+    persist.addEventListener('change', saveSettings);
+    [src,tgt,endpoint,apiKey,azureRegion,openaiModel,concurrencyInput,mode].forEach(el => el.addEventListener('input', saveSettings));
+
+    exportBtn.addEventListener('click', ()=>{
+        if(!RIGHT.length){ alert('Nothing to export yet'); return; }
+        const srt = toSRT(RIGHT);
+        const blob = new Blob([srt], {type: "text/plain;charset=utf-8"});
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = "translated.tr.srt";
+        document.body.appendChild(a); a.click(); a.remove();
+    });
+
+    /* selection popup */
+    document.addEventListener('mouseup', (ev)=>{
+        const sel = window.getSelection().toString().trim();
+        if(!sel) { selPopup.style.display='none'; return; }
+        // only trigger if selection is inside table
+        if(!tbl.contains(window.getSelection().anchorNode)) return;
+        selText.textContent = sel;
+        // build links
+        const enc = encodeURIComponent(sel);
+        linksBox.innerHTML = '';
+        addLink(`https://translate.google.com/?sl=${src.value||'en'}&tl=${tgt.value||'tr'}&text=${enc}`, 'Google Translate');
+        addLink(`https://dictionary.cambridge.org/dictionary/english/${encodeURIComponent(sel.split(/\s+/)[0])}`, 'Cambridge');
+        addLink(`https://sozluk.gov.tr/gts?ara=${enc}`, 'TDK');
+        addLink(`https://www.linguee.com/english-turkish/search?source=auto&query=${enc}`, 'Linguee');
+
+        selResult.style.display='none'; selResult.textContent='';
+        selPopup.style.left = (ev.pageX + 10) + 'px';
+        selPopup.style.top  = (ev.pageY + 10) + 'px';
+        selPopup.style.display='block';
+    });
+
+    closeSel.addEventListener('click', ()=> selPopup.style.display='none');
+
+    selTranslate.addEventListener('click', async ()=>{
+        const text = selText.textContent.trim();
+        if(!text) return;
+        selResult.style.display='block';
+        selResult.textContent = 'Translating…';
+        try{
+            const tr = await translateOne(text, src.value||'en', tgt.value||'tr');
+            selResult.textContent = tr;
+        }catch(e){
+            selResult.textContent = 'Error: ' + (e.message||e);
+        }
+    });
+
+    selDict.addEventListener('click', async ()=>{
+        const text = selText.textContent.trim();
+        if(!text) return;
+        selResult.style.display='block';
+        selResult.textContent = 'Looking up…';
+        try{
+            const word = text.split(/\s+/)[0];
+            const r = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`);
+            if(!r.ok) throw new Error('HTTP '+r.status);
+            const j = await r.json();
+            const defs = [];
+            (j[0]?.meanings||[]).forEach(m=>{
+                (m.definitions||[]).slice(0,2).forEach(d=>defs.push('• '+d.definition));
+            });
+            selResult.textContent = defs.length ? defs.join('\n') : 'No definitions found.';
+        }catch(e){
+            selResult.textContent = 'Dictionary failed. Use quick links below.';
+        }
+    });
+
+    /* chat drawer */
+    openChatBtn.addEventListener('click', ()=>{
+        chatBox.style.display='flex';
+        // prefill with current selection or current hovered row
+        const sel = window.getSelection().toString().trim();
+        chatContext.value = sel || extractCurrentRowText() || '';
+    });
+    closeChatBtn.addEventListener('click', ()=> chatBox.style.display='none');
+
+    chatAsk.addEventListener('click', async ()=>{
+        const ctx = chatContext.value.trim();
+        const q = chatQuestion.value.trim() || 'Explain the cultural nuance and intended meaning of the phrase in this scene. Provide concise examples.';
+        appendMsg('user', `Context:\n${ctx}\n\nQuestion:\n${q}`);
+        try{
+            const text = await openaiChat([
+                {role:'system', content:'You are an expert English tutor focusing on idioms, slang, tone, and cultural nuance for Turkish learners. Be concise and precise.'},
+                {role:'user',   content:`Here is the excerpt from a subtitle:\n\n${ctx}\n\n${q}`}
+            ]);
+            appendMsg('assistant', text);
+        }catch(e){
+            appendMsg('assistant', 'Chat failed: ' + (e.message||e));
+        }
+    });
+
+    /* ---------- Render ---------- */
+    function render(){
+        const rx = q.value ? safeRx(q.value) : null;
+        tbl.innerHTML='';
+        DATA.forEach((row,idx)=>{
+            const ltxt = row.L?row.L.text:'';
+            const rtxt = row.R?row.R.text:'';
+            if(hideEmpty.checked && (!ltxt || !rtxt)) return;
+            if(rx && !(rx.test(ltxt)||rx.test(rtxt))) return;
+
+            const tr=document.createElement('tr');
+            tr.dataset.idx=idx;
+            tr.onmouseenter=()=>tr.classList.add('hover');
+            tr.onmouseleave=()=>tr.classList.remove('hover');
+
+            const tdL=document.createElement('td'); tdL.className='left';
+            const tdR=document.createElement('td'); tdR.className='right';
+            tdL.innerHTML = `<div class="time">${row.L?`${fmt(row.L.start)}–${fmt(row.L.end)}`:'—'}</div><div class="line ${row.L?'':'empty'}">${row.L?escapeHtml(ltxt):'(empty)'}</div>`;
+            tdR.innerHTML = `<div class="time">${row.R?`${fmt(row.R.start)}–${fmt(row.R.end)}`:'—'}</div><div class="line ${row.R?'':'empty'}">${row.R?escapeHtml(rtxt):'(empty)'}</div>`;
+            tbl.appendChild(tr); tr.appendChild(tdL); tr.appendChild(tdR);
+        });
+    }
+
+    /* ---------- Translation engine ---------- */
+    async function doTranslateAll(){
+        if(!LEFT.length){ alert('Load the left subtitle first.'); return; }
+        if($('#cacheMode').value==='clear'){ localStorage.removeItem('srt_mt_cache_v3'); MT_CACHE={}; $('#cacheMode').value='on'; }
+        const rows = LEFT;
+        let done = 0;
+        prog.max = rows.length; prog.value = 0;
+        statusEl.textContent = "Translating…";
+        const out = new Array(rows.length);
+
+        const CONC = Math.max(1, Math.min(10, parseInt(concurrencyInput.value||'5',10)));
+        let idx=0;
+        async function worker(){
+            while(true){
+                const my = idx++;
+                if(my >= rows.length) break;
+                const text = rows[my].text;
+                let tr = MT_CACHE[text];
+                if(!tr){
+                    try{
+                        tr = await translateOne(text, src.value||'en', tgt.value||'tr');
+                        if($('#cacheMode').value==='on'){ MT_CACHE[text]=tr; saveCache(MT_CACHE); }
+                    }catch(e){
+                        tr = "[MT error] " + (e?.message || e);
+                    }
+                }
+                out[my] = tr;
+                prog.value = ++done;
+            }
+        }
+        await Promise.all(Array.from({length:CONC}, worker));
+
+        RIGHT = rows.map((L,i)=>({start:L.start,end:L.end,text:out[i]||''}));
+        DATA = align(LEFT, RIGHT);
+        render();
+        exportBtn.disabled = !out.some(x=>x && !String(x).startsWith('[MT error]'));
+        statusEl.textContent = "Done.";
+    }
+
+    async function translateOne(text, from, to){
+        const kind = PROVIDERS[providerSel.value].type;
+        const url = endpoint.value.trim();
+        if(!url) throw new Error('endpoint is empty');
+
+        if(kind==='libre'){
+            // form-encoded, often easier re: CORS
+            const body = new URLSearchParams({ q:text, source:from, target:to, format:'text' });
+            const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'}, body });
+            if(!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+            const j = await r.json();
+            if(j?.translatedText) return j.translatedText;
+            if(Array.isArray(j) && j[0]?.translatedText) return j[0].translatedText;
+            if(j?.result) return j.result;
+            throw new Error('Unexpected LibreTranslate response');
+        }
+        if(kind==='deepl'){
+            const body = new URLSearchParams({ text:text, source_lang:from.toUpperCase(), target_lang:to.toUpperCase() });
+            const r = await fetch(url, {
+                method:'POST',
+                headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8', 'Authorization':'DeepL-Auth-Key ' + (apiKey.value||'')},
+                body
+            });
+            if(!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+            const j = await r.json();
+            const out = j?.translations?.[0]?.text;
+            if(out!=null) return out;
+            throw new Error('Unexpected DeepL response');
+        }
+        if(kind==='google'){
+            // Google v2; key via query param
+            const key = apiKey.value.trim();
+            const full = url + (url.includes('?')?'&':'?') + 'key=' + encodeURIComponent(key);
+            const body = new URLSearchParams({ q:text, source:from, target:to, format:'text' });
+            const r = await fetch(full, { method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'}, body });
+            if(!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+            const j = await r.json();
+            const out = j?.data?.translations?.[0]?.translatedText;
+            if(out!=null) return out;
+            throw new Error('Unexpected Google v2 response');
+        }
+        if(kind==='azure'){
+            const full = url + (url.includes('?')?'&':'?') + `from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+            const body = JSON.stringify([{Text:text}]);
+            const r = await fetch(full, {
+                method:'POST',
+                headers:{
+                    'Content-Type':'application/json',
+                    'Ocp-Apim-Subscription-Key': apiKey.value||'',
+                    'Ocp-Apim-Subscription-Region': azureRegion.value||''
+                },
+                body
+            });
+            if(!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+            const j = await r.json();
+            const out = j?.[0]?.translations?.[0]?.text;
+            if(out!=null) return out;
+            throw new Error('Unexpected Azure response');
+        }
+        if(kind==='openai'){
+            const key = apiKey.value.trim();
+            const model = openaiModel.value.trim() || 'gpt-4o-mini';
+            const payload = {
+                model,
+                messages: [
+                    {role:'system', content:'You translate English subtitles into natural Turkish subtitles. Keep meaning, tone, register; concise phrasing; no added punctuation; no brackets.'},
+                    {role:'user', content:`Translate to Turkish:\n${text}`}
+                ],
+                temperature: 0.2
+            };
+            const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer ' + key}, body: JSON.stringify(payload) });
+            if(!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+            const j = await r.json();
+            const out = j?.choices?.[0]?.message?.content?.trim();
+            if(out!=null) return out;
+            throw new Error('Unexpected OpenAI response');
+        }
+        throw new Error('Unknown provider type');
+    }
+
+    /* ---------- OpenAI chat for explanations ---------- */
+    function updateChatHint(){
+        const p = providerSel.value;
+        chatHint.textContent = (p==='openai' ? '' : 'Switch provider to OpenAI or still fill OpenAI endpoint/key below.');
+    }
+    function appendMsg(role, text){
+        const div = document.createElement('div'); div.className='msg ' + (role==='user'?'user':'assistant'); div.textContent = text;
+        chatMain.appendChild(div); chatMain.scrollTop = chatMain.scrollHeight;
+    }
+    async function openaiChat(messages){
+        const key = apiKey.value.trim();
+        const model = openaiModel.value.trim() || 'gpt-4o-mini';
+        const url = (providerSel.value==='openai' ? endpoint.value.trim() : 'https://api.openai.com/v1/chat/completions');
+        const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer ' + key}, body: JSON.stringify({model, messages, temperature:0.3}) });
+        if(!r.ok) throw new Error(`HTTP ${r.status} ${r.statusText}`);
+        const j = await r.json();
+        return j?.choices?.[0]?.message?.content?.trim() || '';
+    }
+
+    /* ---------- Helpers ---------- */
+    function fileToText(f){ return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=e=>res(String(e.target.result)); r.onerror=rej; r.readAsText(f); }); }
+    function safeRx(q){ try{ return new RegExp(q,'i'); }catch{ return new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i'); } }
+    function addLink(href,label){ const a=document.createElement('a'); a.href=href; a.target='_blank'; a.rel='noreferrer'; a.textContent=label; linksBox.appendChild(a); }
+    function extractCurrentRowText(){
+        const hover = tbl.querySelector('tr.hover'); if(!hover) return '';
+        const left = hover.querySelector('.left .line')?.textContent || '';
+        const right = hover.querySelector('.right .line')?.textContent || '';
+        return (left + (right? '\n—\n' + right : '')).trim();
+    }
+
+    /* ---------- Settings & cache ---------- */
+    function loadCache(){ try{ return JSON.parse(localStorage.getItem('srt_mt_cache_v3')||'{}'); }catch{ return {}; } }
+    function saveCache(obj){ try{ localStorage.setItem('srt_mt_cache_v3', JSON.stringify(obj)); }catch{} }
+
+    function loadSettings(){
+        try{ return JSON.parse(localStorage.getItem('srt_tool_settings_v1')||'{}'); }catch{ return {}; }
+    }
+    function saveSettings(){
+        if(!persist.checked) return;
+        SETTINGS = {
+            mode: mode.value, provider: providerSel.value, endpoint: endpoint.value,
+            apiKey: apiKey.value, azureRegion: azureRegion.value, openaiModel: openaiModel.value,
+            src: src.value, tgt: tgt.value, concurrency: parseInt(concurrencyInput.value||'5',10),
+            cacheMode: $('#cacheMode').value, persist: persist.checked
+        };
+        try{ localStorage.setItem('srt_tool_settings_v1', JSON.stringify(SETTINGS)); }catch{}
+    }
+
+    function toggleProviderFields(){
+        const kind = PROVIDERS[providerSel.value].type;
+        // show/hide key/region/model rows
+        document.querySelectorAll('.show-if').forEach(e=>e.style.display='none');
+        if(kind==='deepl' || kind==='google' || kind==='azure' || kind==='openai'){
+            document.querySelectorAll('.key-needed').forEach(e=> e.style.display='block');
+        }
+        if(kind==='azure'){ document.querySelectorAll('.azure-only').forEach(e=> e.style.display='block'); }
+        if(kind==='openai'){ document.querySelectorAll('.openai-only').forEach(e=> e.style.display='block'); }
+    }
+
+    /* ---------- Init ---------- */
+    toggleProviderFields();
+</script>
+</body>
+</html>

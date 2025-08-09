@@ -1,0 +1,307 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SRT Side-by-Side Viewer + Auto-Translate</title>
+<style>
+  :root { --bg:#0b0f14; --fg:#e6edf3; --muted:#9aa4ad; --hl:#2b90d9; --row:#111827; --row2:#0f172a; --acc:#2ea043; --border:#1f2937; }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font:14px/1.45 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}
+  .wrap{max-width:1200px;margin:0 auto;padding:16px;}
+  h1{font-size:18px;margin:0 0 10px 0}
+  .bar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+  .bar input[type="file"]{background:#111a24;border:1px solid var(--border);border-radius:10px;padding:6px;color:var(--muted)}
+  .btn{background:#1f2937;border:1px solid #2b3645;border-radius:10px;padding:8px 12px;color:#e6edf3;cursor:pointer}
+  .btn:disabled{opacity:.55;cursor:not-allowed}
+  .hint{color:var(--muted);font-size:12px;margin-left:auto}
+  .topbar{display:flex;gap:8px;align-items:center;margin:10px 0 14px}
+  .search{flex:1;min-width:220px;background:#0f1620;border:1px solid var(--border);border-radius:10px;padding:8px;color:#e6edf3}
+  .chk{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted)}
+  table{width:100%;border-collapse:separate;border-spacing:0 6px}
+  td{vertical-align:top;padding:10px 12px;background:var(--row);border:1px solid var(--border)}
+  tr:nth-child(even) td{background:var(--row2)}
+  td.left{border-right:none;border-radius:10px 0 0 10px}
+  td.right{border-left:none;border-radius:0 10px 10px 0}
+  .time{color:var(--muted);font-size:12px;margin-bottom:4px}
+  .line{white-space:pre-wrap}
+  tr.hover td{outline:2px solid var(--hl);z-index:1;position:relative}
+  .empty{color:#6b7280;font-style:italic}
+  .badge{display:inline-block;background:#102b16;color:#9ae6b4;border:1px solid #1d4d2d;border-radius:999px;padding:2px 8px;font-size:12px;margin-left:8px}
+  details.cfg{border:1px solid var(--border);border-radius:12px;padding:10px;margin:8px 0 10px;background:#0f1620}
+  details.cfg summary{cursor:pointer;color:#cbd5e1;font-weight:600;margin:-10px -10px 8px -10px;padding:10px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin:6px 0 10px}
+  .grid label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#cbd5e1}
+  .grid input,.grid select{background:#0b1220;border:1px solid var(--border);border-radius:10px;padding:8px;color:#e6edf3}
+  progress{height:10px}
+  footer{color:var(--muted);font-size:12px;margin-top:10px}
+  .bad{color:#fca5a5}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>SRT Side-by-Side Viewer <span class="badge">auto-translate capable</span></h1>
+
+  <div class="bar">
+    <label>Left (original, e.g., English) <input id="left" type="file" accept=".srt,.vtt,text/plain"></label>
+    <label>Right (translation file, optional) <input id="right" type="file" accept=".srt,.vtt,text/plain"></label>
+    <button id="load" class="btn" disabled>Load</button>
+    <button id="exportRight" class="btn" disabled>Export right as .srt</button>
+    <span class="hint">Hover a row to cross-highlight. Fully client-side.</span>
+  </div>
+
+  <details class="cfg" open>
+    <summary>Auto-translate settings</summary>
+    <div class="grid">
+      <label>Mode
+        <select id="mode">
+          <option value="file">Use right file (no MT)</option>
+          <option value="mt" selected>Auto-translate left → right</option>
+        </select>
+      </label>
+      <label>Provider
+        <select id="provider">
+          <option value="libre" selected>LibreTranslate-compatible</option>
+        </select>
+      </label>
+      <label>Endpoint (for LibreTranslate)
+        <input id="endpoint" value="http://localhost:5000/translate" spellcheck="false">
+      </label>
+      <label>Source language code
+        <input id="src" value="en">
+      </label>
+      <label>Target language code
+        <input id="tgt" value="tr">
+      </label>
+      <label><span>Cache translations in this browser</span>
+        <select id="cacheMode">
+          <option value="on" selected>on</option>
+          <option value="off">off</option>
+          <option value="clear">clear now</option>
+        </select>
+      </label>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button id="translate" class="btn">Translate now</button>
+      <progress id="prog" max="1" value="0" style="width:240px"></progress>
+      <span id="status" class="hint"></span>
+      <span class="hint">Tip: Run locally with <code>docker run -p 5000:5000 libretranslate/libretranslate</code></span>
+    </div>
+  </details>
+
+  <div class="topbar">
+    <input id="q" class="search" type="search" placeholder="Filter rows (regex ok)…">
+    <label class="chk"><input id="hideEmpty" type="checkbox" checked> hide rows with an empty side</label>
+  </div>
+
+  <table id="tbl" aria-label="Aligned subtitles"><tbody></tbody></table>
+
+  <footer>For hover dictionary popups, pair with a browser dictionary extension (e.g., Yomitan). This page never sends files anywhere unless you click “Translate now”.</footer>
+</div>
+
+<script>
+function parseSRT(text){
+  const s = [];
+  const norm = text.replace(/\r/g,'').trim();
+  const blocks = norm.split(/\n\s*\n/);
+  for(const b of blocks){
+    const lines = b.split('\n').filter(x=>x.trim().length>0);
+    if(lines.length === 0) continue;
+    let i = 0;
+    if(/^\d+$/.test(lines[0].trim())) i = 1;
+    const m = (lines[i]||'').match(/(\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d{1,3}))?\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d{1,3}))?/);
+    if(!m){ continue; }
+    const toMs = (h,mn,s,ms)=> (parseInt(h)*3600+parseInt(mn)*60+parseInt(s))*1000 + parseInt((ms||'0').padEnd(3,'0'));
+    const start = toMs(m[1],m[2],m[3],m[4]);
+    const end   = toMs(m[5],m[6],m[7],m[8]);
+    const textLines = lines.slice(i+1);
+    const textBody = textLines.join('\n').replace(/\{\\an\d\}/g,'').replace(/<\/?[^>]+>/g, (t)=> t.match(/<br\s*\/?>/i)?'\n':'');
+    s.push({start,end,text:textBody});
+  }
+  return s.sort((a,b)=>a.start-b.start);
+}
+function align(left,right){
+  const rows = [];
+  let i=0,j=0;
+  const overlap = (a,b)=> a && b && a.end>=b.start && b.end>=a.start;
+  while(i<left.length || j<right.length){
+    const L = left[i] || null;
+    const R = right[j] || null;
+    if(L && R && overlap(L,R)){
+      rows.push({L,R}); i += (L.end<=R.end?1:0); j += (R.end<L.end?1:0);
+    } else if(L && (!R || L.start < R.start)){
+      rows.push({L,R:null}); i++;
+    } else if(R){
+      rows.push({L:null,R}); j++;
+    } else break;
+  }
+  return rows;
+}
+function fmt(ms){
+  const z=n=>String(n).padStart(2,'0');
+  const h=Math.floor(ms/3600000);
+  const m=Math.floor((ms%3600000)/60000);
+  const s=Math.floor((ms%60000)/1000);
+  return `${z(h)}:${z(m)}:${z(s)}`;
+}
+function escapeHtml(s){ return s.replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'); }
+
+const $ = sel => document.querySelector(sel);
+const tbl = $('#tbl tbody');
+const leftInput = $('#left'), rightInput = $('#right'), btn = $('#load'), q = $('#q'), hideEmpty = $('#hideEmpty');
+const mode = $('#mode'), provider = $('#provider'), endpoint = $('#endpoint'), src = $('#src'), tgt = $('#tgt');
+const translateBtn = $('#translate'), prog = $('#prog'), statusEl = $('#status'), exportBtn = $('#exportRight'), cacheMode = $('#cacheMode');
+
+let DATA = [];
+let LEFT = [], RIGHT = [];
+let MT_CACHE = loadCache();
+
+[leftInput,rightInput,mode].forEach(inp => inp.addEventListener('change', ()=>{
+  btn.disabled = !leftInput.files.length || (mode.value==="file" && !rightInput.files.length);
+}));
+
+btn.addEventListener('click', async ()=>{
+  const ltxt = await fileToText(leftInput.files[0]);
+  LEFT = parseSRT(ltxt);
+  if(mode.value === "file"){
+    const rtxt = await fileToText(rightInput.files[0]);
+    RIGHT = parseSRT(rtxt);
+  } else {
+    RIGHT = []; // will be produced by MT
+  }
+  DATA = align(LEFT, RIGHT);
+  render();
+  if(mode.value === "mt"){
+    // Pre-fill right with empty rows matching left timings
+    DATA = LEFT.map(L=>({L,R:null}));
+    render();
+  }
+});
+
+[q,hideEmpty].forEach(el=>el.addEventListener('input', render));
+
+translateBtn.addEventListener('click', async ()=>{
+  if(!LEFT.length){ alert("Load the left subtitle first."); return; }
+  if(provider.value !== 'libre'){ alert("Only LibreTranslate-compatible provider is implemented here."); return; }
+  if(cacheMode.value === 'clear'){ localStorage.removeItem('srt_mt_cache_v1'); MT_CACHE={}; cacheMode.value='on'; }
+  const url = endpoint.value.trim();
+  const from = src.value.trim() || 'en';
+  const to = tgt.value.trim() || 'tr';
+
+  const rows = LEFT; // translate per-left cue
+  let done = 0;
+  prog.max = rows.length; prog.value = 0;
+  statusEl.textContent = "Translating…";
+  const out = [];
+
+  // simple concurrency limiter
+  const CONC=5;
+  let idx=0;
+  async function worker(){
+    while(true){
+      const my = idx++;
+      if(my >= rows.length) break;
+      const text = rows[my].text;
+      let tr = MT_CACHE[text];
+      if(!tr){
+        try{
+          tr = await translateLibre(url, text, from, to);
+          if(cacheMode.value==='on'){ MT_CACHE[text]=tr; saveCache(MT_CACHE); }
+        }catch(e){
+          tr = "[MT error] " + (e?.message || e);
+        }
+      }
+      out[my] = tr;
+      prog.value = ++done;
+    }
+  }
+  const jobs = Array.from({length:CONC}, worker);
+  await Promise.all(jobs);
+
+  // build RIGHT from LEFT timings + translations
+  RIGHT = rows.map((L,i)=>({start:L.start,end:L.end,text:out[i]||''}));
+  DATA = align(LEFT, RIGHT);
+  render();
+  exportBtn.disabled = false;
+  statusEl.textContent = "Done.";
+});
+
+exportBtn.addEventListener('click', ()=>{
+  if(!RIGHT.length){ alert("Nothing to export yet."); return; }
+  const srt = toSRT(RIGHT);
+  const blob = new Blob([srt], {type: "text/plain;charset=utf-8"});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = "right_translated.srt";
+  document.body.appendChild(a); a.click(); a.remove();
+});
+
+function render(){
+  const rx = q.value ? safeRx(q.value) : null;
+  tbl.innerHTML='';
+  DATA.forEach((row,idx)=>{
+    const ltxt = row.L?row.L.text:'';
+    const rtxt = row.R?row.R.text:'';
+    if(hideEmpty.checked && (!ltxt || !rtxt)) return;
+    if(rx && !(rx.test(ltxt)||rx.test(rtxt))) return;
+    const tr=document.createElement('tr');
+    tr.dataset.idx=idx;
+    tr.onmouseenter=()=>tr.classList.add('hover');
+    tr.onmouseleave=()=>tr.classList.remove('hover');
+    const tdL=document.createElement('td'); tdL.className='left';
+    const tdR=document.createElement('td'); tdR.className='right';
+    tdL.innerHTML = `<div class="time">${row.L?`${fmt(row.L.start)}–${fmt(row.L.end)}`:'—'}</div><div class="line ${row.L?'':'empty'}">${row.L?escapeHtml(ltxt):'(empty)'}</div>`;
+    tdR.innerHTML = `<div class="time">${row.R?`${fmt(row.R.start)}–${fmt(row.R.end)}`:'—'}</div><div class="line ${row.R?'':'empty'}">${row.R?escapeHtml(rtxt):'(empty)'}</div>`;
+    tr.appendChild(tdL); tr.appendChild(tdR);
+    tbl.appendChild(tr);
+  });
+}
+
+function toSRT(arr){
+  const pad = (n,z=2)=>String(n).padStart(z,'0');
+  function fmtS(ms){
+    const h = Math.floor(ms/3600000), m = Math.floor(ms%3600000/60000), s=Math.floor(ms%60000/1000), ms3=ms%1000;
+    return `${pad(h)}:${pad(m)}:${pad(s)},${pad(ms3,3)}`;
+  }
+  return arr.map((c,i)=>`${i+1}
+${fmtS(c.start)} --> ${fmtS(c.end)}
+${c.text}
+
+`).join('');
+}
+
+function safeRx(q){
+  try{ return new RegExp(q,'i'); }catch{ return new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),'i'); }
+}
+
+function loadCache(){
+  try{ return JSON.parse(localStorage.getItem('srt_mt_cache_v1')||'{}'); }catch{ return {}; }
+}
+function saveCache(obj){
+  try{ localStorage.setItem('srt_mt_cache_v1', JSON.stringify(obj)); }catch{}
+}
+
+function fileToText(f){
+  return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=e=>res(String(e.target.result)); r.onerror=rej; r.readAsText(f); });
+}
+
+// LibreTranslate-compatible caller
+async function translateLibre(url, text, source, target){
+  // API: POST url with JSON: { q, source, target, format: 'text' }
+  const payload = { q: text, source, target, format: 'text' };
+  const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  if(!r.ok){
+    const t = await r.text();
+    throw new Error(`HTTP ${r.status} ${r.statusText}: ${t}`);
+  }
+  const j = await r.json();
+  if(typeof j === 'object' && j.translatedText) return j.translatedText;
+  // Some instances return array of translations
+  if(Array.isArray(j) && j[0]?.translatedText) return j[0].translatedText;
+  // Or nested
+  if(j?.result) return j.result;
+  throw new Error('Unexpected response from MT server');
+}
+</script>
+</body>
+</html>
