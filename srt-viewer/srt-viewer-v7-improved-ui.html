@@ -1119,18 +1119,19 @@
             }
         });
 
-        if (newIdx !== currentIdx) {
-            currentIdx = newIdx;
-            if (newIdx >= 0) {
-                if (followToggle.checked && followScroll && (forceScroll || !elementFullyVisible(trs[newIdx]))) {
-                    trs[newIdx].scrollIntoView({block: 'center'});
-                }
-            }
-        } else {
-            if (newIdx >= 0 && followToggle.checked && followScroll && !elementFullyVisible(trs[newIdx]) && (forceScroll || playing)) {
+        // Scroll logic
+        if (newIdx >= 0) {
+            const needsScrolling = !elementFullyVisible(trs[newIdx]);
+            const autoScrollEnabled = followToggle.checked && followScroll;
+
+            // When to scroll:
+            // 1. When forced to (e.g., timeline drag, search jump, click).
+            // 2. When auto-scroll is on, the row is not visible, and playback is active or the row just changed.
+            if (forceScroll || (autoScrollEnabled && needsScrolling && (playing || newIdx !== currentIdx))) {
                 trs[newIdx].scrollIntoView({block: 'center'});
             }
         }
+        currentIdx = newIdx;
     }
 
     function elementFullyVisible(el) {
