@@ -180,11 +180,56 @@
             gap: 10px;
             flex-wrap: wrap;
             align-items: center;
-            padding: 8px 0
+            /* padding: 8px 0 */
         }
 
         .controls .spacer {
             flex: 1
+        }
+
+        .controls-wrapper {
+            padding: 8px 0;
+        }
+
+        .timeline-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 4px 0 12px;
+        }
+
+        .timeline {
+            flex: 1;
+            -webkit-appearance: none;
+            appearance: none;
+            height: 5px;
+            background: #2b3645;
+            border-radius: 3px;
+            outline: none;
+            transition: height .2s;
+        }
+
+        .timeline:hover {
+            height: 8px;
+        }
+
+        .timeline::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--hl);
+            cursor: pointer;
+        }
+
+        .timeline::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--hl);
+            cursor: pointer;
+            border: none;
         }
 
         /* content area scrolls */
@@ -255,9 +300,12 @@
         }
 
         tr.past {
-            opacity: 0.6;
+            opacity: 0.65;
         }
 
+        tr.past td {
+            background: var(--bg);
+        }
 
         .ok {
             color: var(--ok)
@@ -466,16 +514,22 @@
             </details>
 
             <!-- Always-on controls -->
-            <div class="controls">
-                <button id="playPause" class="btn" disabled>Play</button>
-                <button id="stop" class="btn" disabled>Stop</button>
-                <label>Speed <input id="speed" type="number" class="in" value="1.0" step="0.1"
-                                    min="0.1" max="3"></label>
-                <span class="hint" id="timeLabel">00:00:00</span>
-                <span class="spacer"></span>
-                <input id="q" type="text" class="in" style="width: 210px;"
-                       placeholder="Search text or HH:MM:SS & enter"/>
-                <span id="err" class="hint bad"></span>
+            <div class="controls-wrapper">
+                <div class="timeline-bar" id="timeline-bar" style="display: none;">
+                    <span class="hint" id="timeLabel">00:00:00</span>
+                    <input type="range" id="timeline" class="timeline" min="0" value="0" step="1">
+                    <span class="hint" id="durationLabel">00:00:00</span>
+                </div>
+                <div class="controls">
+                    <button id="playPause" class="btn" disabled>Play</button>
+                    <button id="stop" class="btn" disabled>Stop</button>
+                    <label>Speed <input id="speed" type="number" class="in" value="1.0" step="0.1"
+                                        min="0.1" max="3"></label>
+                    <span class="spacer"></span>
+                    <input id="q" type="text" class="in" style="width: 210px;"
+                           placeholder="Search text or HH:MM:SS and press Enter"/>
+                    <span id="err" class="hint bad"></span>
+                </div>
             </div>
         </div>
     </header>
@@ -696,7 +750,9 @@
     const src = $('#src'), tgt = $('#tgt'), batch = $('#batch'), translateAll = $('#translateAll'),
         prog = $('#prog'), statusEl = $('#status'), exportBtn = $('#exportRight');
     const playBtn = $('#playPause'), stopBtn = $('#stop'), speed = $('#speed'),
-        timeLabel = $('#timeLabel'), followToggle = $('#followToggle');
+        timeLabel = $('#timeLabel'), followToggle = $('#followToggle'),
+        timeline = $('#timeline'), durationLabel = $('#durationLabel'),
+        timelineBar = $('#timeline-bar');
 
     const selPopup = $('#selPopup'), selText = $('#selText'), selAgg = $('#selAgg'),
         closeSel = $('#closeSel'), selAdd = $('#selAdd'), selStatus = $('#selStatus'),
@@ -736,6 +792,18 @@
         playBtn.disabled = !ROWS.length;
         stopBtn.disabled = !ROWS.length;
         loadStatus.textContent = `Loaded L=${LEFT.length}${RIGHT.length ? ' R=' + RIGHT.length : ''} Rows=${ROWS.length}`;
+
+        if (ROWS.length > 0) {
+            const totalDuration = ROWS[ROWS.length - 1].end;
+            timeline.max = totalDuration;
+            durationLabel.textContent = fmtClockSecs(totalDuration);
+            timelineBar.style.display = 'flex';
+            currentMs = 0;
+            timeline.value = 0;
+            updateTimeLabel();
+        } else {
+            timelineBar.style.display = 'none';
+        }
     });
 
     /* Align changes */
@@ -748,11 +816,21 @@
             const v = parseHHMMSS(searchBox.value || '');
             if (v != null) {
                 currentMs = v;
+                timeline.value = v;
                 updateHighlight(true);
                 updateTimeLabel();
                 e.preventDefault();
             }
         }
+    });
+
+    timeline.addEventListener('input', () => {
+        const newMs = parseInt(timeline.value, 10);
+        currentMs = newMs;
+        startMs = newMs;
+        startWall = performance.now();
+        updateTimeLabel();
+        updateHighlight(true);
     });
 
     /* Render + Align */
@@ -776,6 +854,7 @@
             tr.addEventListener('mouseleave', () => tr.classList.remove('hover'));
             tr.addEventListener('click', () => {
                 currentMs = row.start;
+                timeline.value = row.start;
                 updateHighlight(true);
                 updateTimeLabel();
             });
@@ -992,6 +1071,7 @@
         playBtn.textContent = 'Play';
         if (rafId) cancelAnimationFrame(rafId);
         currentMs = 0;
+        timeline.value = 0;
         updateHighlight(true);
         updateTimeLabel();
     });
@@ -1010,6 +1090,7 @@
         const dt = now - startWall;
         const sp = parseFloat(speed.value || '1');
         currentMs = startMs + dt * sp;
+        timeline.value = currentMs;
         updateHighlight(false);
         updateTimeLabel();
         rafId = requestAnimationFrame(tick);
