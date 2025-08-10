@@ -521,8 +521,8 @@
                     <span class="hint" id="durationLabel">00:00:00</span>
                 </div>
                 <div class="controls">
-                    <button id="playPause" class="btn" disabled>Play</button>
-                    <button id="stop" class="btn" disabled>Stop</button>
+                    <button id="playPause" class="btn" disabled>▶</button>
+                    <button id="stop" class="btn" disabled>⏹</button>
                     <label>Speed <input id="speed" type="number" class="in" value="1.0" step="0.1"
                                         min="0.1" max="3"></label>
                     <span class="spacer"></span>
@@ -1056,19 +1056,19 @@
         if (!ROWS.length) return;
         if (!playing) {
             playing = true;
-            playBtn.textContent = 'Pause';
+            playBtn.textContent = '⏸';
             startWall = performance.now();
             startMs = currentMs;
             tick();
         } else {
             playing = false;
-            playBtn.textContent = 'Play';
+            playBtn.textContent = '▶';
             if (rafId) cancelAnimationFrame(rafId);
         }
     });
     stopBtn.addEventListener('click', () => {
         playing = false;
-        playBtn.textContent = 'Play';
+        playBtn.textContent = '▶';
         if (rafId) cancelAnimationFrame(rafId);
         currentMs = 0;
         timeline.value = 0;
@@ -1224,9 +1224,9 @@
         const syns = Array.isArray(muse) ? muse.slice(0, 6).map(x => x.word) : [];
 
         selAgg.innerHTML = [
+            `<div class="section"><h4>Synonyms</h4><div class="msg">${escapeHtml(syns.join(', ') || '—')}</div></div>`,
             `<div class="section"><h4>Translation (${langFrom}→${langTo})</h4><div class="msg">${escapeHtml(tr || '(no result)')}</div></div>`,
             `<div class="section"><h4>EN Definitions</h4><div class="msg">${escapeHtml(defs.length ? defs.join('\n') : 'No definitions found.')}</div></div>`,
-            `<div class="section"><h4>Synonyms</h4><div class="msg">${escapeHtml(syns.join(', ') || '—')}</div></div>`,
             `<div class="section"><h4>Quick Links</h4>
       <div class="msg">
         <a href="https://translate.google.com/?sl=${langFrom}&tl=${langTo}&text=${q}" target="_blank">Google Translate</a> ·
