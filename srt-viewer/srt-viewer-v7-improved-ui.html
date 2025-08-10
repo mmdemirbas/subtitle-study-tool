@@ -307,6 +307,18 @@
             background: var(--bg);
         }
 
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--muted);
+            font-style: italic;
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+            filter: brightness(0.9);
+        }
+
         .ok {
             color: var(--ok)
         }
@@ -495,17 +507,23 @@
                 <div class="box" id="boxAlign">
                     <h4>Settings</h4>
                     <div class="form-grid">
-                        <label for="alignMode">Align mode</label>
-                        <select id="alignMode" class="in">
+                        <label for="alignMode"
+                               title="Controls how left/right subtitles are matched. 'Timeline' is more precise, 'Simple' just checks for time overlap.">Align
+                            mode</label>
+                        <select id="alignMode" class="in persist-setting">
                             <option value="timeline" selected>Timeline (no-miss, split/merge-safe)
                             </option>
                             <option value="simple">Simple overlap</option>
                         </select>
-                        <label for="tol">Tolerance (ms)</label>
-                        <input id="tol" type="number" value="120" min="0" step="10" class="in">
+                        <label for="tol"
+                               title="Maximum time gap (in milliseconds) allowed when aligning with the 'Timeline' mode.">Tolerance
+                            (ms)</label>
+                        <input id="tol" type="number" value="120" min="0" step="10"
+                               class="in persist-setting">
                         <div style="grid-column: 1 / -1;">
-                            <label>
-                                <input id="followToggle" type="checkbox" checked> Follow
+                            <label title="If checked, the table will automatically scroll to keep the current line in view during playback.">
+                                <input id="followToggle" type="checkbox" checked
+                                       class="persist-setting"> Follow
                                 playback (auto-scroll)
                             </label>
                         </div>
@@ -521,13 +539,19 @@
                     <span class="hint" id="durationLabel">00:00:00</span>
                 </div>
                 <div class="controls">
-                    <button id="playPause" class="btn" disabled>▶</button>
-                    <button id="stop" class="btn" disabled>⏹</button>
-                    <label>Speed <input id="speed" type="number" class="in" value="1.0" step="0.1"
-                                        min="0.1" max="3"></label>
+                    <button id="playPause" class="btn" disabled title="Play/Pause (Space)">▶
+                    </button>
+                    <button id="stop" class="btn" disabled
+                            title="Stop playback and reset to the beginning.">⏹
+                    </button>
+                    <label>Speed <input id="speed" type="number" class="in persist-setting"
+                                        value="1.0" step="0.1"
+                                        min="0.1" max="3"
+                                        title="Adjust playback speed. 1.0 is normal."></label>
                     <span class="spacer"></span>
                     <input id="q" type="text" class="in" style="width: 210px;"
-                           placeholder="Search text or HH:MM:SS and press Enter"/>
+                           placeholder="Search text or HH:MM:SS and press Enter"
+                           title="Search for text in subtitles. You can also jump to a time by entering it in HH:MM:SS format and pressing Enter."/>
                     <span id="err" class="hint bad"></span>
                 </div>
             </div>
@@ -537,7 +561,7 @@
     <main class="content">
         <div class="tableWrap" id="scrollArea">
             <table id="tbl">
-                <tbody></tbody>
+                <tbody id="tbl-body"></tbody>
             </table>
         </div>
     </main>
@@ -605,7 +629,7 @@
 
     /* ========= Utilities ========= */
     const $ = s => document.querySelector(s);
-    const tbl = $('#tbl tbody'), scrollArea = $('#scrollArea');
+    const scrollArea = $('#scrollArea');
 
     function escapeHtml(s) {
         return s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
@@ -753,7 +777,6 @@
         timeLabel = $('#timeLabel'), followToggle = $('#followToggle'),
         timeline = $('#timeline'), durationLabel = $('#durationLabel'),
         timelineBar = $('#timeline-bar');
-
     const selPopup = $('#selPopup'), selText = $('#selText'), selAgg = $('#selAgg'),
         closeSel = $('#closeSel'), selAdd = $('#selAdd'), selStatus = $('#selStatus'),
         selDragBar = $('#selDragBar');
@@ -762,6 +785,9 @@
         chatCopy = $('#chatCopy'), chatMain = $('#chatMain');
     const dictBox = $('#dictBox'), openDictBtn = $('#openDict'), closeDictBtn = $('#closeDict'),
         dictMain = $('#dictMain'), dictExportCsv = $('#dictExportCsv');
+
+    const APP_STORAGE_KEY = 'srt_viewer_v7_session';
+    const tblBody = $('#tbl-body');
 
     let LEFT = [], RIGHT = [], ROWS = [];
     let DICT = loadDict();
@@ -842,12 +868,21 @@
     }
 
     function render() {
-        tbl.innerHTML = '';
         const q = searchBox.value?.trim();
         const rx = q ? safeRx(q) : null;
-        ROWS.forEach((row, idx) => {
+        const filteredRows = ROWS.filter(row => !rx || (rx.test(row.L?.text || '') || rx.test(row.R?.text || '')));
+
+        if (filteredRows.length === 0) {
+            tblBody.innerHTML = `<tr><td colspan="2" class="empty-state">
+                ${q ? 'No results found for your search.' : 'Load subtitle files to begin.'}
+            </td></tr>`;
+            return;
+        }
+
+        tblBody.innerHTML = ''; // Clear previous content
+        filteredRows.forEach(row => {
+            const idx = ROWS.indexOf(row); // Get original index
             const ltxt = row.L?.text || '', rtxt = row.R?.text || '';
-            if (rx && !(rx.test(ltxt) || rx.test(rtxt))) return;
             const tr = document.createElement('tr');
             tr.dataset.idx = idx;
             tr.addEventListener('mouseenter', () => tr.classList.add('hover'));
@@ -866,7 +901,7 @@
             tdR.innerHTML = `<div class="time">${fmtClockSecs(row.start)}–${fmtClockSecs(row.end)}</div><div class="line">${escapeHtml(rtxt || '(empty)')}</div>`;
             tr.appendChild(tdL);
             tr.appendChild(tdR);
-            tbl.appendChild(tr);
+            tblBody.appendChild(tr);
         });
     }
 
@@ -1101,7 +1136,7 @@
     }
 
     function updateHighlight(forceScroll) {
-        const trs = [...tbl.querySelectorAll('tr')];
+        const trs = [...tblBody.querySelectorAll('tr[data-idx]')];
         let newIdx = -1;
 
         trs.forEach((tr, i) => {
@@ -1178,7 +1213,7 @@
 
         const selObj = window.getSelection();
         const sel = selObj.toString().trim();
-        if (!sel || !tbl.contains(selObj.anchorNode)) {
+        if (!sel || !tblBody.contains(selObj.anchorNode)) {
             selPopup.style.display = 'none';
             followScroll = true;
             return;
@@ -1281,7 +1316,7 @@
     function renderDict() {
         dictMain.innerHTML = '';
         if (!DICT.length) {
-            dictMain.innerHTML = '<div class="hint">Empty.</div>';
+            dictMain.innerHTML = '<div class="empty-state" style="padding: 20px;">Your personal dictionary is empty.</div>';
             return;
         }
         for (const e of DICT) {
@@ -1337,7 +1372,7 @@
     });
 
     function extractCurrentRowText() {
-        const h = tbl.querySelector('tr.playing') || tbl.querySelector('tr.hover');
+        const h = tblBody.querySelector('tr.playing') || tblBody.querySelector('tr.hover');
         if (!h) return '';
         const L = h.querySelector('.left .line')?.textContent || '';
         const R = h.querySelector('.right .line')?.textContent || '';
@@ -1354,6 +1389,84 @@
         });
     }
 
+    /* ===== Session Persistence ===== */
+    function saveState() {
+        const state = {
+            left: LEFT,
+            right: RIGHT,
+            currentMs: currentMs,
+            settings: {}
+        };
+        document.querySelectorAll('.persist-setting').forEach(el => {
+            if (el.type === 'checkbox') {
+                state.settings[el.id] = el.checked;
+            } else if (el.id !== 'mtKey') { // Don't save API key
+                state.settings[el.id] = el.value;
+            }
+        });
+        try {
+            localStorage.setItem(APP_STORAGE_KEY, JSON.stringify(state));
+        } catch (e) {
+            console.error("Failed to save state:", e);
+        }
+    }
+
+    function loadState() {
+        try {
+            const saved = localStorage.getItem(APP_STORAGE_KEY);
+            if (!saved) return;
+            const state = JSON.parse(saved);
+
+            // Restore settings
+            if (state.settings) {
+                Object.keys(state.settings).forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) {
+                        if (el.type === 'checkbox') el.checked = state.settings[id];
+                        else el.value = state.settings[id];
+                    }
+                });
+            }
+
+            // Restore data
+            LEFT = state.left || [];
+            RIGHT = state.right || [];
+            currentMs = state.currentMs || 0;
+
+            if (LEFT.length > 0) {
+                alignAndRender();
+                exportBtn.disabled = !RIGHT.length;
+                playBtn.disabled = !ROWS.length;
+                stopBtn.disabled = !ROWS.length;
+                loadStatus.textContent = `Loaded L=${LEFT.length}${RIGHT.length ? ' R=' + RIGHT.length : ''} Rows=${ROWS.length}`;
+
+                const totalDuration = ROWS.length > 0 ? ROWS[ROWS.length - 1].end : 0;
+                if (totalDuration > 0) {
+                    timeline.max = totalDuration;
+                    durationLabel.textContent = fmtClockSecs(totalDuration);
+                    timelineBar.style.display = 'flex';
+                    timeline.value = currentMs;
+                    updateTimeLabel();
+                    updateHighlight(true);
+                }
+            }
+        } catch (e) {
+            console.error("Failed to load state:", e);
+            localStorage.removeItem(APP_STORAGE_KEY); // Clear corrupted state
+        }
+    }
+
+    // Auto-save settings on change
+    document.querySelector('.top').addEventListener('input', e => {
+        if (e.target.classList.contains('persist-setting')) {
+            saveState();
+        }
+    });
+
+    // Auto-save progress periodically
+    setInterval(saveState, 5000);
+
+
     /* ===== Keyboard ===== */
     function isTypingTarget(el) {
         const t = el.tagName;
@@ -1361,18 +1474,61 @@
     }
 
     document.addEventListener('keydown', (e) => {
-        if (e.key === ' ') {
-            if (isTypingTarget(e.target)) return; // let space type in inputs (incl. search)
-            e.preventDefault();
-            if (!playBtn.disabled) playBtn.click();
-        }
-        if (e.key === 'Escape') {
-            if (selPopup.style.display === 'block') {
-                selPopup.style.display = 'none';
-                followScroll = true;
+        if (isTypingTarget(e.target)) {
+            // Allow Enter for search jump
+            if (e.key === 'Enter' && e.target.id === 'q') {
+                const v = parseHHMMSS(searchBox.value || '');
+                if (v != null) {
+                    currentMs = v;
+                    timeline.value = v;
+                    updateHighlight(true);
+                    updateTimeLabel();
+                    e.preventDefault();
+                }
             }
+            return;
+        }
+
+        switch (e.key) {
+            case ' ':
+                e.preventDefault();
+                if (!playBtn.disabled) playBtn.click();
+                break;
+            case 'Escape':
+                if (selPopup.style.display === 'block') {
+                    selPopup.style.display = 'none';
+                    followScroll = true;
+                }
+                break;
+            case 'j':
+            case 'ArrowLeft':
+                e.preventDefault();
+                currentMs = Math.max(0, currentMs - 5000);
+                timeline.value = currentMs;
+                updateHighlight(true);
+                updateTimeLabel();
+                break;
+            case 'l':
+            case 'ArrowRight':
+                e.preventDefault();
+                currentMs += 5000;
+                timeline.value = currentMs;
+                updateHighlight(true);
+                updateTimeLabel();
+                break;
+            case 'ArrowUp':
+                e.preventDefault();
+                speed.value = (Math.min(3, parseFloat(speed.value) + 0.1)).toFixed(1);
+                break;
+            case 'ArrowDown':
+                e.preventDefault();
+                speed.value = (Math.max(0.1, parseFloat(speed.value) - 0.1)).toFixed(1);
+                break;
         }
     });
+
+    // Initial load
+    loadState();
 </script>
 </body>
 </html>
