@@ -1090,6 +1090,10 @@
     playBtn.addEventListener('click', () => {
         if (!ROWS.length) return;
         if (!playing) {
+            const totalDuration = parseInt(timeline.max, 10);
+            if (currentMs >= totalDuration) {
+                currentMs = 0;
+            }
             playing = true;
             playBtn.textContent = '⏸';
             startWall = performance.now();
@@ -1125,6 +1129,20 @@
         const dt = now - startWall;
         const sp = parseFloat(speed.value || '1');
         currentMs = startMs + dt * sp;
+
+        const totalDuration = parseInt(timeline.max, 10);
+        if (currentMs >= totalDuration) {
+            currentMs = totalDuration;
+            timeline.value = currentMs;
+            updateHighlight(false);
+            updateTimeLabel();
+
+            playing = false;
+            playBtn.textContent = '▶';
+            if (rafId) cancelAnimationFrame(rafId);
+            return;
+        }
+
         timeline.value = currentMs;
         updateHighlight(false);
         updateTimeLabel();
