@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Subtitle Overlay",
+  "version": "0.1.0",
+  "description": "Find a subtitle for whatever is playing and overlay it on the video, synced to the page's own playback clock.",
+
+  "permissions": ["activeTab", "storage", "tabs", "webNavigation"],
+  "host_permissions": ["http://127.0.0.1:8791/*"],
+
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+
+  "action": {
+    "default_popup": "src/popup.html",
+    "default_title": "Subtitle Overlay"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content.js"],
+      "css": ["src/overlay.css"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+
+  "commands": {
+    "auto-attach": {
+      "suggested_key": { "default": "Ctrl+Shift+S", "mac": "Command+Shift+S" },
+      "description": "Find and attach the best subtitle for this tab"
+    },
+    "toggle-overlay": {
+      "suggested_key": { "default": "Ctrl+Shift+X", "mac": "Command+Shift+X" },
+      "description": "Show or hide the subtitle overlay"
+    }
+  }
+}

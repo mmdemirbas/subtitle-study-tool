@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Subtitle Overlay</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="header">
+      <h1>Subtitle Overlay</h1>
+      <span id="daemon-state" class="pill pill--muted">checking…</span>
+    </header>
+
+    <!-- Shown only when the daemon is unreachable or has no key. Everything
+         below is pointless until one of those is fixed, so it replaces the
+         body rather than sitting above it. -->
+    <section id="blocker" class="blocker" hidden>
+      <p id="blocker-message"></p>
+      <pre id="blocker-hint" class="hint"></pre>
+    </section>
+
+    <main id="main">
+      <section class="search">
+        <label class="label" for="query">Searching for</label>
+        <div class="row">
+          <input id="query" type="text" spellcheck="false" autocomplete="off" />
+          <button id="search-again" class="button button--ghost" title="Search again">
+            Search
+          </button>
+        </div>
+        <p id="guess-note" class="note"></p>
+      </section>
+
+      <section class="status">
+        <p id="attached" class="note note--strong" hidden></p>
+        <div id="offset-controls" class="row row--tight" hidden>
+          <button class="button button--small" data-nudge="-1000">−1s</button>
+          <button class="button button--small" data-nudge="-250">−0.25s</button>
+          <span id="offset-value" class="offset">0s</span>
+          <button class="button button--small" data-nudge="250">+0.25s</button>
+          <button class="button button--small" data-nudge="1000">+1s</button>
+          <button id="toggle" class="button button--ghost button--small">Hide</button>
+        </div>
+      </section>
+
+      <section class="results">
+        <p id="results-state" class="note">Open a page with a video playing.</p>
+        <ul id="results" class="list"></ul>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span><kbd>[</kbd> <kbd>]</kbd> nudge · <kbd>\</kbd> reset · hold <kbd>Shift</kbd> for 1s</span>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
