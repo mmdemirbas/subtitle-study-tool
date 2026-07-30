@@ -231,18 +231,49 @@
       event.stopPropagation();
       window.__ssoPanel?.toggle();
     });
-    // The overlay ignores pointer events so it never eats clicks meant for the
-    // player; this one control has to opt back in.
-    node.style.pointerEvents = "auto";
+
+    /* Every property that decides whether this is on screen is set inline and
+     * !important, because it is a <button> living in the page's own DOM and
+     * streaming sites reset buttons hard. A single `button { position:
+     * relative }` or `button { opacity: 0 }` in the host page is enough to
+     * make it invisible, and the stylesheet loses that argument on
+     * specificity. The panel had the same exposure and was moved into a shadow
+     * root; one button does not justify a second shadow tree, but it does
+     * justify winning the cascade outright. */
+    for (const [property, value] of Object.entries({
+      position: "fixed",
+      top: "16px",
+      right: "16px",
+      left: "auto",
+      bottom: "auto",
+      "z-index": "2147483647",
+      display: "flex",
+      width: "38px",
+      height: "26px",
+      margin: "0",
+      transform: "none",
+      "pointer-events": "auto", // the overlay refuses them; this control needs them
+      visibility: "hidden",
+      opacity: "0",
+    })) {
+      node.style.setProperty(property, value, "important");
+    }
     return node;
   }
 
   function revealHandle() {
     if (!handle) return;
     handle.dataset.visible = "true";
+    // Inline, for the same reason the rest of its geometry is inline.
+    handle.style.setProperty("visibility", "visible", "important");
+    handle.style.setProperty("opacity", "0.55", "important");
     clearTimeout(handleTimer);
     handleTimer = setTimeout(() => {
-      if (handle && !handle.matches(":hover")) handle.dataset.visible = "false";
+      if (handle && !handle.matches(":hover")) {
+        handle.dataset.visible = "false";
+        handle.style.setProperty("visibility", "hidden", "important");
+        handle.style.setProperty("opacity", "0", "important");
+      }
     }, 2600);
   }
 
@@ -451,6 +482,9 @@
     root.hidden = false;
     startTicking();
     notify();
+    // Show the handle on attach, so it is discoverable without knowing that
+    // moving the mouse summons it.
+    revealHandle();
 
     showToast(
       state.cues.length > 0
@@ -618,8 +652,15 @@
     revealHandle();
   }
 
+  /* Capture phase, not bubble. Video players routinely stopPropagation on
+   * pointer events inside the player so their own chrome can own them, which
+   * means a bubble-phase listener on document never runs while the pointer is
+   * over the film - precisely where it needs to. Capture runs top-down before
+   * any of that. mousemove as well as pointermove, because a few players
+   * synthesise only one of the two. */
   document.addEventListener("keydown", onKeyDown, true);
-  document.addEventListener("pointermove", onPointerMove, { passive: true });
+  document.addEventListener("pointermove", onPointerMove, { passive: true, capture: true });
+  document.addEventListener("mousemove", onPointerMove, { passive: true, capture: true });
   document.addEventListener("fullscreenchange", attachToCorrectParent);
   document.addEventListener("webkitfullscreenchange", attachToCorrectParent);
   loadSettings();
@@ -633,7 +674,8 @@
     clearTimeout(toastTimer);
     clearTimeout(handleTimer);
     document.removeEventListener("keydown", onKeyDown, true);
-    document.removeEventListener("pointermove", onPointerMove);
+    document.removeEventListener("pointermove", onPointerMove, { capture: true });
+    document.removeEventListener("mousemove", onPointerMove, { capture: true });
     document.removeEventListener("fullscreenchange", attachToCorrectParent);
     document.removeEventListener("webkitfullscreenchange", attachToCorrectParent);
     chrome.runtime.onMessage.removeListener(onMessage);
