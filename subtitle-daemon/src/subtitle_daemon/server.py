@@ -26,7 +26,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from . import subtitles, titles
+from . import matching, subtitles, titles
 from .cache import Cache
 from .config import CACHE_DIR, Config
 from .opensubtitles import Client, OpenSubtitlesError, QuotaExceededError
@@ -125,7 +125,7 @@ class Service:
             return response
 
         try:
-            found = self.client.search(
+            found, resolved = self._search_upstream(
                 query=query,
                 languages=languages,
                 year=year,
@@ -137,15 +137,169 @@ class Service:
             response["error"] = str(err)
             return response
 
+        if resolved is not None:
+            response["resolved"] = {
+                "title": resolved.title,
+                "year": resolved.year,
+                "imdb_id": resolved.imdb_id,
+                "type": resolved.feature_type,
+            }
+        elif not found:
+            # /features knows the whole catalogue. If it has never heard of the
+            # title, no query rewriting will help - the subtitles do not exist.
+            # Saying so is more useful than 187 near-miss episodes.
+            response["error"] = (
+                f'OpenSubtitles has no subtitles for "{query}". '
+                "Check the title, or transcribe the audio instead."
+            )
+            response["not_in_database"] = True
+            return response
+
         results = [item.as_dict() for item in found]
+
         # Mark what is already downloaded so the UI can show a free choice.
         on_disk = {item.file_id for item in self.cache.list_subtitles()}
         for item in results:
             item["cached"] = item["file_id"] in on_disk
+            item["match_score"] = matching.best_score(
+                query,
+                [str(item.get("movie_name") or ""), str(item.get("release") or "")],
+                query_year=year,
+                candidate_year=item.get("year"),
+            )
 
-        self.cache.put_search(key, results)
-        response["results"] = results
+        # Rank by match first. OpenSubtitles' own ordering is fuzzy enough to
+        # put an unrelated film on top, which is how "Ekusute" got downloaded
+        # for a Crime 101 search. Score is bucketed to one decimal so that among
+        # equally plausible matches, trust and popularity still decide.
+        #
+        # Episode agreement outranks everything: for a series, every result
+        # scores identically on title, and uploads mislabelled with the wrong
+        # episode are common enough that ignoring the field puts the wrong
+        # instalment first.
+        def rank(item: dict[str, Any]) -> tuple[int, float, bool, int]:
+            return (
+                _episode_agreement(item, season, episode),
+                round(item["match_score"], 1),
+                item["from_trusted"],
+                item["download_count"],
+            )
+
+        results.sort(key=rank, reverse=True)
+
+        plausible = [item for item in results if item["match_score"] >= matching.VISIBLE_THRESHOLD]
+        if plausible:
+            response["results"] = plausible
+        else:
+            # Nothing resembles the query. Show a few anyway - the title guess
+            # may be wrong rather than the film missing - but say so, so the UI
+            # does not present junk as an answer.
+            response["results"] = results[:5]
+            response["low_confidence"] = True
+
+        response["auto_attach_threshold"] = matching.AUTO_ATTACH_THRESHOLD
+        self.cache.put_search(key, response["results"])
         return response
+
+    def _search_upstream(
+        self,
+        *,
+        query: str,
+        languages: tuple[str, ...],
+        year: int | None,
+        season: int | None,
+        episode: int | None,
+        imdb_id: str | None,
+    ) -> tuple[list[Any], Any]:
+        """Resolve the title, then search for it exactly.
+
+        `/subtitles?query=` is fuzzy and always returns something, so it cannot
+        distinguish "wrong title" from "not in the database". `/features` can:
+        it is the title index. When it recognises the title we search by IMDb
+        id, which is exact; when it does not, we fall back to a fuzzy query so
+        a title the index spells differently is still findable.
+
+        Both calls are free - only downloading is metered.
+        """
+        client = self.client
+        assert client is not None  # callers check has_api_key first
+
+        if imdb_id:
+            return client.search(
+                imdb_id=imdb_id, languages=languages, season=season, episode=episode
+            ), None
+
+        resolved = self._pick_feature(query, year, want_series=season is not None)
+
+        if resolved is not None:
+            if resolved.is_series:
+                found = client.search(
+                    parent_imdb_id=resolved.imdb_id,
+                    languages=languages,
+                    season=season,
+                    episode=episode,
+                )
+                # A series matched but the episode has no subtitles: fall back
+                # to the show as a whole rather than reporting nothing.
+                if not found and (season is not None or episode is not None):
+                    found = client.search(
+                        parent_imdb_id=resolved.imdb_id, languages=languages
+                    )
+            else:
+                found = client.search(imdb_id=resolved.imdb_id, languages=languages)
+
+            if found:
+                return found, resolved
+
+        # No confident title match. Narrow by media type so a film search does
+        # not drown in episodes that merely share a word.
+        media_type = "episode" if season is not None else "movie"
+        found = client.search(
+            query=query,
+            languages=languages,
+            year=year,
+            season=season,
+            episode=episode,
+            media_type=media_type,
+        )
+        if found:
+            return found, resolved
+
+        # Last resort: unfiltered. Catches series searched without an episode
+        # number, and anything the type filter misclassifies.
+        return client.search(
+            query=query, languages=languages, year=year, season=season, episode=episode
+        ), resolved
+
+    def _pick_feature(self, query: str, year: int | None, *, want_series: bool) -> Any:
+        """Best index entry for the query, or None if nothing matches well."""
+        client = self.client
+        assert client is not None
+
+        try:
+            candidates = client.features(query)
+        except OpenSubtitlesError as err:
+            # The index is an optimisation, not a requirement. Losing it costs
+            # precision, not the search.
+            logger.warning("feature lookup failed, falling back to fuzzy search: %s", err)
+            return None
+
+        scored = [
+            (
+                matching.score(query, feature.title, query_year=year,
+                               candidate_year=feature.year),
+                feature,
+            )
+            for feature in candidates
+            if feature.subtitles_count > 0
+        ]
+        if want_series:
+            scored = [(score, f) for score, f in scored if f.is_series] or scored
+
+        scored.sort(key=lambda pair: (pair[0], pair[1].subtitles_count), reverse=True)
+        if scored and scored[0][0] >= matching.AUTO_ATTACH_THRESHOLD:
+            return scored[0][1]
+        return None
 
     def fetch(self, body: dict[str, Any]) -> dict[str, Any]:
         """Return cues for a file_id, downloading only if not already cached."""
@@ -316,6 +470,24 @@ class _Handler(BaseHTTPRequestHandler):
         self._cors_headers(self.headers.get("Origin"))
         self.end_headers()
         self.wfile.write(raw)
+
+
+def _episode_agreement(item: dict[str, Any], season: int | None, episode: int | None) -> int:
+    """1 if the result is the requested episode, -1 if it is a different one.
+
+    0 covers "not asked for" and "result does not say", which must sort between
+    the two: a result with no episode metadata is not evidence of a mismatch.
+    """
+    if season is None and episode is None:
+        return 0
+    item_season, item_episode = item.get("season"), item.get("episode")
+    if item_season is None and item_episode is None:
+        return 0
+    if (season is None or item_season == season) and (
+        episode is None or item_episode == episode
+    ):
+        return 1
+    return -1
 
 
 def _cues_response(raw: bytes, meta: dict[str, Any], *, from_cache: bool) -> dict[str, Any]:

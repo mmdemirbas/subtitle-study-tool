@@ -21,6 +21,34 @@ def test_strips_site_and_player_noise(raw: str, expected: str) -> None:
     assert guess(raw).query.strip() == expected.strip()
 
 
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "Prime Video: Crime 101",
+        "Watch Crime 101 | Prime Video",
+        "Crime 101 - Prime Video",
+        "Amazon Prime Video: Crime 101",
+        "Crime 101 - Watch Online - Prime Video",
+        "Netflix: Crime 101",
+    ],
+)
+def test_site_branding_is_stripped_from_either_end(raw: str) -> None:
+    # Regression: Prime Video detail pages lead with the branding rather than
+    # trailing it, so "Prime Video: Crime 101" reached OpenSubtitles verbatim
+    # and fuzzy-matched "Ekusute" and "Major Crimes".
+    assert guess(raw).query == "Crime 101"
+
+
+def test_site_name_alone_is_not_reduced_to_nothing() -> None:
+    assert guess("Prime Video").query == "Prime Video"
+    assert guess("Netflix").query == "Netflix"
+
+
+def test_leading_watch_needs_a_title_after_it() -> None:
+    assert guess("Watch").query == "Watch"
+    assert guess("Watchmen").query == "Watchmen"
+
+
 def test_extracts_year_and_removes_it_from_query() -> None:
     result = guess("Blade Runner (1982) - Netflix")
     assert result.query == "Blade Runner"

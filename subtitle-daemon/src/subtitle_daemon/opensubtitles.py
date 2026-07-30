@@ -15,6 +15,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -42,6 +43,28 @@ class QuotaExceededError(OpenSubtitlesError):
     Separated from the generic error because the remedy is different: waiting
     or signing in, not retrying.
     """
+
+
+@dataclass(frozen=True)
+class Feature:
+    """A title in OpenSubtitles' index, from /features.
+
+    Worth a separate call because it answers a question `/subtitles?query=`
+    cannot: does this film exist here at all? A fuzzy subtitle search always
+    returns *something*, so absence is indistinguishable from a bad match.
+    /features says plainly when a title is unknown, and when it is known it
+    hands back an IMDb id, which turns the subtitle search from fuzzy to exact.
+    """
+
+    imdb_id: str
+    title: str
+    year: int | None
+    feature_type: str  # "Movie" | "Tvshow" | "Episode"
+    subtitles_count: int
+
+    @property
+    def is_series(self) -> bool:
+        return self.feature_type.lower() in ("tvshow", "episode")
 
 
 @dataclass(frozen=True)
@@ -129,15 +152,27 @@ class Client:
 
     # --- search -------------------------------------------------------------
 
+    def features(self, query: str) -> list[Feature]:
+        """Look a title up in the index. Free, and says when nothing exists."""
+        if not query:
+            return []
+        payload = self._request("GET", "/features", params={"query": query})
+        raw = payload.get("data")
+        if not isinstance(raw, list):
+            return []
+        return [parsed for item in raw if (parsed := _parse_feature(item))]
+
     def search(
         self,
         *,
-        query: str,
+        query: str = "",
         languages: tuple[str, ...],
         year: int | None = None,
         season: int | None = None,
         episode: int | None = None,
         imdb_id: str | None = None,
+        parent_imdb_id: str | None = None,
+        media_type: str | None = None,
         moviehash: str | None = None,
     ) -> list[SearchResult]:
         """Search for subtitles. Unlimited, so callers may retry freely."""
@@ -157,6 +192,10 @@ class Client:
             params["episode_number"] = str(episode)
         if imdb_id:
             params["imdb_id"] = imdb_id.removeprefix("tt")
+        if parent_imdb_id:
+            params["parent_imdb_id"] = parent_imdb_id.removeprefix("tt")
+        if media_type:
+            params["type"] = media_type
         if moviehash:
             params["moviehash"] = moviehash
 
@@ -272,6 +311,27 @@ def _translate_http_error(err: urllib.error.HTTPError) -> OpenSubtitlesError:
     return OpenSubtitlesError(detail or f"OpenSubtitles returned HTTP {err.code}", status=err.code)
 
 
+def _parse_feature(item: Any) -> Feature | None:
+    """Flatten one /features entry, tolerating missing or renamed fields."""
+    if not isinstance(item, dict):
+        return None
+    attributes = item.get("attributes")
+    if not isinstance(attributes, dict):
+        return None
+
+    imdb_id = attributes.get("imdb_id")
+    if imdb_id is None:
+        return None
+
+    return Feature(
+        imdb_id=str(imdb_id),
+        title=str(attributes.get("title") or ""),
+        year=_as_int(attributes.get("year")),
+        feature_type=str(attributes.get("feature_type") or ""),
+        subtitles_count=_as_int(attributes.get("subtitles_count")) or 0,
+    )
+
+
 def _parse_search_item(item: Any) -> SearchResult | None:
     """Flatten one `data[]` entry, tolerating missing or renamed fields."""
     if not isinstance(item, dict):
@@ -293,13 +353,17 @@ def _parse_search_item(item: Any) -> SearchResult | None:
     feature = attributes.get("feature_details")
     feature = feature if isinstance(feature, dict) else {}
 
+    movie_name, name_year = _split_year_prefix(
+        str(feature.get("movie_name") or feature.get("title") or "")
+    )
+
     return SearchResult(
         file_id=file_id,
         subtitle_id=str(item.get("id") or ""),
         language=str(attributes.get("language") or "").lower(),
         release=str(attributes.get("release") or first.get("file_name") or ""),
-        movie_name=str(feature.get("movie_name") or feature.get("title") or ""),
-        year=_as_int(feature.get("year")),
+        movie_name=movie_name,
+        year=_as_int(feature.get("year")) or name_year,
         season=_as_int(feature.get("season_number")),
         episode=_as_int(feature.get("episode_number")),
         download_count=_as_int(attributes.get("download_count")) or 0,
@@ -308,6 +372,20 @@ def _parse_search_item(item: Any) -> SearchResult | None:
         fps=_as_float(attributes.get("fps")),
         url=str(attributes.get("url") or ""),
     )
+
+
+# OpenSubtitles returns movie_name for films as "2015 - Sicario". Left in place
+# it costs every exact title a chunk of its match score, because the year is
+# compared against the title the user asked for.
+_YEAR_PREFIX = re.compile(r"^\s*(?P<year>19[0-9]{2}|20[0-4][0-9])\s*[-–—]\s*(?=\S)")
+
+
+def _split_year_prefix(name: str) -> tuple[str, int | None]:
+    """Separate a leading "YYYY - " from a title, if present."""
+    match = _YEAR_PREFIX.match(name)
+    if not match:
+        return name.strip(), None
+    return name[match.end() :].strip(), int(match.group("year"))
 
 
 def _ranking_key(result: SearchResult) -> tuple[int, int, int]:

@@ -27,18 +27,36 @@ _LEADING_NOISE = re.compile(r"^\s*(?:\(\d+\)|[▶●▪•])\s*")
 _SEPARATOR_CHARS = r"\-|–—·•:"
 _SEPARATOR = f"[{_SEPARATOR_CHARS}]"
 
-# Streaming sites and apps, as a trailing segment after a separator.
-_SITE_NOISE = re.compile(
-    rf"""
-    \s*{_SEPARATOR}\s*
+# Streaming sites and apps. Branding appears at BOTH ends in the wild:
+# Prime Video detail pages title themselves "Prime Video: Crime 101", while
+# search-result and player pages use "Crime 101 - Prime Video". Stripping only
+# the suffix leaves the site name in the query, which turns a title search into
+# a fuzzy match against the word "prime" - the bug that returned "Ekusute" and
+# "Major Crimes" for Crime 101.
+_SITE_NAMES = r"""
     (?:
-        netflix | prime\s*video | amazon(?:\s*prime)? | disney\+? | hulu | max
-      | hbo(?:\s*max)? | apple\s*tv\+? | youtube | vimeo | dailymotion
+        netflix | prime\s*video | amazon(?:\s*prime(?:\s*video)?)? | disney\+?
+      | hulu | hbo(?:\s*max)? | max | apple\s*tv\+? | paramount\+? | peacock
+      | youtube(?:\s*tv)? | vimeo | dailymotion | crunchyroll
       | plex | jellyfin | emby | mubi | blutv | exxen | gain | tabii | tod
     )
-    \s*$
-    """,
+"""
+
+_SITE_SUFFIX = re.compile(
+    rf"\s*{_SEPARATOR}\s*{_SITE_NAMES}\s*$",
     re.IGNORECASE | re.VERBOSE,
+)
+
+_SITE_PREFIX = re.compile(
+    rf"^\s*{_SITE_NAMES}\s*{_SEPARATOR}\s*",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+# "Watch <title>" / "Stream <title>" openers, stripped only when a title
+# follows. A leading bare "Watch" with nothing after it is left alone.
+_WATCH_PREFIX = re.compile(
+    r"^\s*(?:watch|stream|play)\s+(?=\S)",
+    re.IGNORECASE,
 )
 
 # Words that make up "watch this online free in HD" style trailing noise. They
@@ -116,10 +134,13 @@ def guess(raw: str) -> TitleGuess:
     text = _LEADING_NOISE.sub("", raw or "").strip()
 
     # Site branding first: it sits outside the watch-noise, and some pages stack
-    # two separators ("Title - Watch Online - SomeSite").
-    text = _strip_suffix_repeatedly(text, _SITE_NOISE)
-    text = _strip_suffix_repeatedly(text, _WATCH_NOISE_TAIL)
-    text = _strip_suffix_repeatedly(text, _SITE_NOISE)
+    # two separators ("Title - Watch Online - SomeSite"). Both ends, because
+    # branding leads on some pages and trails on others.
+    text = _strip_repeatedly(text, _SITE_PREFIX)
+    text = _strip_repeatedly(text, _SITE_SUFFIX)
+    text = _strip_repeatedly(text, _WATCH_NOISE_TAIL)
+    text = _strip_repeatedly(text, _SITE_SUFFIX)
+    text = _strip_repeatedly(text, _WATCH_PREFIX, limit=1)
 
     season = episode = None
     for pattern in _EPISODE_PATTERNS:
@@ -168,11 +189,12 @@ def guess(raw: str) -> TitleGuess:
     return TitleGuess(query=text, year=year, season=season, episode=episode)
 
 
-def _strip_suffix_repeatedly(text: str, pattern: re.Pattern[str], limit: int = 3) -> str:
-    """Remove a matching suffix, but never everything.
+def _strip_repeatedly(text: str, pattern: re.Pattern[str], limit: int = 3) -> str:
+    """Remove a matching prefix or suffix, but never everything.
 
     The guard is what keeps a title made entirely of noise words from being
-    reduced to an empty query.
+    reduced to an empty query - "Prime Video" on its own stays as it is rather
+    than becoming a search for nothing.
     """
     for _ in range(limit):
         stripped = pattern.sub("", text).strip()

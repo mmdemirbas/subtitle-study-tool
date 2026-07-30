@@ -18,6 +18,13 @@ from pathlib import Path
 
 SEARCH_TTL_SECONDS = 6 * 60 * 60
 
+# Bump when the shape or the derivation of cached search results changes -
+# parsing, scoring, ranking, filtering. Cached entries hold *processed* results,
+# so without this a change to any of that stays invisible for the TTL and the
+# daemon keeps serving answers computed by the previous version. Downloaded
+# subtitle files are not versioned: those are raw bytes and never go stale.
+SEARCH_SCHEMA_VERSION = 2
+
 
 @dataclass(frozen=True)
 class CachedSubtitle:
@@ -79,7 +86,7 @@ class Cache:
     # --- searches -----------------------------------------------------------
 
     def get_search(self, key: str) -> list[dict[str, object]] | None:
-        path = self._searches / f"{key}.json"
+        path = self._search_path(key)
         if not path.exists():
             return None
         payload = json.loads(path.read_text())
@@ -88,8 +95,11 @@ class Cache:
         return payload.get("results")
 
     def put_search(self, key: str, results: list[dict[str, object]]) -> None:
-        path = self._searches / f"{key}.json"
+        path = self._search_path(key)
         path.write_text(json.dumps({"at": time.time(), "results": results}, ensure_ascii=False))
+
+    def _search_path(self, key: str) -> Path:
+        return self._searches / f"v{SEARCH_SCHEMA_VERSION}-{key}.json"
 
     def _subtitle_path(self, file_id: int) -> Path:
         return self._subtitles / f"{file_id}.srt"

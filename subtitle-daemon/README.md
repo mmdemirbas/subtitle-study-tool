@@ -68,6 +68,12 @@ third of a day's allowance, so:
 - Search results are annotated with `cached: true` so the UI can show which
   choices are free.
 
+The search cache holds *processed* results, so `SEARCH_SCHEMA_VERSION` in
+`cache.py` is part of its key. Bump it whenever parsing, scoring, ranking or
+filtering changes — otherwise the daemon keeps serving answers computed by the
+previous version until the TTL expires, which reliably wastes an afternoon.
+Downloaded subtitle files are not versioned: those are raw bytes.
+
 ## Endpoints
 
 | Method | Path | Notes |
@@ -80,6 +86,37 @@ third of a day's allowance, so:
 | `GET` | `/cached/{file_id}` | Cues for one cached subtitle. |
 
 `/search` also accepts `languages`, `year`, `season`, `episode` and `imdb_id`.
+
+## How a search resolves
+
+`/subtitles?query=` is fuzzy and always returns *something*, which makes a
+wrong title indistinguishable from a film that isn't there. So the title is
+resolved first:
+
+1. **`/features`** — the title index. Candidates are scored against the query;
+   a confident match hands back an IMDb id and the search becomes exact
+   (`imdb_id`, or `parent_imdb_id` + season + episode for a series).
+2. **Fuzzy fallback** — if nothing matches confidently, search by query with a
+   `type` filter, so a film search doesn't drown in episodes that merely share
+   a word.
+3. **Unfiltered last resort** — catches series searched without an episode
+   number, and anything the type filter misclassifies.
+
+This is not a marginal improvement. Searching `Crime 101` through
+`/subtitles?query=` returns 187 unrelated TV episodes and zero with
+`type=movie` — the film looks absent. Through `/features` it resolves to
+imdb 32430579 and its subtitles match exactly. Both calls are free; only
+downloading is metered.
+
+Results are then **scored against what was asked for** (`matching.py`) and
+ranked by that score before trust and popularity. Anything below a visibility
+floor is dropped; when nothing is plausible the response carries
+`low_confidence` so the UI can say so rather than presenting junk as an answer.
+The extension refuses to auto-download below `auto_attach_threshold`.
+
+For series, agreement with the requested season and episode outranks
+everything else. Mislabelled uploads are common, and without that the
+most-downloaded episode of the show wins regardless of which was asked for.
 
 ## Access control
 
@@ -102,9 +139,18 @@ rather than taking the first that does not throw.
 
 **Title guessing.** `titles.guess` strips site branding, player chrome and
 release-scene tokens from a tab title, and pulls out season/episode. It is
-heuristic and the extension lets you correct it. One deliberate choice: a bare
-trailing year is left in the query, because "Ayla 2017" and "Blade Runner 2049"
-are indistinguishable and guessing wrong is worse than passing it through.
+heuristic and the extension lets you correct it.
+
+Branding is stripped from **both ends**. Prime Video titles a detail page
+`Prime Video: Crime 101` while its player page uses `Crime 101 - Prime Video`;
+handling only the suffix left the site name in the query and turned a title
+search into a fuzzy match on the word "prime". Stripping never empties a
+query — `Prime Video` on its own stays as it is rather than becoming a search
+for nothing.
+
+A bare trailing year is deliberately left in the query, because "Ayla 2017" and
+"Blade Runner 2049" are indistinguishable and guessing wrong is worse than
+passing it through. A bracketed or dot-delimited year is extracted.
 
 **Response shapes.** The OpenSubtitles reference docs render client-side, so
 the field names were confirmed against live calls rather than read off a spec.
@@ -117,6 +163,12 @@ the request.
 uv run pytest
 ```
 
-Covers encoding detection, SRT parsing, title guessing, quota behaviour and the
-origin allowlist. A stub stands in for the API client, so no test makes a
-network call or spends real quota.
+Covers encoding detection, SRT parsing, title guessing, match scoring, title
+resolution, episode ranking, quota behaviour and the origin allowlist. A stub
+stands in for the API client, so no test makes a network call or spends real
+quota.
+
+The Crime 101 failure is pinned as a regression test in three places: the
+title guesser (`test_site_branding_is_stripped_from_either_end`), the scorer
+(`test_the_actual_bad_matches_score_below_auto_attach`) and the search endpoint
+(`test_the_crime_101_regression`).
