@@ -23,7 +23,7 @@ SEARCH_TTL_SECONDS = 6 * 60 * 60
 # so without this a change to any of that stays invisible for the TTL and the
 # daemon keeps serving answers computed by the previous version. Downloaded
 # subtitle files are not versioned: those are raw bytes and never go stale.
-SEARCH_SCHEMA_VERSION = 2
+SEARCH_SCHEMA_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -85,18 +85,26 @@ class Cache:
 
     # --- searches -----------------------------------------------------------
 
-    def get_search(self, key: str) -> list[dict[str, object]] | None:
+    def get_search(self, key: str) -> dict[str, object] | None:
+        """The cached search envelope, or None if absent or stale.
+
+        Returns the whole envelope rather than only the rows: the confidence
+        flags alongside them are conclusions about that result set and have to
+        survive a replay with it.
+        """
         path = self._search_path(key)
         if not path.exists():
             return None
         payload = json.loads(path.read_text())
         if time.time() - payload.get("at", 0) > SEARCH_TTL_SECONDS:
             return None
-        return payload.get("results")
+        envelope = payload.get("envelope")
+        return envelope if isinstance(envelope, dict) else None
 
-    def put_search(self, key: str, results: list[dict[str, object]]) -> None:
+    def put_search(self, key: str, envelope: dict[str, object]) -> None:
         path = self._search_path(key)
-        path.write_text(json.dumps({"at": time.time(), "results": results}, ensure_ascii=False))
+        path.write_text(json.dumps({"at": time.time(), "envelope": envelope},
+                                   ensure_ascii=False))
 
     def _search_path(self, key: str) -> Path:
         return self._searches / f"v{SEARCH_SCHEMA_VERSION}-{key}.json"

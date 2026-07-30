@@ -198,6 +198,37 @@ def test_repeat_search_is_served_from_cache(http) -> None:
     assert stub.searches == 1, "second identical search should not hit the API"
 
 
+def test_cache_hit_reproduces_the_whole_envelope(http) -> None:
+    """Confidence flags are conclusions about the result set, not decoration.
+
+    Caching only the rows made a replayed low-confidence search look confident,
+    which is precisely when the caller must not auto-attach.
+    """
+    base, stub = http
+    stub.feature_list = []
+    stub.results = [make_result(1, "Ekusute", release="Ekusute.DVDRip")]
+
+    _status, fresh = _get(base, "/search?query=Crime+101")
+    _status, replayed = _get(base, "/search?query=Crime+101")
+
+    assert replayed["from_cache"] is True
+    assert stub.searches == 1
+    for field in ("low_confidence", "auto_attach_threshold", "results"):
+        assert replayed.get(field) == fresh.get(field), field
+
+
+def test_cache_hit_keeps_the_resolved_title(http) -> None:
+    base, stub = http
+    stub.feature_list = [make_feature("Sicario", imdb_id="3397884", year=2015)]
+
+    _get(base, "/search?query=Sicario")
+    _status, replayed = _get(base, "/search?query=Sicario")
+
+    assert replayed["from_cache"] is True
+    assert replayed["resolved"]["imdb_id"] == "3397884"
+    assert stub.feature_lookups == 1
+
+
 # --- match scoring ----------------------------------------------------------
 
 

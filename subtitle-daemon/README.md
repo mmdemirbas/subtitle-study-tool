@@ -39,11 +39,20 @@ allowance from 5 per day to at least 10. Environment variables
 ```bash
 ./run.sh              # or: uv run subtitle-daemon
 ./run.sh --verbose    # log every request
+./run.sh --replace    # stop a daemon already on the port, then take over
+./run.sh --port 8792  # run alongside one
 ```
 
 Listens on `http://127.0.0.1:8791`. It starts and serves `/health` with no API
 key configured, so you can confirm the plumbing before dealing with
 credentials.
+
+A forgotten copy of the daemon holding the port is the most likely reason it
+will not start. Rather than an `EADDRINUSE` traceback, it asks whatever is on
+the port whether it is a subtitle-daemon and prints the PID and the three ways
+out. `--replace` stops the old one and takes over — and refuses if the port is
+held by something that is not a subtitle-daemon, since taking the port first
+is not a reason to be killed.
 
 There are no runtime dependencies. `http.server` and `urllib` cover a
 three-endpoint service, and keeping the dependency list empty means the daemon

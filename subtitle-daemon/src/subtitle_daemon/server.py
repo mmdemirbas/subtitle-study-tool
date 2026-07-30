@@ -17,6 +17,7 @@ Endpoints:
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import re
@@ -47,6 +48,19 @@ _ALLOWED_ORIGIN = re.compile(
 )
 
 MAX_BODY_BYTES = 64 * 1024
+
+# Everything a search derives about its result set, and therefore everything a
+# cache hit has to reproduce. Anything omitted here silently reverts to its
+# default on a replay - which for the confidence flags means a doubtful result
+# set coming back looking certain.
+_CACHED_FIELDS = (
+    "results",
+    "resolved",
+    "low_confidence",
+    "not_in_database",
+    "error",
+    "auto_attach_threshold",
+)
 
 
 class Service:
@@ -120,7 +134,11 @@ class Service:
         key = _cache_key(query, languages, year, season, episode, imdb_id)
         cached = self.cache.get_search(key)
         if cached is not None:
-            response["results"] = cached
+            # Restore the whole derived envelope, not just the rows. The
+            # confidence flags are conclusions about this result set; dropping
+            # them on a cache hit would render a low-confidence search as
+            # though it were a confident one.
+            response.update(cached)
             response["from_cache"] = True
             return response
 
@@ -198,7 +216,7 @@ class Service:
             response["low_confidence"] = True
 
         response["auto_attach_threshold"] = matching.AUTO_ATTACH_THRESHOLD
-        self.cache.put_search(key, response["results"])
+        self.cache.put_search(key, {k: response[k] for k in _CACHED_FIELDS if k in response})
         return response
 
     def _search_upstream(
@@ -355,16 +373,30 @@ class Service:
         return _cues_response(cached.read_bytes(), dict(cached.meta), from_cache=True)
 
 
+class PortInUseError(RuntimeError):
+    """Something is already listening on the port the daemon wants."""
+
+    def __init__(self, port: int) -> None:
+        super().__init__(f"port {port} is already in use")
+        self.port = port
+
+
 def serve(config: Config) -> None:
     """Run the daemon until interrupted."""
-    service = Service(config)
-
+    # Bind before building the Service. Constructing it performs an
+    # OpenSubtitles login, and paying for a network round trip only to then
+    # fail on the port is both slow and confusing to read in the log.
     class Handler(_Handler):
         pass
 
-    Handler.service = service
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", config.port), Handler)
+    except OSError as err:
+        if err.errno == errno.EADDRINUSE:
+            raise PortInUseError(config.port) from err
+        raise
 
-    server = ThreadingHTTPServer(("127.0.0.1", config.port), Handler)
+    Handler.service = Service(config)
     logger.info("subtitle-daemon listening on http://127.0.0.1:%d", config.port)
     if not config.has_api_key:
         logger.warning(
