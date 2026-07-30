@@ -52,6 +52,11 @@ models/
 .cache/
 subtitle-daemon/cache/
 
+# oku report build output, and the kit symlink (points into a uv tools dir,
+# so it is machine-local and must not be committed)
+docs/reports/dist/
+docs/reports/_oku
+
 # Logs / Temp
 *.log
 tmp/
