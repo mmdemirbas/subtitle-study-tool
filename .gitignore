@@ -1,4 +1,57 @@
-# Python
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE / Editors
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# Build / Artifacts
+build/
+dist/
+
+# Language: Python
+__pycache__/
+*.py[cod]
 .venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Language: Node / JS
+node_modules/
+
+# Vendored third-party source (multi-GB, restored by scripts/setup-whisper.sh)
+vendor/
+
+# Model weights (multi-GB, downloaded by scripts/setup-whisper.sh)
+models/
+*.bin
+*.gguf
+
+# Media (generate or fetch locally; never commit)
+*.wav
+*.mp3
+*.m4a
+*.mp4
+*.mkv
+*.mov
+*.avi
+
+# Secrets / Local config
 .env
+.env.local
+*.local.json
+
+# Caches / Runtime data
 *.sqlite
+*.sqlite-journal
+.cache/
+subtitle-daemon/cache/
+
+# Logs / Temp
+*.log
+tmp/

@@ -1,0 +1,11 @@
+# Default glossary for SubGen
+# Add one term per line.  Lines beginning with '#' are ignored.
+# These terms will be appended to the Whisper initial prompt to improve
+# transcription accuracy for domain‑specific words.
+
+Contoso
+Apache Spark
+Kubernetes
+DAG
+PyTorch
+TensorFlow
