@@ -17,6 +17,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from . import markup
+
 # Ordered by likelihood for the languages this tool is used with. utf-8 is tried
 # first because when it succeeds it is almost never a false positive - arbitrary
 # 8-bit text usually fails utf-8's continuation-byte rules.
@@ -120,19 +122,50 @@ def parse_srt(text: str) -> list[Cue]:
 
 
 def to_vtt(cues: list[Cue]) -> str:
-    """Render cues as WebVTT."""
+    """Render cues as WebVTT, translating inline markup into VTT tags."""
     parts = ["WEBVTT", ""]
     for index, cue in enumerate(cues, start=1):
+        parsed = markup.parse(cue.text)
+        # \anN maps onto a cue setting; VTT positions from the top, so "top" is
+        # a small percentage and the default bottom is left unstated.
+        settings = ""
+        if parsed.vertical == "top":
+            settings = " line:10%"
+        elif parsed.vertical == "middle":
+            settings = " line:50%"
+
         parts.append(str(index))
-        parts.append(f"{_fmt_vtt(cue.start_ms)} --> {_fmt_vtt(cue.end_ms)}")
-        parts.append(cue.text)
+        parts.append(f"{_fmt_vtt(cue.start_ms)} --> {_fmt_vtt(cue.end_ms)}{settings}")
+        parts.append(markup.to_vtt(parsed))
         parts.append("")
     return "\n".join(parts)
 
 
 def to_json(cues: list[Cue]) -> list[dict[str, object]]:
-    """Render cues in the shape the extension overlay consumes."""
-    return [{"start": cue.start_ms, "end": cue.end_ms, "text": cue.text} for cue in cues]
+    """Render cues in the shape the extension overlay consumes.
+
+    `text` is the dialogue with markup removed, so any consumer can use it
+    directly. `runs` carries the same text split by formatting, for renderers
+    that build elements rather than print a string. Cues with no formatting at
+    all omit `runs` entirely - which is most of them.
+    """
+    payload: list[dict[str, object]] = []
+    for cue in cues:
+        parsed = markup.parse(cue.text)
+        entry: dict[str, object] = {
+            "start": cue.start_ms,
+            "end": cue.end_ms,
+            "text": parsed.plain,
+        }
+        # kind counts as much as styling: a cue that is only "[indistinct
+        # chatter]" carries no formatting but still needs its run, or the
+        # renderer cannot tell it apart from speech.
+        if any(run.styles or run.color or run.kind for run in parsed.runs):
+            entry["runs"] = [run.as_dict() for run in parsed.runs]
+        if parsed.vertical:
+            entry["vertical"] = parsed.vertical
+        payload.append(entry)
+    return payload
 
 
 def _to_ms(hours: str, minutes: str, seconds: str, fraction: str) -> int:

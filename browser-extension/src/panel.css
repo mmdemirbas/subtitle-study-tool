@@ -211,6 +211,24 @@ input[type="range"] {
   flex: none;
 }
 
+/* Checkbox rows put the control first, so the label reads as its caption
+ * rather than as a column heading like the sliders above. */
+.sso-label--check {
+  margin-top: 6px;
+  cursor: pointer;
+}
+
+.sso-label--check span:first-child {
+  width: auto;
+}
+
+.sso-label--check input[type="checkbox"] {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #4d8ae0;
+}
+
 .sso-value {
   width: 40px;
   flex: none;

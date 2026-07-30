@@ -41,6 +41,7 @@
   let capturing = null;
   let unsubscribe = null;
   let lastResults = [];
+  let lastResolved = null;
   let sheet = null;
 
   // --- construction ---------------------------------------------------------
@@ -234,6 +235,7 @@
     if (!query && response.used?.query) el.query.value = response.used.query;
 
     lastResults = response.results || [];
+    lastResolved = response.resolved || null;
     if (lastResults.length === 0) {
       el.searchNote.textContent = "Nothing found. Try a different title.";
       return;
@@ -298,7 +300,17 @@
     el.searchNote.className = "sso-note";
     el.searchNote.textContent = result.cached ? "Loading…" : "Downloading…";
 
-    const response = await api.daemon("fetch", { fileId: result.file_id });
+    // Title context, so the cache can recognise this film next time and not
+    // spend another download on a different upload of it.
+    const response = await api.daemon("fetch", {
+      fileId: result.file_id,
+      context: {
+        imdb_id: lastResolved?.imdb_id || null,
+        language: result.language || null,
+        movie_name: result.movie_name || null,
+        release: result.release || null,
+      },
+    });
     if (!response || response.error || response.transportError) {
       el.searchNote.className = "sso-note sso-note--warn";
       el.searchNote.textContent =
@@ -337,8 +349,34 @@
       api.updateSettings({ bottomPercent: value }),
     );
 
-    wrap.append(el.fontScale.row, el.background.row, el.bottom.row);
+    el.showSymbols = toggle_("Sound symbols", settings.showSymbols, (on) =>
+      api.updateSettings({ showSymbols: on }),
+    );
+    el.dimNonSpeech = toggle_("Dim non-speech", settings.dimNonSpeech, (on) =>
+      api.updateSettings({ dimNonSpeech: on }),
+    );
+
+    wrap.append(
+      el.fontScale.row,
+      el.background.row,
+      el.bottom.row,
+      el.showSymbols.row,
+      el.dimNonSpeech.row,
+    );
     return wrap;
+  }
+
+  function toggle_(label, checked, onChange) {
+    const row = document.createElement("label");
+    row.className = "sso-label sso-label--check";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.checked = Boolean(checked);
+    input.addEventListener("change", () => onChange(input.checked));
+    const name = document.createElement("span");
+    name.textContent = label;
+    row.append(input, name);
+    return { row, input };
   }
 
   function slider(label, min, max, step, value, onInput) {
@@ -532,6 +570,8 @@
     el.background.readout.textContent = String(settings.background);
     el.bottom.input.value = String(settings.bottomPercent);
     el.bottom.readout.textContent = String(settings.bottomPercent);
+    el.showSymbols.input.checked = Boolean(settings.showSymbols);
+    el.dimNonSpeech.input.checked = Boolean(settings.dimNonSpeech);
 
     for (const [name] of KEY_FIELDS) {
       el.keyButtons[name].textContent = describeCode(settings.keys[name]);

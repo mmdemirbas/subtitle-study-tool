@@ -43,6 +43,8 @@
     fontScale: 1,
     background: 0.55,
     bottomPercent: 8,
+    showSymbols: true,
+    dimNonSpeech: true,
     smallStepMs: 250,
     largeStepMs: 1000,
     keys: {
@@ -175,10 +177,13 @@
 
   function applySettings() {
     if (!root) return;
-    const { fontScale, background, bottomPercent } = state.settings;
+    const { fontScale, background, bottomPercent, dimNonSpeech } = state.settings;
     root.style.setProperty("--sso-font-size", `${2.6 * fontScale}vh`);
     root.style.setProperty("--sso-bg", `rgba(0, 0, 0, ${background})`);
-    root.style.bottom = `${bottomPercent}%`;
+    root.style.setProperty("--sso-edge", `${bottomPercent}%`);
+    root.dataset.dim = dimNonSpeech ? "true" : "false";
+    // Symbols are part of the rendered content, so a change needs a redraw.
+    state.activeIndex = -1;
   }
 
   // --- overlay --------------------------------------------------------------
@@ -259,7 +264,48 @@
     const index = findCueIndex(state.video.currentTime * 1000 - state.offsetMs);
     if (index === state.activeIndex) return;
     state.activeIndex = index;
-    cueBox.textContent = index === -1 ? "" : state.cues[index].text;
+    renderCue(index === -1 ? null : state.cues[index]);
+  }
+
+  /* Builds the cue out of elements rather than assigning markup.
+   *
+   * The daemon splits a cue into runs - dialogue, speaker labels, sound
+   * descriptions - each with its own styling. Speech stays at full strength;
+   * everything else is dimmed, because it is context rather than something
+   * being said. Sounds that recur get a symbol next to the words, which is
+   * worth more than decoration when the subtitles are being read to learn the
+   * language: the glyph attaches to the word on sight.
+   *
+   * Text always goes in through createTextNode, never innerHTML, so nothing in
+   * a downloaded subtitle can become markup in the page. */
+  function renderCue(cue) {
+    cueBox.replaceChildren();
+    root.dataset.vertical = cue?.vertical || "bottom";
+    if (!cue) return;
+
+    if (!cue.runs) {
+      cueBox.textContent = cue.text;
+      return;
+    }
+
+    for (const run of cue.runs) {
+      const span = document.createElement("span");
+      span.className = "sso-run";
+      if (run.kind) span.classList.add(`sso-${run.kind}`);
+      for (const style of run.styles || []) span.classList.add(`sso-${style}`);
+      // Colour is validated against an allowlist daemon-side, so it can only
+      // ever be a hex literal or a known CSS colour name.
+      if (run.color) span.style.color = run.color;
+
+      if (run.symbol && state.settings.showSymbols) {
+        const symbol = document.createElement("span");
+        symbol.className = "sso-symbol";
+        symbol.textContent = run.symbol;
+        span.append(symbol);
+      }
+      span.append(document.createTextNode(run.text));
+      cueBox.append(span);
+    }
   }
 
   function startTicking() {

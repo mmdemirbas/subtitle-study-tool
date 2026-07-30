@@ -120,6 +120,58 @@ def test_to_json_shape() -> None:
     assert to_json([Cue(1000, 2000, "x")]) == [{"start": 1000, "end": 2000, "text": "x"}]
 
 
+# --- markup reaching the wire -------------------------------------------------
+
+
+def test_json_text_is_dialogue_without_markup() -> None:
+    [entry] = to_json([Cue(0, 1, "<i>Hello</i>")])
+    assert entry["text"] == "Hello"
+
+
+def test_json_carries_runs_only_when_there_is_formatting() -> None:
+    plain = to_json([Cue(0, 1, "Just talking")])[0]
+    assert "runs" not in plain, "most cues have no formatting; do not pay for it"
+
+    styled = to_json([Cue(0, 1, "Say <i>that</i> again")])[0]
+    assert styled["runs"] == [
+        {"text": "Say "},
+        {"text": "that", "styles": ["i"]},
+        {"text": " again"},
+    ]
+
+
+def test_json_carries_bbcode_formatting() -> None:
+    [entry] = to_json([Cue(0, 1, "[i]Whispering[/i]")])
+    assert entry["text"] == "Whispering"
+    assert entry["runs"] == [{"text": "Whispering", "styles": ["i"]}]
+
+
+def test_json_speaker_labels_survive_intact() -> None:
+    [entry] = to_json([Cue(0, 1, "[Ormon] Get down!")])
+    assert entry["text"] == "[Ormon] Get down!"
+    # Split into runs so the renderer can colour the name, with every
+    # character preserved.
+    assert entry["runs"][0]["kind"] == "speaker"
+    assert "".join(run["text"] for run in entry["runs"]) == "[Ormon] Get down!"
+
+
+def test_json_carries_vertical_position() -> None:
+    [entry] = to_json([Cue(0, 1, r"{\an8}Sign overhead")])
+    assert entry["text"] == "Sign overhead"
+    assert entry["vertical"] == "top"
+
+
+def test_vtt_translates_markup_and_position() -> None:
+    vtt = to_vtt([Cue(0, 1000, "<i>Hello</i>"), Cue(2000, 3000, r"{\an8}Above")])
+    assert "<i>Hello</i>" in vtt
+    assert "line:10%" in vtt
+    assert "{\\an8}" not in vtt, "override codes must not reach the screen as text"
+
+
+def test_vtt_escapes_dialogue_that_looks_like_markup() -> None:
+    assert "1 &lt; 2" in to_vtt([Cue(0, 1, "1 < 2")])
+
+
 def test_roundtrip_from_repo_fixture() -> None:
     # A real file from the repo, to catch anything synthetic cases miss.
     from pathlib import Path
