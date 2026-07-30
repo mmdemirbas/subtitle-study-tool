@@ -1,0 +1,32 @@
+[project]
+name = "subtitle-daemon"
+version = "0.1.0"
+description = "Local service that finds, downloads and caches subtitles for whatever is currently playing"
+requires-python = ">=3.11"
+
+# No runtime dependencies, deliberately. The daemon serves three endpoints and
+# makes two kinds of outbound request; http.server and urllib cover both. That
+# keeps `subtitle-daemon` startable with nothing installed, which is what makes
+# the extension's one-click path actually one click.
+dependencies = []
+
+[project.scripts]
+subtitle-daemon = "subtitle_daemon.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/subtitle_daemon"]
+
+[dependency-groups]
+dev = ["pytest>=8.3,<9"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src"]

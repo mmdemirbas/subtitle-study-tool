@@ -107,7 +107,8 @@ log "binaries in $WHISPER/build/bin:"
 ls "$WHISPER/build/bin" | grep -E '^whisper-' | sed 's/^/    /'
 echo
 log "models in $MODELS:"
-ls -lh "$MODELS"/ggml-*.bin 2>/dev/null | awk '{print "    " $NF " (" $5 ")"}'
+# -L so symlinked models report the size of their target, not the link.
+du -Lh "$MODELS"/ggml-*.bin 2>/dev/null | awk '{print "    " $2 " (" $1 ")"}'
 echo
 if [[ -x "$WHISPER/build/bin/whisper-stream" ]]; then
   log "whisper-stream is ready — realtime transcription can run"

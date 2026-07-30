@@ -1,0 +1,14 @@
+{
+  "_comment": "Copy to config.local.json (gitignored) and fill in. Get an API key at https://www.opensubtitles.com/en/consumers - free after registering.",
+
+  "api_key": "",
+
+  "_comment_login": "Optional. Signing in raises the download allowance from 5/day to at least 10/day.",
+  "username": "",
+  "password": "",
+
+  "_comment_languages": "Subtitle languages to search for, best first.",
+  "default_languages": ["en", "tr"],
+
+  "port": 8791
+}
