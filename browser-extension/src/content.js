@@ -15,7 +15,20 @@
 (() => {
   "use strict";
 
-  if (window.__ssoApi) return; // already injected
+  /* An earlier copy may already be running - the service worker re-injects on
+   * update, because reloading an extension leaves open tabs on the previous
+   * version. Hand over cleanly rather than bailing out: bailing would leave the
+   * stale copy in charge, and simply running again would double every listener.
+   */
+  if (typeof window.__ssoTeardown === "function") {
+    try {
+      window.__ssoTeardown();
+    } catch {
+      // A broken predecessor must not stop the replacement from installing.
+    }
+  }
+
+  const VERSION = chrome.runtime.getManifest().version;
   const TICK_MS = 50; // ~20 Hz: below perceptible latency, negligible cost
   const MIN_VIDEO_SECONDS = 60; // ignore ad breaks, teasers, autoplay loops
   const TOAST_MS = 1600;
@@ -295,7 +308,11 @@
     if (!state.settings.keysEnabled) return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
 
-    const target = event.target;
+    /* composedPath()[0] rather than event.target: the panel lives in a shadow
+     * root, and events crossing that boundary are retargeted to the host
+     * element. Reading event.target would see a plain div and let typing in the
+     * panel's search box fire the nudge bindings. */
+    const target = event.composedPath?.()[0] ?? event.target;
     if (
       target &&
       (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || ""))
@@ -402,8 +419,14 @@
 
   // --- messaging ------------------------------------------------------------
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  const onMessage = (message, _sender, sendResponse) => {
     switch (message?.type) {
+      case "sso:ping":
+        // Lets the service worker tell "running and current" from "stale or
+        // absent" before deciding whether to re-inject.
+        sendResponse({ ok: true, version: VERSION, hasPanel: Boolean(window.__ssoPanel) });
+        return false;
+
       case "sso:status":
         sendResponse(status());
         return false;
@@ -467,7 +490,8 @@
       default:
         return false;
     }
-  });
+  };
+  chrome.runtime.onMessage.addListener(onMessage);
 
   // --- api for panel.js -----------------------------------------------------
 
@@ -504,4 +528,22 @@
   document.addEventListener("webkitfullscreenchange", attachToCorrectParent);
   loadSettings();
   startTicking();
+
+  /* Everything this injection added, undone. Called by the next injection so a
+   * version upgrade leaves exactly one copy running. */
+  window.__ssoTeardown = () => {
+    clearInterval(ticker);
+    ticker = null;
+    clearTimeout(toastTimer);
+    document.removeEventListener("keydown", onKeyDown, true);
+    document.removeEventListener("fullscreenchange", attachToCorrectParent);
+    document.removeEventListener("webkitfullscreenchange", attachToCorrectParent);
+    chrome.runtime.onMessage.removeListener(onMessage);
+    root?.remove();
+    toast?.remove();
+    listeners.clear();
+    window.__ssoPanelTeardown?.();
+    delete window.__ssoApi;
+    delete window.__ssoTeardown;
+  };
 })();

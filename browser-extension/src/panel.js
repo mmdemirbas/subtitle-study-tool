@@ -12,7 +12,16 @@
 (() => {
   "use strict";
 
-  if (window.__ssoPanel) return;
+  // Same handover as content.js: replace a previous copy rather than refusing
+  // to load next to it.
+  if (typeof window.__ssoPanelTeardown === "function") {
+    try {
+      window.__ssoPanelTeardown();
+    } catch {
+      // Never let a broken predecessor block the replacement.
+    }
+  }
+
   const api = window.__ssoApi;
   if (!api) return; // content.js did not install; nothing to control
 
@@ -26,18 +35,73 @@
     ["togglePanel", "This panel"],
   ];
 
-  let host = null;
+  let host = null; // the element in the page; carries position only
+  let shadow = null; // everything else lives in here
   let el = {};
   let capturing = null;
   let unsubscribe = null;
   let lastResults = [];
+  let sheet = null;
 
   // --- construction ---------------------------------------------------------
 
-  function build() {
-    host = document.createElement("div");
-    host.className = "sso-panel";
-    host.hidden = true;
+  /* The host is the only element the page's cascade can reach, so it carries
+   * nothing but geometry, pinned with inline !important. It is deliberately
+   * invisible - no background, no typography - because anything visual placed
+   * here would be fighting the page for the rest of time. All appearance lives
+   * on .sso-panel inside the shadow root, where page CSS cannot reach it.
+   *
+   * `all: initial` matters as much as the positioning: it stops inherited
+   * properties (line-height, letter-spacing, font) from crossing into the
+   * shadow tree through the host.
+   *
+   * Note this outranks every `:host` rule in the adopted stylesheet, inline
+   * !important being the top of the cascade - so `:host` must not be used for
+   * anything load-bearing. */
+  function createHost() {
+    const node = document.createElement("div");
+    for (const [property, value] of Object.entries({
+      all: "initial",
+      position: "fixed",
+      top: "24px",
+      left: "24px",
+      width: "340px",
+      "z-index": "2147483647",
+    })) {
+      node.style.setProperty(property, value, "important");
+    }
+    setHostVisible(node, false);
+    return node;
+  }
+
+  /* Visibility is a display override rather than the `hidden` attribute: the
+   * host's inline display is !important, so the UA rule behind `hidden` would
+   * never win. */
+  function setHostVisible(node, visible) {
+    node.style.setProperty("display", visible ? "block" : "none", "important");
+    node.hidden = !visible;
+  }
+
+  const isPanelVisible = () => Boolean(host) && host.hidden === false;
+
+  /* A constructable stylesheet rather than a <style> element: adopted sheets
+   * are not subject to the page's Content-Security-Policy, and many streaming
+   * sites ship a restrictive style-src. */
+  async function loadStyles() {
+    if (sheet) return sheet;
+    const css = await fetch(chrome.runtime.getURL("src/panel.css")).then((r) => r.text());
+    sheet = new CSSStyleSheet();
+    sheet.replaceSync(css);
+    return sheet;
+  }
+
+  async function build() {
+    host = createHost();
+    shadow = host.attachShadow({ mode: "open" });
+    shadow.adoptedStyleSheets = [await loadStyles()];
+
+    const panel = document.createElement("div");
+    panel.className = "sso-panel";
 
     const head = document.createElement("div");
     head.className = "sso-panel__head";
@@ -55,7 +119,8 @@
     body.className = "sso-panel__body";
     body.append(buildStatus(), buildSearch(), buildAppearance(), buildKeys());
 
-    host.append(head, body);
+    panel.append(head, body);
+    shadow.append(panel);
     makeDraggable(head);
     return host;
   }
@@ -410,8 +475,7 @@
       const maxTop = Math.max(0, window.innerHeight - 40);
       const left = Math.min(Math.max(0, event.clientX - origin.x), maxLeft);
       const top = Math.min(Math.max(0, event.clientY - origin.y), maxTop);
-      host.style.left = `${left}px`;
-      host.style.top = `${top}px`;
+      setPosition(`${left}px`, `${top}px`);
     });
 
     const end = (event) => {
@@ -427,12 +491,19 @@
     handle.addEventListener("pointercancel", end);
   }
 
+  /* Position stays inline-!important, matching how createHost set it. A plain
+   * `style.left = x` assignment drops the priority flag, which would hand the
+   * page's cascade a way to move the panel off screen. */
+  function setPosition(left, top) {
+    host.style.setProperty("left", left, "important");
+    host.style.setProperty("top", top, "important");
+  }
+
   async function restorePosition() {
     try {
       const stored = await chrome.storage.local.get(POSITION_KEY);
       const saved = stored[POSITION_KEY];
-      if (saved?.left) host.style.left = saved.left;
-      if (saved?.top) host.style.top = saved.top;
+      if (saved?.left && saved?.top) setPosition(saved.left, saved.top);
     } catch {
       // Default corner is fine.
     }
@@ -470,27 +541,27 @@
 
   // --- lifecycle ------------------------------------------------------------
 
-  function show() {
+  async function show() {
     if (!host) {
-      build();
-      restorePosition();
+      await build();
+      await restorePosition();
     }
     reparent();
-    host.hidden = false;
+    setHostVisible(host, true);
     unsubscribe ||= api.subscribe(refresh);
     refresh(api.status());
     if (!el.query.value) el.query.value = bestPageTitle();
   }
 
   function hide() {
-    if (host) host.hidden = true;
+    if (host) setHostVisible(host, false);
     if (unsubscribe) {
       unsubscribe();
       unsubscribe = null;
     }
   }
 
-  const toggle = () => (host && !host.hidden ? hide() : show());
+  const toggle = () => (isPanelVisible() ? hide() : show());
 
   /* Follows the overlay into the fullscreen element, since only that subtree
    * is rendered while fullscreen is active. */
@@ -508,4 +579,15 @@
   document.addEventListener("keydown", onCaptureKey, true);
 
   window.__ssoPanel = { show, hide, toggle, reparent, isCapturingKey };
+
+  window.__ssoPanelTeardown = () => {
+    document.removeEventListener("keydown", onCaptureKey, true);
+    unsubscribe?.();
+    unsubscribe = null;
+    host?.remove();
+    host = null;
+    shadow = null;
+    delete window.__ssoPanel;
+    delete window.__ssoPanelTeardown;
+  };
 })();

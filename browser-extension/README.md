@@ -13,6 +13,19 @@ Chrome, Edge, Brave or any Chromium browser:
 
 There is no icon file, so the toolbar shows a default placeholder. Pin it.
 
+### After changing the code
+
+Reloading the extension does **not** update tabs that are already open — they
+keep running the previous content script until navigated, which makes changes
+look like they did nothing. The service worker now re-injects on install and
+update, and repairs a stale tab on the next command, so a page reload should no
+longer be necessary. If something still looks unchanged, reload the page.
+
+New keyboard commands are a separate trap: Chrome does not always bind a
+`suggested_key` that was added to an extension already installed. Check
+`chrome://extensions/shortcuts` — the popup lists the live bindings, and shows
+*unset* when this has happened.
+
 ## Use
 
 **The fast path:** press <kbd>⌘⇧S</kbd>. It works out what the page is playing,
@@ -80,6 +93,36 @@ it, and auto-attach refuses to download anything that does not match it well.
 That guard exists because the first version had none: it downloaded the top
 fuzzy hit for `Prime Video: Crime 101` and displayed subtitles for an unrelated
 2007 Japanese horror film.
+
+## Why the panel is in a shadow root
+
+Injected UI competes with the host page's stylesheet, and the page usually
+wins. Verified against a page carrying two rules of a kind streaming sites ship
+routinely:
+
+| Page rule | Effect on a light-DOM panel |
+|---|---|
+| `button { font-size: 40px !important }` | every control resized |
+| `div { line-height: 3; letter-spacing: 2px }` | inherited through, layout pulled apart |
+
+`all: initial` on the panel root does not help: it resets the root only, never
+its descendants. A shadow boundary does, so the panel lives in one.
+
+Two consequences worth knowing before editing:
+
+- The host element carries **geometry only** — position, width, z-index, all
+  inline `!important`. Nothing visual, because anything visual there would be
+  fighting the page forever. Appearance is on `.sso-panel` inside the shadow.
+  `:host` rules are not used for anything load-bearing: inline `!important`
+  outranks them, and page rules outrank `:host` for normal declarations anyway.
+- Events crossing a shadow boundary are **retargeted to the host**, so
+  `event.target` at document level reports a plain div. The key handler reads
+  `event.composedPath()[0]` instead; otherwise typing `[` or `]` into the
+  panel's own search box would nudge the subtitle timing.
+
+Styles load as a constructable stylesheet via `adoptedStyleSheets` rather than
+a `<style>` element, because adopted sheets are not subject to the page's
+Content-Security-Policy and streaming sites tend to ship a strict `style-src`.
 
 ## Two implementation details that matter
 

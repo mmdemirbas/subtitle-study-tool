@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Find a subtitle for whatever is playing and overlay it on the video, synced to the page's own playback clock.",
 
-  "permissions": ["activeTab", "storage", "tabs", "webNavigation"],
+  "permissions": ["activeTab", "scripting", "storage", "tabs", "webNavigation"],
   "host_permissions": ["http://127.0.0.1:8791/*"],
 
   "background": {
@@ -21,9 +21,16 @@
     {
       "matches": ["<all_urls>"],
       "js": ["src/content.js", "src/panel.js"],
-      "css": ["src/overlay.css", "src/panel.css"],
+      "css": ["src/overlay.css"],
       "run_at": "document_idle",
       "all_frames": true
+    }
+  ],
+
+  "web_accessible_resources": [
+    {
+      "resources": ["src/panel.css"],
+      "matches": ["<all_urls>"]
     }
   ],
 

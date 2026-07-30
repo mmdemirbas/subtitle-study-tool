@@ -96,7 +96,9 @@ ui.find.addEventListener("click", async () => {
 });
 
 ui.panel.addEventListener("click", async () => {
-  await send({ type: "sso:togglePanel" });
+  // Via the worker, so it re-injects into a tab still running an older content
+  // script rather than failing silently.
+  await chrome.runtime.sendMessage({ type: "sso:command", command: "toggle-panel" });
   window.close();
 });
 

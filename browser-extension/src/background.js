@@ -20,6 +20,38 @@ import {
 const DEFAULT_LANGUAGES = ["en", "tr"];
 const TOP_FRAME = 0;
 
+/* Reloading an extension does NOT update tabs that are already open: they keep
+ * running the content script from the previous version until navigated. That
+ * makes every change invisible on the tab you are testing on, and the symptom
+ * is silence - a new command arrives and nothing in the page knows about it.
+ *
+ * So on install and on update, inject the current scripts into every tab that
+ * already matches. Frames that already have them exit on their own guard, so
+ * re-injection is harmless. */
+chrome.runtime.onInstalled.addListener(async () => {
+  const injectable = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
+  const scripts = chrome.runtime.getManifest().content_scripts?.[0];
+  if (!scripts) return;
+
+  await Promise.all(
+    injectable.map(async (tab) => {
+      if (!tab.id) return;
+      try {
+        await chrome.scripting.insertCSS({
+          target: { tabId: tab.id, allFrames: true },
+          files: scripts.css,
+        });
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id, allFrames: true },
+          files: scripts.js,
+        });
+      } catch {
+        // Restricted pages (chrome://, the web store) refuse injection.
+      }
+    }),
+  );
+});
+
 // --- daemon proxy for panel.js and popup.js ---------------------------------
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -76,11 +108,18 @@ async function runCommand(command) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) return;
 
+  await ensureInjected(tab.id);
+
   const status = await tabStatus(tab.id);
   const frameId = status?.frameId ?? TOP_FRAME;
 
   if (command === "toggle-panel") {
-    await send(tab.id, frameId, { type: "sso:togglePanel" });
+    const result = await send(tab.id, frameId, { type: "sso:togglePanel" });
+    if (!result?.ok) {
+      // Reaching here means the page refused injection, so there is nowhere to
+      // draw a toast either. The badge is the only surface left.
+      await flagBadge(tab.id, "!");
+    }
   } else if (command === "toggle-overlay") {
     const result = await send(tab.id, frameId, { type: "sso:toggleVisible" });
     if (!result?.ok) await notify(tab.id, frameId, "Nothing attached yet");
@@ -161,6 +200,35 @@ function describe(error) {
   return error?.message || "Something went wrong";
 }
 
+/* Self-heal a tab whose content script predates the current version, or has
+ * none because the tab was open before the extension was installed. Cheap: one
+ * message round trip when everything is already in place. */
+async function ensureInjected(tabId) {
+  try {
+    const alive = await chrome.tabs.sendMessage(tabId, { type: "sso:ping" });
+    if (alive?.version === chrome.runtime.getManifest().version) return true;
+  } catch {
+    // No content script at all, or it is old enough to not know about ping.
+  }
+
+  const scripts = chrome.runtime.getManifest().content_scripts?.[0];
+  if (!scripts) return false;
+
+  try {
+    await chrome.scripting.insertCSS({
+      target: { tabId, allFrames: true },
+      files: scripts.css,
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: scripts.js,
+    });
+    return true;
+  } catch {
+    return false; // restricted page
+  }
+}
+
 async function send(tabId, frameId, message) {
   try {
     return await chrome.tabs.sendMessage(tabId, message, { frameId });
@@ -174,4 +242,16 @@ async function send(tabId, frameId, message) {
  * notification would not be seen. */
 async function notify(tabId, frameId, message) {
   await send(tabId, frameId, { type: "sso:toast", message });
+}
+
+/* Last-resort feedback for pages the extension cannot draw on at all, so a
+ * keypress is never answered with complete silence. */
+async function flagBadge(tabId, text) {
+  try {
+    await chrome.action.setBadgeText({ tabId, text });
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: "#c2503f" });
+    setTimeout(() => chrome.action.setBadgeText({ tabId, text: "" }).catch(() => {}), 4000);
+  } catch {
+    // Tab closed.
+  }
 }

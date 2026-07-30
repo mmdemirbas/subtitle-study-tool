@@ -1,25 +1,35 @@
 /* Control panel styles.
  *
- * This markup lands inside arbitrary pages, so every rule is scoped under
- * .sso-panel and the root sets `all: initial` to stop the host page's own
- * styles inheriting in. Layout-critical properties carry !important because
- * some players ship very broad selectors (`div { position: relative }` and
- * similar) that would otherwise win on specificity.
+ * Loaded into a shadow root, not into the page. That is not fussiness: an
+ * earlier version lived in the page's own DOM, and a host rule as ordinary as
+ * `button { font-size: 40px !important }` resized every control, while
+ * `div { line-height: 3; letter-spacing: 2px }` inherited straight through and
+ * pulled the layout apart. Streaming sites ship rules exactly that broad.
+ * `all: initial` on the host only resets the host, never its descendants -
+ * a shadow boundary is what actually stops the cascade.
+ *
+ * Consequence for editing: selectors here are scoped to the shadow tree, so
+ * they cannot leak outward and page rules cannot reach in. The .sso- prefixes
+ * are kept for readability, not isolation.
  */
 
+/* All appearance lives here rather than on :host. The host carries inline
+ * !important geometry, which would outrank anything :host declared, and page
+ * rules outrank :host for normal declarations anyway. This element is inside
+ * the shadow tree, so nothing outside can touch it. */
 .sso-panel {
-  all: initial;
-  position: fixed !important;
-  top: 24px;
-  left: 24px;
-  z-index: 2147483647 !important;
-  display: block !important;
-  width: 340px;
+  display: block;
+  width: 100%;
   max-height: 82vh;
   overflow: hidden auto;
-  font-family: -apple-system, "SF Pro Text", Helvetica, Arial, sans-serif !important;
+  font-family: -apple-system, "SF Pro Text", Helvetica, Arial, sans-serif;
   font-size: 13px;
+  font-weight: 400;
+  font-style: normal;
   line-height: 1.45;
+  letter-spacing: normal;
+  text-align: left;
+  text-transform: none;
   color: #e8eaed;
   background: rgba(20, 22, 27, 0.97);
   border: 1px solid #333844;
@@ -28,11 +38,15 @@
   color-scheme: dark;
 }
 
-.sso-panel[hidden] {
+[hidden] {
+  /* The UA rule for [hidden] is display:none, which any author `display`
+   * declaration outranks - and .sso-row sets display:flex. Without this the
+   * offset controls stay on screen with nothing attached. */
   display: none !important;
 }
 
-.sso-panel * {
+
+* {
   box-sizing: border-box;
   font-family: inherit;
   color: inherit;
@@ -128,7 +142,7 @@
 
 /* --- controls -------------------------------------------------------------- */
 
-.sso-panel button {
+button {
   padding: 5px 9px;
   font-size: 12px;
   font-weight: 500;
@@ -138,26 +152,26 @@
   cursor: pointer;
 }
 
-.sso-panel button:hover:not(:disabled) {
+button:hover:not(:disabled) {
   background: #2c323c;
 }
 
-.sso-panel button:disabled {
+button:disabled {
   opacity: 0.45;
   cursor: default;
 }
 
-.sso-panel button.sso-primary {
+button.sso-primary {
   background: #2f5da8;
   border-color: #3b6fc4;
 }
 
-.sso-panel button.sso-primary:hover:not(:disabled) {
+button.sso-primary:hover:not(:disabled) {
   background: #3568bd;
 }
 
-.sso-panel input[type="text"],
-.sso-panel input[type="number"] {
+input[type="text"],
+input[type="number"] {
   width: 100%;
   padding: 5px 7px;
   font-size: 12px;
@@ -166,13 +180,13 @@
   border-radius: 6px;
 }
 
-.sso-panel input[type="text"]:focus,
-.sso-panel input[type="number"]:focus {
+input[type="text"]:focus,
+input[type="number"]:focus {
   outline: none;
   border-color: #4d8ae0;
 }
 
-.sso-panel input[type="range"] {
+input[type="range"] {
   width: 100%;
   accent-color: #4d8ae0;
 }
