@@ -11,46 +11,34 @@
       <span id="daemon-state" class="pill pill--muted">checking…</span>
     </header>
 
-    <!-- Shown only when the daemon is unreachable or has no key. Everything
-         below is pointless until one of those is fixed, so it replaces the
-         body rather than sitting above it. -->
+    <!-- Replaces the body when the daemon is unreachable or unconfigured;
+         nothing below it would work until that is fixed. -->
     <section id="blocker" class="blocker" hidden>
       <p id="blocker-message"></p>
       <pre id="blocker-hint" class="hint"></pre>
     </section>
 
     <main id="main">
-      <section class="search">
-        <label class="label" for="query">Searching for</label>
-        <div class="row">
-          <input id="query" type="text" spellcheck="false" autocomplete="off" />
-          <button id="search-again" class="button button--ghost" title="Search again">
-            Search
-          </button>
-        </div>
-        <p id="guess-note" class="note"></p>
-      </section>
+      <p id="page-state" class="note">Checking this tab…</p>
+      <p id="attached" class="note note--strong" hidden></p>
 
-      <section class="status">
-        <p id="attached" class="note note--strong" hidden></p>
-        <div id="offset-controls" class="row row--tight" hidden>
-          <button class="button button--small" data-nudge="-1000">−1s</button>
-          <button class="button button--small" data-nudge="-250">−0.25s</button>
-          <span id="offset-value" class="offset">0s</span>
-          <button class="button button--small" data-nudge="250">+0.25s</button>
-          <button class="button button--small" data-nudge="1000">+1s</button>
-          <button id="toggle" class="button button--ghost button--small">Hide</button>
-        </div>
-      </section>
+      <div class="actions">
+        <button id="find" class="button button--primary">Find subtitles</button>
+        <button id="panel" class="button">Control panel</button>
+      </div>
+      <div class="actions">
+        <button id="toggle" class="button button--wide" hidden>Hide subtitles</button>
+      </div>
 
-      <section class="results">
-        <p id="results-state" class="note">Open a page with a video playing.</p>
-        <ul id="results" class="list"></ul>
-      </section>
+      <p class="note note--dim">
+        The control panel opens over the video, so it still works in fullscreen —
+        that is where searching, timing and appearance live.
+      </p>
     </main>
 
     <footer class="footer">
-      <span><kbd>[</kbd> <kbd>]</kbd> nudge · <kbd>\</kbd> reset · hold <kbd>Shift</kbd> for 1s</span>
+      <div id="shortcuts" class="shortcuts"></div>
+      <button id="edit-shortcuts" class="linkish">Change shortcuts</button>
     </footer>
 
     <script type="module" src="popup.js"></script>

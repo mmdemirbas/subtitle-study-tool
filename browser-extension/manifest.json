@@ -20,8 +20,8 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["src/content.js"],
-      "css": ["src/overlay.css"],
+      "js": ["src/content.js", "src/panel.js"],
+      "css": ["src/overlay.css", "src/panel.css"],
       "run_at": "document_idle",
       "all_frames": true
     }
@@ -35,6 +35,10 @@
     "toggle-overlay": {
       "suggested_key": { "default": "Ctrl+Shift+X", "mac": "Command+Shift+X" },
       "description": "Show or hide the subtitle overlay"
+    },
+    "toggle-panel": {
+      "suggested_key": { "default": "Ctrl+Shift+K", "mac": "Command+Shift+K" },
+      "description": "Open the control panel over the video"
     }
   }
 }

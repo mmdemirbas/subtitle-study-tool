@@ -15,22 +15,40 @@ There is no icon file, so the toolbar shows a default placeholder. Pin it.
 
 ## Use
 
-**The fast path:** press <kbd>⌘⇧S</kbd>. It reads the tab title, searches,
-picks the best match, downloads it and puts it on screen. Nothing else.
+**The fast path:** press <kbd>⌘⇧S</kbd>. It works out what the page is playing,
+searches, and puts the best match on screen. If nothing matches the title well
+it opens the control panel instead of guessing — it will not spend a download
+on a film it is not confident about.
 
-**The deliberate path:** click the toolbar button. The popup searches
-immediately — searching costs nothing — and shows what it found. Click a result
-to attach it. Downloading is the only thing that spends quota, so it stays
-behind a click.
+**The control panel:** <kbd>⌘⇧K</kbd>. Search, timing, appearance and key
+bindings, in a draggable panel over the video. This is the main surface. It
+lives in the page rather than in the toolbar popup because **a popup cannot be
+opened while the page is fullscreen**, which is exactly when you need to fix
+timing.
 
-If the tab title was a bad guess, edit the box at the top and press Enter.
+The toolbar popup is a launcher and a status readout — whether the daemon is
+up, whether a subtitle is attached, and the current shortcuts.
+
+### Keys
 
 | Key | Effect |
 |---|---|
+| <kbd>⌘⇧S</kbd> | Find and attach subtitles |
+| <kbd>⌘⇧K</kbd> | Control panel |
+| <kbd>⌘⇧X</kbd> | Hide / show subtitles |
 | <kbd>[</kbd> / <kbd>]</kbd> | Shift subtitles 0.25s earlier / later |
 | <kbd>Shift</kbd> + <kbd>[</kbd> / <kbd>]</kbd> | Shift by 1s |
 | <kbd>\\</kbd> | Reset the offset |
-| <kbd>⌘⇧X</kbd> | Hide / show the overlay |
+| <kbd>P</kbd> | Control panel |
+| <kbd>O</kbd> | Hide / show subtitles |
+
+In-page bindings match on the **physical key**, not the character it produces.
+On a Turkish Q layout the two keys right of P print ğ and ü, but they are still
+`BracketLeft` and `BracketRight` — so the defaults stay in the same physical
+place on every layout without needing an AltGr chord. All of them are
+rebindable in the panel: click a binding, press the key you want.
+
+The ⌘⇧ shortcuts are Chrome's, changed at `chrome://extensions/shortcuts`.
 
 The offset is remembered per subtitle file, so a film you come back to keeps
 the correction you already made.
@@ -49,6 +67,20 @@ What remains is the offset baked into the subtitle file itself, from being
 timed against a different release of the film. That is a constant, you set it
 once with the bracket keys, and it is saved.
 
+## Working out what is playing
+
+The tab title is the weakest signal available. Prime Video calls a detail page
+`Prime Video: Crime 101`; other sites bolt on resolutions, episode numbers and
+marketing. So the content script reads `og:title`, `twitter:title` and JSON-LD
+`Movie`/`TVEpisode` entries first — what the site tells crawlers the page is
+about — and falls back to the tab title only if none of those exist.
+
+Whatever comes out is still a guess, so the panel shows it and lets you correct
+it, and auto-attach refuses to download anything that does not match it well.
+That guard exists because the first version had none: it downloaded the top
+fuzzy hit for `Prime Video: Crime 101` and displayed subtitles for an unrelated
+2007 Japanese horror film.
+
 ## Two implementation details that matter
 
 **Fullscreen.** When a player goes fullscreen the browser renders only the
@@ -65,6 +97,12 @@ frame would not be rendered.
 The video is chosen as the largest one with a duration over a minute,
 preferring a playing one — which skips ad slots, preview loops and hidden
 elements.
+
+**Daemon calls go through the service worker.** MV3 content scripts cannot make
+cross-origin requests with extension permissions, and the daemon's origin
+allowlist would refuse the page's origin anyway. The panel and popup both send
+their daemon calls to the background worker, which is the only thing holding
+the host permission.
 
 ## Boundaries
 

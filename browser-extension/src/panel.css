@@ -1,0 +1,307 @@
+/* Control panel styles.
+ *
+ * This markup lands inside arbitrary pages, so every rule is scoped under
+ * .sso-panel and the root sets `all: initial` to stop the host page's own
+ * styles inheriting in. Layout-critical properties carry !important because
+ * some players ship very broad selectors (`div { position: relative }` and
+ * similar) that would otherwise win on specificity.
+ */
+
+.sso-panel {
+  all: initial;
+  position: fixed !important;
+  top: 24px;
+  left: 24px;
+  z-index: 2147483647 !important;
+  display: block !important;
+  width: 340px;
+  max-height: 82vh;
+  overflow: hidden auto;
+  font-family: -apple-system, "SF Pro Text", Helvetica, Arial, sans-serif !important;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #e8eaed;
+  background: rgba(20, 22, 27, 0.97);
+  border: 1px solid #333844;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+.sso-panel[hidden] {
+  display: none !important;
+}
+
+.sso-panel * {
+  box-sizing: border-box;
+  font-family: inherit;
+  color: inherit;
+}
+
+/* --- header ---------------------------------------------------------------- */
+
+.sso-panel__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px 9px 12px;
+  border-bottom: 1px solid #2b3039;
+  cursor: grab;
+  user-select: none;
+}
+
+.sso-panel__head[data-dragging="true"] {
+  cursor: grabbing;
+}
+
+.sso-panel__title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.sso-panel__x {
+  padding: 2px 7px;
+  font-size: 14px;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid #333844;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.sso-panel__x:hover {
+  background: #262b35;
+}
+
+/* --- sections -------------------------------------------------------------- */
+
+.sso-panel__body {
+  padding: 10px 12px 12px;
+}
+
+.sso-sec + .sso-sec {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #2b3039;
+}
+
+.sso-sec__h {
+  margin: 0 0 7px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #8b929d;
+}
+
+.sso-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sso-row + .sso-row {
+  margin-top: 6px;
+}
+
+.sso-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.sso-note {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: #8b929d;
+  overflow-wrap: anywhere;
+}
+
+.sso-note--strong {
+  color: #e8eaed;
+}
+
+.sso-note--warn {
+  color: #e0a44d;
+}
+
+/* --- controls -------------------------------------------------------------- */
+
+.sso-panel button {
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 500;
+  background: #232830;
+  border: 1px solid #333844;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.sso-panel button:hover:not(:disabled) {
+  background: #2c323c;
+}
+
+.sso-panel button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.sso-panel button.sso-primary {
+  background: #2f5da8;
+  border-color: #3b6fc4;
+}
+
+.sso-panel button.sso-primary:hover:not(:disabled) {
+  background: #3568bd;
+}
+
+.sso-panel input[type="text"],
+.sso-panel input[type="number"] {
+  width: 100%;
+  padding: 5px 7px;
+  font-size: 12px;
+  background: #1b1f26;
+  border: 1px solid #333844;
+  border-radius: 6px;
+}
+
+.sso-panel input[type="text"]:focus,
+.sso-panel input[type="number"]:focus {
+  outline: none;
+  border-color: #4d8ae0;
+}
+
+.sso-panel input[type="range"] {
+  width: 100%;
+  accent-color: #4d8ae0;
+}
+
+.sso-offset {
+  min-width: 56px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: #b9c0ca;
+}
+
+.sso-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: #b9c0ca;
+}
+
+.sso-label span:first-child {
+  width: 78px;
+  flex: none;
+}
+
+.sso-value {
+  width: 40px;
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: #8b929d;
+}
+
+/* --- results --------------------------------------------------------------- */
+
+.sso-results {
+  max-height: 210px;
+  margin: 8px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.sso-results li + li {
+  border-top: 1px solid #2b3039;
+}
+
+.sso-result {
+  display: block;
+  width: 100%;
+  padding: 7px 4px;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+}
+
+.sso-result:hover {
+  background: #262b35;
+}
+
+.sso-result__top {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.sso-result__lang {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #6aa9ff;
+}
+
+.sso-result__name {
+  flex: 1;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sso-result__sub {
+  display: block;
+  overflow: hidden;
+  margin-top: 1px;
+  font-size: 10.5px;
+  color: #8b929d;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sso-tag {
+  padding: 0 5px;
+  font-size: 9.5px;
+  line-height: 1.5;
+  background: #2c323c;
+  border-radius: 4px;
+  color: #b9c0ca;
+  white-space: nowrap;
+}
+
+.sso-tag--free {
+  color: #59c27f;
+}
+
+.sso-tag--weak {
+  color: #e0a44d;
+}
+
+/* --- key bindings ---------------------------------------------------------- */
+
+.sso-keys {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 8px;
+  align-items: center;
+  font-size: 11.5px;
+  color: #b9c0ca;
+}
+
+.sso-key {
+  min-width: 92px;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace !important;
+  font-size: 11px;
+}
+
+.sso-key[data-capturing="true"] {
+  border-color: #4d8ae0;
+  color: #6aa9ff;
+}

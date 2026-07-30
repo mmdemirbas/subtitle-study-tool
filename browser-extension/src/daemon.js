@@ -68,31 +68,32 @@ export function offsetKey(fileId) {
   return `sso:offset:${fileId}`;
 }
 
+// --- talking to the page ----------------------------------------------------
+
+async function frameIds(tabId) {
+  const frames = await chrome.webNavigation?.getAllFrames?.({ tabId }).catch(() => null);
+  return frames ? frames.map((frame) => frame.frameId) : [undefined];
+}
+
+function options(frameId) {
+  return frameId === undefined ? {} : { frameId };
+}
+
 /** Push cues into the content script, trying every frame until one takes them. */
 export async function attachToTab(tabId, { cues, label, fileId }) {
-  const payload = {
-    cues,
-    label,
-    storageKey: offsetKey(fileId),
-  };
-
-  const frames = await chrome.webNavigation?.getAllFrames?.({ tabId }).catch(() => null);
-  const frameIds = frames ? frames.map((frame) => frame.frameId) : [undefined];
-
   let lastReason = "no frame on this page has a playable video";
-  for (const frameId of frameIds) {
+
+  for (const frameId of await frameIds(tabId)) {
     try {
-      const options = frameId === undefined ? {} : { frameId };
       const result = await chrome.tabs.sendMessage(
         tabId,
-        { type: "sso:attach", payload },
-        options,
+        { type: "sso:attach", payload: { cues, label, fileId } },
+        options(frameId),
       );
       if (result?.ok) return result;
       if (result?.reason) lastReason = result.reason;
     } catch {
       // Frame has no content script (chrome:// pages, cross-origin edge cases).
-      // Keep trying the others.
     }
   }
   throw new Error(lastReason);
@@ -100,14 +101,10 @@ export async function attachToTab(tabId, { cues, label, fileId }) {
 
 /** Ask every frame for status; return the first one that holds a video. */
 export async function tabStatus(tabId) {
-  const frames = await chrome.webNavigation?.getAllFrames?.({ tabId }).catch(() => null);
-  const frameIds = frames ? frames.map((frame) => frame.frameId) : [undefined];
-
   let fallback = null;
-  for (const frameId of frameIds) {
+  for (const frameId of await frameIds(tabId)) {
     try {
-      const options = frameId === undefined ? {} : { frameId };
-      const status = await chrome.tabs.sendMessage(tabId, { type: "sso:status" }, options);
+      const status = await chrome.tabs.sendMessage(tabId, { type: "sso:status" }, options(frameId));
       if (status?.hasVideo) return { ...status, frameId };
       if (status && !fallback) fallback = { ...status, frameId };
     } catch {
@@ -118,29 +115,58 @@ export async function tabStatus(tabId) {
 }
 
 /**
+ * The best guess at what the tab is playing.
+ *
+ * The tab title is the weakest signal available: Prime Video titles a detail
+ * page "Prime Video: Crime 101", and other sites bolt on episode numbers and
+ * marketing. og:title and JSON-LD are what the site tells crawlers the page is
+ * about, so the content script's candidates are preferred and the tab title is
+ * only the fallback.
+ */
+export async function bestTitleForTab(tab, frameId) {
+  try {
+    const info = await chrome.tabs.sendMessage(
+      tab.id,
+      { type: "sso:pageInfo" },
+      options(frameId),
+    );
+    const best = info?.candidates?.[0]?.text;
+    if (best) return best;
+  } catch {
+    // No content script, or the frame went away.
+  }
+  return tab.title || "";
+}
+
+/**
  * Choose the subtitle to attach without asking.
  *
- * Preference order: something already downloaded (free, and previously good
- * enough to pick), then the daemon's own ranking, which puts trusted uploads
- * and popular files first. Language preference wins over both, because an
- * excellent subtitle in the wrong language is not a result.
+ * Language preference wins first — an excellent subtitle in the wrong language
+ * is not a result. Then how well it matches what was asked for, because
+ * OpenSubtitles' fuzzy search will confidently return an unrelated film. Only
+ * then does "already downloaded" break ties, since preferring a cached file
+ * over a better match would keep re-attaching the wrong subtitle.
+ *
+ * The caller still has to check `match_score` against the threshold: this
+ * returns the best candidate, not necessarily a good one.
  */
 export function pickBest(results, languages) {
   if (!results?.length) return null;
 
-  const rank = (result) => {
-    const languageIndex = languages.indexOf(result.language);
-    return [
-      languageIndex === -1 ? languages.length : languageIndex,
-      result.cached ? 0 : 1,
-    ];
+  const languageRank = (result) => {
+    const index = languages.indexOf(result.language);
+    return index === -1 ? languages.length : index;
   };
 
   return [...results].sort((a, b) => {
-    const [aLang, aCached] = rank(a);
-    const [bLang, bCached] = rank(b);
-    if (aLang !== bLang) return aLang - bLang;
-    if (aCached !== bCached) return aCached - bCached;
-    return 0; // daemon already ordered by trust and popularity
+    const byLanguage = languageRank(a) - languageRank(b);
+    if (byLanguage !== 0) return byLanguage;
+
+    // Bucket the score so near-equal matches fall through to the daemon's
+    // trust-and-popularity ordering rather than splitting hairs.
+    const byScore = Math.round((b.match_score ?? 0) * 10) - Math.round((a.match_score ?? 0) * 10);
+    if (byScore !== 0) return byScore;
+
+    return Number(Boolean(b.cached)) - Number(Boolean(a.cached));
   })[0];
 }
