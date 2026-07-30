@@ -13,6 +13,7 @@ from subtitle_daemon.annotations import (
     MUSIC,
     SOUND,
     SPEAKER,
+    SOUND_COLOR,
     SPEAKER_PALETTE,
     classify,
     find_annotations,
@@ -94,7 +95,7 @@ def test_symbol_matches_inside_a_longer_description() -> None:
 
 
 def test_unknown_sounds_get_no_symbol_rather_than_a_wrong_one() -> None:
-    assert symbol_for("indeterminate shuffling of papers") is None
+    assert symbol_for("bureaucracy intensifies") is None
     assert symbol_for("") is None
 
 
@@ -103,8 +104,9 @@ def test_symbol_lookup_is_case_and_accent_insensitive() -> None:
 
 
 def test_word_boundaries_are_respected() -> None:
-    # "rain" must not fire on "training", nor "shot" on "shotgun shells".
+    # "train" must not fire on "training": nouns take only a plural.
     assert symbol_for("training montage") is None
+    assert symbol_for("carpet") is None
 
 
 # --- speaker colour ---------------------------------------------------------------
@@ -147,7 +149,9 @@ def test_speaker_run_carries_a_colour_and_sound_run_a_symbol() -> None:
     assert speaker.color in SPEAKER_PALETTE
     sound = parse("[sighs]").runs[0]
     assert sound.symbol
-    assert sound.color is None
+    # Sounds are coloured too, just not with an identity colour.
+    assert sound.color == SOUND_COLOR
+    assert sound.color not in SPEAKER_PALETTE
 
 
 def test_parenthesised_annotations_are_recognised_too() -> None:

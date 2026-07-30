@@ -184,10 +184,11 @@ def test_unusable_colours_are_dropped_rather_than_passed_through(value: str) -> 
     our own palette. That is fine and is the point of the assertion: the only
     colours that ever reach output are ones this code chose.
     """
-    from subtitle_daemon.annotations import SPEAKER_PALETTE
+    from subtitle_daemon.annotations import MUSIC_COLOR, SOUND_COLOR, SPEAKER_PALETTE
 
+    allowed = {*SPEAKER_PALETTE, SOUND_COLOR, MUSIC_COLOR}
     runs = parse(f"[color={value}]a[/color]").runs
-    assert all(run.color is None or run.color in SPEAKER_PALETTE for run in runs)
+    assert all(run.color is None or run.color in allowed for run in runs)
     if value:
         assert all(value not in (run.color or "") for run in runs)
 

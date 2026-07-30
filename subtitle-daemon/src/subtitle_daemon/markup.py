@@ -90,6 +90,11 @@ _TOKEN = re.compile(
     re.VERBOSE | re.IGNORECASE,
 )
 
+_ANNOTATION_COLORS = {
+    annotations.SOUND: annotations.SOUND_COLOR,
+    annotations.MUSIC: annotations.MUSIC_COLOR,
+}
+
 _FONT_COLOR = re.compile(r"""\bcolor\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))""", re.IGNORECASE)
 _SSA_STYLE = re.compile(r"([ibus])([01])")
 _SSA_ALIGN = re.compile(r"an([1-9])\b")
@@ -243,11 +248,16 @@ def _split_annotations(runs: list[Run]) -> list[Run]:
             if start > cursor:
                 out.append(Run(run.text[cursor:start], run.styles, run.color))
 
-            # A colour set explicitly in the file outranks the one derived from
-            # the speaker's name - the author meant that colour.
+            # Every annotation gets a colour, because none of it is ordinary
+            # speech and hue says that faster than dimming does. Named speakers
+            # get their own hue on top, so identity reads as well as kind.
+            # A colour set explicitly in the file outranks both - the author
+            # meant that colour.
             color = run.color
-            if kind == annotations.SPEAKER and color is None:
-                color = annotations.speaker_color(inner)
+            if color is None:
+                color = _ANNOTATION_COLORS.get(kind)
+                if kind == annotations.SPEAKER:
+                    color = annotations.speaker_color(inner)
 
             out.append(
                 Run(

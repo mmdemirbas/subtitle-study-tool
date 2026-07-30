@@ -59,9 +59,23 @@ class Cue:
 def decode(raw: bytes) -> tuple[str, str]:
     """Decode subtitle bytes, returning the text and the encoding chosen.
 
-    Scores each candidate rather than returning the first that does not raise,
-    because latin-1 never raises and would otherwise always win.
+    Valid UTF-8 wins outright. Everything else is scored, because latin-1 never
+    raises and would otherwise always win.
+
+    The short-circuit is not an optimisation, it is the correctness fix. Scoring
+    UTF-8 against the 8-bit encodings looks even-handed and is not: the bytes of
+    a music note, E2 99 AA, read as cp1250 give "â™Ş", and the trailing Ş is a
+    Turkish letter that the scoring rewards. So a UTF-8 file full of "♪♪♪"
+    scored *higher* as cp1250 and every note became mojibake - 92 occurrences in
+    an eight-subtitle corpus. Valid UTF-8 is decisive because arbitrary 8-bit
+    text almost never satisfies its continuation-byte structure by accident.
     """
+    for encoding in ("utf-8-sig", "utf-8"):
+        try:
+            return raw.decode(encoding), encoding
+        except UnicodeDecodeError:
+            pass
+
     best_text = ""
     best_encoding = "latin-1"
     best_score = float("-inf")
@@ -75,8 +89,6 @@ def decode(raw: bytes) -> tuple[str, str]:
         # Penalise replacement chars and C1 controls heavily; reward letters
         # that belong in the target languages.
         score = -20 * len(_MOJIBAKE.findall(text)) + len(_EXPECTED_LETTERS.findall(text))
-        if encoding.startswith("utf-8"):
-            score += 1  # tie-break toward utf-8 for pure-ASCII files
 
         if score > best_score:
             best_text, best_encoding, best_score = text, encoding, score
