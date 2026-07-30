@@ -73,6 +73,8 @@
   let cueBox = null;
   let toast = null;
   let toastTimer = null;
+  let handle = null;
+  let handleTimer = null;
   let ticker = null;
 
   // --- video selection ------------------------------------------------------
@@ -202,8 +204,46 @@
     toast = document.createElement("div");
     toast.className = "sso-toast";
 
+    handle = buildHandle();
+
     applySettings();
     attachToCorrectParent();
+  }
+
+  /* A small on-screen way into the control panel.
+   *
+   * The panel had been reachable only by a keyboard command, and Chrome does
+   * not reliably bind a suggested_key that was added to an extension already
+   * installed - so for some users there was simply no way to open it. An
+   * element in the page cannot fail that way.
+   *
+   * It fades in with mouse movement and out again when the mouse rests, so it
+   * is available while you are reaching for it and invisible while you watch. */
+  function buildHandle() {
+    const node = document.createElement("button");
+    node.type = "button";
+    node.className = "sso-handle";
+    node.title = "Subtitle controls";
+    node.setAttribute("aria-label", "Subtitle controls");
+    node.textContent = "CC";
+    node.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      window.__ssoPanel?.toggle();
+    });
+    // The overlay ignores pointer events so it never eats clicks meant for the
+    // player; this one control has to opt back in.
+    node.style.pointerEvents = "auto";
+    return node;
+  }
+
+  function revealHandle() {
+    if (!handle) return;
+    handle.dataset.visible = "true";
+    clearTimeout(handleTimer);
+    handleTimer = setTimeout(() => {
+      if (handle && !handle.matches(":hover")) handle.dataset.visible = "false";
+    }, 2600);
   }
 
   /* Fullscreen is the detail that breaks naive overlays: the browser renders
@@ -218,6 +258,7 @@
     if (!parent) return;
     if (root && root.parentElement !== parent) parent.appendChild(root);
     if (toast && toast.parentElement !== parent) parent.appendChild(toast);
+    if (handle && handle.parentElement !== parent) parent.appendChild(handle);
     if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(parent);
   }
 
@@ -569,7 +610,16 @@
 
   // --- wiring ---------------------------------------------------------------
 
+  /* The handle only appears where there is something to control, and only
+   * while the mouse is moving - so it is never in the way of the film. */
+  function onPointerMove() {
+    if (!hasPlayableVideo()) return;
+    ensureOverlay();
+    revealHandle();
+  }
+
   document.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("pointermove", onPointerMove, { passive: true });
   document.addEventListener("fullscreenchange", attachToCorrectParent);
   document.addEventListener("webkitfullscreenchange", attachToCorrectParent);
   loadSettings();
@@ -581,12 +631,15 @@
     clearInterval(ticker);
     ticker = null;
     clearTimeout(toastTimer);
+    clearTimeout(handleTimer);
     document.removeEventListener("keydown", onKeyDown, true);
+    document.removeEventListener("pointermove", onPointerMove);
     document.removeEventListener("fullscreenchange", attachToCorrectParent);
     document.removeEventListener("webkitfullscreenchange", attachToCorrectParent);
     chrome.runtime.onMessage.removeListener(onMessage);
     root?.remove();
     toast?.remove();
+    handle?.remove();
     listeners.clear();
     window.__ssoPanelTeardown?.();
     delete window.__ssoApi;

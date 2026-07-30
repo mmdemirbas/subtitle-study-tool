@@ -125,6 +125,18 @@ async function runCommand(command) {
     const result = await send(tab.id, frameId, { type: "sso:toggleVisible" });
     if (!result?.ok) await notify(tab.id, frameId, "Nothing attached yet");
   } else if (command === "auto-attach") {
+    // One shortcut, three states. With nothing attached it finds subtitles;
+    // after that it toggles them off and on. Re-running the search on every
+    // press would be both slower and useless - the subtitle is already there,
+    // and there was previously no way to turn it off without a second binding
+    // that Chrome may never have registered.
+    if (status?.attached) {
+      const result = await send(tab.id, frameId, { type: "sso:toggleVisible" });
+      if (result?.ok) {
+        await notify(tab.id, frameId, result.visible ? "Subtitles on" : "Subtitles off");
+      }
+      return;
+    }
     await autoAttach(tab, frameId, status);
   }
 }
