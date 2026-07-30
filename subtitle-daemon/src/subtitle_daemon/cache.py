@@ -11,6 +11,7 @@ enough to be worth not repeating while the user nudges a title around.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass
@@ -23,7 +24,7 @@ SEARCH_TTL_SECONDS = 6 * 60 * 60
 # so without this a change to any of that stays invisible for the TTL and the
 # daemon keeps serving answers computed by the previous version. Downloaded
 # subtitle files are not versioned: those are raw bytes and never go stale.
-SEARCH_SCHEMA_VERSION = 3
+SEARCH_SCHEMA_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -63,9 +64,41 @@ class Cache:
     def put_subtitle(self, file_id: int, raw: bytes, meta: dict[str, object]) -> CachedSubtitle:
         path = self._subtitle_path(file_id)
         path.write_bytes(raw)
-        meta = {**meta, "cached_at": time.time()}
+        meta = {**meta, "cached_at": time.time(), "sha256": hashlib.sha256(raw).hexdigest()}
         path.with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
         return CachedSubtitle(file_id=file_id, path=path, meta=meta)
+
+    def find_for_title(self, imdb_id: str | None, languages: tuple[str, ...]) -> CachedSubtitle | None:
+        """A subtitle already on disk for this title, in the best language.
+
+        This is the part that actually protects the quota. Keying only on
+        file_id stops a *repeat* download of the same upload, but the same film
+        is on OpenSubtitles many times over, and a later search ranking a
+        different upload first would spend a download on a subtitle we
+        effectively already have.
+        """
+        if not imdb_id:
+            return None
+
+        candidates = [
+            item for item in self.list_subtitles() if str(item.meta.get("imdb_id") or "") == imdb_id
+        ]
+        if not candidates:
+            return None
+
+        def rank(item: CachedSubtitle) -> tuple[int, float]:
+            language = str(item.meta.get("language") or "")
+            position = languages.index(language) if language in languages else len(languages)
+            return (position, -float(item.meta.get("cached_at", 0)))
+
+        return min(candidates, key=rank)
+
+    def find_by_content(self, digest: str) -> CachedSubtitle | None:
+        """An existing file with identical bytes, under any file_id."""
+        return next(
+            (item for item in self.list_subtitles() if item.meta.get("sha256") == digest),
+            None,
+        )
 
     def list_subtitles(self) -> list[CachedSubtitle]:
         found: list[CachedSubtitle] = []

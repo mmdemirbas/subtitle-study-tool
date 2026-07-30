@@ -14,6 +14,7 @@ import {
   health,
   pickBest,
   search,
+  subtitleContext,
   tabStatus,
 } from "./daemon.js";
 
@@ -85,7 +86,7 @@ async function handleDaemonCall(op, args) {
       return search({ ...args, languages });
     }
     case "fetch":
-      return fetchSubtitle(args.fileId);
+      return fetchSubtitle(args.fileId, args.context || {});
     default:
       return { error: `unknown daemon operation: ${op}` };
   }
@@ -171,7 +172,7 @@ async function autoAttach(tab, frameId, status) {
       return;
     }
 
-    const subtitle = await fetchSubtitle(best.file_id);
+    const subtitle = await fetchSubtitle(best.file_id, subtitleContext(best, found.resolved));
     if (subtitle.error) {
       await notify(
         tab.id,

@@ -49,13 +49,30 @@ export function search({ title, query, languages, year, season, episode }) {
   return call(`/search?${params.toString()}`);
 }
 
-/** Fetch cues for a file_id. Costs one unit of daily quota on a cache miss. */
-export function fetchSubtitle(fileId) {
+/**
+ * Fetch cues for a file_id. Costs one unit of daily quota on a cache miss.
+ *
+ * `context` tells the daemon which film the file belongs to. Without it the
+ * cache cannot recognise that a later search for the same title is asking for
+ * something already downloaded, and a second upload of the same film would
+ * cost another download.
+ */
+export function fetchSubtitle(fileId, context = {}) {
   return call("/fetch", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ file_id: fileId }),
+    body: JSON.stringify({ file_id: fileId, ...context }),
   });
+}
+
+/** The title context to record alongside a downloaded subtitle. */
+export function subtitleContext(result, resolved) {
+  return {
+    imdb_id: resolved?.imdb_id || null,
+    language: result.language || null,
+    movie_name: result.movie_name || null,
+    release: result.release || null,
+  };
 }
 
 export function cached() {

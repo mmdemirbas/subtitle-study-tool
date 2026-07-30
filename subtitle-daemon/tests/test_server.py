@@ -413,6 +413,69 @@ def test_results_without_episode_metadata_sort_between_match_and_mismatch(http) 
 # --- quota ------------------------------------------------------------------
 
 
+def test_download_records_which_film_the_file_belongs_to(http) -> None:
+    base, _ = http
+    _post(base, "/fetch", {
+        "file_id": 42, "imdb_id": "3397884", "language": "en",
+        "movie_name": "Sicario", "release": "Sicario.2015.1080p",
+    })
+    _status, payload = _get(base, "/cached")
+    [entry] = payload["subtitles"]
+    assert entry["imdb_id"] == "3397884"
+    assert entry["language"] == "en"
+    assert entry["sha256"]
+
+
+def test_a_cached_subtitle_for_the_title_is_offered_first(http) -> None:
+    """The actual quota saver.
+
+    file_id caching alone only stops re-downloading the *same upload*. The same
+    film is on OpenSubtitles many times over, so a later search that ranks a
+    different upload first would spend a download on a subtitle already held.
+    """
+    base, stub = http
+    stub.feature_list = [make_feature("Sicario", imdb_id="3397884", year=2015)]
+
+    # Already downloaded: a modest upload of this film.
+    _post(base, "/fetch", {"file_id": 42, "imdb_id": "3397884", "language": "en"})
+
+    # A later search turns up a far more popular different upload.
+    stub.results = [
+        make_result(999, "Sicario", download_count=90000),
+        make_result(42, "Sicario", download_count=3),
+    ]
+    _status, payload = _get(base, "/search?query=Sicario&languages=en")
+
+    assert payload["results"][0]["file_id"] == 42, "the one we already have comes first"
+    assert payload["results"][0]["cached"] is True
+    assert payload["reusing_cached"] is True
+
+
+def test_cached_promotion_needs_a_matching_title(http) -> None:
+    base, stub = http
+    stub.feature_list = [make_feature("Sicario", imdb_id="3397884")]
+    _post(base, "/fetch", {"file_id": 42, "imdb_id": "9999999", "language": "en"})
+
+    stub.results = [make_result(999, "Sicario", download_count=90000), make_result(42, "Sicario")]
+    _status, payload = _get(base, "/search?query=Sicario&languages=en")
+
+    # A cached subtitle for a different film must not be promoted.
+    assert payload["results"][0]["file_id"] == 999
+    assert not payload.get("reusing_cached")
+
+
+def test_repeated_attach_of_the_same_film_spends_one_download(http) -> None:
+    base, stub = http
+    stub.feature_list = [make_feature("Sicario", imdb_id="3397884")]
+    stub.results = [make_result(42, "Sicario")]
+
+    for _ in range(3):
+        _get(base, "/search?query=Sicario&languages=en")
+        _post(base, "/fetch", {"file_id": 42, "imdb_id": "3397884", "language": "en"})
+
+    assert stub.downloads == [42], "watching the same film again must be free"
+
+
 def test_fetch_downloads_once_then_serves_from_disk(http) -> None:
     base, stub = http
     status, first = _post(base, "/fetch", {"file_id": 42})

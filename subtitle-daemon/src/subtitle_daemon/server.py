@@ -205,6 +205,21 @@ class Service:
 
         results.sort(key=rank, reverse=True)
 
+        # If a subtitle for this title is already on disk, put it first. A
+        # cached file costs nothing, so auto-attach should reach for it before
+        # spending a download on another upload of the same film.
+        owned = self.cache.find_for_title(
+            resolved.imdb_id if resolved is not None else None, languages
+        )
+        if owned is not None:
+            already = next(
+                (item for item in results if item["file_id"] == owned.file_id), None
+            )
+            if already is not None:
+                results.remove(already)
+                results.insert(0, already)
+                response["reusing_cached"] = True
+
         plausible = [item for item in results if item["match_score"] >= matching.VISIBLE_THRESHOLD]
         if plausible:
             response["results"] = plausible
@@ -346,12 +361,31 @@ class Service:
             except OpenSubtitlesError as err:
                 return {"error": str(err)}
 
+            # Context from the caller, so the cache knows which film this file
+            # belongs to. Without it a later search for the same title cannot
+            # tell that it is already downloaded.
             meta: dict[str, Any] = {
                 "file_id": file_id,
                 "file_name": downloaded.file_name,
                 "remaining_quota": downloaded.remaining,
+                "imdb_id": str(body.get("imdb_id") or "") or None,
+                "language": str(body.get("language") or "") or None,
+                "movie_name": str(body.get("movie_name") or "") or None,
+                "release": str(body.get("release") or "") or None,
             }
             stored = self.cache.put_subtitle(file_id, downloaded.content, meta)
+
+            duplicate = self.cache.find_by_content(str(stored.meta.get("sha256")))
+            if duplicate is not None and duplicate.file_id != file_id:
+                # Two uploads of the same film with byte-identical content. The
+                # download is already spent, but say so - it means the title
+                # context above was missing or wrong on one of them.
+                logger.info(
+                    "file_id %d is byte-identical to cached %d; a download was spent "
+                    "on a subtitle already held",
+                    file_id,
+                    duplicate.file_id,
+                )
 
         if downloaded.remaining is not None:
             logger.info("Downloaded %s; %s downloads left today", downloaded.file_name,
