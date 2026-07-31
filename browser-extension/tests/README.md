@@ -30,18 +30,25 @@ specific things streaming sites do that have broken this extension:
 | `div { line-height: 3; letter-spacing: 2px }` | control panel layout pulled apart |
 | A chrome element appended after ours at the same `z-index` | overlay painted over |
 | `stopPropagation` on pointer events inside the player | handle never appeared |
+| A mid-roll ad stitched into the same stream | every cue after the break late by the ad's length |
 
 Each row cost a round trip to discover. Anything that survives this page
 survives Prime Video.
 
 ## The cases
 
-Thirteen, covering: shadow-root isolation, cue colour, italics, speaker
+Eighteen, covering: shadow-root isolation, cue colour, italics, speaker
 colour, non-speech dimming, sound symbols, handle visibility under a
 pointer-event-swallowing player, handle size under a button reset, stacking
 against later chrome, the handle opening the panel, Turkish-Q bracket keys
 nudging the offset, typing in the panel *not* nudging, and re-injection
-leaving exactly one overlay.
+leaving exactly one overlay. Four more cover mid-roll ads: the break being
+measured, the cue surviving it unchanged, subtitles hidden while the ad runs,
+and a flickering marker not being mistaken for a break.
+
+The ad cases advance `video.currentTime` while an ad marker is on screen,
+which is what server-side ad insertion does to the clock. They take a few
+seconds because the detector polls.
 
 ## Adding a case
 

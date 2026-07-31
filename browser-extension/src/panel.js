@@ -180,12 +180,27 @@
     el.offsetValue.textContent = "0s";
 
     offsets.append(
+      button("−30s", { onClick: () => api.nudge(-30000), title: "Subtitles 30s earlier" }),
       button("−1s", { onClick: () => api.nudge(-1000), title: "Subtitles 1s earlier" }),
       button("−¼", { onClick: () => api.nudge(-250) }),
       el.offsetValue,
       button("+¼", { onClick: () => api.nudge(250) }),
       button("+1s", { onClick: () => api.nudge(1000), title: "Subtitles 1s later" }),
+      button("+30s", { onClick: () => api.nudge(30000), title: "Subtitles 30s later" }),
       button("Reset", { onClick: () => api.setOffset(0) }),
+    );
+
+    /* Ad time is measured and subtracted automatically, but the detection
+     * leans on player class names that change, so the total is shown and can
+     * be thrown away when it is wrong. */
+    el.adRow = document.createElement("div");
+    el.adRow.className = "sso-row";
+    el.adDrift = document.createElement("span");
+    el.adDrift.className = "sso-note";
+    el.adDrift.style.flex = "1";
+    el.adRow.append(
+      el.adDrift,
+      button("Clear", { onClick: () => api.clearAdDrift(), title: "Forget measured ad time" }),
     );
 
     const actions = document.createElement("div");
@@ -197,7 +212,7 @@
 
     el.offsetRow = offsets;
     el.actionsRow = actions;
-    wrap.append(el.attached, offsets, actions);
+    wrap.append(el.attached, offsets, el.adRow, actions);
     return wrap;
   }
 
@@ -598,6 +613,11 @@
         : "No video detected on this page.";
 
     el.offsetRow.hidden = !status.attached;
+    const drift = status.adDriftMs || 0;
+    el.adRow.hidden = !status.attached || (drift === 0 && !status.inAd);
+    el.adDrift.textContent = status.inAd
+      ? "Ad playing — subtitles paused"
+      : `Ad time removed: ${(drift / 1000).toFixed(0)}s`;
     el.actionsRow.hidden = !status.attached;
     el.offsetValue.textContent = api.formatOffset(status.offsetMs);
     el.toggleVisible.textContent = status.visible ? "Hide subtitles" : "Show subtitles";

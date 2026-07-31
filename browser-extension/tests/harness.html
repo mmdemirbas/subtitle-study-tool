@@ -46,6 +46,7 @@
   <body>
     <div id="player"><video id="v"></video></div>
     <div id="later"></div>
+    <div id="ad-slot"></div>
     <aside id="results"><h1>Subtitle Overlay — harness</h1><p id="summary">running…</p></aside>
 
     <script>
@@ -197,6 +198,64 @@
         shadowOf().querySelector(".sso-handle").click();
         await sleep(250);
         if (!panelShadow()) throw new Error("panel did not open");
+      });
+
+      /* Prime stitches ads into the same stream, so currentTime keeps running
+       * through the break while the film stands still. Simulate exactly that:
+       * show an ad marker, advance the clock, hide it again. */
+      const adBreak = async (seconds) => {
+        const slot = document.getElementById("ad-slot");
+        slot.innerHTML = '<div class="atvwebplayersdk-ad-timer-remaining-time" ' +
+          'style="position:fixed;top:4px;left:4px;width:60px;height:20px">Ad</div>';
+        await sleep(500);                       // detector polls at 400ms
+        video.currentTime += seconds;           // stream advances, film does not
+        await sleep(200);
+        slot.innerHTML = "";
+        await sleep(500);
+      };
+
+      check("an ad break is detected and its time removed", async () => {
+        await showSpeakerCue();
+        const before = window.__ssoApi.status().adDriftMs || 0;
+        await adBreak(90);
+        const after = window.__ssoApi.status().adDriftMs;
+        if (Math.abs(after - before - 90000) > 1500)
+          throw new Error(`measured ${Math.round((after - before) / 1000)}s of ad, expected ~90s`);
+      });
+
+      check("the same cue is still showing after the ad break", async () => {
+        video.currentTime = 1;
+        window.__ssoApi.clearAdDrift();
+        await sleep(150);
+        const before = shadowOf().querySelector(".sso-cue").textContent;
+        await adBreak(90);
+        // Film time is unchanged: stream moved 90s, all of it advertising.
+        const after = shadowOf().querySelector(".sso-cue").textContent;
+        if (before !== after)
+          throw new Error(`cue changed across the ad break: "${before}" -> "${after}"`);
+      });
+
+      check("subtitles are hidden while the ad plays", async () => {
+        const slot = document.getElementById("ad-slot");
+        slot.innerHTML = '<div class="atvwebplayersdk-ad-timer-remaining-time" ' +
+          'style="position:fixed;top:4px;left:4px;width:60px;height:20px">Ad</div>';
+        await sleep(500);
+        const text = shadowOf().querySelector(".sso-cue").textContent.trim();
+        slot.innerHTML = "";
+        await sleep(500);
+        if (text) throw new Error("cue still rendered during the ad: " + text);
+      });
+
+      check("a marker that flickers is not counted as an ad", async () => {
+        window.__ssoApi.clearAdDrift();
+        const slot = document.getElementById("ad-slot");
+        slot.innerHTML = '<div class="ad-timer" style="position:fixed;width:20px;height:10px"></div>';
+        await sleep(500);
+        video.currentTime += 0.5;   // far below the two-second floor
+        slot.innerHTML = "";
+        await sleep(500);
+        if ((window.__ssoApi.status().adDriftMs || 0) !== 0)
+          throw new Error("a sub-second flicker was counted as an ad break");
       });
 
       check("panel opens beside the handle that opens it, not across the screen", () => {

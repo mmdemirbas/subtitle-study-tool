@@ -57,9 +57,45 @@
     keysEnabled: true,
   };
 
+  /* Mid-roll ads and the clock they break.
+   *
+   * Prime stitches ads into the same stream (server-side ad insertion), so the
+   * <video> element never changes and currentTime keeps advancing while the ad
+   * plays. Film time stands still; stream time does not. Every cue after the
+   * break is therefore late by exactly the ad's length, and the error adds up
+   * across breaks - which is why the sync goes and never comes back.
+   *
+   * The fix is to measure each break and subtract it: film time is stream time
+   * minus everything that was not the film. Measuring needs only the two
+   * moments an ad starts and ends, which is why detection is the whole problem.
+   *
+   * No single selector is trustworthy - Prime has renamed player classes before
+   * - so these are matched loosely and treated as hints, any one of which is
+   * enough. */
+  const AD_MARKERS = [
+    '[class*="ad-timer"]',
+    '[class*="adTimer"]',
+    '[class*="ad-countdown"]',
+    '[class*="adCountdown"]',
+    '[class*="ad-badge"]',
+    '[data-testid*="ad-timer"]',
+    '[data-testid*="ad-badge"]',
+  ].join(",");
+
+  const AD_POLL_MS = 400;
+  // A break shorter than this is noise; longer than this is not one ad break.
+  const AD_MIN_MS = 2000;
+  const AD_MAX_MS = 15 * 60 * 1000;
+
   const state = {
     cues: [],
     offsetMs: 0,
+    // Accumulated ad time, kept apart from offsetMs because it belongs to this
+    // viewing session, not to the subtitle file. Folding it into the saved
+    // offset would corrupt the timing next time the film is opened.
+    adDriftMs: 0,
+    inAd: false,
+    adStartedAtMs: 0,
     visible: true,
     video: null,
     activeIndex: -1,
@@ -379,11 +415,66 @@
       return;
     }
     ensureOverlay();
+    pollAdState();
 
-    const index = findCueIndex(state.video.currentTime * 1000 - state.offsetMs);
+    if (state.inAd) {
+      // Film subtitles over an advert are worse than none.
+      if (state.activeIndex !== -1) {
+        state.activeIndex = -1;
+        renderCue(null);
+      }
+      return;
+    }
+
+    const index = findCueIndex(filmTimeMs());
     if (index === state.activeIndex) return;
     state.activeIndex = index;
     renderCue(index === -1 ? null : state.cues[index]);
+  }
+
+  /** Stream time, less the subtitle's own offset and everything that was an ad. */
+  function filmTimeMs() {
+    return state.video.currentTime * 1000 - state.offsetMs - state.adDriftMs;
+  }
+
+  let lastAdPoll = 0;
+
+  /* Detecting the two edges of an ad break is the entire mechanism: the gap
+   * between them, measured in stream time, IS the correction. */
+  function pollAdState() {
+    const now = performance.now();
+    if (now - lastAdPoll < AD_POLL_MS) return;
+    lastAdPoll = now;
+
+    const showing = adMarkerVisible();
+    if (showing === state.inAd) return;
+
+    const streamMs = state.video.currentTime * 1000;
+    if (showing) {
+      state.inAd = true;
+      state.adStartedAtMs = streamMs;
+      showToast("Ad break — subtitles paused");
+    } else {
+      const elapsed = streamMs - state.adStartedAtMs;
+      state.inAd = false;
+      // Guard both ends. A negative or tiny gap means the marker flickered; an
+      // implausibly long one means we mistook something else for an ad and
+      // adding it would wreck the timing rather than repair it.
+      if (elapsed >= AD_MIN_MS && elapsed <= AD_MAX_MS) {
+        state.adDriftMs += elapsed;
+        showToast(`Ad break over — subtitles shifted ${(elapsed / 1000).toFixed(0)}s`);
+      }
+      state.activeIndex = -1;
+    }
+    notify();
+  }
+
+  function adMarkerVisible() {
+    for (const node of document.querySelectorAll(AD_MARKERS)) {
+      const box = node.getBoundingClientRect();
+      if (box.width > 0 && box.height > 0) return true;
+    }
+    return false;
   }
 
   /* Builds the cue out of elements rather than assigning markup.
@@ -521,6 +612,8 @@
     state.label = label || "";
     state.fileId = fileId ?? null;
     state.offsetMs = await loadOffset(state.fileId);
+    state.adDriftMs = 0;
+    state.inAd = false;
     state.activeIndex = -1;
     state.visible = true;
     state.video = pickVideo();
@@ -566,6 +659,8 @@
       attached: state.cues.length > 0,
       cueCount: state.cues.length,
       offsetMs: state.offsetMs,
+      adDriftMs: state.adDriftMs,
+      inAd: state.inAd,
       visible: state.visible,
       label: state.label,
       fileId: state.fileId,
@@ -640,6 +735,13 @@
         sendResponse({ ok: true, offsetMs: state.offsetMs });
         return false;
 
+      case "sso:clearAdDrift":
+        state.adDriftMs = 0;
+        state.activeIndex = -1;
+        notify();
+        sendResponse({ ok: true });
+        return false;
+
       case "sso:setOffset":
         setOffset(Number(message.offsetMs) || 0, { quiet: true });
         sendResponse({ ok: true, offsetMs: state.offsetMs });
@@ -671,6 +773,11 @@
     setOffset,
     nudge,
     formatOffset,
+    clearAdDrift() {
+      state.adDriftMs = 0;
+      state.activeIndex = -1;
+      notify();
+    },
     pageInfo,
     hasPlayableVideo,
     updateSettings,
