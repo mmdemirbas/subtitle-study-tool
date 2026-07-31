@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Subtitle Overlay — test harness</title>
+    <style>
+      /* --- The page under test ------------------------------------------
+       *
+       * These are not arbitrary. Every rule here reproduces something a real
+       * streaming site does that has broken this extension at least once:
+       *
+       *   button { ... !important }   made the CC handle invisible
+       *   span   { font-style: normal } cancelled subtitle italics
+       *   div    { line-height: 3 }   pulled the control panel apart
+       *   #later { z-index: max }     player chrome painted over the overlay
+       *   stopPropagation on the player  killed the pointermove listener
+       *
+       * If a change to the extension survives this page, it survives Prime.
+       */
+      body { margin: 0; background: #0b0d10; font-family: serif; color: #fff; }
+      div { position: relative; line-height: 3; letter-spacing: 2px; }
+      span { font-style: normal !important; color: #ff00ff !important; }
+      button { position: relative !important; opacity: 0 !important;
+               visibility: hidden !important; display: inline !important;
+               transform: scale(0) !important; font-size: 40px !important; }
+      #player { position: fixed; inset: 0;
+        background: radial-gradient(60% 50% at 30% 35%, #48586b, #12161c 70%); }
+      video { width: 100%; height: 100%; display: block; }
+      /* Player chrome appended AFTER the overlay, same z-index. */
+      #later { position: fixed; inset: 0; z-index: 2147483647; pointer-events: none; }
+
+      /* --- Results panel (not under test) ------------------------------- */
+      #results { position: fixed; right: 0; top: 0; bottom: 0; width: 430px;
+        overflow: auto; z-index: 2147483646; padding: 14px 16px;
+        background: #0f1116; border-left: 1px solid #262b33;
+        font-family: ui-monospace, Menlo, monospace; font-size: 12px;
+        line-height: 1.5 !important; letter-spacing: 0 !important; }
+      #results h1 { margin: 0 0 4px; font-size: 13px; letter-spacing: 0 !important; }
+      #summary { margin: 0 0 12px; font-size: 12px; }
+      .case { padding: 5px 0; border-top: 1px solid #1c212a; letter-spacing: 0 !important; }
+      .pass::before { content: "PASS "; color: #59c27f; }
+      .fail::before { content: "FAIL "; color: #e8705f; }
+      .why { color: #8b929d; padding-left: 42px; }
+    </style>
+  </head>
+  <body>
+    <div id="player"><video id="v"></video></div>
+    <div id="later"></div>
+    <aside id="results"><h1>Subtitle Overlay — harness</h1><p id="summary">running…</p></aside>
+
+    <script>
+      // --- chrome API stub ------------------------------------------------
+      const store = {};
+      const EXT = "../src/";
+      window.chrome = {
+        runtime: {
+          getManifest: () => ({ version: "0.1.0" }),
+          getURL: (p) => EXT + p.split("/").pop(),
+          onMessage: { addListener() {}, removeListener() {} },
+          sendMessage: async (msg) => {
+            if (msg?.type !== "sso:daemon") return {};
+            if (msg.op === "search") {
+              return {
+                used: { query: "Mercy" },
+                auto_attach_threshold: 0.75,
+                resolved: { title: "mercy", year: 2026, imdb_id: "31050594" },
+                results: [{
+                  file_id: 1, language: "en", movie_name: "Mercy",
+                  release: "Mercy.2026.1080p.AMZN.WEB-DL", year: 2026,
+                  download_count: 812, match_score: 1.0, cached: false,
+                  from_trusted: true, hearing_impaired: true,
+                }],
+              };
+            }
+            if (msg.op === "fetch") return { cues: CUES };
+            return {};
+          },
+        },
+        storage: { local: {
+          get: async (k) => (typeof k === "string" ? { [k]: store[k] } : {}),
+          set: async (o) => Object.assign(store, o),
+        } },
+      };
+
+      // Cue payloads in the exact shape the daemon emits.
+      const CUES = [
+        { start: 0, end: 600000, text: "[Ormon] Get down!",
+          runs: [{ text: "[Ormon]", color: "#ffc857", kind: "speaker" },
+                 { text: " Get down!" }] },
+        { start: 600000, end: 900000, text: "[sighs] Fine.",
+          runs: [{ text: "[sighs]", styles: ["i"], kind: "sound", symbol: "\u{1F62E}‍\u{1F4A8}" },
+                 { text: " Fine.", styles: ["i"] }] },
+      ];
+
+      const video = document.getElementById("v");
+      Object.defineProperty(video, "duration", { get: () => 7200 });
+      Object.defineProperty(video, "paused", { get: () => false });
+      let t = 1;
+      Object.defineProperty(video, "currentTime", { get: () => t, set: (x) => (t = x) });
+
+      // Players own pointer events inside the player surface.
+      for (const type of ["pointermove", "mousemove"]) {
+        document.getElementById("player")
+          .addEventListener(type, (e) => e.stopPropagation());
+      }
+    </script>
+
+    <script src="../src/content.js"></script>
+    <script src="../src/panel.js"></script>
+
+    <script>
+      // --- assertions -----------------------------------------------------
+      const cases = [];
+      const check = (name, fn) => cases.push({ name, fn });
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      // Cue 2 carries the italics, the sound run and the symbol. It is only
+      // rendered while the playhead is inside it, so checks about it have to
+      // move the clock first.
+      const showSoundCue = async () => { video.currentTime = 700; await sleep(120); };
+      const showSpeakerCue = async () => { video.currentTime = 1; await sleep(120); };
+      const shadowOf = () =>
+        [...document.querySelectorAll("div")].find((d) => d.shadowRoot && d.shadowRoot.querySelector(".sso-root"))?.shadowRoot;
+      const panelShadow = () =>
+        [...document.querySelectorAll("div")].find((d) => d.shadowRoot && d.shadowRoot.querySelector(".sso-panel"))?.shadowRoot;
+
+      check("overlay lives in a shadow root, out of reach of page CSS", () => {
+        if (!shadowOf()) throw new Error("no shadow root holding .sso-root");
+      });
+
+      check("cue text is not recoloured by the page's span rule", async () => {
+        await showSpeakerCue();
+        const run = [...shadowOf().querySelectorAll(".sso-run")]
+          .find((r) => !r.classList.contains("sso-speaker"));
+        const color = getComputedStyle(run).color;
+        if (color.includes("255, 0, 255")) throw new Error("page span colour leaked in: " + color);
+      });
+
+      check("italic survives the page's font-style reset", async () => {
+        await showSoundCue();
+        const italic = [...shadowOf().querySelectorAll(".sso-i")][0];
+        if (!italic) throw new Error("no italic run rendered");
+        if (getComputedStyle(italic).fontStyle !== "italic")
+          throw new Error("font-style is " + getComputedStyle(italic).fontStyle);
+      });
+
+      check("speaker run keeps its identity colour", async () => {
+        await showSpeakerCue();
+        const speaker = shadowOf().querySelector(".sso-speaker");
+        if (!speaker) throw new Error("no speaker run");
+        const c = getComputedStyle(speaker).color;
+        if (!c.includes("255, 200, 87")) throw new Error("speaker colour is " + c);
+      });
+
+      check("sound run is dimmed relative to dialogue", async () => {
+        await showSoundCue();
+        const sound = shadowOf().querySelector(".sso-sound");
+        const dialogue = [...shadowOf().querySelectorAll(".sso-run")]
+          .find((r) => !r.classList.contains("sso-sound") && !r.classList.contains("sso-speaker"));
+        if (!sound || !dialogue) throw new Error("expected a sound run and a dialogue run");
+        if (Number(getComputedStyle(sound).opacity) >= Number(getComputedStyle(dialogue).opacity))
+          throw new Error("sound is not dimmer than speech");
+      });
+
+      check("sound symbol is rendered beside the words", async () => {
+        await showSoundCue();
+        const symbol = shadowOf().querySelector(".sso-symbol");
+        if (!symbol || !symbol.textContent.trim()) throw new Error("no symbol");
+        if (!shadowOf().querySelector(".sso-sound").textContent.includes("sighs"))
+          throw new Error("symbol replaced the word instead of joining it");
+      });
+
+      check("CC handle appears despite the player swallowing pointer events", async () => {
+        document.getElementById("player")
+          .dispatchEvent(new PointerEvent("pointermove", { bubbles: true }));
+        await sleep(80);
+        const h = shadowOf().querySelector(".sso-handle");
+        if (!h) throw new Error("handle missing");
+        const cs = getComputedStyle(h);
+        if (cs.visibility === "hidden" || Number(cs.opacity) === 0)
+          throw new Error(`hidden: visibility=${cs.visibility} opacity=${cs.opacity}`);
+      });
+
+      check("CC handle keeps its size against the page's button reset", () => {
+        const box = shadowOf().querySelector(".sso-handle").getBoundingClientRect();
+        if (box.width < 20 || box.height < 14)
+          throw new Error(`collapsed to ${Math.round(box.width)}x${Math.round(box.height)}`);
+      });
+
+      check("overlay stays above chrome appended later at equal z-index", () => {
+        const host = shadowOf().host;
+        const later = document.getElementById("later");
+        if (host.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING)
+          throw new Error("player chrome is after the overlay in document order");
+      });
+
+      check("CC handle opens the panel", async () => {
+        shadowOf().querySelector(".sso-handle").click();
+        await sleep(250);
+        if (!panelShadow()) throw new Error("panel did not open");
+      });
+
+      check("a Turkish Q bracket key nudges the offset", async () => {
+        const before = window.__ssoApi.status().offsetMs;
+        document.dispatchEvent(new KeyboardEvent("keydown",
+          { key: "ğ", code: "BracketRight", bubbles: true }));
+        await sleep(50);
+        if (window.__ssoApi.status().offsetMs === before) throw new Error("offset unchanged");
+      });
+
+      check("typing in the panel search box does not nudge", async () => {
+        const input = panelShadow().querySelector('input[type="text"]');
+        input.focus();
+        const before = window.__ssoApi.status().offsetMs;
+        input.dispatchEvent(new KeyboardEvent("keydown",
+          { key: "ğ", code: "BracketRight", bubbles: true, composed: true }));
+        await sleep(50);
+        if (window.__ssoApi.status().offsetMs !== before) throw new Error("typing changed the offset");
+      });
+
+      check("re-injection leaves exactly one overlay", async () => {
+        const count = () => [...document.querySelectorAll("div")].filter((d) => d.shadowRoot).length;
+        const load = (src) => new Promise((ok, no) => {
+          const s = document.createElement("script");
+          s.src = src + "?v=" + cases.length; s.onload = ok; s.onerror = no;
+          document.body.append(s);
+        });
+        await load("../src/content.js");
+        await load("../src/panel.js");
+        await sleep(150);
+        if (count() > 2) throw new Error(`${count()} shadow hosts after re-injection`);
+      });
+
+      // --- run ------------------------------------------------------------
+      (async () => {
+        await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1 });
+        await sleep(250);
+
+        const out = document.getElementById("results");
+        let passed = 0;
+        for (const { name, fn } of cases) {
+          const row = document.createElement("div");
+          row.className = "case";
+          try {
+            await fn();
+            row.classList.add("pass");
+            row.textContent = name;
+            passed++;
+          } catch (err) {
+            row.classList.add("fail");
+            row.textContent = name;
+            const why = document.createElement("div");
+            why.className = "why";
+            why.textContent = err.message;
+            row.append(why);
+          }
+          out.append(row);
+        }
+        const summary = document.getElementById("summary");
+        summary.textContent = `${passed}/${cases.length} passed`;
+        summary.style.color = passed === cases.length ? "#59c27f" : "#e8705f";
+        window.__harness = { passed, total: cases.length };
+      })();
+    </script>
+  </body>
+</html>

@@ -69,6 +69,9 @@
   };
 
   const listeners = new Set();
+  let host = null;      // in the page; geometry only
+  let shadow = null;    // everything visible lives in here
+  let overlaySheet = null;
   let root = null;
   let cueBox = null;
   let toast = null;
@@ -212,11 +215,39 @@
 
   // --- overlay --------------------------------------------------------------
 
+  /* The overlay lives in a shadow root, for the same reason the panel does.
+   *
+   * In the page's own DOM it loses two fights it cannot win. Styling: a host
+   * rule as ordinary as `span { font-style: normal }` cancels italics, and
+   * broad colour resets flatten the speaker and sound colouring - reported as
+   * "markup highlight was not working". Stacking: an element the player appends
+   * later with the same z-index paints over ours, which is how a button pinned
+   * at 2147483647 becomes invisible - reported as "I cannot see any CC button".
+   *
+   * A shadow boundary settles the first. Re-appending the host settles the
+   * second: among equal z-index, last in the DOM wins. */
   function ensureOverlay() {
-    if (root && root.isConnected) {
+    if (host && host.isConnected) {
       attachToCorrectParent();
       return;
     }
+
+    host = document.createElement("div");
+    for (const [property, value] of Object.entries({
+      all: "initial",
+      position: "fixed",
+      inset: "0",
+      "z-index": "2147483647",
+      display: "block",
+      // The film must stay clickable; only the handle opts back in.
+      "pointer-events": "none",
+    })) {
+      host.style.setProperty(property, value, "important");
+    }
+
+    shadow = host.attachShadow({ mode: "open" });
+    if (overlaySheet) shadow.adoptedStyleSheets = [overlaySheet];
+
     root = document.createElement("div");
     root.className = "sso-root";
     cueBox = document.createElement("div");
@@ -227,9 +258,26 @@
     toast.className = "sso-toast";
 
     handle = buildHandle();
+    shadow.append(root, toast, handle);
 
     applySettings();
     attachToCorrectParent();
+  }
+
+  /* Constructable stylesheet rather than a <style> element: adopted sheets are
+   * not subject to the page's Content-Security-Policy, and streaming sites ship
+   * strict style-src. Loaded once, before anything renders. */
+  async function loadOverlayStyles() {
+    if (overlaySheet) return overlaySheet;
+    try {
+      const css = await fetch(chrome.runtime.getURL("src/overlay.css")).then((r) => r.text());
+      overlaySheet = new CSSStyleSheet();
+      overlaySheet.replaceSync(css);
+      if (shadow) shadow.adoptedStyleSheets = [overlaySheet];
+    } catch {
+      // Without the sheet cues still render, unstyled. Better than nothing.
+    }
+    return overlaySheet;
   }
 
   /* A small on-screen way into the control panel.
@@ -262,56 +310,33 @@
      * specificity. The panel had the same exposure and was moved into a shadow
      * root; one button does not justify a second shadow tree, but it does
      * justify winning the cascade outright. */
-    for (const [property, value] of Object.entries({
-      position: "fixed",
-      top: "16px",
-      right: "16px",
-      left: "auto",
-      bottom: "auto",
-      "z-index": "2147483647",
-      display: "flex",
-      width: "38px",
-      height: "26px",
-      margin: "0",
-      transform: "none",
-      "pointer-events": "auto", // the overlay refuses them; this control needs them
-      visibility: "hidden",
-      opacity: "0",
-    })) {
-      node.style.setProperty(property, value, "important");
-    }
+    node.style.setProperty("pointer-events", "auto", "important");
     return node;
   }
 
   function revealHandle() {
     if (!handle) return;
     handle.dataset.visible = "true";
-    // Inline, for the same reason the rest of its geometry is inline.
-    handle.style.setProperty("visibility", "visible", "important");
-    handle.style.setProperty("opacity", "0.55", "important");
+    // Among equal z-index the last element in the DOM wins, and players append
+    // their chrome continuously. Re-appending keeps the overlay on top.
+    attachToCorrectParent({ raise: true });
     clearTimeout(handleTimer);
     handleTimer = setTimeout(() => {
-      if (handle && !handle.matches(":hover")) {
-        handle.dataset.visible = "false";
-        handle.style.setProperty("visibility", "hidden", "important");
-        handle.style.setProperty("opacity", "0", "important");
-      }
+      if (handle && !handle.matches(":hover")) handle.dataset.visible = "false";
     }, 2600);
   }
 
   /* Fullscreen is the detail that breaks naive overlays: the browser renders
    * only the fullscreen element's subtree, so an overlay parented to <body>
    * silently disappears. Re-parent on every change. */
-  function attachToCorrectParent() {
+  function attachToCorrectParent({ raise = false } = {}) {
     const parent =
       document.fullscreenElement ||
       document.webkitFullscreenElement ||
       document.body ||
       document.documentElement;
-    if (!parent) return;
-    if (root && root.parentElement !== parent) parent.appendChild(root);
-    if (toast && toast.parentElement !== parent) parent.appendChild(toast);
-    if (handle && handle.parentElement !== parent) parent.appendChild(handle);
+    if (!parent || !host) return;
+    if (host.parentElement !== parent || raise) parent.appendChild(host);
     if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(parent);
   }
 
@@ -685,6 +710,7 @@
   document.addEventListener("mousemove", onPointerMove, { passive: true, capture: true });
   document.addEventListener("fullscreenchange", attachToCorrectParent);
   document.addEventListener("webkitfullscreenchange", attachToCorrectParent);
+  loadOverlayStyles();
   loadSettings();
   startTicking();
 
@@ -701,9 +727,9 @@
     document.removeEventListener("fullscreenchange", attachToCorrectParent);
     document.removeEventListener("webkitfullscreenchange", attachToCorrectParent);
     chrome.runtime.onMessage.removeListener(onMessage);
-    root?.remove();
-    toast?.remove();
-    handle?.remove();
+    host?.remove();
+    host = null;
+    shadow = null;
     listeners.clear();
     window.__ssoPanelTeardown?.();
     delete window.__ssoApi;

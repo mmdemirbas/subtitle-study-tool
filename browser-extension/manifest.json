@@ -3,48 +3,68 @@
   "name": "Subtitle Overlay",
   "version": "0.1.0",
   "description": "Find a subtitle for whatever is playing and overlay it on the video, synced to the page's own playback clock.",
-
-  "permissions": ["activeTab", "scripting", "storage", "tabs", "webNavigation"],
-  "host_permissions": ["http://127.0.0.1:8791/*"],
-
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "tabs",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8791/*"
+  ],
   "background": {
     "service_worker": "src/background.js",
     "type": "module"
   },
-
   "action": {
     "default_popup": "src/popup.html",
     "default_title": "Subtitle Overlay"
   },
-
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["src/content.js", "src/panel.js"],
-      "css": ["src/overlay.css"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/content.js",
+        "src/panel.js"
+      ],
       "run_at": "document_idle",
       "all_frames": true
     }
   ],
-
   "web_accessible_resources": [
     {
-      "resources": ["src/panel.css"],
-      "matches": ["<all_urls>"]
+      "resources": [
+        "src/panel.css",
+        "src/overlay.css"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
     }
   ],
-
   "commands": {
     "auto-attach": {
-      "suggested_key": { "default": "Ctrl+Shift+S", "mac": "Command+Shift+S" },
+      "suggested_key": {
+        "default": "Ctrl+Shift+S",
+        "mac": "Command+Shift+S"
+      },
       "description": "Find and attach the best subtitle for this tab"
     },
     "toggle-overlay": {
-      "suggested_key": { "default": "Ctrl+Shift+X", "mac": "Command+Shift+X" },
+      "suggested_key": {
+        "default": "Ctrl+Shift+X",
+        "mac": "Command+Shift+X"
+      },
       "description": "Show or hide the subtitle overlay"
     },
     "toggle-panel": {
-      "suggested_key": { "default": "Ctrl+Shift+K", "mac": "Command+Shift+K" },
+      "suggested_key": {
+        "default": "Ctrl+Shift+K",
+        "mac": "Command+Shift+K"
+      },
       "description": "Open the control panel over the video"
     }
   }
