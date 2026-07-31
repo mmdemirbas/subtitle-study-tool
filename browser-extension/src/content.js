@@ -115,10 +115,17 @@
       if (text) candidates.push({ text, source });
     };
 
+    let year = null;
+    const noteYear = (value) => {
+      const match = String(value || "").match(/\b(19[0-9]{2}|20[0-4][0-9])\b/);
+      if (match && year === null) year = Number(match[1]);
+    };
+
     for (const item of readJsonLd()) {
       if (/^(Movie|TVEpisode|TVSeries|VideoObject|CreativeWork)$/i.test(item["@type"] || "")) {
         push(item.name, "json-ld");
         if (item.partOfSeries?.name) push(item.partOfSeries.name, "json-ld-series");
+        noteYear(item.datePublished || item.dateCreated || item.copyrightYear);
       }
     }
 
@@ -127,7 +134,22 @@
     push(document.querySelector("h1")?.textContent, "h1");
     push(document.title, "document.title");
 
-    return { candidates, url: location.href };
+    /* The release year is what tells one "Mercy" from the other seventeen.
+     * Titles alone cannot: the index holds eighteen entries with that exact
+     * name, so without a year the pick comes down to a tiebreak that has
+     * nothing to do with which film is on screen.
+     *
+     * Streaming pages print the year next to the title, so scrape it from the
+     * places it turns up, most reliable first. */
+    noteYear(document.querySelector('meta[itemprop="datePublished"]')?.content);
+    for (const candidate of candidates) noteYear(candidate.text);
+    if (year === null) {
+      // Prime and Netflix both render it as a bare 4-digit chip near the title.
+      const near = document.querySelector("h1")?.closest("div")?.textContent || "";
+      noteYear(near.slice(0, 400));
+    }
+
+    return { candidates, year, url: location.href };
   }
 
   function readJsonLd() {

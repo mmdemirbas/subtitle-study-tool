@@ -78,9 +78,16 @@ def score(query: str, candidate: str, *, query_year: int | None = None,
         base = max(similarity, coverage)
 
     if query_year and candidate_year:
-        # A matching year is strong corroboration; a clashing one is strong
-        # evidence against, but not disqualifying - listings carry wrong years.
-        base = min(1.0, base + 0.1) if query_year == candidate_year else base * 0.7
+        # A matching year corroborates. A year out by one does not contradict:
+        # festival and wide-release years differ, and so do regions - the page
+        # said 2025 for a film the database calls 2026. Penalising that dropped
+        # an exact title below the auto-attach threshold and refused to attach
+        # the correct subtitle. Only a real disagreement counts against.
+        delta = abs(query_year - candidate_year)
+        if delta == 0:
+            base = min(1.0, base + 0.1)
+        elif delta > 1:
+            base *= 0.7
 
     return round(base, 4)
 

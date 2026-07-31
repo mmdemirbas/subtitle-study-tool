@@ -220,7 +220,12 @@
     el.searchNote.className = "sso-note";
     el.searchNote.textContent = "Searching…";
 
-    const response = await api.daemon("search", { query, title: query ? "" : bestPageTitle() });
+    const info = api.pageInfo();
+    const response = await api.daemon("search", {
+      query,
+      title: query ? "" : (info.candidates[0]?.text || document.title),
+      year: info.year ?? undefined,
+    });
     if (!response || response.transportError) {
       el.searchNote.className = "sso-note sso-note--warn";
       el.searchNote.textContent =

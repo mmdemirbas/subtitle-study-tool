@@ -153,8 +153,8 @@ async function autoAttach(tab, frameId, status) {
     const languages = await preferredLanguages();
     // Prefer what the page says it is over the tab title. Prime Video titles a
     // detail page "Prime Video: Crime 101"; og:title says "Crime 101".
-    const title = await bestTitleForTab(tab, frameId);
-    const found = await search({ title, languages });
+    const { title, year } = await bestTitleForTab(tab, frameId);
+    const found = await search({ title, year, languages });
 
     if (found.error) {
       await notify(tab.id, frameId, found.error);

@@ -374,6 +374,123 @@ def test_features_failure_degrades_to_fuzzy_search(http) -> None:
     assert stub.searches >= 1
 
 
+def test_the_mercy_regression(http) -> None:
+    """A common title cannot be resolved on title similarity alone.
+
+    "Mercy" matches 18 entries in the index exactly, so every one scores 1.0
+    and whatever breaks the tie IS the answer. Breaking it on subtitle count
+    chose a 2016 television episode for a 2025 film. A film page with no season
+    or episode wants a Movie, and the year decides among the films.
+    """
+    base, stub = http
+    stub.feature_list = [
+        # What used to win: most-subtitled entry sharing the name.
+        make_feature("mercy", imdb_id="4793696", year=2016,
+                     feature_type="Episode", subtitles_count=258),
+        make_feature("mercy", imdb_id="6156390", year=2017,
+                     feature_type="Episode", subtitles_count=203),
+        make_feature("mercy", imdb_id="2481496", year=2014,
+                     feature_type="Movie", subtitles_count=65),
+        # The film actually playing. Listed as 2026 upstream, 2025 on the page.
+        make_feature("mercy", imdb_id="31050594", year=2026,
+                     feature_type="Movie", subtitles_count=201),
+    ]
+    _status, payload = _get(base, "/search?query=Mercy&year=2025&languages=en")
+
+    assert payload["resolved"]["imdb_id"] == "31050594"
+    assert payload["resolved"]["type"] == "Movie"
+
+
+def test_a_film_page_prefers_films_over_episodes(http) -> None:
+    base, stub = http
+    stub.feature_list = [
+        make_feature("mercy", imdb_id="1", feature_type="Episode", subtitles_count=900),
+        make_feature("mercy", imdb_id="2", feature_type="Movie", subtitles_count=5),
+    ]
+    _status, payload = _get(base, "/search?query=Mercy")
+    assert payload["resolved"]["imdb_id"] == "2", "no episode number means a film"
+
+
+def test_an_episode_search_still_prefers_series(http) -> None:
+    base, stub = http
+    stub.feature_list = [
+        make_feature("mercy", imdb_id="1", feature_type="Movie", subtitles_count=900),
+        make_feature("mercy", imdb_id="2", feature_type="Tvshow", subtitles_count=5),
+    ]
+    _status, payload = _get(base, "/search?query=Mercy&season=1&episode=2")
+    assert payload["resolved"]["imdb_id"] == "2"
+
+
+def test_year_is_a_preference_not_a_filter(http) -> None:
+    """Release years disagree between festival, wide release and region.
+
+    Prime lists the film as 2025 and OpenSubtitles as 2026. Filtering on an
+    exact year would reject the correct entry, so a year within one still
+    counts as agreement.
+    """
+    base, stub = http
+    stub.feature_list = [
+        make_feature("mercy", imdb_id="off-by-one", year=2026,
+                     feature_type="Movie", subtitles_count=10),
+        make_feature("mercy", imdb_id="far-off", year=2009,
+                     feature_type="Movie", subtitles_count=900),
+    ]
+    _status, payload = _get(base, "/search?query=Mercy&year=2025")
+    assert payload["resolved"]["imdb_id"] == "off-by-one"
+
+
+def test_an_exact_year_beats_an_adjacent_one(http) -> None:
+    base, stub = http
+    stub.feature_list = [
+        make_feature("mercy", imdb_id="adjacent", year=2026,
+                     feature_type="Movie", subtitles_count=900),
+        make_feature("mercy", imdb_id="exact", year=2025,
+                     feature_type="Movie", subtitles_count=1),
+    ]
+    _status, payload = _get(base, "/search?query=Mercy&year=2025")
+    assert payload["resolved"]["imdb_id"] == "exact"
+
+
+def test_indistinguishable_titles_are_reported_not_silently_chosen(http) -> None:
+    """With no year, several films of the same name are a genuine coin toss."""
+    base, stub = http
+    stub.feature_list = [
+        make_feature("mercy", imdb_id="a", year=2026, feature_type="Movie",
+                     subtitles_count=201),
+        make_feature("mercy", imdb_id="b", year=2014, feature_type="Movie",
+                     subtitles_count=65),
+    ]
+    _status, payload = _get(base, "/search?query=Mercy")
+
+    assert payload["ambiguous_title"] is True
+    assert [o["imdb_id"] for o in payload["other_titles"]] == ["b"]
+
+
+def test_a_year_removes_the_ambiguity(http) -> None:
+    base, stub = http
+    stub.feature_list = [
+        make_feature("mercy", imdb_id="a", year=2026, feature_type="Movie",
+                     subtitles_count=201),
+        make_feature("mercy", imdb_id="b", year=2014, feature_type="Movie",
+                     subtitles_count=65),
+    ]
+    _status, payload = _get(base, "/search?query=Mercy&year=2025")
+    assert not payload.get("ambiguous_title")
+
+
+def test_ambiguity_survives_a_cache_hit(http) -> None:
+    base, stub = http
+    stub.feature_list = [
+        make_feature("mercy", imdb_id="a", feature_type="Movie", subtitles_count=9),
+        make_feature("mercy", imdb_id="b", feature_type="Movie", subtitles_count=8),
+    ]
+    _get(base, "/search?query=Mercy")
+    _status, replayed = _get(base, "/search?query=Mercy")
+    assert replayed["from_cache"] is True
+    assert replayed["ambiguous_title"] is True
+    assert replayed["other_titles"]
+
+
 def test_feature_with_no_subtitles_is_not_used(http) -> None:
     base, stub = http
     stub.feature_list = [make_feature("Sicario", imdb_id="3397884", subtitles_count=0)]

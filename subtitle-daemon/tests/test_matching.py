@@ -61,6 +61,22 @@ def test_matching_year_helps_and_clashing_year_hurts() -> None:
     assert with_clash < with_match
 
 
+def test_a_year_out_by_one_is_not_a_clash() -> None:
+    """Release years disagree by a year all the time and must not penalise.
+
+    The page said Mercy (2025); the database says 2026. Treating that as a
+    clash cost an exact title 30% of its score, dropped it under the
+    auto-attach threshold, and refused to attach the right subtitle.
+    """
+    adjacent = score("Mercy", "Mercy", query_year=2025, candidate_year=2026)
+    assert adjacent >= AUTO_ATTACH_THRESHOLD
+    assert adjacent == score("Mercy", "Mercy")
+
+
+def test_a_year_out_by_several_still_counts_against() -> None:
+    assert score("Mercy", "Mercy", query_year=2025, candidate_year=2009) < AUTO_ATTACH_THRESHOLD
+
+
 def test_year_clash_alone_does_not_disqualify_an_exact_title() -> None:
     # Listings carry wrong years often enough that this must stay visible.
     assert score("Sicario", "Sicario", query_year=2015, candidate_year=2018) > VISIBLE_THRESHOLD

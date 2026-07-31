@@ -56,6 +56,8 @@ MAX_BODY_BYTES = 64 * 1024
 _CACHED_FIELDS = (
     "results",
     "resolved",
+    "ambiguous_title",
+    "other_titles",
     "low_confidence",
     "not_in_database",
     "error",
@@ -143,7 +145,7 @@ class Service:
             return response
 
         try:
-            found, resolved = self._search_upstream(
+            found, resolved, rivals = self._search_upstream(
                 query=query,
                 languages=languages,
                 year=year,
@@ -162,6 +164,20 @@ class Service:
                 "imdb_id": resolved.imdb_id,
                 "type": resolved.feature_type,
             }
+            # Titles this common cannot be resolved from the title alone. Say so
+            # and hand over the alternatives, rather than presenting a coin toss
+            # as an answer.
+            if rivals:
+                response["ambiguous_title"] = True
+                response["other_titles"] = [
+                    {
+                        "title": other.title,
+                        "year": other.year,
+                        "imdb_id": other.imdb_id,
+                        "type": other.feature_type,
+                    }
+                    for other in rivals
+                ]
         elif not found:
             # /features knows the whole catalogue. If it has never heard of the
             # title, no query rewriting will help - the subtitles do not exist.
@@ -243,7 +259,7 @@ class Service:
         season: int | None,
         episode: int | None,
         imdb_id: str | None,
-    ) -> tuple[list[Any], Any]:
+    ) -> tuple[list[Any], Any, list[Any]]:
         """Resolve the title, then search for it exactly.
 
         `/subtitles?query=` is fuzzy and always returns something, so it cannot
@@ -260,9 +276,9 @@ class Service:
         if imdb_id:
             return client.search(
                 imdb_id=imdb_id, languages=languages, season=season, episode=episode
-            ), None
+            ), None, []
 
-        resolved = self._pick_feature(query, year, want_series=season is not None)
+        resolved, rivals = self._pick_feature(query, year, want_series=season is not None)
 
         if resolved is not None:
             if resolved.is_series:
@@ -282,7 +298,7 @@ class Service:
                 found = client.search(imdb_id=resolved.imdb_id, languages=languages)
 
             if found:
-                return found, resolved
+                return found, resolved, rivals
 
         # No confident title match. Narrow by media type so a film search does
         # not drown in episodes that merely share a word.
@@ -296,16 +312,30 @@ class Service:
             media_type=media_type,
         )
         if found:
-            return found, resolved
+            return found, resolved, rivals
 
         # Last resort: unfiltered. Catches series searched without an episode
         # number, and anything the type filter misclassifies.
         return client.search(
             query=query, languages=languages, year=year, season=season, episode=episode
-        ), resolved
+        ), resolved, rivals
 
-    def _pick_feature(self, query: str, year: int | None, *, want_series: bool) -> Any:
-        """Best index entry for the query, or None if nothing matches well."""
+    def _pick_feature(
+        self, query: str, year: int | None, *, want_series: bool
+    ) -> tuple[Any, list[Any]]:
+        """Best index entry for the query, plus any equally-good rivals.
+
+        A common title is not a rare case. "Mercy" matches 18 entries in the
+        index exactly, so title similarity alone cannot choose between them and
+        whatever breaks the tie IS the answer. Breaking it on subtitle count -
+        which is what this used to do - picks the most-subtitled thing sharing
+        the name, and returned a 2016 television episode for a 2025 film.
+
+        So the tie is broken on things that actually indicate identity: whether
+        the entry is the right kind of thing, and how close its year is. Rivals
+        that survive all of that are returned rather than silently discarded,
+        because at that point the daemon genuinely cannot tell and the user can.
+        """
         client = self.client
         assert client is not None
 
@@ -315,24 +345,45 @@ class Service:
             # The index is an optimisation, not a requirement. Losing it costs
             # precision, not the search.
             logger.warning("feature lookup failed, falling back to fuzzy search: %s", err)
-            return None
+            return None, []
 
+        # Title similarity only. Feeding the year in here would apply the
+        # scorer's clash penalty, and a one-year disagreement is normal enough
+        # that it dropped an exact title below the threshold and resolved to
+        # nothing. The year is a ranking dimension below, not a score modifier.
         scored = [
-            (
-                matching.score(query, feature.title, query_year=year,
-                               candidate_year=feature.year),
-                feature,
-            )
+            (matching.score(query, feature.title), feature)
             for feature in candidates
             if feature.subtitles_count > 0
         ]
-        if want_series:
-            scored = [(score, f) for score, f in scored if f.is_series] or scored
+        if not scored:
+            return None, []
 
-        scored.sort(key=lambda pair: (pair[0], pair[1].subtitles_count), reverse=True)
-        if scored and scored[0][0] >= matching.AUTO_ATTACH_THRESHOLD:
-            return scored[0][1]
-        return None
+        def rank(pair: tuple[float, Any]) -> tuple[float, int, int, int]:
+            score, feature = pair
+            return (
+                round(score, 1),
+                _type_agreement(feature, want_series=want_series),
+                _year_agreement(feature.year, year),
+                feature.subtitles_count,
+            )
+
+        scored.sort(key=rank, reverse=True)
+        best_score, best = scored[0]
+        if best_score < matching.AUTO_ATTACH_THRESHOLD:
+            return None, []
+
+        # Anything indistinguishable from the winner on every signal except
+        # popularity is a rival, not a runner-up.
+        top = rank(scored[0])[:3]
+        rivals = [feature for pair, feature in ((rank(p), p[1]) for p in scored[1:])
+                  if pair[:3] == top][:5]
+        if rivals:
+            logger.info(
+                "%r matches %d entries equally well; picked %s (%s, %s)",
+                query, len(rivals) + 1, best.title, best.year, best.feature_type,
+            )
+        return best, rivals
 
     def fetch(self, body: dict[str, Any]) -> dict[str, Any]:
         """Return cues for a file_id, downloading only if not already cached."""
@@ -536,6 +587,34 @@ class _Handler(BaseHTTPRequestHandler):
         self._cors_headers(self.headers.get("Origin"))
         self.end_headers()
         self.wfile.write(raw)
+
+
+def _type_agreement(feature: Any, *, want_series: bool) -> int:
+    """1 when the entry is the kind of thing we are looking for, else -1.
+
+    A page with no season or episode detected is a film until shown otherwise.
+    Without this, television episodes sharing a film's title win on subtitle
+    count, which is how a 2016 episode was chosen for a 2025 film.
+    """
+    return 1 if feature.is_series == want_series else -1
+
+
+def _year_agreement(candidate_year: int | None, wanted: int | None) -> int:
+    """2 exact, 1 within a year, 0 unknown, -1 further away.
+
+    Within-a-year counts as agreement on purpose. Release years disagree
+    routinely between festival and wide release and between regions - Prime
+    lists the film in question as 2025 and OpenSubtitles as 2026 - so treating
+    the year as a filter would reject the correct entry. It is a preference.
+    """
+    if wanted is None or candidate_year is None:
+        return 0
+    delta = abs(candidate_year - wanted)
+    if delta == 0:
+        return 2
+    if delta <= 1:
+        return 1
+    return -1
 
 
 def _episode_agreement(item: dict[str, Any], season: int | None, episode: int | None) -> int:

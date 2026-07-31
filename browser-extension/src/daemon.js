@@ -148,11 +148,13 @@ export async function bestTitleForTab(tab, frameId) {
       options(frameId),
     );
     const best = info?.candidates?.[0]?.text;
-    if (best) return best;
+    // The year travels with the title. Without it a common name like "Mercy"
+    // cannot be resolved to one film - the index holds eighteen of them.
+    if (best) return { title: best, year: info?.year ?? null };
   } catch {
     // No content script, or the frame went away.
   }
-  return tab.title || "";
+  return { title: tab.title || "", year: null };
 }
 
 /**
