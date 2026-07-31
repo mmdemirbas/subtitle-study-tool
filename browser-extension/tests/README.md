@@ -37,7 +37,7 @@ survives Prime Video.
 
 ## The cases
 
-Twenty-four, covering: shadow-root isolation, cue colour, italics, speaker
+Thirty-three, covering: shadow-root isolation, cue colour, italics, speaker
 colour, non-speech dimming, sound symbols, handle visibility under a
 pointer-event-swallowing player, handle size under a button reset, stacking
 against later chrome, the handle opening the panel, Turkish-Q bracket keys
@@ -50,6 +50,14 @@ Six more cover moving the subtitle: dragging it, the position persisting,
 the clamp that stops it leaving the screen, a click without movement still
 reaching the player, reset, and placement mode producing something to grab
 between two lines.
+
+Nine more cover how wide it is and who decides where a line breaks: the
+file's own breaks being rewrapped, a turn between two speakers keeping its
+break, rewrapping off restoring both, the box reaching the whole width it is
+given, narrowing pushing the text onto more rows, a long line staying on
+screen after the box was placed against an edge with a short one showing,
+widening not pushing it off the screen, an edge-drag resizing, and a
+middle-drag still moving rather than resizing.
 
 The ad cases advance `video.currentTime` while an ad marker is on screen,
 which is what server-side ad insertion does to the clock. They take a few

@@ -9,20 +9,26 @@
 
 /* Positioned by its centre, so dragging is a single point to reason about and
  * the box grows symmetrically as lines wrap. Percentages rather than pixels so
- * a position survives a window resize and fullscreen. */
+ * a position survives a window resize and fullscreen.
+ *
+ * The width is an explicit setting rather than an emergent one. It used to be
+ * `max-content` capped by a percentage, which had two faults: the cap was a
+ * percentage of a max-content parent, so every cue was squeezed to 92% of the
+ * width it had just asked for, and the horizontal padding sat outside the cap,
+ * so the box could still reach both edges of the screen. One value, one
+ * meaning: --sso-width is how wide the subtitle is allowed to get. */
 .sso-root {
   position: fixed;
   left: var(--sso-x, 50%);
   top: var(--sso-y, 92%);
   transform: translate(-50%, -50%);
-  width: max-content;
-  max-width: 92vw;
+  width: var(--sso-width, 80vw);
   z-index: 2147483647; /* above player chrome, which often sits near 2^31 */
   display: flex;
   justify-content: center;
   pointer-events: none; /* never intercept clicks meant for the player */
   margin: 0;
-  padding: 0 4vw;
+  padding: 0;
   text-align: center;
 }
 
@@ -32,7 +38,11 @@
 
 .sso-cue {
   display: inline-block;
-  max-width: 92%;
+  /* Of the root, whose width is the setting. A short line still hugs its own
+   * text - only a long one is held to the limit. border-box so the padding is
+   * inside the limit and the setting means what it says. */
+  box-sizing: border-box;
+  max-width: 100%;
   margin: 0;
   padding: 0.15em 0.5em;
   font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
@@ -67,6 +77,14 @@
   opacity: 0.9;
 }
 
+/* While the width is being dragged, the box takes its whole allotment. A cue
+ * only occupies the width its text needs, so without this you would be setting
+ * a limit with nothing showing you where it now sits. */
+.sso-root[data-sizing="true"] .sso-cue,
+.sso-root[data-placing="true"] .sso-cue {
+  width: 100%;
+}
+
 .sso-root[data-plain="true"] .sso-cue {
   background: transparent;
 }
@@ -86,7 +104,11 @@
 /* The cue is the drag handle. It is the only part of the overlay that takes
  * pointer events - everything else stays click-through so the player keeps
  * its own clicks. A press that does not move is forwarded to whatever sits
- * underneath, so tapping the middle of the screen still pauses the film. */
+ * underneath, so tapping the middle of the screen still pauses the film.
+ *
+ * Its middle moves the subtitle; either vertical edge resizes it. The cursor
+ * is set from script while the pointer is over an edge, because "within a few
+ * pixels of the border" is not something a selector can say. */
 .sso-cue {
   cursor: grab;
   pointer-events: auto;
@@ -95,6 +117,13 @@
 .sso-root[data-dragging="true"] .sso-cue {
   cursor: grabbing;
   user-select: none;
+}
+
+.sso-root[data-sizing="true"] .sso-cue {
+  cursor: ew-resize;
+  user-select: none;
+  outline: 2px dashed rgba(255, 255, 255, 0.55);
+  outline-offset: 4px;
 }
 
 /* A hint that it can be moved, shown only while the pointer is on it. */

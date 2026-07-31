@@ -40,6 +40,11 @@
   const NEEDS_REDRAW = -2;
   const SETTINGS_KEY = "sso:settings";
 
+  // Used by both the settings clamp and the drag; up here so neither section
+  // owns them.
+  const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
+  const round1 = (value) => Math.round(value * 10) / 10;
+
   /* Key bindings are stored as KeyboardEvent.code, which identifies the
    * physical key rather than the character it produces. On a Turkish Q layout
    * the keys right of P produce ğ and ü, but their codes are still
@@ -52,8 +57,12 @@
     // position survives a resize or going fullscreen.
     posX: 50,
     posY: 92,
+    // How wide the subtitle may get, again as a percentage of the viewport.
+    widthPercent: 80,
     // False until dragged. While false a cue's own {\an8} may still move it.
     placed: false,
+    // Let the box decide where lines break rather than the file. See rewrapRuns.
+    rewrap: true,
     showSymbols: true,
     dimNonSpeech: true,
     smallStepMs: 250,
@@ -246,11 +255,24 @@
   }
 
   function updateSettings(patch) {
-    state.settings = {
+    const next = {
       ...state.settings,
       ...patch,
       keys: { ...state.settings.keys, ...(patch.keys || {}) },
     };
+
+    /* Keep the box on screen horizontally, here rather than in the drag alone.
+     * A drag can only measure the line in front of it, so a position set
+     * against a short line let the next long one hang off the edge - 101px of
+     * it, on a 360px viewport - and widening the box afterwards did the same
+     * to a position that was legal when it was set. The width setting bounds
+     * the box whatever the line, so half of it is as close as the centre may
+     * come to either edge. Vertically the height is text-dependent and has no
+     * such bound, so that clamp stays with the drag, which can measure it. */
+    const half = next.widthPercent / 2;
+    next.posX = round1(clamp(next.posX, half, 100 - half));
+
+    state.settings = next;
     applySettings();
     chrome.storage.local.set({ [SETTINGS_KEY]: state.settings }).catch(() => {});
     notify();
@@ -262,11 +284,13 @@
 
   function applySettings() {
     if (!root) return;
-    const { fontScale, background, dimNonSpeech, posX, posY, placed } = state.settings;
+    const { fontScale, background, dimNonSpeech, posX, posY, placed, widthPercent } =
+      state.settings;
     root.style.setProperty("--sso-font-size", `${2.6 * fontScale}vh`);
     root.style.setProperty("--sso-bg", `rgba(0, 0, 0, ${background})`);
     root.style.setProperty("--sso-x", `${posX}%`);
     root.style.setProperty("--sso-y", `${posY}%`);
+    root.style.setProperty("--sso-width", `${widthPercent}vw`);
     root.dataset.dim = dimNonSpeech ? "true" : "false";
     // Once placed by hand, a cue's own {\an8} no longer moves it.
     root.dataset.placed = placed ? "manual" : "auto";
@@ -285,7 +309,21 @@
    * the cue for one hit-test and re-dispatching the click there. So the film
    * keeps its clicks and the subtitle is still movable. */
   const DRAG_THRESHOLD_PX = 4;
+  const RESIZE_EDGE_PX = 16;
+  const MIN_WIDTH_PERCENT = 20;
+  const MAX_WIDTH_PERCENT = 100;
   let drag = null;
+
+  /* Either vertical edge of the cue resizes it; the middle moves it. On a box
+   * narrower than four edge-widths the two zones would meet in the middle and
+   * there would be nowhere left to grab, so a short cue is all middle. */
+  function edgeAt(clientX) {
+    const box = cueBox.getBoundingClientRect();
+    if (box.width < RESIZE_EDGE_PX * 4) return 0;
+    if (clientX - box.left <= RESIZE_EDGE_PX) return -1;
+    if (box.right - clientX <= RESIZE_EDGE_PX) return 1;
+    return 0;
+  }
 
   function onCuePointerDown(event) {
     if (event.button !== 0) return;
@@ -294,12 +332,22 @@
       startX: event.clientX,
       startY: event.clientY,
       moved: false,
+      sizing: edgeAt(event.clientX) !== 0,
     };
     cueBox.setPointerCapture(event.pointerId);
   }
 
   function onCuePointerMove(event) {
-    if (!drag || event.pointerId !== drag.pointerId) return;
+    if (!drag || event.pointerId !== drag.pointerId) {
+      // Not dragging: say which of the two things a press here would do.
+      if (!drag) cueBox.style.cursor = edgeAt(event.clientX) ? "ew-resize" : "";
+      return;
+    }
+
+    if (drag.sizing) {
+      onResizeMove(event);
+      return;
+    }
 
     if (!drag.moved) {
       const far =
@@ -310,14 +358,33 @@
       root.dataset.dragging = "true";
     }
 
-    // Clamped so the subtitle can never be dragged off the screen and lost.
+    // Vertical clamp only, so the subtitle cannot be dragged off the bottom or
+    // top and lost. The horizontal one belongs to updateSettings, which knows
+    // the width the box is allowed rather than the width of this one line.
     const box = cueBox.getBoundingClientRect();
-    const halfW = (box.width / 2 / window.innerWidth) * 100;
     const halfH = (box.height / 2 / window.innerHeight) * 100;
-    const x = clamp((event.clientX / window.innerWidth) * 100, halfW, 100 - halfW);
+    const x = (event.clientX / window.innerWidth) * 100;
     const y = clamp((event.clientY / window.innerHeight) * 100, halfH, 100 - halfH);
 
     updateSettings({ posX: round1(x), posY: round1(y), placed: true });
+  }
+
+  /* The box grows about its centre, so the width is twice the distance from
+   * the centre to the pointer. Measured from the stored centre rather than the
+   * box's own, which shifts as the box grows and would have the drag chasing
+   * itself. */
+  function onResizeMove(event) {
+    if (!drag.moved) {
+      if (Math.abs(event.clientX - drag.startX) <= DRAG_THRESHOLD_PX) return;
+      drag.moved = true;
+      root.dataset.sizing = "true";
+    }
+    const centre = (state.settings.posX / 100) * window.innerWidth;
+    const half = Math.abs(event.clientX - centre);
+    const percent = ((half * 2) / window.innerWidth) * 100;
+    updateSettings({
+      widthPercent: round1(clamp(percent, MIN_WIDTH_PERCENT, MAX_WIDTH_PERCENT)),
+    });
   }
 
   function onCuePointerUp(event) {
@@ -326,6 +393,7 @@
     drag = null;
     cueBox.releasePointerCapture?.(event.pointerId);
     root.dataset.dragging = "false";
+    root.dataset.sizing = "false";
 
     if (!moved) forwardClickBeneath(startX, startY, event);
   }
@@ -350,9 +418,6 @@
       );
     }
   }
-
-  const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
-  const round1 = (value) => Math.round(value * 10) / 10;
 
   // --- overlay --------------------------------------------------------------
 
@@ -600,6 +665,42 @@
    *
    * Text always goes in through createTextNode, never innerHTML, so nothing in
    * a downloaded subtitle can become markup in the page. */
+  /* Subtitle files hard-wrap their own lines - around forty characters, two
+   * lines, a habit inherited from 4:3 television. Honouring those breaks
+   * literally makes the box hug the longest line in the *file*, so a cue that
+   * would sit comfortably on one line of a widescreen arrives as two short
+   * ones and the width setting has nothing to act on. Measured on a 1200px
+   * window: 45% of the screen with the file's breaks, 84% without.
+   *
+   * So the breaks are advisory and the box does the wrapping - except where a
+   * break carries meaning. A line opening with a dash is the second speaker's
+   * turn and a line opening with a note is a separate sung phrase; joining
+   * either would put two voices on one line. */
+  const TURN_START = /^[\s ]*(?:[-–—]|♪|♫)/;
+
+  function rewrapText(text) {
+    return text.replace(/\n+/g, (match, at) =>
+      TURN_START.test(text.slice(at + match.length)) ? match : " ",
+    );
+  }
+
+  /* The same rule across a cue's runs. A break can sit at the end of one run
+   * with the dash that justifies it at the start of the next, so the decision
+   * reads the whole cue while the replacement stays inside its own run. */
+  function rewrapRuns(runs) {
+    const full = runs.map((run) => run.text).join("");
+    let base = 0;
+    return runs.map((run) => {
+      const start = base;
+      base += run.text.length;
+      if (!run.text.includes("\n")) return run;
+      const text = run.text.replace(/\n+/g, (match, at) =>
+        TURN_START.test(full.slice(start + at + match.length)) ? match : " ",
+      );
+      return { ...run, text };
+    });
+  }
+
   function renderCue(cue) {
     cueBox.replaceChildren();
     root.dataset.vertical = cue?.vertical || "bottom";
@@ -608,12 +709,14 @@
       return;
     }
 
+    const rewrap = state.settings.rewrap;
+
     if (!cue.runs) {
-      cueBox.textContent = cue.text;
+      cueBox.textContent = rewrap ? rewrapText(cue.text) : cue.text;
       return;
     }
 
-    for (const run of cue.runs) {
+    for (const run of rewrap ? rewrapRuns(cue.runs) : cue.runs) {
       const span = document.createElement("span");
       span.className = "sso-run";
       if (run.kind) span.classList.add(`sso-${run.kind}`);

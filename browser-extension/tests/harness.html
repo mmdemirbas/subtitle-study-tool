@@ -91,6 +91,18 @@
         { start: 600000, end: 900000, text: "[sighs] Fine.",
           runs: [{ text: "[sighs]", styles: ["i"], kind: "sound", symbol: "\u{1F62E}‍\u{1F4A8}" },
                  { text: " Fine.", styles: ["i"] }] },
+        // Wrapped the way subtitle files really are: two short lines broken
+        // for a 4:3 television, not for the screen this will be shown on.
+        { start: 1200000, end: 1500000,
+          text: "I have no idea what you are talking\nabout, and frankly I do not care.",
+          runs: [{ text: "I have no idea what you are talking\n" },
+                 { text: "about, and frankly I do not care." }] },
+        // Two speakers in one cue. Here the break is meaning, not wrapping,
+        // and it sits at the boundary between two runs.
+        { start: 1500000, end: 1800000,
+          text: "- Did you see that?\n- I saw nothing at all.",
+          runs: [{ text: "- Did you see that?\n" },
+                 { text: "- I saw nothing at all." }] },
       ];
 
       const video = document.getElementById("v");
@@ -336,6 +348,119 @@
         await sleep(150);
         if (shadowOf().querySelector(".sso-cue").getBoundingClientRect().width > 1)
           throw new Error("stand-in outlived placement mode");
+      });
+
+      /* How wide the subtitle is allowed to get, and who decides where a line
+       * breaks. The file wraps its own lines for a 4:3 television; obeying
+       * that made the box hug the longest line in the file, so a cue used a
+       * fraction of the screen and arrived a line longer than it needed. */
+      const showLongCue = async () => { video.currentTime = 1300; await sleep(140); };
+      const showTurnCue = async () => { video.currentTime = 1600; await sleep(140); };
+      const cueBox = () => shadowOf().querySelector(".sso-cue").getBoundingClientRect();
+
+      check("a line break made for a 4:3 television does not survive", async () => {
+        window.__ssoApi.updateSettings({ rewrap: true, widthPercent: 90 });
+        await showLongCue();
+        const text = shadowOf().querySelector(".sso-cue").textContent;
+        if (text.includes("\n"))
+          throw new Error("the file's own break was still deciding the width");
+      });
+
+      check("a turn between two speakers keeps its line break", async () => {
+        await showTurnCue();
+        const text = shadowOf().querySelector(".sso-cue").textContent;
+        if (!text.includes("\n"))
+          throw new Error("two speakers were joined onto one line");
+      });
+
+      check("the file's breaks come back when rewrapping is turned off", async () => {
+        window.__ssoApi.updateSettings({ rewrap: false });
+        await showLongCue();
+        const text = shadowOf().querySelector(".sso-cue").textContent;
+        window.__ssoApi.updateSettings({ rewrap: true });
+        if (!text.includes("\n")) throw new Error("break lost with rewrap off");
+      });
+
+      check("the box may use the whole width it is given", async () => {
+        window.__ssoApi.updateSettings({ widthPercent: 60 });
+        await showLongCue();
+        const allowed = window.innerWidth * 0.6;
+        const box = cueBox();
+        // It used to be held to 92% of the width it had just asked for, so a
+        // long line could never reach its limit and wrapped a line early.
+        if (box.width < allowed - 2)
+          throw new Error(`used ${Math.round(box.width)}px of the ${Math.round(allowed)}px allowed`);
+        if (box.width > allowed + 2)
+          throw new Error(`overflowed its limit: ${Math.round(box.width)}px`);
+      });
+
+      check("narrowing the width pushes the line onto more rows", async () => {
+        window.__ssoApi.updateSettings({ widthPercent: 90 });
+        await showLongCue();
+        const wide = cueBox();
+        window.__ssoApi.updateSettings({ widthPercent: 30 });
+        await sleep(140);
+        const narrow = cueBox();
+        if (narrow.width >= wide.width)
+          throw new Error(`30% was not narrower than 90%: ${Math.round(narrow.width)} vs ${Math.round(wide.width)}`);
+        if (narrow.height <= wide.height)
+          throw new Error("the text did not rewrap onto more rows");
+      });
+
+      /* Placing the box against an edge while a short line is showing, then
+       * letting a long one arrive. The drag can only measure the line in front
+       * of it; the limit has to hold for the widest the box may get. */
+      check("a long line stays on screen after placing against the edge", async () => {
+        window.__ssoApi.resetPosition();
+        window.__ssoApi.updateSettings({ widthPercent: 80, rewrap: true });
+        await showSpeakerCue();
+        const short = cueBox();
+        await dragCue(short.left + short.width / 2, short.top + 6, 4, short.top + 6);
+        await showLongCue();
+        const long = cueBox();
+        if (long.left < -1 || long.right > window.innerWidth + 1)
+          throw new Error(
+            `long line spans ${Math.round(long.left)}..${Math.round(long.right)} in a ${window.innerWidth}px viewport`);
+      });
+
+      check("widening the box cannot push it off the screen", async () => {
+        window.__ssoApi.resetPosition();
+        window.__ssoApi.updateSettings({ widthPercent: 30 });
+        await showLongCue();
+        const box = cueBox();
+        await dragCue(box.left + box.width / 2, box.top + 6, 4, box.top + 6);
+        // Legal at 30% wide; the box is now told to be much wider.
+        window.__ssoApi.updateSettings({ widthPercent: 90 });
+        await sleep(160);
+        const after = cueBox();
+        if (after.left < -1)
+          throw new Error(`widening pushed it ${Math.round(-after.left)}px off the left edge`);
+      });
+
+      check("dragging an edge resizes the subtitle", async () => {
+        window.__ssoApi.resetPosition();
+        window.__ssoApi.updateSettings({ widthPercent: 80 });
+        await showLongCue();
+        const box = cueBox();
+        const centre = window.innerWidth / 2;
+        // Take hold of the right edge and pull it in to a quarter-width from
+        // the centre, which is a half-width box.
+        await dragCue(box.right - 4, box.top + 8, centre + window.innerWidth * 0.25, box.top + 8);
+        const width = window.__ssoApi.status().settings.widthPercent;
+        if (Math.abs(width - 50) > 3)
+          throw new Error(`expected about 50%, got ${width}%`);
+      });
+
+      check("dragging the middle still moves rather than resizes", async () => {
+        const before = window.__ssoApi.status().settings.widthPercent;
+        const box = cueBox();
+        await dragCue(box.left + box.width / 2, box.top + 8, 320, 240);
+        const after = window.__ssoApi.status().settings;
+        if (after.widthPercent !== before)
+          throw new Error(`the width changed while moving: ${before}% -> ${after.widthPercent}%`);
+        if (!after.placed) throw new Error("the drag did not move it");
+        window.__ssoApi.resetPosition();
+        window.__ssoApi.updateSettings({ widthPercent: 80 });
       });
 
       check("panel opens beside the handle that opens it, not across the screen", () => {

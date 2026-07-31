@@ -380,9 +380,24 @@
     el.fontScale = slider("Size", 0.6, 2.2, 0.05, settings.fontScale, (value) =>
       api.updateSettings({ fontScale: value }),
     );
+    /* Width has a slider as well as an edge-drag, which the position
+     * deliberately does not. Position is two numbers with no natural slider
+     * and the drag reads them both at once; width is one number, both controls
+     * set it in the same unit, and the slider works when no line is on screen
+     * to take hold of. */
+    el.widthPercent = slider("Width", 20, 100, 1, settings.widthPercent, (value) =>
+      api.updateSettings({ widthPercent: value }),
+    );
     el.background = slider("Backdrop", 0, 1, 0.05, settings.background, (value) =>
       api.updateSettings({ background: value }),
     );
+
+    el.rewrap = toggle_("Rewrap lines", settings.rewrap, (on) =>
+      api.updateSettings({ rewrap: on }),
+    );
+    el.rewrap.row.title =
+      "Let the width decide where lines break, instead of the subtitle file, " +
+      "which wrapped them for a 4:3 television. Turns between speakers are kept.";
 
     el.showSymbols = toggle_("Sound symbols", settings.showSymbols, (on) =>
       api.updateSettings({ showSymbols: on }),
@@ -411,8 +426,10 @@
 
     wrap.append(
       el.fontScale.row,
+      el.widthPercent.row,
       el.background.row,
       el.positionRow,
+      el.rewrap.row,
       el.showSymbols.row,
       el.dimNonSpeech.row,
     );
@@ -640,14 +657,17 @@
     const settings = status.settings;
     el.fontScale.input.value = String(settings.fontScale);
     el.fontScale.readout.textContent = String(settings.fontScale);
+    el.widthPercent.input.value = String(Math.round(settings.widthPercent));
+    el.widthPercent.readout.textContent = `${Math.round(settings.widthPercent)}%`;
     el.background.input.value = String(settings.background);
     el.background.readout.textContent = String(settings.background);
     el.placeButton.textContent = status.placing ? "Done" : "Move";
     el.position.textContent = status.placing
       ? "Drag the stand-in, then Done"
       : settings.placed
-      ? `Position ${Math.round(settings.posX)}% x ${Math.round(settings.posY)}% — drag the subtitle to move it`
-      : "Drag the subtitle to move it";
+      ? `Position ${Math.round(settings.posX)}% x ${Math.round(settings.posY)}% — drag the middle to move, an edge to resize`
+      : "Drag the middle of the subtitle to move it, an edge to resize";
+    el.rewrap.input.checked = Boolean(settings.rewrap);
     el.showSymbols.input.checked = Boolean(settings.showSymbols);
     el.dimNonSpeech.input.checked = Boolean(settings.dimNonSpeech);
 
