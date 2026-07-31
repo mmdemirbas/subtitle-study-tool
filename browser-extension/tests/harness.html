@@ -199,6 +199,17 @@
         if (!panelShadow()) throw new Error("panel did not open");
       });
 
+      check("panel opens beside the handle that opens it, not across the screen", () => {
+        const handle = shadowOf().querySelector(".sso-handle").getBoundingClientRect();
+        const panel = panelShadow().host.getBoundingClientRect();
+        const sameSide = Math.abs(handle.right - panel.right) < 8;
+        if (!sameSide)
+          throw new Error(
+            `handle right edge at ${Math.round(handle.right)}, panel right edge at ${Math.round(panel.right)}`);
+        if (panel.top < handle.bottom)
+          throw new Error("panel overlaps the handle instead of hanging below it");
+      });
+
       check("a Turkish Q bracket key nudges the offset", async () => {
         const before = window.__ssoApi.status().offsetMs;
         document.dispatchEvent(new KeyboardEvent("keydown",

@@ -27,6 +27,14 @@
 
   const POSITION_KEY = "sso:panelPosition";
 
+  // Kept in step with the .sso-handle rule in overlay.css, so the panel hangs
+  // directly under the button that opens it.
+  const HANDLE_TOP = 16;
+  const HANDLE_RIGHT = 16;
+  const HANDLE_HEIGHT = 26;
+  const GAP = 10;
+  const PANEL_WIDTH = 340;
+
   const KEY_FIELDS = [
     ["earlier", "Subtitles earlier"],
     ["later", "Subtitles later"],
@@ -58,15 +66,25 @@
    *
    * Note this outranks every `:host` rule in the adopted stylesheet, inline
    * !important being the top of the cascade - so `:host` must not be used for
-   * anything load-bearing. */
+   * anything load-bearing.
+   *
+   * Position: anchored under the CC handle, top-right. It used to open at
+   * top-left while the handle that opens it sits top-right, so the thing you
+   * clicked and the thing that appeared were at opposite ends of the screen.
+   * Controls belong next to what they operate.
+   *
+   * Right-anchored rather than left-anchored at a computed offset, so it stays
+   * against the handle when the window is resized. The first drag converts it
+   * to left/top, because after that the user's placement is the intent. */
   function createHost() {
     const node = document.createElement("div");
     for (const [property, value] of Object.entries({
       all: "initial",
       position: "fixed",
-      top: "24px",
-      left: "24px",
-      width: "340px",
+      top: `${HANDLE_TOP + HANDLE_HEIGHT + GAP}px`,
+      right: `${HANDLE_RIGHT}px`,
+      left: "auto",
+      width: `${PANEL_WIDTH}px`,
       "z-index": "2147483647",
     })) {
       node.style.setProperty(property, value, "important");
@@ -538,8 +556,24 @@
    * `style.left = x` assignment drops the priority flag, which would hand the
    * page's cascade a way to move the panel off screen. */
   function setPosition(left, top) {
+    // Dragging replaces the right-anchor with an explicit position; keeping
+    // both would fight and pin the width.
+    host.style.setProperty("right", "auto", "important");
     host.style.setProperty("left", left, "important");
     host.style.setProperty("top", top, "important");
+  }
+
+  /* A window narrow enough to push a dragged panel off-screen would otherwise
+   * strand it there with no way back. */
+  function clampIntoView() {
+    if (!host || host.hidden) return;
+    const box = host.getBoundingClientRect();
+    if (box.left === 0 && box.width === 0) return;
+    const maxLeft = Math.max(0, window.innerWidth - box.width);
+    const maxTop = Math.max(0, window.innerHeight - 40);
+    if (box.left > maxLeft || box.top > maxTop) {
+      setPosition(`${Math.min(box.left, maxLeft)}px`, `${Math.min(box.top, maxTop)}px`);
+    }
   }
 
   async function restorePosition() {
@@ -622,11 +656,13 @@
   }
 
   document.addEventListener("keydown", onCaptureKey, true);
+  window.addEventListener("resize", clampIntoView, { passive: true });
 
   window.__ssoPanel = { show, hide, toggle, reparent, isCapturingKey };
 
   window.__ssoPanelTeardown = () => {
     document.removeEventListener("keydown", onCaptureKey, true);
+    window.removeEventListener("resize", clampIntoView);
     unsubscribe?.();
     unsubscribe = null;
     host?.remove();
