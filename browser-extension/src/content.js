@@ -32,6 +32,12 @@
   const TICK_MS = 50; // ~20 Hz: below perceptible latency, negligible cost
   const MIN_VIDEO_SECONDS = 60; // ignore ad breaks, teasers, autoplay loops
   const TOAST_MS = 1600;
+  /* Sentinel for "redraw whatever is current". findCueIndex returns -1 when no
+   * cue is active, so using -1 to mean "invalidate" collides with it: the tick
+   * compares the new index against the old, sees -1 === -1, and skips the
+   * render. That is invisible while a line is on screen and breaks exactly in
+   * the gap between lines. */
+  const NEEDS_REDRAW = -2;
   const SETTINGS_KEY = "sso:settings";
 
   /* Key bindings are stored as KeyboardEvent.code, which identifies the
@@ -42,7 +48,12 @@
   const DEFAULT_SETTINGS = {
     fontScale: 1,
     background: 0.55,
-    bottomPercent: 8,
+    // Centre of the cue box, as a percentage of the viewport. Percentages so a
+    // position survives a resize or going fullscreen.
+    posX: 50,
+    posY: 92,
+    // False until dragged. While false a cue's own {\an8} may still move it.
+    placed: false,
     showSymbols: true,
     dimNonSpeech: true,
     smallStepMs: 250,
@@ -96,6 +107,10 @@
     adDriftMs: 0,
     inAd: false,
     adStartedAtMs: 0,
+    // Placement mode. Cues come and go, so between two lines there is nothing
+    // on screen to take hold of; this pins a stand-in until the position is
+    // settled.
+    placing: false,
     visible: true,
     video: null,
     activeIndex: -1,
@@ -216,6 +231,13 @@
           ...saved,
           keys: { ...DEFAULT_SETTINGS.keys, ...(saved.keys || {}) },
         };
+        // Carry over a height set with the old slider, which measured up from
+        // the bottom rather than down from the top.
+        if (saved.bottomPercent != null && saved.posY == null) {
+          state.settings.posY = 100 - Number(saved.bottomPercent);
+          state.settings.placed = true;
+        }
+        delete state.settings.bottomPercent;
       }
     } catch {
       // Defaults are fine.
@@ -240,14 +262,97 @@
 
   function applySettings() {
     if (!root) return;
-    const { fontScale, background, bottomPercent, dimNonSpeech } = state.settings;
+    const { fontScale, background, dimNonSpeech, posX, posY, placed } = state.settings;
     root.style.setProperty("--sso-font-size", `${2.6 * fontScale}vh`);
     root.style.setProperty("--sso-bg", `rgba(0, 0, 0, ${background})`);
-    root.style.setProperty("--sso-edge", `${bottomPercent}%`);
+    root.style.setProperty("--sso-x", `${posX}%`);
+    root.style.setProperty("--sso-y", `${posY}%`);
     root.dataset.dim = dimNonSpeech ? "true" : "false";
+    // Once placed by hand, a cue's own {\an8} no longer moves it.
+    root.dataset.placed = placed ? "manual" : "auto";
     // Symbols are part of the rendered content, so a change needs a redraw.
-    state.activeIndex = -1;
+    state.activeIndex = NEEDS_REDRAW;
   }
+
+  // --- dragging the subtitle ------------------------------------------------
+
+  /* The overlay is click-through by design, so the cue is the one part that
+   * takes pointer events. That creates a conflict: the subtitle sits in the
+   * middle-bottom of the screen, which is exactly where people click to pause.
+   *
+   * Resolved by distinguishing a drag from a click. Movement past a few pixels
+   * is a drag; anything less is forwarded to whatever is underneath, by hiding
+   * the cue for one hit-test and re-dispatching the click there. So the film
+   * keeps its clicks and the subtitle is still movable. */
+  const DRAG_THRESHOLD_PX = 4;
+  let drag = null;
+
+  function onCuePointerDown(event) {
+    if (event.button !== 0) return;
+    drag = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+    };
+    cueBox.setPointerCapture(event.pointerId);
+  }
+
+  function onCuePointerMove(event) {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+
+    if (!drag.moved) {
+      const far =
+        Math.abs(event.clientX - drag.startX) > DRAG_THRESHOLD_PX ||
+        Math.abs(event.clientY - drag.startY) > DRAG_THRESHOLD_PX;
+      if (!far) return;
+      drag.moved = true;
+      root.dataset.dragging = "true";
+    }
+
+    // Clamped so the subtitle can never be dragged off the screen and lost.
+    const box = cueBox.getBoundingClientRect();
+    const halfW = (box.width / 2 / window.innerWidth) * 100;
+    const halfH = (box.height / 2 / window.innerHeight) * 100;
+    const x = clamp((event.clientX / window.innerWidth) * 100, halfW, 100 - halfW);
+    const y = clamp((event.clientY / window.innerHeight) * 100, halfH, 100 - halfH);
+
+    updateSettings({ posX: round1(x), posY: round1(y), placed: true });
+  }
+
+  function onCuePointerUp(event) {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const { moved, startX, startY } = drag;
+    drag = null;
+    cueBox.releasePointerCapture?.(event.pointerId);
+    root.dataset.dragging = "false";
+
+    if (!moved) forwardClickBeneath(startX, startY, event);
+  }
+
+  function forwardClickBeneath(x, y, source) {
+    const previous = cueBox.style.pointerEvents;
+    cueBox.style.pointerEvents = "none";
+    const target = document.elementFromPoint(x, y);
+    cueBox.style.pointerEvents = previous;
+    if (!target || target === cueBox) return;
+
+    for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
+      target.dispatchEvent(
+        new MouseEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clientX: x,
+          clientY: y,
+          button: source.button,
+        }),
+      );
+    }
+  }
+
+  const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
+  const round1 = (value) => Math.round(value * 10) / 10;
 
   // --- overlay --------------------------------------------------------------
 
@@ -288,6 +393,11 @@
     root.className = "sso-root";
     cueBox = document.createElement("div");
     cueBox.className = "sso-cue";
+    cueBox.title = "Drag to move the subtitles";
+    cueBox.addEventListener("pointerdown", onCuePointerDown);
+    cueBox.addEventListener("pointermove", onCuePointerMove);
+    cueBox.addEventListener("pointerup", onCuePointerUp);
+    cueBox.addEventListener("pointercancel", onCuePointerUp);
     root.appendChild(cueBox);
 
     toast = document.createElement("div");
@@ -408,6 +518,8 @@
       if (!state.video) return;
     }
     if (!state.visible || state.cues.length === 0) {
+      // "Nothing is showing", not "redraw" - otherwise this clears the text on
+      // every tick forever.
       if (state.activeIndex !== -1) {
         state.activeIndex = -1;
         if (cueBox) cueBox.textContent = "";
@@ -464,7 +576,7 @@
         state.adDriftMs += elapsed;
         showToast(`Ad break over — subtitles shifted ${(elapsed / 1000).toFixed(0)}s`);
       }
-      state.activeIndex = -1;
+      state.activeIndex = NEEDS_REDRAW;
     }
     notify();
   }
@@ -491,7 +603,10 @@
   function renderCue(cue) {
     cueBox.replaceChildren();
     root.dataset.vertical = cue?.vertical || "bottom";
-    if (!cue) return;
+    if (!cue) {
+      if (state.placing) cueBox.textContent = "Drag me where you want subtitles";
+      return;
+    }
 
     if (!cue.runs) {
       cueBox.textContent = cue.text;
@@ -543,7 +658,7 @@
 
   function setOffset(ms, { quiet = false } = {}) {
     state.offsetMs = Math.round(ms);
-    state.activeIndex = -1; // force a re-render at the new offset
+    state.activeIndex = NEEDS_REDRAW; // force a re-render at the new offset
     saveOffset();
     notify();
     if (!quiet) showToast(`Subtitle offset ${formatOffset(state.offsetMs)}`);
@@ -589,6 +704,8 @@
       nudge(-step);
     } else if (event.code === keys.later) {
       nudge(step);
+    } else if (event.code === "Escape" && state.placing) {
+      window.__ssoApi.setPlacing(false);
     } else if (event.code === keys.reset) {
       setOffset(0);
       showToast("Subtitle offset reset");
@@ -614,7 +731,7 @@
     state.offsetMs = await loadOffset(state.fileId);
     state.adDriftMs = 0;
     state.inAd = false;
-    state.activeIndex = -1;
+    state.activeIndex = NEEDS_REDRAW;
     state.visible = true;
     state.video = pickVideo();
 
@@ -638,7 +755,7 @@
     state.cues = [];
     state.label = "";
     state.fileId = null;
-    state.activeIndex = -1;
+    state.activeIndex = NEEDS_REDRAW;
     if (cueBox) cueBox.textContent = "";
     notify();
     return { ok: true };
@@ -648,7 +765,7 @@
     state.visible = visible;
     if (root) root.hidden = !visible;
     if (!visible && cueBox) cueBox.textContent = "";
-    state.activeIndex = -1;
+    state.activeIndex = NEEDS_REDRAW;
     notify();
     return { ok: true, visible };
   }
@@ -659,6 +776,7 @@
       attached: state.cues.length > 0,
       cueCount: state.cues.length,
       offsetMs: state.offsetMs,
+      placing: state.placing,
       adDriftMs: state.adDriftMs,
       inAd: state.inAd,
       visible: state.visible,
@@ -737,7 +855,7 @@
 
       case "sso:clearAdDrift":
         state.adDriftMs = 0;
-        state.activeIndex = -1;
+        state.activeIndex = NEEDS_REDRAW;
         notify();
         sendResponse({ ok: true });
         return false;
@@ -773,9 +891,18 @@
     setOffset,
     nudge,
     formatOffset,
+    setPlacing(on) {
+      state.placing = Boolean(on);
+      state.activeIndex = NEEDS_REDRAW;
+      if (root) root.dataset.placing = state.placing ? "true" : "false";
+      notify();
+    },
+    resetPosition() {
+      updateSettings({ posX: 50, posY: 92, placed: false });
+    },
     clearAdDrift() {
       state.adDriftMs = 0;
-      state.activeIndex = -1;
+      state.activeIndex = NEEDS_REDRAW;
       notify();
     },
     pageInfo,

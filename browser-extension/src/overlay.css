@@ -7,11 +7,16 @@
  * so the properties are just set individually.
  */
 
+/* Positioned by its centre, so dragging is a single point to reason about and
+ * the box grows symmetrically as lines wrap. Percentages rather than pixels so
+ * a position survives a window resize and fullscreen. */
 .sso-root {
   position: fixed;
-  left: 0;
-  right: 0;
-  bottom: var(--sso-edge, 8%);
+  left: var(--sso-x, 50%);
+  top: var(--sso-y, 92%);
+  transform: translate(-50%, -50%);
+  width: max-content;
+  max-width: 92vw;
   z-index: 2147483647; /* above player chrome, which often sits near 2^31 */
   display: flex;
   justify-content: center;
@@ -52,21 +57,50 @@
   display: none;
 }
 
+/* In placement mode the stand-in is always on screen, so there is something to
+ * take hold of between two lines of dialogue. Dashed, so it is obviously not
+ * part of the film. */
+.sso-root[data-placing="true"] .sso-cue {
+  display: inline-block;
+  outline: 2px dashed rgba(255, 255, 255, 0.55);
+  outline-offset: 4px;
+  opacity: 0.9;
+}
+
 .sso-root[data-plain="true"] .sso-cue {
   background: transparent;
 }
 
 /* Cues carrying {\an8} sit at the top instead, which is what that override is
  * for: the bottom of the frame is occupied by on-screen text the subtitle
- * would otherwise cover. */
-.sso-root[data-vertical="top"] {
-  top: var(--sso-edge, 8%);
-  bottom: auto;
+ * would otherwise cover. Only honoured until the position is placed by hand -
+ * after that the user's choice outranks the file's. */
+.sso-root[data-placed="auto"][data-vertical="top"] {
+  top: 10%;
 }
 
-.sso-root[data-vertical="middle"] {
+.sso-root[data-placed="auto"][data-vertical="middle"] {
   top: 50%;
-  bottom: auto;
+}
+
+/* The cue is the drag handle. It is the only part of the overlay that takes
+ * pointer events - everything else stays click-through so the player keeps
+ * its own clicks. A press that does not move is forwarded to whatever sits
+ * underneath, so tapping the middle of the screen still pauses the film. */
+.sso-cue {
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.sso-root[data-dragging="true"] .sso-cue {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* A hint that it can be moved, shown only while the pointer is on it. */
+.sso-cue:hover {
+  outline: 1px dashed rgba(255, 255, 255, 0.35);
+  outline-offset: 3px;
 }
 
 /* --- runs ------------------------------------------------------------------

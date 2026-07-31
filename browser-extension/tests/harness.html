@@ -258,6 +258,86 @@
           throw new Error("a sub-second flicker was counted as an ad break");
       });
 
+      /* Dragging the cue. The overlay is click-through apart from the cue
+       * itself, which sits where people click to pause - so a press that does
+       * not move must reach the player, and one that moves must not. */
+      const dragCue = async (fromX, fromY, toX, toY) => {
+        const cue = shadowOf().querySelector(".sso-cue");
+        cue.setPointerCapture = () => {};
+        cue.releasePointerCapture = () => {};
+        const ev = (type, x, y) => new PointerEvent(type,
+          { pointerId: 7, clientX: x, clientY: y, button: 0, bubbles: true });
+        cue.dispatchEvent(ev("pointerdown", fromX, fromY));
+        cue.dispatchEvent(ev("pointermove", toX, toY));
+        cue.dispatchEvent(ev("pointerup", toX, toY));
+        await sleep(120);
+      };
+
+      check("dragging the subtitle moves it", async () => {
+        await showSpeakerCue();
+        const before = shadowOf().querySelector(".sso-cue").getBoundingClientRect();
+        await dragCue(before.left + 20, before.top + 8, 300, 260);
+        const after = shadowOf().querySelector(".sso-cue").getBoundingClientRect();
+        if (Math.abs(after.top - before.top) < 40)
+          throw new Error(`barely moved: ${Math.round(before.top)} -> ${Math.round(after.top)}`);
+      });
+
+      check("the dragged position is remembered in settings", () => {
+        const s = window.__ssoApi.status().settings;
+        if (!s.placed) throw new Error("placed flag not set");
+        if (s.posY > 60) throw new Error(`posY still near the bottom: ${s.posY}`);
+      });
+
+      check("the subtitle cannot be dragged off screen", async () => {
+        await dragCue(300, 260, -800, -800);
+        const box = shadowOf().querySelector(".sso-cue").getBoundingClientRect();
+        if (box.left < -1 || box.top < -1)
+          throw new Error(`escaped the viewport at ${Math.round(box.left)},${Math.round(box.top)}`);
+      });
+
+      check("a click on the subtitle still reaches the player", async () => {
+        window.__ssoApi.resetPosition();
+        await sleep(120);
+        let reached = 0;
+        const player = document.getElementById("player");
+        const count = () => reached++;
+        player.addEventListener("click", count);
+        const cue = shadowOf().querySelector(".sso-cue");
+        const box = cue.getBoundingClientRect();
+        // Press and release without moving: that is a click, not a drag.
+        await dragCue(box.left + 10, box.top + 6, box.left + 10, box.top + 6);
+        player.removeEventListener("click", count);
+        if (reached === 0) throw new Error("the click was swallowed by the subtitle");
+      });
+
+      check("reset puts the subtitle back at the bottom centre", async () => {
+        window.__ssoApi.resetPosition();
+        await sleep(120);
+        const s = window.__ssoApi.status().settings;
+        if (s.posX !== 50 || s.posY !== 92 || s.placed)
+          throw new Error(`reset left it at ${s.posX},${s.posY} placed=${s.placed}`);
+      });
+
+      check("placement mode gives something to drag between lines", async () => {
+        // Park the playhead past the last cue, where nothing is rendered.
+        // (Cue 1 covers 0-600s and cue 2 covers 600-900s, so 500 is not a gap.)
+        video.currentTime = 950;
+        await sleep(150);
+        const empty = shadowOf().querySelector(".sso-cue").getBoundingClientRect();
+        if (empty.width > 1) throw new Error("expected no cue in the gap");
+
+        window.__ssoApi.setPlacing(true);
+        await sleep(150);
+        const standIn = shadowOf().querySelector(".sso-cue").getBoundingClientRect();
+        if (standIn.width < 40 || standIn.height < 10)
+          throw new Error("no stand-in to grab in placement mode");
+
+        window.__ssoApi.setPlacing(false);
+        await sleep(150);
+        if (shadowOf().querySelector(".sso-cue").getBoundingClientRect().width > 1)
+          throw new Error("stand-in outlived placement mode");
+      });
+
       check("panel opens beside the handle that opens it, not across the screen", () => {
         const handle = shadowOf().querySelector(".sso-handle").getBoundingClientRect();
         const panel = panelShadow().host.getBoundingClientRect();

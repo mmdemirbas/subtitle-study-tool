@@ -37,7 +37,7 @@ survives Prime Video.
 
 ## The cases
 
-Eighteen, covering: shadow-root isolation, cue colour, italics, speaker
+Twenty-four, covering: shadow-root isolation, cue colour, italics, speaker
 colour, non-speech dimming, sound symbols, handle visibility under a
 pointer-event-swallowing player, handle size under a button reset, stacking
 against later chrome, the handle opening the panel, Turkish-Q bracket keys
@@ -45,6 +45,11 @@ nudging the offset, typing in the panel *not* nudging, and re-injection
 leaving exactly one overlay. Four more cover mid-roll ads: the break being
 measured, the cue surviving it unchanged, subtitles hidden while the ad runs,
 and a flickering marker not being mistaken for a break.
+
+Six more cover moving the subtitle: dragging it, the position persisting,
+the clamp that stops it leaving the screen, a click without movement still
+reaching the player, reset, and placement mode producing something to grab
+between two lines.
 
 The ad cases advance `video.currentTime` while an ad marker is on screen,
 which is what server-side ad insertion does to the clock. They take a few

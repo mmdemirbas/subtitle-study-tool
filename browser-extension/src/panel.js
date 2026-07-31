@@ -383,9 +383,6 @@
     el.background = slider("Backdrop", 0, 1, 0.05, settings.background, (value) =>
       api.updateSettings({ background: value }),
     );
-    el.bottom = slider("Height", 0, 40, 1, settings.bottomPercent, (value) =>
-      api.updateSettings({ bottomPercent: value }),
-    );
 
     el.showSymbols = toggle_("Sound symbols", settings.showSymbols, (on) =>
       api.updateSettings({ showSymbols: on }),
@@ -394,10 +391,28 @@
       api.updateSettings({ dimNonSpeech: on }),
     );
 
+    /* Position is set by dragging the subtitle itself, so there is no slider
+     * for it - two controls for one value would fight each other. This row
+     * says where it is and puts it back. */
+    el.positionRow = document.createElement("div");
+    el.positionRow.className = "sso-row";
+    el.position = document.createElement("span");
+    el.position.className = "sso-note";
+    el.position.style.flex = "1";
+    el.placeButton = button("Move", {
+      onClick: () => api.setPlacing(!api.status().placing),
+      title: "Show a stand-in you can drag, so you need not catch a passing line",
+    });
+    el.positionRow.append(
+      el.position,
+      el.placeButton,
+      button("Reset", { onClick: () => api.resetPosition(), title: "Back to bottom centre" }),
+    );
+
     wrap.append(
       el.fontScale.row,
       el.background.row,
-      el.bottom.row,
+      el.positionRow,
       el.showSymbols.row,
       el.dimNonSpeech.row,
     );
@@ -627,8 +642,12 @@
     el.fontScale.readout.textContent = String(settings.fontScale);
     el.background.input.value = String(settings.background);
     el.background.readout.textContent = String(settings.background);
-    el.bottom.input.value = String(settings.bottomPercent);
-    el.bottom.readout.textContent = String(settings.bottomPercent);
+    el.placeButton.textContent = status.placing ? "Done" : "Move";
+    el.position.textContent = status.placing
+      ? "Drag the stand-in, then Done"
+      : settings.placed
+      ? `Position ${Math.round(settings.posX)}% x ${Math.round(settings.posY)}% — drag the subtitle to move it`
+      : "Drag the subtitle to move it";
     el.showSymbols.input.checked = Boolean(settings.showSymbols);
     el.dimNonSpeech.input.checked = Boolean(settings.dimNonSpeech);
 
