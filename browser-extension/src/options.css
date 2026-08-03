@@ -1,0 +1,151 @@
+/* Settings page. Its own stylesheet rather than the panel's: this one renders
+ * in a normal tab where nothing is fighting it, so none of the panel's defensive
+ * styling applies. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --card: #f6f7f9;
+  --line: #d9dde3;
+  --text: #16181d;
+  --muted: #5c636e;
+  --accent: #2f6fd0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --card: #1c1f25;
+    --line: #2c313a;
+    --text: #e8eaed;
+    --muted: #9aa2ae;
+    --accent: #6ea8ff;
+  }
+}
+
+body {
+  margin: 0;
+  padding: 32px 20px 56px;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.55 -apple-system, "SF Pro Text", Segoe UI, Helvetica, Arial, sans-serif;
+}
+
+main {
+  max-width: 620px;
+  margin: 0 auto;
+}
+
+h1 {
+  margin: 0 0 24px;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  margin: 0 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.card {
+  margin-bottom: 18px;
+  padding: 18px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.status {
+  margin: 0 0 12px;
+  font-weight: 600;
+}
+
+.status[data-kind="daemon"] { color: #2e9e63; }
+.status[data-kind="extension"] { color: var(--accent); }
+.status[data-kind="stuck"] { color: #c2503f; }
+
+label {
+  display: block;
+  margin: 12px 0 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+label.check {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  margin-top: 9px;
+  font-size: 13px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text);
+}
+
+input[type="text"],
+input[type="password"] {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: inherit;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 16px;
+}
+
+button {
+  padding: 7px 14px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--muted);
+}
+
+button.primary {
+  color: #fff;
+  background: var(--accent);
+  border-color: transparent;
+}
+
+code {
+  padding: 1px 4px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}

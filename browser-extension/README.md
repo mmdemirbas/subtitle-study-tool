@@ -6,12 +6,48 @@ Puts subtitles on a video that has none, in the tab you are already watching.
 
 Chrome, Edge, Brave or any Chromium browser:
 
-1. Start the daemon first — `cd ../subtitle-daemon && ./run.sh`
-2. Open `chrome://extensions`
-3. Turn on **Developer mode** (top right)
-4. **Load unpacked** → select this `browser-extension/` directory
+1. Open `chrome://extensions`
+2. Turn on **Developer mode** (top right)
+3. **Load unpacked** → select this `browser-extension/` directory
+4. Open the extension's **options** and paste an OpenSubtitles API key
+   (opensubtitles.com → your account → Consumers → new consumer)
 
 There is no icon file, so the toolbar shows a default placeholder. Pin it.
+
+## Do I need the daemon?
+
+Not for subtitles. The extension does the whole thing itself — search, rank,
+download, decode, annotate, cache — and only defers to the daemon when the
+daemon happens to be running.
+
+Start the daemon (`cd ../subtitle-daemon && ./run.sh`) when you want:
+
+- **Local transcription**, for a film with no subtitle anywhere. That needs a
+  model and audio capture, which a browser extension cannot do.
+- **The cache on disk**, shared with the SRT viewer and surviving a browser
+  profile reset.
+- **The API key out of the browser**, in `config.local.json` instead.
+
+When it is running it answers everything and the extension's own key is unused.
+
+### Two caches, kept in step
+
+The extension cannot read or write the daemon's cache folder — an extension has
+no filesystem. So each keeps its own store with the same schema, and whenever
+the daemon is running, anything either side has downloaded is copied to the
+other. A download is never spent twice, whichever side spent it the first time.
+
+The copy runs automatically when the daemon comes up, before any search. There
+is a **Sync now** button on the options page if you want to force it.
+
+### Is it really the same subtitle?
+
+The pipeline exists twice — Python in the daemon, JavaScript here — so the two
+are checked against each other rather than trusted. The symbol tables are
+generated from the Python (`subtitle-daemon/tools/export_tables.py`), and
+`subtitle-daemon/tests/test_js_parity.py` runs both copies over the same
+annotations and subtitle files and diffs every cue: same runs, same symbols,
+same speaker colours, same encoding, same match scores.
 
 ### After changing the code
 
@@ -39,8 +75,8 @@ lives in the page rather than in the toolbar popup because **a popup cannot be
 opened while the page is fullscreen**, which is exactly when you need to fix
 timing.
 
-The toolbar popup is a launcher and a status readout — whether the daemon is
-up, whether a subtitle is attached, and the current shortcuts.
+The toolbar popup is a launcher and a status readout — which side is answering,
+whether a subtitle is attached, and the current shortcuts.
 
 ### Keys
 

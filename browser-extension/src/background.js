@@ -10,15 +10,21 @@ import {
   DaemonDownError,
   attachToTab,
   bestTitleForTab,
-  fetchSubtitle,
-  health,
   pickBest,
-  search,
   subtitleContext,
   tabStatus,
 } from "./daemon.js";
+/* Every call that used to go straight to the daemon goes through the provider,
+ * which prefers the daemon and does the work here when it is not running. */
+import {
+  fetchSubtitle,
+  preferredLanguages,
+  search,
+  status as providerStatus,
+  syncNow,
+  updateSettings,
+} from "./provider.js";
 
-const DEFAULT_LANGUAGES = ["en", "tr"];
 const TOP_FRAME = 0;
 
 /* Reloading an extension does NOT update tabs that are already open: they keep
@@ -80,24 +86,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 async function handleDaemonCall(op, args) {
   switch (op) {
     case "health":
-      return health();
+      return providerStatus();
     case "search": {
       const languages = args.languages?.length ? args.languages : await preferredLanguages();
       return search({ ...args, languages });
     }
     case "fetch":
       return fetchSubtitle(args.fileId, args.context || {});
+    case "settings":
+      return updateSettings(args.patch || {});
+    case "sync":
+      return syncNow();
     default:
       return { error: `unknown daemon operation: ${op}` };
-  }
-}
-
-async function preferredLanguages() {
-  try {
-    const config = await health();
-    return config.default_languages?.length ? config.default_languages : DEFAULT_LANGUAGES;
-  } catch {
-    return DEFAULT_LANGUAGES;
   }
 }
 

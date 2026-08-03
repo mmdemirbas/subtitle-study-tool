@@ -1,13 +1,19 @@
 # Extension tests
 
-Open `harness.html` in a browser. It runs itself and prints PASS/FAIL down the
-right-hand side. No install, no test runner, no dependencies.
+Two pages. Both run themselves and print PASS/FAIL. No install, no test runner,
+no dependencies.
 
 ```bash
 cd browser-extension
 python3 -m http.server 8997
-# then open http://127.0.0.1:8997/tests/harness.html
+# http://127.0.0.1:8997/tests/harness.html   - the overlay in a hostile page
+# http://127.0.0.1:8997/tests/fallback.html  - fetching without the daemon
 ```
+
+There is a third, which lives on the daemon's side because it needs both
+languages at once: `subtitle-daemon/tests/test_js_parity.py` runs the Python
+pipeline and the JavaScript one over the same inputs and diffs the results. Run
+it with `uv run pytest` from `subtitle-daemon/`.
 
 It needs to be served over HTTP rather than opened from `file://`, because the
 overlay fetches its stylesheet and `file://` blocks that.
@@ -62,6 +68,29 @@ middle-drag still moving rather than resizing.
 The ad cases advance `video.currentTime` while an ad marker is on screen,
 which is what server-side ad insertion does to the clock. They take a few
 seconds because the detector polls.
+
+## fallback.html
+
+The extension can fetch subtitles on its own when the daemon is not running.
+That path has three parts the parity test does not reach — the rule for which
+side answers, the IndexedDB cache, and the convergence with the daemon's cache —
+so they are checked here against a stubbed OpenSubtitles and a stubbed daemon.
+
+Fifteen cases. The ones that matter are about quota, and they assert it
+directly: the stub counts calls to the download endpoint, so "this did not spend
+a download" is a number, not an inference from a cache flag. Covered: the
+extension answering alone, the title being cleaned before it is searched for,
+cues coming back annotated, the same file not being fetched twice, *another
+upload of the same film* not being fetched either, searches being replayed from
+cache, the daemon winning when it is up, a daemon error not being retried
+locally, both directions of the sync, a pulled subtitle working offline
+afterwards, the sha256 surviving the copy, and a missing API key being reported
+rather than failing silently.
+
+It found two things on its first run: a cache miss that returned a truthy
+wrapper object, so every lookup reported a hit and the fetch short-circuited to
+zero cues; and a stale-ranking window inherited from the daemon, which is pinned
+by a case rather than fixed here.
 
 ## Adding a case
 

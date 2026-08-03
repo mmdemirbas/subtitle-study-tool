@@ -11,8 +11,15 @@
     "webNavigation"
   ],
   "host_permissions": [
-    "http://127.0.0.1:8791/*"
+    "http://127.0.0.1:8791/*",
+    "https://api.opensubtitles.com/*",
+    "https://*.opensubtitles.com/*",
+    "https://*.opensubtitles.org/*"
   ],
+  "options_ui": {
+    "page": "src/options.html",
+    "open_in_tab": true
+  },
   "background": {
     "service_worker": "src/background.js",
     "type": "module"

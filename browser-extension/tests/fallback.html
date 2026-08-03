@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Subtitle Overlay — fallback harness</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px 20px 60px;
+        background: #0f1116;
+        color: #e8eaed;
+        font: 12px/1.55 ui-monospace, Menlo, monospace;
+      }
+      h1 { margin: 0 0 4px; font-size: 13px; }
+      #summary { margin: 0 0 14px; font-size: 12px; }
+      .case { padding: 5px 0; border-top: 1px solid #1c212a; max-width: 900px; }
+      .pass::before { content: "PASS "; color: #59c27f; }
+      .fail::before { content: "FAIL "; color: #e8705f; }
+      .why { color: #8b929d; padding-left: 42px; white-space: pre-wrap; }
+    </style>
+  </head>
+  <body>
+    <h1>Subtitle Overlay — fallback harness</h1>
+    <p id="summary">running…</p>
+    <div id="results"></div>
+
+    <script type="module">
+      /* What happens when the daemon is not running.
+       *
+       * The pipeline itself is checked against the daemon's by
+       * subtitle-daemon/tests/test_js_parity.py - same inputs, same outputs, in
+       * both languages. This file checks the parts that only exist here: the
+       * routing rule, the cache, and the convergence with the daemon.
+       *
+       * The quota cases are the ones that matter. A download is five a day
+       * anonymously, so "did this spend one?" is asserted directly by counting
+       * calls to the download endpoint, not inferred from a cache flag.
+       */
+
+      // --- stubs ----------------------------------------------------------
+      const store = {};
+      globalThis.chrome = {
+        runtime: { getManifest: () => ({ version: "0.1.0" }) },
+        storage: {
+          local: {
+            get: async (key) => (typeof key === "string" ? { [key]: store[key] } : { ...store }),
+            set: async (obj) => Object.assign(store, obj),
+          },
+        },
+      };
+
+      const SRT = [
+        "1",
+        "00:00:01,000 --> 00:00:02,000",
+        "[Ormon] Get down!",
+        "",
+        "2",
+        "00:00:03,000 --> 00:00:04,000",
+        "<i>[sighs]</i> Fine.",
+        "",
+      ].join("\n");
+
+      // Counters are the assertion surface for quota.
+      const calls = { download: 0, features: 0, subtitles: 0, daemonSearch: 0, imported: [] };
+      let daemonRunning = false;
+      let daemonFails = null;
+      const daemonCache = new Map();
+
+      const json = (body, status = 200) =>
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        });
+
+      const feature = {
+        attributes: {
+          imdb_id: "32430579",
+          title: "Crime 101",
+          year: 2025,
+          feature_type: "Movie",
+          subtitles_count: 12,
+        },
+      };
+
+      const subtitleItem = (fileId, release) => ({
+        id: `s${fileId}`,
+        attributes: {
+          language: "en",
+          release,
+          download_count: 900,
+          from_trusted: true,
+          hearing_impaired: false,
+          files: [{ file_id: fileId, file_name: `${release}.srt` }],
+          feature_details: { movie_name: "Crime 101", year: 2025 },
+        },
+      });
+
+      globalThis.fetch = async (url, options = {}) => {
+        const target = String(url);
+
+        // --- the daemon ---
+        if (target.startsWith("http://127.0.0.1:8791")) {
+          if (!daemonRunning) throw new TypeError("Failed to fetch");
+          const path = target.slice("http://127.0.0.1:8791".length);
+          if (path.startsWith("/health")) {
+            return json({ has_api_key: true, default_languages: ["en"] });
+          }
+          if (path.startsWith("/search")) {
+            calls.daemonSearch++;
+            if (daemonFails) return json({ error: daemonFails });
+            return json({
+              used: { query: "Crime 101" },
+              auto_attach_threshold: 0.75,
+              results: [{ file_id: 11, language: "en", movie_name: "Crime 101", match_score: 1 }],
+            });
+          }
+          if (path === "/cached") {
+            if (options.method === "POST") {
+              const body = JSON.parse(options.body);
+              calls.imported.push(body.file_id);
+              daemonCache.set(body.file_id, body);
+              return json({ imported: true, file_id: body.file_id });
+            }
+            return json({
+              subtitles: [...daemonCache.values()].map((item) => ({
+                file_id: item.file_id,
+                ...item.meta,
+              })),
+            });
+          }
+          const one = path.match(/^\/cached\/(\d+)/);
+          if (one) {
+            const held = daemonCache.get(Number(one[1]));
+            if (!held) return json({ error: "not cached" });
+            return json({ content: held.content, meta: held.meta, cues: [] });
+          }
+          return json({ error: "no such endpoint" }, 404);
+        }
+
+        // --- OpenSubtitles ---
+        if (target.includes("/features")) {
+          calls.features++;
+          return json({ data: [feature] });
+        }
+        if (target.includes("/subtitles")) {
+          calls.subtitles++;
+          return json({ data: [subtitleItem(11, "Crime.101.1080p"), subtitleItem(22, "Crime.101.720p")] });
+        }
+        if (target.includes("/download")) {
+          calls.download++;
+          return json({ link: "https://dl.opensubtitles.com/x.srt", file_name: "x.srt", remaining: 4 });
+        }
+        if (target.startsWith("https://dl.opensubtitles.com")) {
+          return new Response(new TextEncoder().encode(SRT));
+        }
+        throw new Error(`unstubbed fetch: ${target}`);
+      };
+
+      // Every test starts from an empty store, or one test's downloads would
+      // satisfy the next test's cache and hide a real regression.
+      await new Promise((resolve) => {
+        const request = indexedDB.deleteDatabase("sso-subtitles");
+        request.onsuccess = request.onerror = request.onblocked = resolve;
+      });
+
+      const provider = await import("../src/provider.js");
+      const cache = await import("../src/subtitles/cache.js");
+      await provider.updateSettings({ apiKey: "test-key", languages: ["en"] });
+
+      // --- assertions -----------------------------------------------------
+      const cases = [];
+      const check = (name, fn) => cases.push({ name, fn });
+      const reset = () => {
+        calls.download = calls.features = calls.subtitles = calls.daemonSearch = 0;
+        calls.imported = [];
+      };
+      /* Starting or stopping the daemon has to be followed by a forced probe.
+       * The provider caches "is it up?" for a few seconds so the panel does not
+       * put a round trip in front of every keystroke, which means a stub that
+       * flips between two tests is not noticed - the same way starting the real
+       * daemon is not noticed for a moment. This is the options page's "Check
+       * again" button. */
+      const setDaemon = async (up) => {
+        daemonRunning = up;
+        await provider.daemonUp({ force: true });
+      };
+
+      check("with the daemon stopped, the extension answers the search itself", async () => {
+        await setDaemon(false);
+        reset();
+        const found = await provider.search({ title: "Prime Video: Crime 101", languages: ["en"] });
+        if (found.served_by !== "extension") throw new Error(`served by ${found.served_by}`);
+        if (!found.results.length) throw new Error("no results");
+        if (found.resolved?.imdb_id !== "32430579") throw new Error("title was not resolved");
+        if (!calls.features) throw new Error("/features was never consulted");
+      });
+
+      check("the title is cleaned before it is searched for", async () => {
+        const found = await provider.search({ title: "Prime Video: Crime 101", languages: ["en"] });
+        if (found.used.query !== "Crime 101")
+          throw new Error(`searched for ${JSON.stringify(found.used.query)}`);
+      });
+
+      check("fetching a subtitle produces annotated cues", async () => {
+        reset();
+        const result = await provider.fetchSubtitle(11, { imdb_id: "32430579", language: "en" });
+        if (result.error) throw new Error(result.error);
+        if (result.cues.length !== 2) throw new Error(`${result.cues.length} cues`);
+        const speaker = result.cues[0].runs.find((run) => run.kind === "speaker");
+        if (!speaker) throw new Error("no speaker run");
+        if (!speaker.color) throw new Error("speaker run has no identity colour");
+        const sound = result.cues[1].runs.find((run) => run.kind === "sound");
+        if (!sound?.symbol) throw new Error("no symbol on the sound run");
+        if (!result.cues[1].runs.some((run) => run.styles?.includes("i")))
+          throw new Error("italics were lost");
+      });
+
+      check("the same file is not downloaded twice", async () => {
+        reset();
+        const result = await provider.fetchSubtitle(11, { imdb_id: "32430579", language: "en" });
+        if (calls.download !== 0) throw new Error(`spent ${calls.download} more download(s)`);
+        if (!result.from_cache) throw new Error("not served from cache");
+      });
+
+      check("another upload of the same film is not downloaded either", async () => {
+        // This is the case that keying on file_id alone would miss: the same
+        // film is on OpenSubtitles many times over, and a search that ranked
+        // file 22 first would otherwise spend a download on a subtitle we
+        // effectively already hold.
+        const owned = await cache.findForTitle("32430579", ["en"]);
+        if (!owned) throw new Error("the held subtitle was not found by title");
+        if (owned.file_id !== 11) throw new Error(`found ${owned.file_id}`);
+
+        // A fresh search - the year makes a different cache key - so this
+        // exercises the live ranking rather than a replayed envelope.
+        const found = await provider.search({ query: "Crime 101", year: 2025, languages: ["en"] });
+        if (!found.reusing_cached) throw new Error("the search did not prefer what is held");
+        if (found.results[0].file_id !== 11)
+          throw new Error(`ranked ${found.results[0].file_id} first`);
+      });
+
+      /* A limitation carried over from the daemon, pinned here so it is visible
+       * rather than surprising. `reusing_cached` and the per-result `cached`
+       * flags are computed when a search runs and stored with its envelope, so
+       * for the six hours that envelope lives, a repeat of the same search does
+       * not know about anything downloaded since. The quota is still safe - a
+       * fetch always checks the store before spending anything, which is what
+       * the next case asserts - but the ordering can be stale. */
+      check("a replayed search does not know about a later download", async () => {
+        const replay = await provider.search({ title: "Prime Video: Crime 101", languages: ["en"] });
+        if (replay.reusing_cached)
+          throw new Error("the daemon's behaviour changed; update this note");
+      });
+
+      check("a stale ranking still cannot spend a download twice", async () => {
+        reset();
+        const result = await provider.fetchSubtitle(11, { imdb_id: "32430579" });
+        if (calls.download !== 0) throw new Error("a download was spent on a held file");
+        if (!result.from_cache) throw new Error("not served from the store");
+      });
+
+      check("a search is answered from cache the second time", async () => {
+        reset();
+        await provider.search({ title: "Crime 101", query: "Crime 101", languages: ["en"] });
+        if (calls.subtitles !== 0) throw new Error("searched upstream again");
+      });
+
+      check("with the daemon running, it answers instead", async () => {
+        await setDaemon(true);
+        reset();
+        const found = await provider.search({ title: "Crime 101", languages: ["en"] });
+        if (found.served_by !== "daemon") throw new Error(`served by ${found.served_by}`);
+        if (!calls.daemonSearch) throw new Error("the daemon was not asked");
+      });
+
+      check("an error from the daemon is not retried locally", async () => {
+        /* An error is an answer. Retrying it here would spend a download to
+         * arrive at the same one, and quota is the scarce thing. */
+        await setDaemon(true);
+        daemonFails = "daily download limit reached";
+        reset();
+        const found = await provider.search({ title: "Something Else", languages: ["en"] });
+        daemonFails = null;
+        if (!found.error) throw new Error("the error was swallowed");
+        if (calls.features || calls.subtitles)
+          throw new Error("the extension searched upstream anyway");
+      });
+
+      check("what the extension downloaded is pushed to the daemon", async () => {
+        // Without this the daemon would later spend a second download on a file
+        // the extension already holds.
+        await setDaemon(true);
+        daemonCache.clear();
+        reset();
+        const moved = await provider.syncNow();
+        if (!calls.imported.includes(11)) throw new Error("file 11 was never sent");
+        if (moved.pushed < 1) throw new Error(`pushed ${moved.pushed}`);
+        const sent = daemonCache.get(11);
+        if (!sent?.meta?.imdb_id) throw new Error("pushed without the title context");
+      });
+
+      check("what the daemon holds is pulled back", async () => {
+        await setDaemon(true);
+        daemonCache.set(77, {
+          file_id: 77,
+          content: btoa(SRT),
+          meta: { imdb_id: "tt777", language: "en", movie_name: "Elsewhere" },
+        });
+        const moved = await provider.syncNow();
+        if (moved.pulled < 1) throw new Error(`pulled ${moved.pulled}`);
+        const held = await cache.getSubtitle(77);
+        if (!held) throw new Error("file 77 is not in the extension's cache");
+        if (new TextDecoder().decode(held.bytes) !== SRT)
+          throw new Error("the bytes did not survive the copy");
+      });
+
+      check("a pulled subtitle is then usable with the daemon stopped", async () => {
+        await setDaemon(false);
+        reset();
+        const result = await provider.fetchSubtitle(77, {});
+        if (result.error) throw new Error(result.error);
+        if (calls.download !== 0) throw new Error("it was downloaded again");
+        if (result.cues.length !== 2) throw new Error(`${result.cues.length} cues`);
+      });
+
+      check("the sha256 matches on both sides of the copy", async () => {
+        // The daemon keys duplicate detection on this digest, so a copy that
+        // re-encoded the text would break it silently.
+        const held = await cache.getSubtitle(77);
+        const expected = await cache.sha256Hex(new TextEncoder().encode(SRT));
+        if (held.meta.sha256 !== expected)
+          throw new Error(`${held.meta.sha256} vs ${expected}`);
+      });
+
+      check("without an API key the extension says so rather than failing", async () => {
+        await setDaemon(false);
+        await provider.updateSettings({ apiKey: "" });
+        const found = await provider.search({ title: "Anything At All", languages: ["en"] });
+        await provider.updateSettings({ apiKey: "test-key" });
+        if (!found.needs_api_key) throw new Error("no needs_api_key flag");
+        if (!/API key/i.test(found.error)) throw new Error(`unhelpful: ${found.error}`);
+      });
+
+      // --- run ------------------------------------------------------------
+      const out = document.getElementById("results");
+      let passed = 0;
+      for (const { name, fn } of cases) {
+        const row = document.createElement("div");
+        row.className = "case";
+        try {
+          await fn();
+          row.classList.add("pass");
+          row.textContent = name;
+          passed++;
+        } catch (err) {
+          row.classList.add("fail");
+          row.textContent = name;
+          const why = document.createElement("div");
+          why.className = "why";
+          why.textContent = err.message;
+          row.append(why);
+        }
+        out.append(row);
+      }
+      const summary = document.getElementById("summary");
+      summary.textContent = `${passed}/${cases.length} passed`;
+      summary.style.color = passed === cases.length ? "#59c27f" : "#e8705f";
+      window.__harness = { passed, total: cases.length };
+    </script>
+  </body>
+</html>

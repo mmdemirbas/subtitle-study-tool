@@ -1,0 +1,209 @@
+/* The extension's own copy of the download cache.
+ *
+ * This exists for quota reasons, not speed. A free OpenSubtitles account gets
+ * around ten downloads a day; re-fetching because a tab was reloaded would burn
+ * that in an evening.
+ *
+ * **Why this is a second store rather than the daemon's.** A browser extension
+ * has no filesystem, so it cannot read or write subtitle-daemon/cache/. The two
+ * stores therefore hold the same schema and are *converged* rather than shared:
+ * whenever the daemon is reachable, whatever either side has downloaded is
+ * copied to the other (see sync.js). What the user asked for - never spending a
+ * download on a subtitle we already hold, whichever side fetched it - is what
+ * that delivers; what it does not deliver is one set of bytes on disk.
+ *
+ * The schema mirrors subtitle-daemon/src/subtitle_daemon/cache.py field for
+ * field, because the sync copies records across verbatim.
+ */
+
+import { SEARCH_SCHEMA_VERSION, SEARCH_TTL_SECONDS } from "./tables.generated.js";
+
+const DB_NAME = "sso-subtitles";
+const DB_VERSION = 1;
+const SUBTITLES = "subtitles";
+const SEARCHES = "searches";
+
+let dbPromise = null;
+
+function open() {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(SUBTITLES)) {
+        db.createObjectStore(SUBTITLES, { keyPath: "file_id" });
+      }
+      if (!db.objectStoreNames.contains(SEARCHES)) {
+        db.createObjectStore(SEARCHES, { keyPath: "key" });
+      }
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+  return dbPromise;
+}
+
+/* Two helpers rather than one, because the one that tried to serve both had a
+ * hole: "the request produced no result" and "the caller returned no request"
+ * were indistinguishable, so a miss on `get` came back as a wrapper object.
+ * That object was truthy, every cache lookup reported a hit, and the fetch
+ * short-circuited to zero cues without ever downloading. Reading and writing
+ * want different answers, so they get different functions. */
+
+/** Run a read and resolve with its result - undefined when there is no record. */
+function read(storeName, work) {
+  return open().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, "readonly");
+        const request = work(tx.objectStore(storeName));
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+        tx.onabort = () => reject(tx.error);
+      }),
+  );
+}
+
+/** Run a write and resolve when the transaction commits. */
+function write(storeName, work) {
+  return open().then(
+    (db) =>
+      new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, "readwrite");
+        try {
+          work(tx.objectStore(storeName));
+        } catch (error) {
+          reject(error);
+          return;
+        }
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error);
+      }),
+  );
+}
+
+/** Seconds since the epoch, matching Python's time.time(). */
+const now = () => Date.now() / 1000;
+
+export async function sha256Hex(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// --- subtitles --------------------------------------------------------------
+
+export function getSubtitle(fileId) {
+  return read(SUBTITLES, (store) => store.get(fileId));
+}
+
+/**
+ * Store raw bytes plus the metadata the daemon records.
+ *
+ * Bytes, not decoded text: the sha256 is over the bytes on both sides, the
+ * encoding scoring needs them, and the sync has to be able to hand the daemon
+ * exactly what it would have downloaded itself.
+ */
+export async function putSubtitle(fileId, raw, meta) {
+  const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+  const record = {
+    file_id: fileId,
+    bytes,
+    meta: { ...meta, cached_at: now(), sha256: await sha256Hex(bytes) },
+  };
+  await write(SUBTITLES, (store) => store.put(record));
+  return record;
+}
+
+/** Store a record that came from the daemon, keeping its own cached_at. */
+export async function importSubtitle(fileId, raw, meta) {
+  const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+  const record = {
+    file_id: fileId,
+    bytes,
+    meta: { ...meta, sha256: meta.sha256 || (await sha256Hex(bytes)) },
+  };
+  await write(SUBTITLES, (store) => store.put(record));
+  return record;
+}
+
+export function listSubtitles() {
+  return read(SUBTITLES, (store) => store.getAll()).then((records) =>
+    (records || []).sort(
+      (a, b) => Number(b.meta.cached_at || 0) - Number(a.meta.cached_at || 0),
+    ),
+  );
+}
+
+/**
+ * A subtitle already held for this title, in the best available language.
+ *
+ * This is the part that actually protects the quota. Keying only on file_id
+ * stops a repeat download of the same upload, but the same film is on
+ * OpenSubtitles many times over, and a later search ranking a different upload
+ * first would spend a download on a subtitle we effectively already have.
+ */
+export async function findForTitle(imdbId, languages) {
+  if (!imdbId) return null;
+  const records = await listSubtitles();
+  const candidates = records.filter((item) => String(item.meta.imdb_id || "") === imdbId);
+  if (!candidates.length) return null;
+
+  const rank = (item) => {
+    const language = String(item.meta.language || "");
+    const position = languages.indexOf(language);
+    return [position === -1 ? languages.length : position, -Number(item.meta.cached_at || 0)];
+  };
+
+  return candidates.reduce((best, item) => {
+    const [aPos, aAge] = rank(item);
+    const [bPos, bAge] = rank(best);
+    if (aPos !== bPos) return aPos < bPos ? item : best;
+    return aAge < bAge ? item : best;
+  });
+}
+
+/** An existing file with identical bytes, under any file_id. */
+export async function findByContent(digest) {
+  const records = await listSubtitles();
+  return records.find((item) => item.meta.sha256 === digest) || null;
+}
+
+// --- searches ---------------------------------------------------------------
+
+/* Same key derivation and the same staleness window as the daemon, so a search
+ * answered by one is answered the same way by the other. */
+export function searchKey({ query, languages, year, season, episode, imdbId }) {
+  const parts = [
+    String(query).toLowerCase(),
+    [...languages].sort().join(","),
+    year === null || year === undefined ? "None" : String(year),
+    season === null || season === undefined ? "None" : String(season),
+    episode === null || episode === undefined ? "None" : String(episode),
+    imdbId === null || imdbId === undefined ? "None" : String(imdbId),
+  ];
+  return parts
+    .join("|")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .slice(0, 120);
+}
+
+export async function getSearch(key) {
+  const record = await read(SEARCHES, (store) => store.get(`v${SEARCH_SCHEMA_VERSION}-${key}`));
+  if (!record) return null;
+  if (now() - Number(record.at || 0) > SEARCH_TTL_SECONDS) return null;
+  return record.envelope && typeof record.envelope === "object" ? record.envelope : null;
+}
+
+export function putSearch(key, envelope) {
+  return write(SEARCHES, (store) =>
+    store.put({ key: `v${SEARCH_SCHEMA_VERSION}-${key}`, at: now(), envelope }),
+  );
+}
+
+export async function stats() {
+  const records = await listSubtitles();
+  return { subtitles: records.length };
+}

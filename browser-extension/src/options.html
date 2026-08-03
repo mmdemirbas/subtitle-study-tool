@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Subtitle Overlay — settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Subtitle Overlay</h1>
+
+      <section class="card" id="state">
+        <h2>Where subtitles come from</h2>
+        <p class="status" id="statusLine">Checking…</p>
+        <p class="note" id="statusNote"></p>
+        <button type="button" id="refresh">Check again</button>
+      </section>
+
+      <section class="card">
+        <h2>OpenSubtitles API key</h2>
+        <p class="note">
+          Only needed for the extension to fetch subtitles on its own, when the
+          daemon is not running. The daemon keeps its own key in
+          <code>subtitle-daemon/config.local.json</code> and does not use this one.
+        </p>
+        <label for="apiKey">API key</label>
+        <input id="apiKey" type="password" autocomplete="off" spellcheck="false"
+               placeholder="from opensubtitles.com → Consumers" />
+        <label class="check">
+          <input id="reveal" type="checkbox" />
+          <span>Show it</span>
+        </label>
+
+        <label for="languages">Languages, best first</label>
+        <input id="languages" type="text" spellcheck="false" placeholder="en, tr" />
+
+        <div class="row">
+          <button type="button" id="save" class="primary">Save</button>
+          <span class="note" id="saved"></span>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Downloaded subtitles</h2>
+        <p class="note">
+          The extension and the daemon keep separate stores — a browser
+          extension cannot write to the daemon's folder. Whatever either one has
+          downloaded is copied to the other whenever the daemon is running, so a
+          download is never spent twice.
+        </p>
+        <p class="status" id="cacheLine">—</p>
+        <div class="row">
+          <button type="button" id="sync">Sync with the daemon now</button>
+          <span class="note" id="syncResult"></span>
+        </div>
+      </section>
+    </main>
+    <script src="options.js" type="module"></script>
+  </body>
+</html>

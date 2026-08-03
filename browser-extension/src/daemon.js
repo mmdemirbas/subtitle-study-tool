@@ -1,9 +1,10 @@
-/* Client for the local subtitle-daemon, shared by the popup and the service
- * worker.
+/* Client for the local subtitle-daemon.
  *
- * The extension never talks to OpenSubtitles directly. Everything goes through
- * the daemon so the API key stays out of the browser and the download cache is
- * shared across tabs, reloads and extension restarts.
+ * The daemon is preferred but no longer required: provider.js falls back to
+ * doing the same work inside the extension when nothing is listening on the
+ * port. This file is only the daemon half of that - it should keep throwing
+ * DaemonDownError rather than handling the fallback itself, so there is exactly
+ * one place that decides which side answers.
  */
 
 export const DAEMON_ORIGIN = "http://127.0.0.1:8791";
@@ -77,6 +78,20 @@ export function subtitleContext(result, resolved) {
 
 export function cached() {
   return call("/cached");
+}
+
+/** One cached subtitle. `content` also returns the raw bytes, base64, for sync. */
+export function cachedOne(fileId, { content = false } = {}) {
+  return call(`/cached/${fileId}${content ? "?content=1" : ""}`);
+}
+
+/** Hand the daemon a subtitle the extension downloaded while it was stopped. */
+export function importSubtitle(body) {
+  return call("/cached", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }
 
 /* Offsets are stored per subtitle file, not per page: the correction belongs to
