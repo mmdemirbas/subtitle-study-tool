@@ -17,6 +17,8 @@ Endpoints:
 
 from __future__ import annotations
 
+import base64
+import binascii
 import errno
 import json
 import logging
@@ -444,6 +446,55 @@ class Service:
 
         return _cues_response(stored.read_bytes(), dict(stored.meta), from_cache=False)
 
+    def import_subtitle(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Take a subtitle the extension downloaded while this was not running.
+
+        The extension can now do the whole fetch itself, which means a download
+        can be spent while the daemon is stopped. Its cache is a separate store
+        - a browser extension has no filesystem, so it cannot write to this one
+        - and without a way back in, the daemon would later spend a *second*
+        download on a file already held. That is the whole point of the cache,
+        so the two are converged instead: this is the direction the extension
+        cannot reach any other way.
+
+        Bytes arrive base64-encoded because the transport is JSON. They are
+        stored verbatim, so the file on disk is the one OpenSubtitles served and
+        its sha256 matches on both sides.
+        """
+        file_id = body.get("file_id")
+        if not isinstance(file_id, int):
+            return {"error": "file_id must be an integer"}
+
+        existing = self.cache.get_subtitle(file_id)
+        if existing is not None:
+            return {"imported": False, "reason": "already held", "file_id": file_id}
+
+        try:
+            raw = base64.b64decode(str(body.get("content") or ""), validate=True)
+        except (ValueError, binascii.Error):
+            return {"error": "content must be base64"}
+        if not raw:
+            return {"error": "content was empty"}
+
+        meta_in = body.get("meta")
+        meta_in = meta_in if isinstance(meta_in, dict) else {}
+        # Only the fields this cache defines, so a future extension version
+        # cannot write arbitrary keys into the sidecar.
+        meta: dict[str, Any] = {
+            "file_id": file_id,
+            "file_name": str(meta_in.get("file_name") or f"{file_id}.srt"),
+            "imdb_id": str(meta_in.get("imdb_id") or "") or None,
+            "language": str(meta_in.get("language") or "") or None,
+            "movie_name": str(meta_in.get("movie_name") or "") or None,
+            "release": str(meta_in.get("release") or "") or None,
+            "imported_from": "extension",
+        }
+        stored = self.cache.put_subtitle(file_id, raw, meta)
+        logger.info(
+            "imported file_id %d from the extension (%d bytes)", file_id, len(raw)
+        )
+        return {"imported": True, "file_id": file_id, "sha256": stored.meta.get("sha256")}
+
     def cached_list(self) -> dict[str, Any]:
         return {
             "subtitles": [
@@ -451,11 +502,18 @@ class Service:
             ]
         }
 
-    def cached_one(self, file_id: int) -> dict[str, Any]:
+    def cached_one(self, file_id: int, *, with_content: bool = False) -> dict[str, Any]:
         cached = self.cache.get_subtitle(file_id)
         if cached is None:
             return {"error": "not cached"}
-        return _cues_response(cached.read_bytes(), dict(cached.meta), from_cache=True)
+        raw = cached.read_bytes()
+        response = _cues_response(raw, dict(cached.meta), from_cache=True)
+        if with_content:
+            # The bytes themselves, for the extension to copy into its own store
+            # during a sync. Cues would not do: the sha256 is over the bytes, and
+            # re-encoding the text would not reproduce them.
+            response["content"] = base64.b64encode(raw).decode("ascii")
+        return response
 
 
 class PortInUseError(RuntimeError):
@@ -528,7 +586,12 @@ class _Handler(BaseHTTPRequestHandler):
         elif parsed.path == "/cached":
             self._send(HTTPStatus.OK, self.service.cached_list())
         elif match := re.fullmatch(r"/cached/(\d+)", parsed.path):
-            self._send(HTTPStatus.OK, self.service.cached_one(int(match.group(1))))
+            self._send(
+                HTTPStatus.OK,
+                self.service.cached_one(
+                    int(match.group(1)), with_content=bool(params.get("content"))
+                ),
+            )
         else:
             self._send(HTTPStatus.NOT_FOUND, {"error": "no such endpoint"})
 
@@ -536,7 +599,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._origin_ok():
             return
         parsed = urlparse(self.path)
-        if parsed.path != "/fetch":
+        if parsed.path not in ("/fetch", "/cached"):
             self._send(HTTPStatus.NOT_FOUND, {"error": "no such endpoint"})
             return
 
@@ -558,7 +621,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.BAD_REQUEST, {"error": "body must be a JSON object"})
             return
 
-        self._send(HTTPStatus.OK, self.service.fetch(body))
+        if parsed.path == "/cached":
+            self._send(HTTPStatus.OK, self.service.import_subtitle(body))
+        else:
+            self._send(HTTPStatus.OK, self.service.fetch(body))
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Route through logging instead of BaseHTTPRequestHandler's stderr writes.
