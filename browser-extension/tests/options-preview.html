@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Options preview</title>
+  </head>
+  <body>
+    <!-- Renders the settings page against a stubbed service worker, so the
+         layout can be checked without loading the extension into Chrome.
+         Not a test - there is nothing asserted here. It exists because a table
+         that renders wrong is not something a passing test would notice. -->
+    <script>
+      const entries = [
+        {
+          file_id: 11, movie_name: "Crime 101", release: "Crime.101.2025.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX",
+          language: "en", cached_at: Date.now() / 1000 - 3600, bytes: 74210, held_by: ["extension", "daemon"],
+        },
+        {
+          file_id: 22, movie_name: "Battlestar Galactica: The Miniseries",
+          release: "Battlestar.Galactica.Miniseries.S00E01.2003.1080p.BluRay", language: "tr",
+          cached_at: Date.now() / 1000 - 86400 * 2, bytes: 90730, held_by: ["extension"],
+        },
+        {
+          file_id: 33, movie_name: "Mercy", release: "Mercy.2026.720p", language: "en",
+          cached_at: Date.now() / 1000 - 86400 * 9, bytes: 41002, held_by: ["daemon"],
+        },
+      ];
+
+      window.chrome = {
+        storage: { local: { get: async () => ({ "sso:provider": { apiKey: "abc", languages: ["en", "tr"] } }) } },
+        runtime: {
+          sendMessage: async ({ op }) => {
+            if (op === "health") {
+              return { served_by: "extension", has_api_key: true, daemon_running: false };
+            }
+            if (op === "cacheList") {
+              return { entries, daemon_running: true, pending_deletions: 1 };
+            }
+            return {};
+          },
+        },
+      };
+    </script>
+    <div id="mount"></div>
+    <script>
+      fetch("../src/options.html")
+        .then((response) => response.text())
+        .then((html) => {
+          const parsed = new DOMParser().parseFromString(html, "text/html");
+          const link = document.createElement("link");
+          link.rel = "stylesheet";
+          link.href = "../src/options.css";
+          document.head.append(link);
+          document.body.replaceChildren(...parsed.body.children);
+          const script = document.createElement("script");
+          script.type = "module";
+          script.src = "../src/options.js";
+          document.body.append(script);
+        });
+    </script>
+  </body>
+</html>

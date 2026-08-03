@@ -166,6 +166,93 @@ async function mirrorFromDaemon(fileId) {
   }
 }
 
+// --- cache management -------------------------------------------------------
+
+/**
+ * Everything downloaded, from both stores, as one list.
+ *
+ * Merged rather than shown as two lists: after a sync almost every entry is in
+ * both, and two near-identical tables would suggest the subtitle had been
+ * downloaded twice. `held_by` says where each one actually is, which is the
+ * only part the user needs to know - and it is the honest answer to "where did
+ * my disk space go".
+ */
+export async function cacheEntries() {
+  const mine = await cache.listSubtitles();
+  const merged = new Map();
+
+  for (const record of mine) {
+    merged.set(record.file_id, {
+      ...record.meta,
+      file_id: record.file_id,
+      bytes: record.bytes.length,
+      held_by: ["extension"],
+    });
+  }
+
+  let daemonRunning = false;
+  if (await daemonUp()) {
+    try {
+      const theirs = await daemon.cached();
+      daemonRunning = true;
+      for (const item of theirs.subtitles || []) {
+        const existing = merged.get(item.file_id);
+        if (existing) existing.held_by.push("daemon");
+        else merged.set(item.file_id, { ...item, held_by: ["daemon"] });
+      }
+    } catch {
+      // Went away mid-call; report what we have.
+    }
+  }
+
+  const entries = [...merged.values()].sort(
+    (a, b) => Number(b.cached_at || 0) - Number(a.cached_at || 0),
+  );
+  const pending = await cache.pendingDeletions();
+  return { entries, daemon_running: daemonRunning, pending_deletions: pending.length };
+}
+
+/**
+ * Delete a subtitle from both stores.
+ *
+ * With the daemon stopped it goes from here and is queued for the daemon, which
+ * is what stops the next sync copying it back. Reported honestly either way, so
+ * "deleted" never means "deleted from one of two places" without saying so.
+ */
+export async function cacheDelete(fileId) {
+  await cache.deleteSubtitle(fileId);
+  if (await daemonUp()) {
+    try {
+      await daemon.forget(fileId);
+      await cache.clearPendingDeletion(fileId);
+      return { deleted: true, everywhere: true };
+    } catch {
+      // Leave it pending.
+    }
+  }
+  return { deleted: true, everywhere: false };
+}
+
+export async function cacheClear({ searchesOnly = false } = {}) {
+  const result = { subtitles: 0, searches: 0, everywhere: false };
+  if (!searchesOnly) result.subtitles = await cache.deleteAllSubtitles();
+  result.searches = await cache.clearSearches();
+
+  if (await daemonUp()) {
+    try {
+      await daemon.forgetAll({ searchesOnly });
+      // The daemon has them now, so nothing is left to propagate.
+      for (const pending of await cache.pendingDeletions()) {
+        await cache.clearPendingDeletion(pending.file_id);
+      }
+      result.everywhere = true;
+    } catch {
+      // Deletions stay queued.
+    }
+  }
+  return result;
+}
+
 /** Force a convergence now. Used by the options page's button. */
 export async function syncNow() {
   if (!(await daemonUp({ force: true }))) throw new DaemonDownError();

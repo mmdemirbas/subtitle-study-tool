@@ -47,13 +47,46 @@
           The extension and the daemon keep separate stores — a browser
           extension cannot write to the daemon's folder. Whatever either one has
           downloaded is copied to the other whenever the daemon is running, so a
-          download is never spent twice.
+          download is never spent twice. <strong>Held</strong> says where each
+          one currently is.
         </p>
         <p class="status" id="cacheLine">—</p>
+
+        <div class="table-scroll">
+          <table id="cacheTable">
+            <colgroup>
+              <col />
+              <col class="c-lang" />
+              <col class="c-when" />
+              <col class="c-size" />
+              <col class="c-held" />
+              <col class="c-act" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">Film</th>
+                <th scope="col">Lang</th>
+                <th scope="col">Downloaded</th>
+                <th scope="col" class="num">Size</th>
+                <th scope="col">Held</th>
+                <th scope="col"><span class="visually-hidden">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="cacheRows"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="cacheEmpty" hidden>
+          Nothing downloaded yet. Press <kbd>⌘⇧S</kbd> on a page with a video.
+        </p>
+
+        <p class="pending" id="cachePending" hidden></p>
+
         <div class="row">
           <button type="button" id="sync">Sync with the daemon now</button>
-          <span class="note" id="syncResult"></span>
+          <button type="button" id="clearSearches">Forget cached searches</button>
+          <button type="button" id="clearAll" class="danger">Delete all subtitles</button>
         </div>
+        <p class="note" id="cacheResult"></p>
       </section>
     </main>
     <script src="options.js" type="module"></script>

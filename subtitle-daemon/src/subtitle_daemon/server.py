@@ -532,8 +532,22 @@ class Service:
     def cached_list(self) -> dict[str, Any]:
         return {
             "subtitles": [
-                {"file_id": item.file_id, **item.meta} for item in self.cache.list_subtitles()
+                # Size comes from the file rather than the sidecar: it is what
+                # the cache manager shows, and a sidecar can outlive an edit.
+                {"file_id": item.file_id, "bytes": item.path.stat().st_size, **item.meta}
+                for item in self.cache.list_subtitles()
             ]
+        }
+
+    def forget(self, file_id: int) -> dict[str, Any]:
+        return {"deleted": self.cache.delete_subtitle(file_id), "file_id": file_id}
+
+    def forget_all(self, *, searches_only: bool = False) -> dict[str, Any]:
+        if searches_only:
+            return {"searches": self.cache.clear_searches()}
+        return {
+            "subtitles": self.cache.clear_subtitles(),
+            "searches": self.cache.clear_searches(),
         }
 
     def cached_one(self, file_id: int, *, with_content: bool = False) -> dict[str, Any]:
@@ -602,7 +616,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         self.send_response(HTTPStatus.NO_CONTENT)
         self._cors_headers(origin)
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Max-Age", "600")
         self.end_headers()
@@ -659,6 +673,22 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, self.service.import_subtitle(body))
         else:
             self._send(HTTPStatus.OK, self.service.fetch(body))
+
+    def do_DELETE(self) -> None:  # noqa: N802
+        if not self._origin_ok():
+            return
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+
+        if match := re.fullmatch(r"/cached/(\d+)", parsed.path):
+            self._send(HTTPStatus.OK, self.service.forget(int(match.group(1))))
+        elif parsed.path == "/cached":
+            self._send(
+                HTTPStatus.OK,
+                self.service.forget_all(searches_only=bool(params.get("searches_only"))),
+            )
+        else:
+            self._send(HTTPStatus.NOT_FOUND, {"error": "no such endpoint"})
 
     def log_message(self, fmt: str, *args: Any) -> None:
         # Route through logging instead of BaseHTTPRequestHandler's stderr writes.

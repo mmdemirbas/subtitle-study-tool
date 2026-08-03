@@ -17,6 +17,9 @@ import {
 /* Every call that used to go straight to the daemon goes through the provider,
  * which prefers the daemon and does the work here when it is not running. */
 import {
+  cacheClear,
+  cacheDelete,
+  cacheEntries,
   fetchSubtitle,
   preferredLanguages,
   search,
@@ -97,6 +100,12 @@ async function handleDaemonCall(op, args) {
       return updateSettings(args.patch || {});
     case "sync":
       return syncNow();
+    case "cacheList":
+      return cacheEntries();
+    case "cacheDelete":
+      return cacheDelete(args.fileId);
+    case "cacheClear":
+      return cacheClear(args.options || {});
     default:
       return { error: `unknown daemon operation: ${op}` };
   }

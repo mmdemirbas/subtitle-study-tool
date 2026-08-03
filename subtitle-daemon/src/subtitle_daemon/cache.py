@@ -100,6 +100,36 @@ class Cache:
             None,
         )
 
+    def delete_subtitle(self, file_id: int) -> bool:
+        """Remove a subtitle and its sidecar. False if it was not there."""
+        path = self._subtitle_path(file_id)
+        meta_path = path.with_suffix(".json")
+        existed = path.exists() or meta_path.exists()
+        path.unlink(missing_ok=True)
+        meta_path.unlink(missing_ok=True)
+        return existed
+
+    def clear_subtitles(self) -> int:
+        """Remove every downloaded subtitle. Returns how many went."""
+        removed = 0
+        for item in self.list_subtitles():
+            if self.delete_subtitle(item.file_id):
+                removed += 1
+        return removed
+
+    def clear_searches(self) -> int:
+        """Forget cached search results, so the next search asks upstream.
+
+        Separate from clearing subtitles: searching is free and unlimited,
+        downloading is neither. Wanting a fresh search is not wanting to spend
+        the day's quota again.
+        """
+        removed = 0
+        for path in self._searches.glob("*.json"):
+            path.unlink(missing_ok=True)
+            removed += 1
+        return removed
+
     def list_subtitles(self) -> list[CachedSubtitle]:
         found: list[CachedSubtitle] = []
         for meta_path in self._subtitles.glob("*.json"):

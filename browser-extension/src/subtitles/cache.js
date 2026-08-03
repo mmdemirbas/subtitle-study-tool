@@ -19,9 +19,15 @@
 import { SEARCH_SCHEMA_VERSION, SEARCH_TTL_SECONDS } from "./tables.generated.js";
 
 const DB_NAME = "sso-subtitles";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const SUBTITLES = "subtitles";
 const SEARCHES = "searches";
+/* Deletions waiting to reach the daemon. Without them, deleting a subtitle
+ * while the daemon is stopped would do nothing at all: the next sync would see
+ * the daemon still holding it, decide this side was missing it, and pull it
+ * straight back. A record here is a pending instruction, not a gravestone - it
+ * is removed as soon as the daemon has carried it out. */
+const DELETIONS = "deletions";
 
 let dbPromise = null;
 
@@ -36,6 +42,9 @@ function open() {
       }
       if (!db.objectStoreNames.contains(SEARCHES)) {
         db.createObjectStore(SEARCHES, { keyPath: "key" });
+      }
+      if (!db.objectStoreNames.contains(DELETIONS)) {
+        db.createObjectStore(DELETIONS, { keyPath: "file_id" });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -162,6 +171,49 @@ export async function findForTitle(imdbId, languages) {
     if (aPos !== bPos) return aPos < bPos ? item : best;
     return aAge < bAge ? item : best;
   });
+}
+
+/**
+ * Remove a subtitle, and remember to tell the daemon.
+ *
+ * The pending record is what makes deletion stick. Delete something while the
+ * daemon is stopped and, without it, the next sync would see the daemon still
+ * holding the file, conclude this side was missing it, and copy it back - so
+ * the delete button would appear to work and quietly undo itself.
+ */
+export async function deleteSubtitle(fileId) {
+  await write(SUBTITLES, (store) => store.delete(fileId));
+  await write(DELETIONS, (store) => store.put({ file_id: fileId, at: now() }));
+}
+
+export async function deleteAllSubtitles() {
+  const held = await listSubtitles();
+  for (const item of held) await deleteSubtitle(item.file_id);
+  return held.length;
+}
+
+export function pendingDeletions() {
+  return read(DELETIONS, (store) => store.getAll()).then((records) => records || []);
+}
+
+/** Called once the daemon has carried the deletion out. */
+export function clearPendingDeletion(fileId) {
+  return write(DELETIONS, (store) => store.delete(fileId));
+}
+
+/**
+ * Forget cached search results, so the next search asks upstream.
+ *
+ * Separate from deleting subtitles: searching is free and unlimited,
+ * downloading is neither. Wanting a fresh search is not wanting to spend the
+ * day's quota again.
+ */
+export async function clearSearches() {
+  const keys = await read(SEARCHES, (store) => store.getAllKeys());
+  await write(SEARCHES, (store) => {
+    for (const key of keys || []) store.delete(key);
+  });
+  return (keys || []).length;
 }
 
 /** An existing file with identical bytes, under any file_id. */

@@ -115,6 +115,52 @@ def test_bad_input_is_refused(
     assert service.import_subtitle(body)["error"] == expected
 
 
+def test_deleting_removes_the_file_and_its_sidecar(
+    service: server_module.Service,
+) -> None:
+    service.cache.put_subtitle(42, SRT, {"imdb_id": "tt1"})
+    path = service.cache.get_subtitle(42).path
+
+    assert service.forget(42)["deleted"] is True
+    assert service.cache.get_subtitle(42) is None
+    assert not path.exists()
+    # A sidecar left behind would show up in list_subtitles as a broken entry.
+    assert not path.with_suffix(".json").exists()
+
+    # Deleting something already gone is not an error, just nothing to do.
+    assert service.forget(42)["deleted"] is False
+
+
+def test_clearing_searches_keeps_the_downloads(service: server_module.Service) -> None:
+    """Searching is free; downloading is five a day. They clear separately."""
+    service.cache.put_subtitle(42, SRT, {"imdb_id": "tt1"})
+    service.cache.put_search("some-key", {"results": []})
+
+    result = service.forget_all(searches_only=True)
+
+    assert result["searches"] == 1
+    assert service.cache.get_search("some-key") is None
+    assert service.cache.get_subtitle(42) is not None, "a download must survive"
+
+
+def test_clearing_everything_removes_both(service: server_module.Service) -> None:
+    service.cache.put_subtitle(42, SRT, {"imdb_id": "tt1"})
+    service.cache.put_subtitle(43, SRT, {"imdb_id": "tt2"})
+    service.cache.put_search("some-key", {"results": []})
+
+    result = service.forget_all()
+
+    assert result == {"subtitles": 2, "searches": 1}
+    assert service.cache.list_subtitles() == []
+
+
+def test_size_is_reported_for_the_cache_manager(service: server_module.Service) -> None:
+    service.cache.put_subtitle(42, SRT, {"imdb_id": "tt1"})
+    listed = service.cached_list()["subtitles"][0]
+    assert listed["bytes"] == len(SRT)
+    assert listed["cached_at"] > 0
+
+
 def test_raw_content_is_available_for_the_other_direction(
     service: server_module.Service,
 ) -> None:

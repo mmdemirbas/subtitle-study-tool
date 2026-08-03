@@ -41,7 +41,22 @@ const fromBase64 = (text) => Uint8Array.from(atob(text), (char) => char.charCode
  * convergence, not the search the user is waiting for.
  */
 export async function converge(daemon) {
-  const result = { pushed: 0, pulled: 0, failed: 0 };
+  const result = { deleted: 0, pushed: 0, pulled: 0, failed: 0 };
+
+  /* Deletions first, and before anything is listed. A subtitle deleted here
+   * while the daemon was stopped is still on the daemon, so pushing or pulling
+   * before carrying the deletion out would copy it straight back and undo the
+   * user's action. */
+  for (const pending of await cache.pendingDeletions()) {
+    try {
+      await daemon.forget(pending.file_id);
+      await cache.clearPendingDeletion(pending.file_id);
+      result.deleted++;
+    } catch {
+      // Stays pending; it will be retried on the next convergence.
+      result.failed++;
+    }
+  }
 
   let theirs;
   try {

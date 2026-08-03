@@ -61,7 +61,7 @@
       ].join("\n");
 
       // Counters are the assertion surface for quota.
-      const calls = { download: 0, features: 0, subtitles: 0, daemonSearch: 0, imported: [] };
+      const calls = { download: 0, features: 0, subtitles: 0, daemonSearch: 0, imported: [], forgotten: [] };
       let daemonRunning = false;
       let daemonFails = null;
       const daemonCache = new Map();
@@ -114,7 +114,13 @@
               results: [{ file_id: 11, language: "en", movie_name: "Crime 101", match_score: 1 }],
             });
           }
-          if (path === "/cached") {
+          // Exactly the collection, not /cached/<id> - which also starts with it.
+          if (path === "/cached" || path.startsWith("/cached?")) {
+            if (options.method === "DELETE") {
+              const searchesOnly = path.includes("searches_only");
+              if (!searchesOnly) daemonCache.clear();
+              return json({ subtitles: 0, searches: 0 });
+            }
             if (options.method === "POST") {
               const body = JSON.parse(options.body);
               calls.imported.push(body.file_id);
@@ -130,7 +136,13 @@
           }
           const one = path.match(/^\/cached\/(\d+)/);
           if (one) {
-            const held = daemonCache.get(Number(one[1]));
+            const id = Number(one[1]);
+            if (options.method === "DELETE") {
+              const existed = daemonCache.delete(id);
+              calls.forgotten.push(id);
+              return json({ deleted: existed, file_id: id });
+            }
+            const held = daemonCache.get(id);
             if (!held) return json({ error: "not cached" });
             return json({ content: held.content, meta: held.meta, cues: [] });
           }
@@ -173,6 +185,7 @@
       const reset = () => {
         calls.download = calls.features = calls.subtitles = calls.daemonSearch = 0;
         calls.imported = [];
+        calls.forgotten = [];
       };
       /* Starting or stopping the daemon has to be followed by a forced probe.
        * The provider caches "is it up?" for a few seconds so the panel does not
@@ -369,6 +382,90 @@
         await provider.updateSettings({ apiKey: "test-key" });
         if (!found.needs_api_key) throw new Error("no needs_api_key flag");
         if (!/API key/i.test(found.error)) throw new Error(`unhelpful: ${found.error}`);
+      });
+
+      /* Managing what has been downloaded. The load-bearing case is the one
+       * where a deletion has to survive a sync: the two stores copy anything
+       * the other is missing, so a naive delete on one side is undone by the
+       * next convergence - the button appears to work and quietly reverses
+       * itself minutes later. */
+      check("the cache lists what is held, with sizes and dates", async () => {
+        await setDaemon(false);
+        const { entries } = await provider.cacheEntries();
+        if (!entries.length) throw new Error("nothing listed");
+        const one = entries[0];
+        if (!one.bytes) throw new Error("no size");
+        if (!one.cached_at) throw new Error("no download date");
+        if (!one.held_by.includes("extension")) throw new Error("held_by is wrong");
+      });
+
+      check("entries held on both sides are listed once, not twice", async () => {
+        await setDaemon(true);
+        await provider.syncNow();
+        const { entries } = await provider.cacheEntries();
+        const ids = entries.map((entry) => entry.file_id);
+        if (new Set(ids).size !== ids.length) throw new Error(`duplicated: ${ids}`);
+        const shared = entries.find((entry) => entry.held_by.length === 2);
+        if (!shared) throw new Error("nothing reported as held by both");
+      });
+
+      check("deleting with the daemon running removes it from both", async () => {
+        await setDaemon(true);
+        reset();
+        const result = await provider.cacheDelete(77);
+        if (!result.everywhere) throw new Error("did not reach the daemon");
+        if (!calls.forgotten.includes(77)) throw new Error("the daemon was not told");
+        if (await cache.getSubtitle(77)) throw new Error("still held here");
+        if (daemonCache.has(77)) throw new Error("still held by the daemon");
+      });
+
+      check("deleting with the daemon stopped does not undo itself", async () => {
+        // Delete while it is stopped, then start it and sync. Without the
+        // pending-deletion record the sync would see the daemon still holding
+        // the file, decide this side was missing it, and copy it back.
+        await setDaemon(true);
+        await provider.syncNow();
+        if (!daemonCache.has(11)) throw new Error("setup: the daemon should hold 11");
+
+        await setDaemon(false);
+        const result = await provider.cacheDelete(11);
+        if (result.everywhere) throw new Error("claimed to reach a stopped daemon");
+        if (await cache.getSubtitle(11)) throw new Error("still held here");
+
+        // Starting the daemon is enough - the queued deletion is applied on
+        // reconnect, before anything else in the convergence, so there is no
+        // window in which the file could be copied back.
+        reset();
+        await setDaemon(true);
+        await provider.syncNow();
+        if (!calls.forgotten.includes(11)) throw new Error("the daemon was never told");
+        if (daemonCache.has(11)) throw new Error("the daemon still holds it");
+        if (await cache.getSubtitle(11)) throw new Error("it came back on the sync");
+      });
+
+      check("forgetting searches keeps the downloads", async () => {
+        await setDaemon(false);
+        await provider.fetchSubtitle(11, { imdb_id: "32430579", language: "en" });
+        await provider.search({ query: "Crime 101", year: 2025, languages: ["en"] });
+
+        const result = await provider.cacheClear({ searchesOnly: true });
+        if (!result.searches) throw new Error("no searches were forgotten");
+        if (result.subtitles) throw new Error("it deleted downloads too");
+        if (!(await cache.getSubtitle(11))) throw new Error("a download was lost");
+
+        reset();
+        await provider.search({ query: "Crime 101", year: 2025, languages: ["en"] });
+        if (!calls.subtitles) throw new Error("the search was still replayed from cache");
+      });
+
+      check("deleting everything empties both stores", async () => {
+        await setDaemon(true);
+        await provider.syncNow();
+        const result = await provider.cacheClear();
+        if (!result.everywhere) throw new Error("did not reach the daemon");
+        const { entries } = await provider.cacheEntries();
+        if (entries.length) throw new Error(`${entries.length} left`);
+        if (daemonCache.size) throw new Error("the daemon still holds some");
       });
 
       // --- run ------------------------------------------------------------

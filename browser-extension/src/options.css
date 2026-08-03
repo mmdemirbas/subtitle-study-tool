@@ -2,24 +2,29 @@
  * in a normal tab where nothing is fighting it, so none of the panel's defensive
  * styling applies. */
 
+/* The page is the field and the cards sit on it, so the field has to be the
+ * darker of the two. It was the other way round - white page, grey cards -
+ * which reads as sunken panels rather than as objects on a surface. */
 :root {
   color-scheme: light dark;
-  --bg: #ffffff;
-  --card: #f6f7f9;
-  --line: #d9dde3;
-  --text: #16181d;
-  --muted: #5c636e;
-  --accent: #2f6fd0;
+  --bg: #edeae4;
+  --card: #ffffff;
+  --line: #e0dad0;
+  --text: #1a1611;
+  --muted: #6f665a;
+  --accent: #2b5cd9;
+  --shadow: 0 1px 2px rgba(26, 22, 17, 0.06), 0 4px 12px -5px rgba(26, 22, 17, 0.14);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14161a;
+    --bg: #101216;
     --card: #1c1f25;
     --line: #2c313a;
     --text: #e8eaed;
     --muted: #9aa2ae;
     --accent: #6ea8ff;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   }
 }
 
@@ -52,8 +57,8 @@ h2 {
   margin-bottom: 18px;
   padding: 18px;
   background: var(--card);
-  border: 1px solid var(--line);
   border-radius: 10px;
+  box-shadow: var(--shadow);
 }
 
 .note {
@@ -113,8 +118,12 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+/* Wraps, or three buttons side by side push the page wider than the window and
+ * the whole document scrolls sideways. The table is allowed to scroll inside
+ * its own box; the page is not. */
 .row {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   align-items: center;
   margin-top: 16px;
@@ -139,6 +148,165 @@ button.primary {
   color: #fff;
   background: var(--accent);
   border-color: transparent;
+}
+
+/* --- the cache table ------------------------------------------------------ */
+
+/* The film column is the one that varies without limit, so it takes the slack
+ * and truncates; everything else is bounded and stays readable. The table
+ * scrolls inside this box rather than making the page scroll sideways. */
+/* `position: relative` is load-bearing, not decoration. The screen-reader label
+ * in the last header cell is absolutely positioned, and without a positioned
+ * ancestor its containing block is the viewport - so it escapes this box's
+ * clipping, lands at the table's full width, and drags the whole page 27px
+ * sideways at a narrow window. Making this the containing block clips it. */
+.table-scroll {
+  position: relative;
+  overflow-x: auto;
+  margin-top: 4px;
+}
+
+/* Fixed layout, or the columns size to their content and the widest of them -
+ * the release string - pushes the Delete button past the edge of the card. It
+ * was rendering at x 740 inside a card ending at 760, so the section's only
+ * action sat behind a horizontal scroll and read as missing. Every column but
+ * the film has a bounded width; the film takes what is left and truncates. */
+table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+col.c-lang { width: 52px; }
+col.c-when { width: 112px; }
+col.c-size { width: 66px; }
+col.c-held { width: 118px; }
+col.c-act { width: 74px; }
+
+th {
+  padding: 6px 10px 6px 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+td {
+  padding: 7px 10px 7px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.film {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.film span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Sizes line up only with tabular figures; without them the digits do not
+ * stack and the column cannot be compared by eye. */
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.held {
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.held b {
+  display: inline-block;
+  padding: 1px 6px;
+  margin-right: 3px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-weight: 600;
+}
+
+.held b[data-where="daemon"] { color: #2e9e63; }
+.held b[data-where="extension"] { color: var(--accent); }
+.held b[data-where="pending"] { color: #c2503f; }
+
+button.link {
+  padding: 4px 8px;
+  color: var(--muted);
+  background: none;
+  border-color: transparent;
+}
+
+button.link:hover {
+  color: #ab4321;
+  border-color: var(--line);
+}
+
+/* Queued destructive work. It was a muted footnote under the buttons - the
+ * least prominent thing on the card, for the one piece of state the user has
+ * to know about. */
+.pending {
+  display: flex;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 9px 12px;
+  color: var(--text);
+  background: rgba(168, 96, 12, 0.09);
+  border-left: 3px solid #a8600c;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.pending[hidden] {
+  display: none;
+}
+
+button.danger:hover {
+  color: #fff;
+  background: #c2503f;
+  border-color: transparent;
+}
+
+.empty {
+  margin: 14px 0 0;
+  padding: 16px;
+  color: var(--muted);
+  text-align: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+}
+
+kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 
 code {

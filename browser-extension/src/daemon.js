@@ -85,6 +85,16 @@ export function cachedOne(fileId, { content = false } = {}) {
   return call(`/cached/${fileId}${content ? "?content=1" : ""}`);
 }
 
+/** Delete one subtitle from the daemon's cache. */
+export function forget(fileId) {
+  return call(`/cached/${fileId}`, { method: "DELETE" });
+}
+
+/** Delete everything, or only the cached searches. */
+export function forgetAll({ searchesOnly = false } = {}) {
+  return call(`/cached${searchesOnly ? "?searches_only=1" : ""}`, { method: "DELETE" });
+}
+
 /** Hand the daemon a subtitle the extension downloaded while it was stopped. */
 export function importSubtitle(body) {
   return call("/cached", {

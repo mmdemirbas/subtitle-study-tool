@@ -40,6 +40,22 @@ other. A download is never spent twice, whichever side spent it the first time.
 The copy runs automatically when the daemon comes up, before any search. There
 is a **Sync now** button on the options page if you want to force it.
 
+### Managing what has been downloaded
+
+The options page lists every subtitle held, with the film, language, when it was
+downloaded, its size, and which store it is in. Each row has a **Delete**, and
+there is a **Delete all subtitles** — which asks first, because getting them
+again is metered.
+
+**Forget cached searches** is separate and safe: it only drops the six-hour
+memory of search results, so the next search asks OpenSubtitles again. Searching
+is free and unlimited; downloading is not.
+
+Deleting with the daemon stopped still works. The deletion is queued and applied
+the moment the daemon next runs — without that, the next sync would see the
+daemon still holding the file, decide the browser was missing it, and copy it
+back, so the delete button would quietly undo itself.
+
 ### Is it really the same subtitle?
 
 The pipeline exists twice — Python in the daemon, JavaScript here — so the two
