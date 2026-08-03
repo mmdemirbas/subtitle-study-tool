@@ -164,6 +164,38 @@
 
   const hasPlayableVideo = () => pickVideo() !== null;
 
+  /* A page with a video on it is not the same as a page you are watching.
+   *
+   * Feed rows play a hover preview, and a preview is a real <video>: playing,
+   * unhidden, carrying the film's whole duration. Measured on YouTube's results
+   * page it is 504x211 with duration 464s, which passes every test above - so
+   * the CC handle appeared over a thumbnail on the home page, on a page with
+   * nothing to subtitle.
+   *
+   * Two things separate a preview from a player, both measured rather than
+   * assumed:
+   *
+   *   - It sits inside a link (`a#media-container-link`), because clicking it
+   *     navigates to the video. A player you are watching is never inside a
+   *     link - clicking it pauses.
+   *   - It is small: 7.4% of the window, against the watch page's 32%. An
+   *     embedded player is a whole frame of its own, so it measures near 100%.
+   *
+   * This gates the handle only. Which video gets subtitles remains pickVideo's
+   * decision, and the frame the popup addresses remains hasPlayableVideo's, so
+   * a video this declines to decorate is still reachable from the keyboard and
+   * from the toolbar. A false negative costs a shortcut; a false positive puts
+   * a button over someone's homepage. */
+  const SUBJECT_VIEWPORT_SHARE = 0.12;
+
+  function isPageSubject(video) {
+    if (!video || video.closest("a")) return false;
+    const viewport = window.innerWidth * window.innerHeight;
+    if (!viewport) return false;
+    const box = video.getBoundingClientRect();
+    return (box.width * box.height) / viewport >= SUBJECT_VIEWPORT_SHARE;
+  }
+
   // --- page metadata --------------------------------------------------------
 
   /* The tab title is the worst of the available signals: Prime Video titles a
@@ -1031,7 +1063,7 @@
   /* The handle only appears where there is something to control, and only
    * while the mouse is moving - so it is never in the way of the film. */
   function onPointerMove() {
-    if (!hasPlayableVideo()) return;
+    if (!isPageSubject(pickVideo())) return;
     ensureOverlay();
     revealHandle();
   }

@@ -193,6 +193,76 @@
           throw new Error(`hidden: visibility=${cs.visibility} opacity=${cs.opacity}`);
       });
 
+      /* A feed page: the page's own player is gone and the only video is one a
+       * row plays while the pointer is over it. Sizes are the ones measured on
+       * YouTube's results page - 504x211 in a 1440x900 window, duration 464s -
+       * expressed as fractions of the window so the case does not depend on
+       * the size of the browser running it. */
+      async function onFeedPage(shape, run) {
+        const player = document.getElementById("player");
+        const handle = shadowOf().querySelector(".sso-handle");
+        const preview = document.createElement("video");
+        preview.style.display = "block";
+        preview.style.width = `${Math.round(shape.width * window.innerWidth)}px`;
+        preview.style.height = `${Math.round(shape.height * window.innerHeight)}px`;
+        Object.defineProperty(preview, "duration", { get: () => 464 });
+        Object.defineProperty(preview, "paused", { get: () => false });
+
+        let holder = preview;
+        if (shape.inLink) {
+          holder = document.createElement("a");
+          holder.href = "#watch";
+          holder.style.display = "block";
+          holder.append(preview);
+        }
+        document.body.append(holder);
+        player.style.display = "none";     // no player on this page, only rows
+        handle.dataset.visible = "false";
+        try {
+          preview.dispatchEvent(new PointerEvent("pointermove", { bubbles: true }));
+          await sleep(80);
+          return await run(handle, preview);
+        } finally {
+          holder.remove();
+          player.style.display = "";
+        }
+      }
+
+      const handleShowing = (handle) =>
+        handle.dataset.visible === "true" && Number(getComputedStyle(handle).opacity) > 0;
+
+      check("CC handle stays away from a feed row's hover preview", () =>
+        onFeedPage({ width: 0.35, height: 0.235, inLink: true }, (handle) => {
+          if (handleShowing(handle))
+            throw new Error("the handle appeared over a thumbnail - this page has nothing to subtitle");
+        }));
+
+      check("CC handle stays away from a video too small to be the page's subject", () =>
+        onFeedPage({ width: 0.35, height: 0.235, inLink: false }, (handle) => {
+          if (handleShowing(handle))
+            throw new Error("a video covering 8% of the window was treated as the page's subject");
+        }));
+
+      /* Size alone does not settle it. The preview keeps roughly its share of
+       * the row, so in a narrower window it grows against the window: the same
+       * tile that covers 7% of a maximised screen covers about 18% of a
+       * 1000x600 one, which clears the floor. Being inside the link that opens
+       * it is what still identifies it. */
+      check("CC handle stays away from a hover preview large enough to clear the floor", () =>
+        onFeedPage({ width: 0.55, height: 0.4, inLink: true }, (handle) => {
+          if (handleShowing(handle))
+            throw new Error("a link-wrapped preview got the handle once it was big enough");
+        }));
+
+      /* The control for the two above: the rule has to admit a player that is
+       * merely large, not only one that fills the window, or an article with a
+       * video in it would lose the handle. This is the watch page's 32%. */
+      check("CC handle appears for a player that is large without filling the window", () =>
+        onFeedPage({ width: 0.7, height: 0.46, inLink: false }, (handle) => {
+          if (!handleShowing(handle))
+            throw new Error("a player covering a third of the window did not get the handle");
+        }));
+
       check("CC handle keeps its size against the page's button reset", () => {
         const box = shadowOf().querySelector(".sso-handle").getBoundingClientRect();
         if (box.width < 20 || box.height < 14)

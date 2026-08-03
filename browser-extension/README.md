@@ -91,6 +91,14 @@ lives in the page rather than in the toolbar popup because **a popup cannot be
 opened while the page is fullscreen**, which is exactly when you need to fix
 timing.
 
+**The CC button** fades in over the video when you move the mouse, and opens the
+same panel. It appears only where there is something to watch: not on a page
+without a video, and not over a feed row playing a hover preview — a preview is
+a real `<video>` with the film's whole duration, which is why the button used to
+turn up on the YouTube home page. It is ruled out by sitting inside the link
+that opens it, and by being a small part of the window. A player it declines to
+decorate is still reachable with <kbd>⌘⇧K</kbd> and from the toolbar.
+
 The toolbar popup is a launcher and a status readout — which side is answering,
 whether a subtitle is attached, and the current shortcuts.
 

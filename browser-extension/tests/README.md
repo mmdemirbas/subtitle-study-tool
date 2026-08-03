@@ -37,13 +37,14 @@ specific things streaming sites do that have broken this extension:
 | A chrome element appended after ours at the same `z-index` | overlay painted over |
 | `stopPropagation` on pointer events inside the player | handle never appeared |
 | A mid-roll ad stitched into the same stream | every cue after the break late by the ad's length |
+| A feed row playing a hover preview of another video | CC handle appeared on the home page |
 
 Each row cost a round trip to discover. Anything that survives this page
 survives Prime Video.
 
 ## The cases
 
-Thirty-three, covering: shadow-root isolation, cue colour, italics, speaker
+Thirty-seven, covering: shadow-root isolation, cue colour, italics, speaker
 colour, non-speech dimming, sound symbols, handle visibility under a
 pointer-event-swallowing player, handle size under a button reset, stacking
 against later chrome, the handle opening the panel, Turkish-Q bracket keys
@@ -64,6 +65,12 @@ given, narrowing pushing the text onto more rows, a long line staying on
 screen after the box was placed against an edge with a short one showing,
 widening not pushing it off the screen, an edge-drag resizing, and a
 middle-drag still moving rather than resizing.
+
+Four more cover where the CC handle is allowed to appear: a feed row's hover
+preview not getting one, a video too small to be what the page is about not
+getting one, a preview still not getting one once a narrow window has made it
+large enough to clear the size floor, and a player that is merely large — a
+third of the window, not all of it — still getting one.
 
 The ad cases advance `video.currentTime` while an ad marker is on screen,
 which is what server-side ad insertion does to the clock. They take a few
