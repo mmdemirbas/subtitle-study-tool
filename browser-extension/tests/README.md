@@ -76,21 +76,24 @@ That path has three parts the parity test does not reach — the rule for which
 side answers, the IndexedDB cache, and the convergence with the daemon's cache —
 so they are checked here against a stubbed OpenSubtitles and a stubbed daemon.
 
-Fifteen cases. The ones that matter are about quota, and they assert it
+Sixteen cases. The ones that matter are about quota, and they assert it
 directly: the stub counts calls to the download endpoint, so "this did not spend
 a download" is a number, not an inference from a cache flag. Covered: the
 extension answering alone, the title being cleaned before it is searched for,
 cues coming back annotated, the same file not being fetched twice, *another
 upload of the same film* not being fetched either, searches being replayed from
-cache, the daemon winning when it is up, a daemon error not being retried
-locally, both directions of the sync, a pulled subtitle working offline
-afterwards, the sha256 surviving the copy, and a missing API key being reported
-rather than failing silently.
+cache, a replay noticing a download made since it was cached and forgetting a
+promotion that no longer applies, the daemon winning when it is up, a daemon
+error not being retried locally, both directions of the sync, a pulled subtitle
+working offline afterwards, the sha256 surviving the copy, and a missing API key
+being reported rather than failing silently.
 
-It found two things on its first run: a cache miss that returned a truthy
+It found two real bugs on its first run: a cache miss that returned a truthy
 wrapper object, so every lookup reported a hit and the fetch short-circuited to
-zero cues; and a stale-ranking window inherited from the daemon, which is pinned
-by a case rather than fixed here.
+zero cues; and a six-hour window in which a replayed search still ranked by what
+was held when it was first run, which could send auto-attach to a different
+upload of a film already on disk. The second was inherited from the daemon and
+is now fixed on both sides.
 
 ## Adding a case
 

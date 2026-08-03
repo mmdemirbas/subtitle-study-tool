@@ -568,6 +568,74 @@ def test_a_cached_subtitle_for_the_title_is_offered_first(http) -> None:
     assert payload["reusing_cached"] is True
 
 
+def test_a_replayed_search_knows_what_has_been_downloaded_since(http) -> None:
+    """The order this searched in six hours ago is not evidence about the cache.
+
+    A search envelope is kept for six hours because searching upstream is slow,
+    not because its answer is timeless. Two things in it are facts about the
+    download cache rather than about the search: which results are already held,
+    and the reordering that floats a held file to the top. Frozen into the
+    envelope, they go stale the moment anything is downloaded - and then a
+    replay ranks a different upload of the same film first and auto-attach
+    spends one of ten daily downloads on a subtitle already on disk.
+    """
+    base, stub = http
+    stub.feature_list = [make_feature("Sicario", imdb_id="3397884", year=2015)]
+    stub.results = [
+        make_result(999, "Sicario", download_count=90000),
+        make_result(42, "Sicario", download_count=3),
+    ]
+
+    # Search first, while nothing is held. The popular upload ranks first.
+    _status, first = _get(base, "/search?query=Sicario&languages=en")
+    assert first["results"][0]["file_id"] == 999
+    assert first["results"][0]["cached"] is False
+
+    # Then take the other one - which is what the panel is for.
+    _post(base, "/fetch", {"file_id": 42, "imdb_id": "3397884", "language": "en"})
+
+    # The same search again, inside the six hours, so it is replayed.
+    _status, replayed = _get(base, "/search?query=Sicario&languages=en")
+    assert replayed["from_cache"] is True
+    assert replayed["results"][0]["file_id"] == 42, "the held file must still come first"
+    assert replayed["reusing_cached"] is True
+    assert {item["file_id"]: item["cached"] for item in replayed["results"]} == {
+        42: True,
+        999: False,
+    }
+
+
+def test_a_replayed_search_forgets_a_promotion_that_no_longer_applies(service) -> None:
+    """The re-derivation runs in both directions, not only downwards.
+
+    Deleting a subtitle from the cache folder is a normal thing to do. If the
+    envelope kept the promotion it was stored with, the search would keep
+    claiming to hold a file that is gone.
+    """
+    svc, stub = service
+    stub.feature_list = [make_feature("Sicario", imdb_id="3397884")]
+    stub.results = [
+        make_result(999, "Sicario", download_count=90000),
+        make_result(42, "Sicario", download_count=3),
+    ]
+
+    svc.fetch({"file_id": 42, "imdb_id": "3397884", "language": "en"})
+    first = svc.search({"query": ["Sicario"], "languages": ["en"]})
+    assert first["reusing_cached"] is True
+    assert first["results"][0]["file_id"] == 42
+
+    # Clear the folder the way a person would.
+    for held in svc.cache.list_subtitles():
+        held.path.unlink()
+        held.path.with_suffix(".json").unlink()
+
+    replayed = svc.search({"query": ["Sicario"], "languages": ["en"]})
+    assert replayed["from_cache"] is True
+    assert not replayed.get("reusing_cached"), "a stale promotion must not survive"
+    assert replayed["results"][0]["file_id"] == 999
+    assert all(item["cached"] is False for item in replayed["results"])
+
+
 def test_cached_promotion_needs_a_matching_title(http) -> None:
     base, stub = http
     stub.feature_list = [make_feature("Sicario", imdb_id="3397884")]

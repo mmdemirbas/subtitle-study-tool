@@ -126,7 +126,13 @@ export class LocalService {
 
     const key = cache.searchKey({ query, languages, year, season, episode, imdbId });
     const cached = await cache.getSearch(key);
-    if (cached) return { ...response, ...cached, from_cache: true };
+    if (cached) {
+      const replayed = { ...response, ...cached, from_cache: true };
+      // Except what is a fact about the download cache rather than about the
+      // search - that is re-derived, never replayed. See applyCacheState.
+      await applyCacheState(replayed, languages);
+      return replayed;
+    }
 
     let found;
     let resolved;
@@ -175,11 +181,8 @@ export class LocalService {
       return response;
     }
 
-    const held = await cache.listSubtitles();
-    const onDisk = new Set(held.map((item) => item.file_id));
     const results = found.map((item) => ({
       ...item,
-      cached: onDisk.has(item.file_id),
       match_score: matching.bestScore(query, [item.movie_name || "", item.release || ""], {
         queryYear: year,
         candidateYear: item.year,
@@ -200,20 +203,6 @@ export class LocalService {
       ]),
     );
 
-    /* A subtitle already held for this title costs nothing, so auto-attach
-     * should reach for it before spending a download on another upload of the
-     * same film. */
-    const owned = await cache.findForTitle(resolved ? resolved.imdb_id : null, languages);
-    if (owned) {
-      const at = results.findIndex((item) => item.file_id === owned.file_id);
-      if (at > 0) {
-        results.unshift(results.splice(at, 1)[0]);
-        response.reusing_cached = true;
-      } else if (at === 0) {
-        response.reusing_cached = true;
-      }
-    }
-
     const plausible = results.filter((item) => item.match_score >= matching.VISIBLE_THRESHOLD);
     if (plausible.length) {
       response.results = plausible;
@@ -226,16 +215,22 @@ export class LocalService {
 
     response.auto_attach_threshold = matching.AUTO_ATTACH_THRESHOLD;
 
+    // Stored before the cache state is applied, so what is kept is the upstream
+    // answer in upstream order.
     const envelope = {};
     for (const field of CACHED_FIELDS) {
       if (field in response) envelope[field] = response[field];
     }
     await cache.putSearch(key, envelope);
+
+    await applyCacheState(response, languages);
     return response;
   }
 
   /**
    * Resolve the title, then search for it exactly.
+   *
+   * @see applyCacheState for why the download-cache annotations are not done here.
    *
    * `/subtitles?query=` is fuzzy and always returns something, so it cannot
    * distinguish "wrong title" from "not in the database". `/features` can: it
@@ -397,6 +392,43 @@ export class LocalService {
     const held = await cache.getSubtitle(fileId);
     if (!held) return { error: "not cached" };
     return cuesResponse(held.bytes, held.meta, true);
+  }
+}
+
+/**
+ * Mark what is already downloaded, and float it to the top.
+ *
+ * Deliberately *not* stored with the search envelope, and re-run on every reply
+ * including a replayed one. Both of these are facts about the download cache,
+ * not about the search, and the envelope lives for six hours - long enough for
+ * anything to have been downloaded or deleted since.
+ *
+ * Frozen into the envelope they went stale immediately, and the cost was the
+ * thing the cache exists to prevent: search, download something from the panel,
+ * search again, and the replay still ranked a *different* upload of the same
+ * film first. Auto-attach took it and spent one of ten daily downloads on a
+ * subtitle already held.
+ */
+async function applyCacheState(response, languages) {
+  const results = response.results;
+  if (!Array.isArray(results)) return;
+
+  const held = await cache.listSubtitles();
+  const onDisk = new Set(held.map((item) => item.file_id));
+  for (const item of results) item.cached = onDisk.has(item.file_id);
+
+  // A held file costs nothing, so auto-attach should reach for it before
+  // spending a download on another upload of the same film.
+  const owned = await cache.findForTitle(response.resolved?.imdb_id || null, languages);
+  const at = owned ? results.findIndex((item) => item.file_id === owned.file_id) : -1;
+
+  if (at !== -1) {
+    if (at > 0) results.unshift(results.splice(at, 1)[0]);
+    response.reusing_cached = true;
+  } else {
+    // Both directions: a promotion that no longer applies has to go, or a
+    // deleted subtitle would still be advertised as held.
+    delete response.reusing_cached;
   }
 }
 

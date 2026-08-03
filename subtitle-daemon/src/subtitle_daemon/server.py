@@ -144,6 +144,9 @@ class Service:
             # though it were a confident one.
             response.update(cached)
             response["from_cache"] = True
+            # Except what is a fact about the download cache rather than about
+            # the search - that is re-derived, never replayed. See below.
+            self._apply_cache_state(response, languages)
             return response
 
         try:
@@ -193,10 +196,7 @@ class Service:
 
         results = [item.as_dict() for item in found]
 
-        # Mark what is already downloaded so the UI can show a free choice.
-        on_disk = {item.file_id for item in self.cache.list_subtitles()}
         for item in results:
-            item["cached"] = item["file_id"] in on_disk
             item["match_score"] = matching.best_score(
                 query,
                 [str(item.get("movie_name") or ""), str(item.get("release") or "")],
@@ -223,21 +223,6 @@ class Service:
 
         results.sort(key=rank, reverse=True)
 
-        # If a subtitle for this title is already on disk, put it first. A
-        # cached file costs nothing, so auto-attach should reach for it before
-        # spending a download on another upload of the same film.
-        owned = self.cache.find_for_title(
-            resolved.imdb_id if resolved is not None else None, languages
-        )
-        if owned is not None:
-            already = next(
-                (item for item in results if item["file_id"] == owned.file_id), None
-            )
-            if already is not None:
-                results.remove(already)
-                results.insert(0, already)
-                response["reusing_cached"] = True
-
         plausible = [item for item in results if item["match_score"] >= matching.VISIBLE_THRESHOLD]
         if plausible:
             response["results"] = plausible
@@ -249,8 +234,57 @@ class Service:
             response["low_confidence"] = True
 
         response["auto_attach_threshold"] = matching.AUTO_ATTACH_THRESHOLD
+
+        # Stored before the cache state is applied, so what is kept is the
+        # upstream answer in upstream order.
         self.cache.put_search(key, {k: response[k] for k in _CACHED_FIELDS if k in response})
+
+        self._apply_cache_state(response, languages)
         return response
+
+    def _apply_cache_state(self, response: dict[str, Any], languages: tuple[str, ...]) -> None:
+        """Mark what is already downloaded, and float it to the top.
+
+        Deliberately *not* stored with the search envelope, and re-run on every
+        reply including a replayed one. Both of these are facts about the
+        download cache, not about the search, and the envelope lives for six
+        hours - long enough for anything to have been downloaded or deleted
+        since.
+
+        Frozen into the envelope they went stale immediately, and the cost was
+        the thing the cache exists to prevent: search, download something from
+        the panel, search again, and the replay still ranked a *different*
+        upload of the same film first. Auto-attach took it and spent one of ten
+        daily downloads on a subtitle already on disk.
+        """
+        results = response.get("results")
+        if not isinstance(results, list):
+            return
+
+        on_disk = {item.file_id for item in self.cache.list_subtitles()}
+        for item in results:
+            item["cached"] = item["file_id"] in on_disk
+
+        # A held file costs nothing, so auto-attach should reach for it before
+        # spending a download on another upload of the same film.
+        resolved = response.get("resolved")
+        imdb_id = resolved.get("imdb_id") if isinstance(resolved, dict) else None
+        owned = self.cache.find_for_title(imdb_id, languages)
+
+        already = None
+        if owned is not None:
+            already = next(
+                (item for item in results if item["file_id"] == owned.file_id), None
+            )
+
+        if already is not None:
+            results.remove(already)
+            results.insert(0, already)
+            response["reusing_cached"] = True
+        else:
+            # Both directions: a promotion that no longer applies has to go,
+            # or a deleted subtitle would still be advertised as held.
+            response.pop("reusing_cached", None)
 
     def _search_upstream(
         self,

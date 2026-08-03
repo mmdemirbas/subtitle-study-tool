@@ -239,20 +239,50 @@
           throw new Error(`ranked ${found.results[0].file_id} first`);
       });
 
-      /* A limitation carried over from the daemon, pinned here so it is visible
-       * rather than surprising. `reusing_cached` and the per-result `cached`
-       * flags are computed when a search runs and stored with its envelope, so
-       * for the six hours that envelope lives, a repeat of the same search does
-       * not know about anything downloaded since. The quota is still safe - a
-       * fetch always checks the store before spending anything, which is what
-       * the next case asserts - but the ordering can be stale. */
-      check("a replayed search does not know about a later download", async () => {
+      /* A search envelope is kept for six hours because searching upstream is
+       * slow, not because its answer is timeless. Which results are held, and
+       * the reordering that floats a held one to the top, are facts about the
+       * download cache rather than about the search - so they are re-derived on
+       * every reply, including a replayed one.
+       *
+       * Left frozen in the envelope they went stale immediately, and the cost
+       * was the thing the cache exists to prevent: auto-attach taking a
+       * different upload of a film already on disk. */
+      check("a replayed search knows about a download made since", async () => {
+        // This exact search was cached earlier, before anything was downloaded.
         const replay = await provider.search({ title: "Prime Video: Crime 101", languages: ["en"] });
-        if (replay.reusing_cached)
-          throw new Error("the daemon's behaviour changed; update this note");
+        if (!replay.from_cache) throw new Error("expected a replay, not a fresh search");
+        if (!replay.reusing_cached) throw new Error("the replay did not notice the download");
+        if (replay.results[0].file_id !== 11)
+          throw new Error(`ranked ${replay.results[0].file_id} first`);
+        const flags = Object.fromEntries(replay.results.map((r) => [r.file_id, r.cached]));
+        if (flags[11] !== true || flags[22] !== false)
+          throw new Error(`stale cached flags: ${JSON.stringify(flags)}`);
       });
 
-      check("a stale ranking still cannot spend a download twice", async () => {
+      check("a replayed search forgets a promotion that no longer applies", async () => {
+        // Deleting a subtitle is a normal thing to do; the envelope must not
+        // keep advertising it.
+        const db = await new Promise((ok) => {
+          const request = indexedDB.open("sso-subtitles");
+          request.onsuccess = () => ok(request.result);
+        });
+        await new Promise((ok) => {
+          const tx = db.transaction("subtitles", "readwrite");
+          tx.objectStore("subtitles").delete(11);
+          tx.oncomplete = ok;
+        });
+        db.close();
+
+        const replay = await provider.search({ title: "Prime Video: Crime 101", languages: ["en"] });
+        if (replay.reusing_cached) throw new Error("a stale promotion survived");
+        if (replay.results.some((r) => r.cached)) throw new Error("stale cached flag survived");
+
+        // Put it back so the sync cases downstream still have something to move.
+        await provider.fetchSubtitle(11, { imdb_id: "32430579", language: "en" });
+      });
+
+      check("a fetch never spends a download on a held file", async () => {
         reset();
         const result = await provider.fetchSubtitle(11, { imdb_id: "32430579" });
         if (calls.download !== 0) throw new Error("a download was spent on a held file");

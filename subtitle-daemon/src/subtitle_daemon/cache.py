@@ -24,7 +24,7 @@ SEARCH_TTL_SECONDS = 6 * 60 * 60
 # so without this a change to any of that stays invisible for the TTL and the
 # daemon keeps serving answers computed by the previous version. Downloaded
 # subtitle files are not versioned: those are raw bytes and never go stale.
-SEARCH_SCHEMA_VERSION = 5
+SEARCH_SCHEMA_VERSION = 6
 
 
 @dataclass(frozen=True)
