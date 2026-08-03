@@ -1,0 +1,6 @@
+{
+  "name": "subtitle-overlay-extension",
+  "private": true,
+  "type": "module",
+  "description": "Marks src/subtitles/*.js as ES modules so node can run the parity harness against the daemon. Chrome ignores this file; the manifest is what loads the extension."
+}
