@@ -27,6 +27,13 @@ import {
   syncNow,
   updateSettings,
 } from "./provider.js";
+/* Study mode lives in the worker for two reasons: the rarity tables are large
+ * enough that one copy per frame would be wasteful, and the dictionary is a
+ * cross-origin call, which an MV3 content script cannot make with extension
+ * permissions. */
+import * as deck from "./study/deck.js";
+import { canReachDictionary, lookup } from "./study/lookup.js";
+import { rank } from "./study/rarity.js";
 
 const TOP_FRAME = 0;
 
@@ -74,6 +81,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
+  /* The panel is inside a page, which cannot open an extension page itself.
+   * Sending it here is the only route, and it keeps the deck one click from
+   * where the words are saved rather than somewhere in the browser's menus. */
+  if (message?.type === "sso:openOptions") {
+    chrome.tabs
+      .create({ url: chrome.runtime.getURL(`src/options.html${message.hash || ""}`) })
+      .then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
+    return true;
+  }
+
   // The popup's buttons run the same paths as the keyboard shortcuts, so the
   // match-quality gate and error handling cannot drift between the two.
   if (message?.type === "sso:command") {
@@ -106,6 +123,28 @@ async function handleDaemonCall(op, args) {
       return cacheDelete(args.fileId);
     case "cacheClear":
       return cacheClear(args.options || {});
+
+    /* Study operations answer from the worker without necessarily touching the
+     * daemon, but they arrive on the same channel: the panel and the overlay
+     * already have one way to ask the worker something, and a second one would
+     * be two things to keep in step for no gain. */
+    case "rank":
+      return { ranks: await rank(args.words || [], args.language) };
+    case "lookup":
+      return lookup({ query: args.query, language: args.language });
+    case "lookupReady":
+      return { dictionary: await canReachDictionary() };
+    case "deckSave":
+      return deck.save(args.entry || {});
+    case "deckTerms":
+      return { terms: await deck.terms() };
+    case "deckList":
+      return { entries: await deck.all() };
+    case "deckRemove":
+      return deck.remove(args.id);
+    case "deckClear":
+      return deck.clear();
+
     default:
       return { error: `unknown daemon operation: ${op}` };
   }
@@ -194,26 +233,53 @@ async function autoAttach(tab, frameId, status) {
       return;
     }
 
-    const subtitle = await fetchSubtitle(best.file_id, subtitleContext(best, found.resolved));
-    if (subtitle.error) {
-      await notify(
-        tab.id,
-        frameId,
-        subtitle.quota_exceeded
-          ? "Daily download limit reached - pick something already cached"
-          : subtitle.error,
-      );
-      return;
-    }
+    if (!(await attachOne(tab, frameId, best, found, 0))) return;
 
-    await attachToTab(tab.id, {
-      cues: subtitle.cues,
-      label: `${best.language.toUpperCase()} · ${best.release || best.movie_name}`,
-      fileId: best.file_id,
-    });
+    /* The second language, if one is configured and the search turned up a
+     * good enough match for it.
+     *
+     * This is where dual subtitles stop being a thing you assemble by hand: the
+     * languages are already in preferences, best-first, and the search already
+     * asked for all of them. Silence is the right answer when there is no
+     * second language configured or nothing in it matched - the first subtitle
+     * is on screen either way, which is what the shortcut promised. */
+    const second = languages
+      .slice(1)
+      .map((language) => pickBest(found.results.filter((r) => r.language === language), [language]))
+      .find((result) => result && (result.match_score ?? 0) >= threshold);
+
+    if (second) await attachOne(tab, frameId, second, found, 1);
   } catch (error) {
     await notify(tab.id, frameId, describe(error));
   }
+}
+
+/** Download one result and put it on the named track. False if it did not land. */
+async function attachOne(tab, frameId, result, found, slot) {
+  const subtitle = await fetchSubtitle(result.file_id, subtitleContext(result, found.resolved));
+  if (subtitle.error) {
+    /* A failure on the second subtitle is a note, not an error: the first one
+     * is already on screen and the film is watchable. Saying "download failed"
+     * with subtitles running would read as though nothing had worked. */
+    const prefix = slot > 0 ? "Second subtitle: " : "";
+    await notify(
+      tab.id,
+      frameId,
+      subtitle.quota_exceeded
+        ? `${prefix}daily download limit reached - pick something already cached`
+        : `${prefix}${subtitle.error}`,
+    );
+    return false;
+  }
+
+  await attachToTab(tab.id, {
+    cues: subtitle.cues,
+    label: `${result.language.toUpperCase()} · ${result.release || result.movie_name}`,
+    fileId: result.file_id,
+    language: result.language,
+    slot,
+  });
+  return true;
 }
 
 // --- helpers ----------------------------------------------------------------

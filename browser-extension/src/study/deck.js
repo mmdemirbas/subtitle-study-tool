@@ -1,0 +1,136 @@
+/* The personal deck: words and phrases kept, each with the line it came from.
+ *
+ * The line is the point. A word list is nearly useless a week later - "warrant"
+ * on its own is four meanings and no register - whereas the same word under the
+ * sentence somebody said it in, in the film you were watching, is a memory you
+ * already have. So the sentence, the paired line in the other language, the
+ * film and the timestamp are all part of the entry, not decoration on it, and
+ * an entry is saved with them or not at all.
+ *
+ * Stored in the browser rather than in the daemon. Saving has to work on the
+ * key that saves it, in the middle of a film, whether or not a local service
+ * happens to be running - and unlike a subtitle there is no download quota to
+ * protect and nothing the daemon can do that the browser cannot. The options
+ * page exports the deck, which is how it reaches Anki or anything else.
+ */
+
+const KEY = "sso:deck";
+
+/* One entry per word per film. Meeting "warrant" nine times in one film is one
+ * thing worth remembering, not nine, and a deck that grows a row per repetition
+ * is a deck nobody reviews. Across films it is a separate entry: the second
+ * sentence is new evidence about the same word. */
+const identity = (entry) => `${entry.language}:${entry.term}:${entry.fileId ?? ""}`;
+
+export async function all() {
+  try {
+    const stored = await chrome.storage.local.get(KEY);
+    return Array.isArray(stored[KEY]) ? stored[KEY] : [];
+  } catch {
+    return [];
+  }
+}
+
+async function write(entries) {
+  await chrome.storage.local.set({ [KEY]: entries });
+  return entries;
+}
+
+/**
+ * Add an entry, or return the existing one untouched.
+ *
+ * `added` says which happened, so the toast can say "saved" rather than
+ * claiming to have saved something that was already there.
+ */
+export async function save(entry) {
+  const term = String(entry.term || "").trim();
+  if (!term) return { added: false, entry: null, reason: "nothing to save" };
+
+  const record = {
+    id: `${Date.now().toString(36)}-${term.slice(0, 24)}`,
+    term,
+    language: entry.language || "en",
+    rank: entry.rank ?? null,
+    definitions: entry.definitions || [],
+    phonetic: entry.phonetic || "",
+    translation: entry.translation || "",
+    // The line the word was in, and the same moment in the other subtitle.
+    sentence: entry.sentence || "",
+    pairedSentence: entry.pairedSentence || "",
+    pairedLanguage: entry.pairedLanguage || "",
+    title: entry.title || "",
+    fileId: entry.fileId ?? null,
+    // Position in the film, so the moment can be found again.
+    timeMs: entry.timeMs ?? null,
+    url: entry.url || "",
+    savedAt: new Date().toISOString(),
+  };
+
+  const entries = await all();
+  const existing = entries.find((item) => identity(item) === identity(record));
+  if (existing) return { added: false, entry: existing };
+
+  entries.push(record);
+  await write(entries);
+  return { added: true, entry: record, size: entries.length };
+}
+
+export async function remove(id) {
+  const entries = await all();
+  const kept = entries.filter((entry) => entry.id !== id);
+  await write(kept);
+  return { removed: entries.length - kept.length, size: kept.length };
+}
+
+export async function clear() {
+  await write([]);
+  return { size: 0 };
+}
+
+/** The terms already in the deck, so the overlay can mark them as met before. */
+export async function terms() {
+  const entries = await all();
+  return entries.map((entry) => `${entry.language}:${entry.term}`);
+}
+
+// --- export -----------------------------------------------------------------
+
+const COLUMNS = [
+  ["term", (entry) => entry.term],
+  ["language", (entry) => entry.language],
+  ["rank", (entry) => (entry.rank == null ? "" : String(entry.rank))],
+  ["definition", (entry) => entry.definitions.map((d) => `${d.partOfSpeech}: ${d.sense}`).join(" | ")],
+  ["phonetic", (entry) => entry.phonetic],
+  ["translation", (entry) => entry.translation],
+  ["sentence", (entry) => entry.sentence],
+  ["paired_sentence", (entry) => entry.pairedSentence],
+  ["title", (entry) => entry.title],
+  ["time", (entry) => formatTime(entry.timeMs)],
+  ["saved_at", (entry) => entry.savedAt],
+];
+
+export function formatTime(ms) {
+  if (ms == null) return "";
+  const total = Math.max(0, Math.round(ms / 1000));
+  const parts = [Math.floor(total / 3600), Math.floor((total % 3600) / 60), total % 60];
+  return parts.map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+/**
+ * Serialise the deck.
+ *
+ * `tsv` rather than csv is the default because that is what Anki's importer
+ * takes without configuration, and a subtitle line is full of commas and quotes
+ * - exactly the two things CSV quoting gets wrong when a person edits the file
+ * afterwards. Tabs cannot occur in a subtitle line, so nothing has to be
+ * escaped and nothing can be mangled.
+ */
+export function serialise(entries, format = "tsv") {
+  if (format === "json") return JSON.stringify(entries, null, 2);
+
+  const rows = [COLUMNS.map(([name]) => name)];
+  for (const entry of entries) {
+    rows.push(COLUMNS.map(([, read]) => String(read(entry) || "").replace(/[\t\r\n]+/g, " ")));
+  }
+  return rows.map((row) => row.join("\t")).join("\n");
+}

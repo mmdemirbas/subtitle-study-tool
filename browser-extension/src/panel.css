@@ -140,6 +140,100 @@
   color: #e0a44d;
 }
 
+/* --- one subtitle's controls ------------------------------------------------
+ *
+ * Each attached subtitle gets a card holding everything that belongs to it -
+ * timing, size, width, whether it is showing. Grouped by subtitle rather than
+ * by control type, because every question here is about one of the two, and an
+ * answer split across the panel by kind of control is an answer you have to
+ * assemble.
+ */
+
+.sso-track {
+  padding: 8px 9px 9px;
+  background: #1c2029;
+  border: 1px solid #2b3039;
+  border-radius: 8px;
+}
+
+.sso-track + .sso-track {
+  margin-top: 6px;
+}
+
+.sso-track[hidden] {
+  display: none;
+}
+
+.sso-track__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 7px;
+}
+
+.sso-track__label {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #e8eaed;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sso-track__head input[type="radio"] {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: #4c8bf5;
+  cursor: pointer;
+}
+
+.sso-track__head input[type="radio"][hidden] {
+  display: none;
+}
+
+/* --- segmented choice -------------------------------------------------------
+ *
+ * Used where one of a small fixed set is picked and the set is worth seeing at
+ * once: which subtitle the next result attaches to, which language to show,
+ * which one is being learnt. A <select> would hide the alternatives behind a
+ * click, and the whole point is that the alternatives are the information.
+ */
+
+.sso-seg {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.sso-seg--wrap {
+  flex-wrap: wrap;
+}
+
+.sso-seg[hidden] {
+  display: none;
+}
+
+button.sso-seg__b {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: 11.5px;
+}
+
+button.sso-seg__b[data-on="true"] {
+  color: #fff;
+  background: #2f4a7a;
+  border-color: #4c8bf5;
+}
+
+/* A control whose setting is off does not disappear - that would hide what the
+ * switch above it controls - but it stops asking to be read. */
+[data-off="true"] {
+  opacity: 0.45;
+}
+
 /* --- controls -------------------------------------------------------------- */
 
 button {

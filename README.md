@@ -18,11 +18,21 @@ and they fail in opposite situations, so the tools cover both:
 **Studying.** Two subtitle tracks side by side, aligned by timecode, with
 lookup, translation and a personal dictionary.
 
+The extension does this over a film that is actually streaming: the language
+being learnt and the one already known on the same clock, the words in each line
+that are rare *in film dialogue* underlined, and their meanings in a column at
+the side as it plays. One key keeps a word with the sentence it was said in, the
+translated line beside it, the film and the timestamp — which is the part that
+makes it worth reviewing later. The deck exports to Anki.
+
+`srt-viewer/` does the same for a subtitle file you already have, without a
+video.
+
 ## Layout
 
 | Directory | What it is | State |
 |---|---|---|
-| `browser-extension/` | MV3 extension. Overlays subtitles on any `<video>` in a page, driven by the page's own playback clock. One click to find and attach a subtitle. | see its README |
+| `browser-extension/` | MV3 extension. Overlays subtitles on any `<video>` in a page, driven by the page's own playback clock. One click to find and attach a subtitle — two languages side by side, with word lookup and a personal deck. | see its README |
 | `subtitle-daemon/` | Local HTTP service. Searches and downloads from OpenSubtitles, caches aggressively, converts to WebVTT. Backs both the extension and the viewer. | see its README |
 | `srt-viewer/` | Single-file browser app, "SRT Study Tool v7". Dual-subtitle study surface with its own virtual playback clock. | working |
 | `srt-translator/` | Python CLI. Batch-translates a whole `.srt` via OpenAI / DeepL / Google / Azure / LibreTranslate, with a SQLite dedup cache. | working |

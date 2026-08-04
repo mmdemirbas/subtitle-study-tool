@@ -40,6 +40,17 @@
   const NEEDS_REDRAW = -2;
   const SETTINGS_KEY = "sso:settings";
 
+  /* Two subtitles at once, which is the whole point of studying with them: the
+   * language being learnt and the one already known, on screen together, timed
+   * against the same clock.
+   *
+   * Two rather than N. A third line has nowhere to go that does not cover the
+   * film, and every part of this - geometry, offsets, which one the keys move -
+   * gets an interface question the moment the count is open-ended. Two is what
+   * a learner uses and it keeps all of those answers implicit. */
+  const TRACK_COUNT = 2;
+  const PRIMARY = 0;
+
   // Used by both the settings clamp and the drag; up here so neither section
   // owns them.
   const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
@@ -50,17 +61,54 @@
    * the keys right of P produce ğ and ü, but their codes are still
    * BracketLeft and BracketRight - so the default bindings stay physically
    * where they are on every layout, and remain rebindable besides. */
-  const DEFAULT_SETTINGS = {
-    fontScale: 1,
-    background: 0.55,
+  /* Geometry is per track, appearance mostly is not.
+   *
+   * Position and width have to be per track - that is what side-by-side means -
+   * and so does size, because the language being learnt wants to be bigger than
+   * the one already known. The backdrop and the markup switches are properties
+   * of "how subtitles look here", not of one file, so they stay shared. */
+  const DEFAULT_TRACK = {
     // Centre of the cue box, as a percentage of the viewport. Percentages so a
     // position survives a resize or going fullscreen.
     posX: 50,
     posY: 92,
     // How wide the subtitle may get, again as a percentage of the viewport.
     widthPercent: 80,
-    // False until dragged. While false a cue's own {\an8} may still move it.
+    fontScale: 1,
+    // False until dragged. While false a cue's own {\an8} may still move it,
+    // and attaching a second subtitle may arrange both.
     placed: false,
+  };
+
+  /* Where the two go when a second one arrives and neither has been placed by
+   * hand. Left and right halves, on the same baseline, because the eye reads
+   * one line and then the other and should not have to move vertically to do
+   * it. The boxes are anchored by their bottom edges, so the baseline holds
+   * even when one language needs two lines and the other needs one.
+   *
+   * 44% wide at 26% and 74% leaves a margin at both screen edges and a gap of
+   * four percent down the middle. Half the screen each, exactly, would put a
+   * box against the edge of the frame and the two of them touching. */
+  const SIDE_BY_SIDE = [
+    { posX: 26, posY: 94, widthPercent: 44 },
+    { posX: 74, posY: 94, widthPercent: 44 },
+  ];
+
+  /* One above the other. The gap is the taller of the two boxes plus a little,
+   * so a two-line cue in the upper one does not reach the lower. */
+  const STACKED = [
+    { posX: 50, posY: 88, widthPercent: 80 },
+    { posX: 50, posY: 96, widthPercent: 80 },
+  ];
+
+  const DEFAULT_SETTINGS = {
+    background: 0.55,
+    tracks: [
+      { ...DEFAULT_TRACK },
+      // The known language sits slightly smaller: it is there to be glanced at,
+      // not read.
+      { ...DEFAULT_TRACK, fontScale: 0.88 },
+    ],
     // Let the box decide where lines break rather than the file. See rewrapRuns.
     rewrap: true,
     showSymbols: true,
@@ -73,6 +121,8 @@
       reset: "Backslash",
       togglePanel: "KeyP",
       toggleOverlay: "KeyO",
+      toggleStudy: "KeyS",
+      saveWord: "KeyD",
     },
     keysEnabled: true,
   };
@@ -107,12 +157,30 @@
   const AD_MIN_MS = 2000;
   const AD_MAX_MS = 15 * 60 * 1000;
 
-  const state = {
+  /* One track's worth of playback state. The offset is per track because it
+   * belongs to the file - two subtitles for the same film are routinely timed
+   * against different releases, so syncing one says nothing about the other. */
+  const newTrack = () => ({
     cues: [],
     offsetMs: 0,
+    activeIndex: -1,
+    label: "",
+    fileId: null,
+    language: "",
+    visible: true,
+  });
+
+  const state = {
+    tracks: Array.from({ length: TRACK_COUNT }, newTrack),
+    /* Which track the nudge keys move. There is one pair of bracket keys and
+     * now two things they could shift, and guessing from the pointer would make
+     * the answer depend on where the mouse happens to be resting. The panel
+     * names it instead, and every nudge says which track moved. */
+    keyTrack: PRIMARY,
     // Accumulated ad time, kept apart from offsetMs because it belongs to this
     // viewing session, not to the subtitle file. Folding it into the saved
-    // offset would corrupt the timing next time the film is opened.
+    // offset would corrupt the timing next time the film is opened. Shared:
+    // an ad interrupts the video, not one of the subtitle files.
     adDriftMs: 0,
     inAd: false,
     adStartedAtMs: 0,
@@ -122,18 +190,28 @@
     placing: false,
     visible: true,
     video: null,
-    activeIndex: -1,
-    label: "",
-    fileId: null,
-    settings: { ...DEFAULT_SETTINGS, keys: { ...DEFAULT_SETTINGS.keys } },
+    settings: cloneSettings(DEFAULT_SETTINGS),
   };
+
+  const attachedTracks = () => state.tracks.filter((track) => track.cues.length > 0);
+  const anyAttached = () => state.tracks.some((track) => track.cues.length > 0);
+
+  function cloneSettings(source) {
+    return {
+      ...source,
+      keys: { ...source.keys },
+      tracks: source.tracks.map((track) => ({ ...track })),
+    };
+  }
 
   const listeners = new Set();
   let host = null;      // in the page; geometry only
   let shadow = null;    // everything visible lives in here
   let overlaySheet = null;
-  let root = null;
-  let cueBox = null;
+  /* One view per track: a positioned root and the cue box inside it. Separate
+   * roots rather than one root with two children, because position and width
+   * are exactly what differs between the two and both live on the root. */
+  let views = [];
   let toast = null;
   let toastTimer = null;
   let handle = null;
@@ -266,24 +344,45 @@
     try {
       const stored = await chrome.storage.local.get(SETTINGS_KEY);
       const saved = stored[SETTINGS_KEY];
-      if (saved) {
-        state.settings = {
-          ...DEFAULT_SETTINGS,
-          ...saved,
-          keys: { ...DEFAULT_SETTINGS.keys, ...(saved.keys || {}) },
-        };
-        // Carry over a height set with the old slider, which measured up from
-        // the bottom rather than down from the top.
-        if (saved.bottomPercent != null && saved.posY == null) {
-          state.settings.posY = 100 - Number(saved.bottomPercent);
-          state.settings.placed = true;
-        }
-        delete state.settings.bottomPercent;
-      }
+      if (saved) state.settings = migrate(saved);
     } catch {
       // Defaults are fine.
     }
     applySettings();
+  }
+
+  /* Older versions stored one subtitle's geometry at the top level, because
+   * there was only ever one. Those values are the primary track's now - lifted
+   * rather than dropped, so a position someone settled on survives the upgrade
+   * instead of jumping back to the middle on the next film. */
+  function migrate(saved) {
+    const next = {
+      ...DEFAULT_SETTINGS,
+      ...saved,
+      keys: { ...DEFAULT_SETTINGS.keys, ...(saved.keys || {}) },
+      tracks: DEFAULT_SETTINGS.tracks.map((base, slot) => ({
+        ...base,
+        ...(saved.tracks?.[slot] || {}),
+      })),
+    };
+
+    if (!saved.tracks) {
+      const primary = next.tracks[PRIMARY];
+      for (const key of ["posX", "posY", "widthPercent", "fontScale", "placed"]) {
+        if (saved[key] != null) primary[key] = saved[key];
+      }
+      // A height set with the slider older still, which measured up from the
+      // bottom rather than down from the top.
+      if (saved.bottomPercent != null && saved.posY == null) {
+        primary.posY = 100 - Number(saved.bottomPercent);
+        primary.placed = true;
+      }
+    }
+
+    for (const key of ["posX", "posY", "widthPercent", "fontScale", "placed", "bottomPercent"]) {
+      delete next[key];
+    }
+    return next;
   }
 
   function updateSettings(patch) {
@@ -291,9 +390,13 @@
       ...state.settings,
       ...patch,
       keys: { ...state.settings.keys, ...(patch.keys || {}) },
+      tracks: state.settings.tracks.map((track) => ({ ...track })),
     };
+    if (patch.tracks) {
+      next.tracks = next.tracks.map((track, slot) => ({ ...track, ...(patch.tracks[slot] || {}) }));
+    }
 
-    /* Keep the box on screen horizontally, here rather than in the drag alone.
+    /* Keep each box on screen horizontally, here rather than in the drag alone.
      * A drag can only measure the line in front of it, so a position set
      * against a short line let the next long one hang off the edge - 101px of
      * it, on a 360px viewport - and widening the box afterwards did the same
@@ -301,8 +404,10 @@
      * the box whatever the line, so half of it is as close as the centre may
      * come to either edge. Vertically the height is text-dependent and has no
      * such bound, so that clamp stays with the drag, which can measure it. */
-    const half = next.widthPercent / 2;
-    next.posX = round1(clamp(next.posX, half, 100 - half));
+    for (const track of next.tracks) {
+      const half = track.widthPercent / 2;
+      track.posX = round1(clamp(track.posX, half, 100 - half));
+    }
 
     state.settings = next;
     applySettings();
@@ -310,24 +415,49 @@
     notify();
   }
 
+  /** Patch one track's geometry, leaving the other alone. */
+  function updateTrackSettings(slot, patch) {
+    const tracks = [];
+    tracks[slot] = patch;
+    updateSettings({ tracks });
+  }
+
   function resetSettings() {
-    updateSettings({ ...DEFAULT_SETTINGS, keys: { ...DEFAULT_SETTINGS.keys } });
+    updateSettings(cloneSettings(DEFAULT_SETTINGS));
+  }
+
+  /* Put both boxes somewhere sensible in one action.
+   *
+   * An arrangement is a button, not a mode. Position stays something you set by
+   * dragging, and a stored "layout mode" would have to be either overridden by
+   * the next drag - in which case it is not a mode - or defended against it, in
+   * which case dragging stops working. So this writes the two geometries once
+   * and then gets out of the way. */
+  function arrange(name) {
+    const preset = name === "stacked" ? STACKED : SIDE_BY_SIDE;
+    updateSettings({ tracks: preset.map((geometry) => ({ ...geometry, placed: true })) });
   }
 
   function applySettings() {
-    if (!root) return;
-    const { fontScale, background, dimNonSpeech, posX, posY, placed, widthPercent } =
-      state.settings;
-    root.style.setProperty("--sso-font-size", `${2.6 * fontScale}vh`);
-    root.style.setProperty("--sso-bg", `rgba(0, 0, 0, ${background})`);
-    root.style.setProperty("--sso-x", `${posX}%`);
-    root.style.setProperty("--sso-y", `${posY}%`);
-    root.style.setProperty("--sso-width", `${widthPercent}vw`);
-    root.dataset.dim = dimNonSpeech ? "true" : "false";
-    // Once placed by hand, a cue's own {\an8} no longer moves it.
-    root.dataset.placed = placed ? "manual" : "auto";
-    // Symbols are part of the rendered content, so a change needs a redraw.
-    state.activeIndex = NEEDS_REDRAW;
+    if (views.length === 0) return;
+    const { background, dimNonSpeech } = state.settings;
+
+    views.forEach((view, slot) => {
+      const track = state.settings.tracks[slot];
+      const { root } = view;
+      root.style.setProperty("--sso-font-size", `${2.6 * track.fontScale}vh`);
+      root.style.setProperty("--sso-bg", `rgba(0, 0, 0, ${background})`);
+      root.style.setProperty("--sso-x", `${track.posX}%`);
+      root.style.setProperty("--sso-y", `${track.posY}%`);
+      root.style.setProperty("--sso-width", `${track.widthPercent}vw`);
+      root.dataset.dim = dimNonSpeech ? "true" : "false";
+      // Once placed by hand, a cue's own {\an8} no longer moves it.
+      root.dataset.placed = track.placed ? "manual" : "auto";
+    });
+
+    // Symbols and wrapping are part of the rendered content, so a change needs
+    // a redraw of whatever is currently on screen.
+    for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
   }
 
   // --- dragging the subtitle ------------------------------------------------
@@ -349,30 +479,41 @@
   /* Either vertical edge of the cue resizes it; the middle moves it. On a box
    * narrower than four edge-widths the two zones would meet in the middle and
    * there would be nowhere left to grab, so a short cue is all middle. */
-  function edgeAt(clientX) {
-    const box = cueBox.getBoundingClientRect();
+  function edgeAt(slot, clientX) {
+    const box = views[slot].cueBox.getBoundingClientRect();
     if (box.width < RESIZE_EDGE_PX * 4) return 0;
     if (clientX - box.left <= RESIZE_EDGE_PX) return -1;
     if (box.right - clientX <= RESIZE_EDGE_PX) return 1;
     return 0;
   }
 
-  function onCuePointerDown(event) {
+  function onCuePointerDown(slot, event) {
     if (event.button !== 0) return;
+
+    /* Study mode wants two gestures that would otherwise be the box's: shift
+     * and drag selects a phrase, and a press on a word ends in a lookup rather
+     * than in the click being handed to the player. It gets first refusal on
+     * the press, and everything it declines behaves exactly as it did before
+     * study mode existed. */
+    if (window.__ssoStudy?.claimPointerDown?.(slot, event)) return;
+
     drag = {
+      slot,
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       moved: false,
-      sizing: edgeAt(event.clientX) !== 0,
+      sizing: edgeAt(slot, event.clientX) !== 0,
     };
-    cueBox.setPointerCapture(event.pointerId);
+    views[slot].cueBox.setPointerCapture(event.pointerId);
   }
 
-  function onCuePointerMove(event) {
+  function onCuePointerMove(slot, event) {
     if (!drag || event.pointerId !== drag.pointerId) {
       // Not dragging: say which of the two things a press here would do.
-      if (!drag) cueBox.style.cursor = edgeAt(event.clientX) ? "ew-resize" : "";
+      if (!drag) {
+        views[slot].cueBox.style.cursor = edgeAt(slot, event.clientX) ? "ew-resize" : "";
+      }
       return;
     }
 
@@ -387,18 +528,22 @@
         Math.abs(event.clientY - drag.startY) > DRAG_THRESHOLD_PX;
       if (!far) return;
       drag.moved = true;
-      root.dataset.dragging = "true";
+      views[drag.slot].root.dataset.dragging = "true";
     }
 
-    // Vertical clamp only, so the subtitle cannot be dragged off the bottom or
-    // top and lost. The horizontal one belongs to updateSettings, which knows
-    // the width the box is allowed rather than the width of this one line.
-    const box = cueBox.getBoundingClientRect();
-    const halfH = (box.height / 2 / window.innerHeight) * 100;
+    /* Vertical clamp only, so the subtitle cannot be dragged off the bottom or
+     * top and lost. The horizontal one belongs to updateSettings, which knows
+     * the width the box is allowed rather than the width of this one line.
+     *
+     * posY is the box's bottom edge, so it may reach 100 but never go below its
+     * own height - at which point the top of the box is at the top of the
+     * screen. */
+    const box = views[drag.slot].cueBox.getBoundingClientRect();
+    const height = (box.height / window.innerHeight) * 100;
     const x = (event.clientX / window.innerWidth) * 100;
-    const y = clamp((event.clientY / window.innerHeight) * 100, halfH, 100 - halfH);
+    const y = clamp((event.clientY / window.innerHeight) * 100, height, 100);
 
-    updateSettings({ posX: round1(x), posY: round1(y), placed: true });
+    updateTrackSettings(drag.slot, { posX: round1(x), posY: round1(y), placed: true });
   }
 
   /* The box grows about its centre, so the width is twice the distance from
@@ -409,33 +554,43 @@
     if (!drag.moved) {
       if (Math.abs(event.clientX - drag.startX) <= DRAG_THRESHOLD_PX) return;
       drag.moved = true;
-      root.dataset.sizing = "true";
+      views[drag.slot].root.dataset.sizing = "true";
     }
-    const centre = (state.settings.posX / 100) * window.innerWidth;
+    const centre = (state.settings.tracks[drag.slot].posX / 100) * window.innerWidth;
     const half = Math.abs(event.clientX - centre);
     const percent = ((half * 2) / window.innerWidth) * 100;
-    updateSettings({
+    updateTrackSettings(drag.slot, {
       widthPercent: round1(clamp(percent, MIN_WIDTH_PERCENT, MAX_WIDTH_PERCENT)),
+      placed: true,
     });
   }
 
+  // No slot argument: the press decided which box is being dragged, and the
+  // pointer is captured, so the release belongs to that box whatever it is over.
   function onCuePointerUp(event) {
     if (!drag || event.pointerId !== drag.pointerId) return;
     const { moved, startX, startY } = drag;
+    const view = views[drag.slot];
     drag = null;
-    cueBox.releasePointerCapture?.(event.pointerId);
-    root.dataset.dragging = "false";
-    root.dataset.sizing = "false";
+    view.cueBox.releasePointerCapture?.(event.pointerId);
+    view.root.dataset.dragging = "false";
+    view.root.dataset.sizing = "false";
 
     if (!moved) forwardClickBeneath(startX, startY, event);
   }
 
+  /* Both boxes have to be transparent to the hit test, not just the one that
+   * was pressed: with two subtitles side by side the other is often what sits
+   * under the pointer, and leaving it hittable would forward the click to a
+   * subtitle rather than to the film. */
   function forwardClickBeneath(x, y, source) {
-    const previous = cueBox.style.pointerEvents;
-    cueBox.style.pointerEvents = "none";
+    const previous = views.map((view) => view.cueBox.style.pointerEvents);
+    for (const view of views) view.cueBox.style.pointerEvents = "none";
     const target = document.elementFromPoint(x, y);
-    cueBox.style.pointerEvents = previous;
-    if (!target || target === cueBox) return;
+    views.forEach((view, slot) => {
+      view.cueBox.style.pointerEvents = previous[slot];
+    });
+    if (!target || views.some((view) => view.cueBox === target)) return;
 
     for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
       target.dispatchEvent(
@@ -486,25 +641,33 @@
     shadow = host.attachShadow({ mode: "open" });
     if (overlaySheet) shadow.adoptedStyleSheets = [overlaySheet];
 
-    root = document.createElement("div");
-    root.className = "sso-root";
-    cueBox = document.createElement("div");
-    cueBox.className = "sso-cue";
-    cueBox.title = "Drag to move the subtitles";
-    cueBox.addEventListener("pointerdown", onCuePointerDown);
-    cueBox.addEventListener("pointermove", onCuePointerMove);
-    cueBox.addEventListener("pointerup", onCuePointerUp);
-    cueBox.addEventListener("pointercancel", onCuePointerUp);
-    root.appendChild(cueBox);
+    views = Array.from({ length: TRACK_COUNT }, (_, slot) => buildView(slot));
 
     toast = document.createElement("div");
     toast.className = "sso-toast";
 
     handle = buildHandle();
-    shadow.append(root, toast, handle);
+    shadow.append(...views.map((view) => view.root), toast, handle);
 
     applySettings();
     attachToCorrectParent();
+  }
+
+  function buildView(slot) {
+    const root = document.createElement("div");
+    root.className = "sso-root";
+    root.dataset.slot = String(slot);
+
+    const cueBox = document.createElement("div");
+    cueBox.className = "sso-cue";
+    cueBox.title = "Drag to move the subtitles";
+    cueBox.addEventListener("pointerdown", (event) => onCuePointerDown(slot, event));
+    cueBox.addEventListener("pointermove", (event) => onCuePointerMove(slot, event));
+    cueBox.addEventListener("pointerup", onCuePointerUp);
+    cueBox.addEventListener("pointercancel", onCuePointerUp);
+    root.appendChild(cueBox);
+
+    return { root, cueBox };
   }
 
   /* Constructable stylesheet rather than a <style> element: adopted sheets are
@@ -581,6 +744,7 @@
     if (!parent || !host) return;
     if (host.parentElement !== parent || raise) parent.appendChild(host);
     if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(parent);
+    if (window.__ssoStudy?.reparent) window.__ssoStudy.reparent(parent);
   }
 
   function showToast(message) {
@@ -595,8 +759,7 @@
 
   // --- cue lookup -----------------------------------------------------------
 
-  function findCueIndex(timeMs) {
-    const cues = state.cues;
+  function findCueIndex(cues, timeMs) {
     let low = 0;
     let high = cues.length - 1;
     while (low <= high) {
@@ -614,36 +777,39 @@
       state.video = pickVideo();
       if (!state.video) return;
     }
-    if (!state.visible || state.cues.length === 0) {
+    if (!state.visible || !anyAttached()) {
       // "Nothing is showing", not "redraw" - otherwise this clears the text on
       // every tick forever.
-      if (state.activeIndex !== -1) {
-        state.activeIndex = -1;
-        if (cueBox) cueBox.textContent = "";
-      }
+      state.tracks.forEach((track, slot) => {
+        if (track.activeIndex === -1) return;
+        track.activeIndex = -1;
+        if (views[slot]) views[slot].cueBox.textContent = "";
+      });
       return;
     }
     ensureOverlay();
     pollAdState();
 
-    if (state.inAd) {
-      // Film subtitles over an advert are worse than none.
-      if (state.activeIndex !== -1) {
-        state.activeIndex = -1;
-        renderCue(null);
+    state.tracks.forEach((track, slot) => {
+      if (state.inAd || !track.visible || track.cues.length === 0) {
+        // Film subtitles over an advert are worse than none.
+        if (track.activeIndex !== -1) {
+          track.activeIndex = -1;
+          renderCue(slot, null);
+        }
+        return;
       }
-      return;
-    }
 
-    const index = findCueIndex(filmTimeMs());
-    if (index === state.activeIndex) return;
-    state.activeIndex = index;
-    renderCue(index === -1 ? null : state.cues[index]);
+      const index = findCueIndex(track.cues, filmTimeMs(track));
+      if (index === track.activeIndex) return;
+      track.activeIndex = index;
+      renderCue(slot, index === -1 ? null : track.cues[index]);
+    });
   }
 
-  /** Stream time, less the subtitle's own offset and everything that was an ad. */
-  function filmTimeMs() {
-    return state.video.currentTime * 1000 - state.offsetMs - state.adDriftMs;
+  /** Stream time, less this subtitle's own offset and everything that was an ad. */
+  function filmTimeMs(track) {
+    return state.video.currentTime * 1000 - track.offsetMs - state.adDriftMs;
   }
 
   let lastAdPoll = 0;
@@ -673,7 +839,7 @@
         state.adDriftMs += elapsed;
         showToast(`Ad break over — subtitles shifted ${(elapsed / 1000).toFixed(0)}s`);
       }
-      state.activeIndex = NEEDS_REDRAW;
+      for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
     }
     notify();
   }
@@ -733,11 +899,15 @@
     });
   }
 
-  function renderCue(cue) {
+  function renderCue(slot, cue) {
+    const { root, cueBox } = views[slot];
     cueBox.replaceChildren();
     root.dataset.vertical = cue?.vertical || "bottom";
     if (!cue) {
-      if (state.placing) cueBox.textContent = "Drag me where you want subtitles";
+      if (state.placing) cueBox.textContent = `Drag me — subtitle ${slot + 1}`;
+      // Tell study mode the line ended, so a lookup does not outlive the line
+      // that raised it.
+      window.__ssoStudy?.onCue?.(slot, null, cueBox);
       return;
     }
 
@@ -745,27 +915,32 @@
 
     if (!cue.runs) {
       cueBox.textContent = rewrap ? rewrapText(cue.text) : cue.text;
-      return;
-    }
+    } else {
+      for (const run of rewrap ? rewrapRuns(cue.runs) : cue.runs) {
+        const span = document.createElement("span");
+        span.className = "sso-run";
+        if (run.kind) span.classList.add(`sso-${run.kind}`);
+        for (const style of run.styles || []) span.classList.add(`sso-${style}`);
+        // Colour is validated against an allowlist daemon-side, so it can only
+        // ever be a hex literal or a known CSS colour name.
+        if (run.color) span.style.color = run.color;
 
-    for (const run of rewrap ? rewrapRuns(cue.runs) : cue.runs) {
-      const span = document.createElement("span");
-      span.className = "sso-run";
-      if (run.kind) span.classList.add(`sso-${run.kind}`);
-      for (const style of run.styles || []) span.classList.add(`sso-${style}`);
-      // Colour is validated against an allowlist daemon-side, so it can only
-      // ever be a hex literal or a known CSS colour name.
-      if (run.color) span.style.color = run.color;
-
-      if (run.symbol && state.settings.showSymbols) {
-        const symbol = document.createElement("span");
-        symbol.className = "sso-symbol";
-        symbol.textContent = run.symbol;
-        span.append(symbol);
+        if (run.symbol && state.settings.showSymbols) {
+          const symbol = document.createElement("span");
+          symbol.className = "sso-symbol";
+          symbol.textContent = run.symbol;
+          span.append(symbol);
+        }
+        span.append(document.createTextNode(run.text));
+        cueBox.append(span);
       }
-      span.append(document.createTextNode(run.text));
-      cueBox.append(span);
     }
+
+    /* Study mode gets the finished box rather than a hook inside the loop
+     * above. Splitting the line into words is its business, it only happens
+     * while study mode is on, and doing it here would put a branch in the
+     * middle of the one function that runs for every line of every film. */
+    window.__ssoStudy?.onCue?.(slot, cue, cueBox);
   }
 
   function startTicking() {
@@ -786,20 +961,25 @@
     }
   }
 
-  function saveOffset() {
-    if (state.fileId == null) return;
-    chrome.storage.local.set({ [offsetKey(state.fileId)]: state.offsetMs }).catch(() => {});
+  function saveOffset(track) {
+    if (track.fileId == null) return;
+    chrome.storage.local.set({ [offsetKey(track.fileId)]: track.offsetMs }).catch(() => {});
   }
 
-  function setOffset(ms, { quiet = false } = {}) {
-    state.offsetMs = Math.round(ms);
-    state.activeIndex = NEEDS_REDRAW; // force a re-render at the new offset
-    saveOffset();
+  function setOffset(ms, { quiet = false, slot = state.keyTrack } = {}) {
+    const track = state.tracks[slot];
+    track.offsetMs = Math.round(ms);
+    track.activeIndex = NEEDS_REDRAW; // force a re-render at the new offset
+    saveOffset(track);
     notify();
-    if (!quiet) showToast(`Subtitle offset ${formatOffset(state.offsetMs)}`);
+    if (quiet) return;
+    // Name the track only when there are two of them to confuse.
+    const which = attachedTracks().length > 1 ? `Subtitle ${slot + 1}` : "Subtitle";
+    showToast(`${which} offset ${formatOffset(track.offsetMs)}`);
   }
 
-  const nudge = (deltaMs) => setOffset(state.offsetMs + deltaMs);
+  const nudge = (deltaMs, { slot = state.keyTrack } = {}) =>
+    setOffset(state.tracks[slot].offsetMs + deltaMs, { slot });
 
   function formatOffset(ms) {
     const seconds = (ms / 1000).toFixed(2).replace(/\.?0+$/, "");
@@ -833,7 +1013,7 @@
 
     if (event.code === keys.togglePanel) {
       window.__ssoPanel?.toggle();
-    } else if (state.cues.length === 0) {
+    } else if (!anyAttached()) {
       handled = false; // the rest only make sense with something attached
     } else if (event.code === keys.earlier) {
       nudge(-step);
@@ -847,6 +1027,10 @@
     } else if (event.code === keys.toggleOverlay) {
       setVisible(!state.visible);
       showToast(state.visible ? "Subtitles shown" : "Subtitles hidden");
+    } else if (event.code === keys.toggleStudy) {
+      handled = Boolean(window.__ssoStudy?.toggle());
+    } else if (event.code === keys.saveWord) {
+      handled = Boolean(window.__ssoStudy?.saveTop());
     } else {
       handled = false;
     }
@@ -859,19 +1043,34 @@
 
   // --- attach / visibility --------------------------------------------------
 
-  async function attach({ cues, label, fileId }) {
-    state.cues = Array.isArray(cues) ? cues : [];
-    state.label = label || "";
-    state.fileId = fileId ?? null;
-    state.offsetMs = await loadOffset(state.fileId);
+  async function attach({ cues, label, fileId, language, slot = PRIMARY }) {
+    const index = clamp(Number(slot) || 0, 0, TRACK_COUNT - 1);
+    const track = state.tracks[index];
+    const wasAlone = attachedTracks().length <= 1;
+
+    track.cues = Array.isArray(cues) ? cues : [];
+    track.label = label || "";
+    track.fileId = fileId ?? null;
+    track.language = language || "";
+    track.offsetMs = await loadOffset(track.fileId);
+    track.activeIndex = NEEDS_REDRAW;
+    track.visible = true;
     state.adDriftMs = 0;
     state.inAd = false;
-    state.activeIndex = NEEDS_REDRAW;
     state.visible = true;
     state.video = pickVideo();
 
     ensureOverlay();
-    root.hidden = false;
+    syncRootVisibility();
+
+    /* A second subtitle on top of the first is unreadable, so the moment there
+     * are two, put them side by side. Only while neither has been placed by
+     * hand: after that the arrangement is the user's and moving it would be
+     * this deciding it knows better. */
+    if (wasAlone && attachedTracks().length > 1 && !state.settings.tracks.some((t) => t.placed)) {
+      arrange("side");
+    }
+
     startTicking();
     notify();
     // Show the handle on attach, so it is discoverable without knowing that
@@ -879,44 +1078,85 @@
     revealHandle();
 
     showToast(
-      state.cues.length > 0
-        ? `Subtitles on - ${state.cues.length} lines${state.label ? ` · ${state.label}` : ""}`
+      track.cues.length > 0
+        ? `Subtitle ${index + 1} on - ${track.cues.length} lines${track.label ? ` · ${track.label}` : ""}`
         : "That subtitle had no readable lines",
     );
-    return { ok: true, cueCount: state.cues.length };
+    return { ok: true, cueCount: track.cues.length, slot: index };
   }
 
-  function detach() {
-    state.cues = [];
-    state.label = "";
-    state.fileId = null;
-    state.activeIndex = NEEDS_REDRAW;
-    if (cueBox) cueBox.textContent = "";
+  /** Drop one track, or every track when no slot is named. */
+  function detach(slot) {
+    const slots = slot == null ? state.tracks.map((_, index) => index) : [Number(slot)];
+    for (const index of slots) {
+      const track = state.tracks[index];
+      if (!track) continue;
+      Object.assign(track, newTrack());
+      track.activeIndex = NEEDS_REDRAW;
+      if (views[index]) views[index].cueBox.textContent = "";
+    }
     notify();
     return { ok: true };
   }
 
-  function setVisible(visible) {
-    state.visible = visible;
-    if (root) root.hidden = !visible;
-    if (!visible && cueBox) cueBox.textContent = "";
-    state.activeIndex = NEEDS_REDRAW;
+  function setVisible(visible, { slot = null } = {}) {
+    if (slot == null) {
+      state.visible = visible;
+    } else {
+      state.tracks[slot].visible = visible;
+      // Showing one track while everything is hidden has to turn the master
+      // switch back on, or the click does nothing and reads as broken.
+      if (visible) state.visible = true;
+    }
+    syncRootVisibility();
     notify();
-    return { ok: true, visible };
+    return { ok: true, visible: state.visible };
   }
 
+  /* A track is on screen when both switches allow it: the one for all subtitles
+   * and the one for that subtitle. Kept in one place because attach and
+   * setVisible both change an input to it, and having each work out the answer
+   * separately is how a track that was hidden comes back on the next attach. */
+  function syncRootVisibility() {
+    for (const [index, view] of views.entries()) {
+      const on = state.visible && state.tracks[index].visible;
+      view.root.hidden = !on;
+      if (!on) view.cueBox.textContent = "";
+      state.tracks[index].activeIndex = NEEDS_REDRAW;
+    }
+  }
+
+  /* Status is the one shape three other files read - the panel, the popup and
+   * the service worker. The per-track detail is in `tracks`; the flat fields
+   * above it describe the primary, or the only, subtitle, so a caller that
+   * only wants to say "attached, 1183 lines" does not have to know there can
+   * be two. */
   function status() {
+    const attached = attachedTracks();
+    const lead = attached[0] || state.tracks[PRIMARY];
     return {
       hasVideo: hasPlayableVideo(),
-      attached: state.cues.length > 0,
-      cueCount: state.cues.length,
-      offsetMs: state.offsetMs,
+      attached: attached.length > 0,
+      trackCount: attached.length,
+      cueCount: lead.cues.length,
+      offsetMs: lead.offsetMs,
+      label: lead.label,
+      fileId: lead.fileId,
+      tracks: state.tracks.map((track, slot) => ({
+        slot,
+        attached: track.cues.length > 0,
+        cueCount: track.cues.length,
+        offsetMs: track.offsetMs,
+        label: track.label,
+        fileId: track.fileId,
+        language: track.language,
+        visible: track.visible,
+      })),
+      keyTrack: state.keyTrack,
       placing: state.placing,
       adDriftMs: state.adDriftMs,
       inAd: state.inAd,
       visible: state.visible,
-      label: state.label,
-      fileId: state.fileId,
       settings: state.settings,
       currentTime: state.video?.currentTime ?? null,
       duration: state.video?.duration ?? null,
@@ -964,41 +1204,45 @@
         return true;
 
       case "sso:detach":
-        sendResponse(detach());
+        sendResponse(detach(message.slot));
         return false;
 
       case "sso:setVisible":
-        sendResponse(setVisible(Boolean(message.visible)));
+        sendResponse(setVisible(Boolean(message.visible), { slot: message.slot ?? null }));
         return false;
 
       case "sso:toggleVisible":
-        if (state.cues.length === 0) {
+        if (!anyAttached()) {
           sendResponse({ ok: false, reason: "nothing attached" });
           return false;
         }
         sendResponse(setVisible(!state.visible));
         return false;
 
-      case "sso:nudge":
-        if (state.cues.length === 0) {
+      case "sso:nudge": {
+        if (!anyAttached()) {
           sendResponse({ ok: false, reason: "nothing attached" });
           return false;
         }
-        nudge(Number(message.deltaMs) || 0);
-        sendResponse({ ok: true, offsetMs: state.offsetMs });
+        const slot = message.slot ?? state.keyTrack;
+        nudge(Number(message.deltaMs) || 0, { slot });
+        sendResponse({ ok: true, offsetMs: state.tracks[slot].offsetMs });
         return false;
+      }
 
       case "sso:clearAdDrift":
         state.adDriftMs = 0;
-        state.activeIndex = NEEDS_REDRAW;
+        for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
         notify();
         sendResponse({ ok: true });
         return false;
 
-      case "sso:setOffset":
-        setOffset(Number(message.offsetMs) || 0, { quiet: true });
-        sendResponse({ ok: true, offsetMs: state.offsetMs });
+      case "sso:setOffset": {
+        const slot = message.slot ?? state.keyTrack;
+        setOffset(Number(message.offsetMs) || 0, { quiet: true, slot });
+        sendResponse({ ok: true, offsetMs: state.tracks[slot].offsetMs });
         return false;
+      }
 
       case "sso:togglePanel":
         window.__ssoPanel?.toggle();
@@ -1028,24 +1272,64 @@
     formatOffset,
     setPlacing(on) {
       state.placing = Boolean(on);
-      state.activeIndex = NEEDS_REDRAW;
-      if (root) root.dataset.placing = state.placing ? "true" : "false";
+      for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
+      for (const view of views) view.root.dataset.placing = state.placing ? "true" : "false";
       notify();
     },
     resetPosition() {
-      updateSettings({ posX: 50, posY: 92, placed: false });
+      updateSettings({
+        tracks: DEFAULT_SETTINGS.tracks.map((track) => ({ ...track })),
+      });
+    },
+    arrange,
+    setKeyTrack(slot) {
+      state.keyTrack = clamp(Number(slot) || 0, 0, TRACK_COUNT - 1);
+      notify();
     },
     clearAdDrift() {
       state.adDriftMs = 0;
-      state.activeIndex = NEEDS_REDRAW;
+      for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
       notify();
     },
     pageInfo,
     hasPlayableVideo,
     updateSettings,
+    updateTrackSettings,
     resetSettings,
     showToast,
+    /* Study mode needs to read the line under a word to save it with its
+     * sentence, and the paired line in the other language, which is the whole
+     * reason a word is worth saving at all. */
+    cueAt(slot) {
+      const track = state.tracks[slot];
+      const index = track.activeIndex;
+      return index >= 0 ? track.cues[index] : null;
+    },
+    trackInfo(slot) {
+      const track = state.tracks[slot];
+      return { label: track.label, fileId: track.fileId, language: track.language };
+    },
+    filmTimeMs() {
+      return state.video ? state.video.currentTime * 1000 - state.adDriftMs : null;
+    },
+    pauseVideo() {
+      state.video?.pause();
+    },
+    /* Turning study mode on has to affect the line already on screen, not just
+     * the next one - a subtitle can sit there for five seconds and a feature
+     * that appears to do nothing for five seconds reads as broken. */
+    redrawCues() {
+      for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
+    },
+    overlayRoots() {
+      return views.map((view) => view.root);
+    },
+    /* Study settings live in study.js, so a change there is invisible to the
+     * panel's subscription. This pushes one status round so the panel redraws
+     * against them. */
+    notifyChanged: notify,
     defaults: DEFAULT_SETTINGS,
+    trackCount: TRACK_COUNT,
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -1099,8 +1383,10 @@
     host?.remove();
     host = null;
     shadow = null;
+    views = [];
     listeners.clear();
     window.__ssoPanelTeardown?.();
+    window.__ssoStudyTeardown?.();
     delete window.__ssoApi;
     delete window.__ssoTeardown;
   };

@@ -74,6 +74,35 @@
               };
             }
             if (msg.op === "fetch") return { cues: CUES };
+
+            /* Study mode's three questions. Stubbed rather than reaching the
+             * real tables and the real dictionary, because what is under test
+             * here is what the overlay does with the answers - which word gets
+             * marked, what lands in the rail, what a save keeps. The tables
+             * themselves are generated data with their own generator. */
+            if (msg.op === "rank") {
+              const ranks = {};
+              for (const word of msg.args.words) {
+                ranks[word] = RANKS[word] === undefined ? null : RANKS[word];
+              }
+              return { ranks };
+            }
+            if (msg.op === "lookup") {
+              lookupCalls.push(msg.args.query);
+              return {
+                query: msg.args.query,
+                definitions: [{ partOfSpeech: "verb", sense: `to ${msg.args.query}, in a way` }],
+                phonetic: "/stub/",
+                source: "harness",
+              };
+            }
+            if (msg.op === "deckSave") {
+              deckSaves.push(msg.args.entry);
+              return { added: true, entry: msg.args.entry, size: deckSaves.length };
+            }
+            if (msg.op === "deckTerms") {
+              return { terms: deckSaves.map((entry) => `${entry.language}:${entry.term}`) };
+            }
             return {};
           },
         },
@@ -82,6 +111,20 @@
           set: async (o) => Object.assign(store, o),
         } },
       };
+
+      /* Ranks for the words in the cues below. "frankly" is deliberately far
+       * down the list and "about" near the top, so one line contains both a
+       * word that must be marked and several that must not - which is the
+       * actual claim, rather than "something got underlined". */
+      const RANKS = {
+        i: 5, have: 60, no: 30, idea: 900, what: 12, you: 0, are: 25,
+        talking: 700, about: 90, and: 8, do: 40, not: 15, care: 400,
+        frankly: 14200, get: 55, down: 120, fine: 500, did: 45, see: 70,
+        that: 5, saw: 300, nothing: 250, at: 20, all: 35, ormon: null,
+        sighs: 8800,
+      };
+      const lookupCalls = [];
+      const deckSaves = [];
 
       // Cue payloads in the exact shape the daemon emits.
       const CUES = [
@@ -120,6 +163,7 @@
 
     <script src="../src/content.js"></script>
     <script src="../src/panel.js"></script>
+    <script src="../src/study.js"></script>
 
     <script>
       // --- assertions -----------------------------------------------------
@@ -365,7 +409,7 @@
       });
 
       check("the dragged position is remembered in settings", () => {
-        const s = window.__ssoApi.status().settings;
+        const s = window.__ssoApi.status().settings.tracks[0];
         if (!s.placed) throw new Error("placed flag not set");
         if (s.posY > 60) throw new Error(`posY still near the bottom: ${s.posY}`);
       });
@@ -395,7 +439,7 @@
       check("reset puts the subtitle back at the bottom centre", async () => {
         window.__ssoApi.resetPosition();
         await sleep(120);
-        const s = window.__ssoApi.status().settings;
+        const s = window.__ssoApi.status().settings.tracks[0];
         if (s.posX !== 50 || s.posY !== 92 || s.placed)
           throw new Error(`reset left it at ${s.posX},${s.posY} placed=${s.placed}`);
       });
@@ -429,7 +473,8 @@
       const cueBox = () => shadowOf().querySelector(".sso-cue").getBoundingClientRect();
 
       check("a line break made for a 4:3 television does not survive", async () => {
-        window.__ssoApi.updateSettings({ rewrap: true, widthPercent: 90 });
+        window.__ssoApi.updateSettings({ rewrap: true });
+        window.__ssoApi.updateTrackSettings(0, { widthPercent: 90 });
         await showLongCue();
         const text = shadowOf().querySelector(".sso-cue").textContent;
         if (text.includes("\n"))
@@ -452,9 +497,20 @@
       });
 
       check("the box may use the whole width it is given", async () => {
-        window.__ssoApi.updateSettings({ widthPercent: 60 });
+        /* The limit is derived from what the line actually needs rather than
+         * picked as a percentage. A fixed 60% only forces a wrap while the
+         * window is narrow enough for this sentence to overflow it - at 1440px
+         * it no longer did, the box correctly hugged its one line, and the test
+         * failed for a reason that had nothing to do with what it checks. */
+        window.__ssoApi.updateTrackSettings(0, { widthPercent: 100 });
         await showLongCue();
-        const allowed = window.innerWidth * 0.6;
+        const natural = cueBox().width;
+
+        const percent = Math.round(((natural * 0.7) / window.innerWidth) * 100);
+        window.__ssoApi.updateTrackSettings(0, { widthPercent: percent });
+        await sleep(140);
+
+        const allowed = window.innerWidth * (percent / 100);
         const box = cueBox();
         // It used to be held to 92% of the width it had just asked for, so a
         // long line could never reach its limit and wrapped a line early.
@@ -465,10 +521,10 @@
       });
 
       check("narrowing the width pushes the line onto more rows", async () => {
-        window.__ssoApi.updateSettings({ widthPercent: 90 });
+        window.__ssoApi.updateTrackSettings(0, { widthPercent: 90 });
         await showLongCue();
         const wide = cueBox();
-        window.__ssoApi.updateSettings({ widthPercent: 30 });
+        window.__ssoApi.updateTrackSettings(0, { widthPercent: 30 });
         await sleep(140);
         const narrow = cueBox();
         if (narrow.width >= wide.width)
@@ -482,7 +538,8 @@
        * of it; the limit has to hold for the widest the box may get. */
       check("a long line stays on screen after placing against the edge", async () => {
         window.__ssoApi.resetPosition();
-        window.__ssoApi.updateSettings({ widthPercent: 80, rewrap: true });
+        window.__ssoApi.updateSettings({ rewrap: true });
+        window.__ssoApi.updateTrackSettings(0, { widthPercent: 80 });
         await showSpeakerCue();
         const short = cueBox();
         await dragCue(short.left + short.width / 2, short.top + 6, 4, short.top + 6);
@@ -495,12 +552,12 @@
 
       check("widening the box cannot push it off the screen", async () => {
         window.__ssoApi.resetPosition();
-        window.__ssoApi.updateSettings({ widthPercent: 30 });
+        window.__ssoApi.updateTrackSettings(0, { widthPercent: 30 });
         await showLongCue();
         const box = cueBox();
         await dragCue(box.left + box.width / 2, box.top + 6, 4, box.top + 6);
         // Legal at 30% wide; the box is now told to be much wider.
-        window.__ssoApi.updateSettings({ widthPercent: 90 });
+        window.__ssoApi.updateTrackSettings(0, { widthPercent: 90 });
         await sleep(160);
         const after = cueBox();
         if (after.left < -1)
@@ -509,28 +566,28 @@
 
       check("dragging an edge resizes the subtitle", async () => {
         window.__ssoApi.resetPosition();
-        window.__ssoApi.updateSettings({ widthPercent: 80 });
+        window.__ssoApi.updateTrackSettings(0, { widthPercent: 80 });
         await showLongCue();
         const box = cueBox();
         const centre = window.innerWidth / 2;
         // Take hold of the right edge and pull it in to a quarter-width from
         // the centre, which is a half-width box.
         await dragCue(box.right - 4, box.top + 8, centre + window.innerWidth * 0.25, box.top + 8);
-        const width = window.__ssoApi.status().settings.widthPercent;
+        const width = window.__ssoApi.status().settings.tracks[0].widthPercent;
         if (Math.abs(width - 50) > 3)
           throw new Error(`expected about 50%, got ${width}%`);
       });
 
       check("dragging the middle still moves rather than resizes", async () => {
-        const before = window.__ssoApi.status().settings.widthPercent;
+        const before = window.__ssoApi.status().settings.tracks[0].widthPercent;
         const box = cueBox();
         await dragCue(box.left + box.width / 2, box.top + 8, 320, 240);
-        const after = window.__ssoApi.status().settings;
+        const after = window.__ssoApi.status().settings.tracks[0];
         if (after.widthPercent !== before)
           throw new Error(`the width changed while moving: ${before}% -> ${after.widthPercent}%`);
         if (!after.placed) throw new Error("the drag did not move it");
         window.__ssoApi.resetPosition();
-        window.__ssoApi.updateSettings({ widthPercent: 80 });
+        window.__ssoApi.updateTrackSettings(0, { widthPercent: 80 });
       });
 
       check("panel opens beside the handle that opens it, not across the screen", () => {
@@ -562,7 +619,232 @@
         if (window.__ssoApi.status().offsetMs !== before) throw new Error("typing changed the offset");
       });
 
+      /* --- two subtitles at once -------------------------------------------
+       *
+       * The claim is that the second subtitle is a second subtitle and not a
+       * second view of the first: its own box, its own place on screen, its own
+       * offset, its own detach. Every case below is one of those independences,
+       * because a shared value is exactly how a dual display goes wrong - one
+       * that renders both and then moves them together is the bug that looks
+       * like the feature.
+       */
+      const CUES_TR = [
+        { start: 0, end: 600000, text: "[Ormon] Yere yat!" },
+        { start: 600000, end: 900000, text: "[iç çeker] Peki." },
+        { start: 1200000, end: 1500000, text: "Neden bahsettiğini bilmiyorum ve açıkçası umurumda değil." },
+      ];
+      const roots = () => [...shadowOf().querySelectorAll(".sso-root")];
+      const cueOf = (slot) => roots()[slot].querySelector(".sso-cue");
+      const attachSecond = () =>
+        window.__ssoApi.attach({ cues: CUES_TR, label: "TR · harness", fileId: 2, language: "tr", slot: 1 });
+
+      check("a second subtitle renders in its own box, beside the first", async () => {
+        window.__ssoApi.resetPosition();
+        await attachSecond();
+        await showSpeakerCue();
+        const one = cueOf(0).getBoundingClientRect();
+        const two = cueOf(1).getBoundingClientRect();
+        if (!cueOf(1).textContent.includes("Yere yat"))
+          throw new Error(`second box shows "${cueOf(1).textContent}"`);
+        if (two.left < one.right - 2)
+          throw new Error(
+            `boxes overlap: first ends at ${Math.round(one.right)}, second starts at ${Math.round(two.left)}`);
+      });
+
+      check("attaching a second arranges both without being asked", () => {
+        const [a, b] = window.__ssoApi.status().settings.tracks;
+        if (!(a.posX < 50 && b.posX > 50))
+          throw new Error(`not side by side: ${a.posX}% and ${b.posX}%`);
+      });
+
+      check("each subtitle keeps its own offset", async () => {
+        window.__ssoApi.setOffset(0, { slot: 0 });
+        window.__ssoApi.nudge(1000, { slot: 1 });
+        await sleep(50);
+        const [a, b] = window.__ssoApi.status().tracks;
+        if (a.offsetMs !== 0)
+          throw new Error(`nudging the second moved the first to ${a.offsetMs}ms`);
+        if (b.offsetMs !== 1000) throw new Error(`second offset is ${b.offsetMs}ms, not 1000`);
+        window.__ssoApi.setOffset(0, { slot: 1 });
+      });
+
+      check("dragging one subtitle leaves the other where it was", async () => {
+        const before = window.__ssoApi.status().settings.tracks[0].posX;
+        const box = cueOf(1).getBoundingClientRect();
+        await dragCue(box.left + box.width / 2, box.top + 8, 200, 300);
+        const after = window.__ssoApi.status().settings.tracks;
+        if (after[0].posX !== before)
+          throw new Error(`the first moved too: ${before}% -> ${after[0].posX}%`);
+        if (!after[1].placed) throw new Error("the second did not move");
+      });
+
+      check("hiding one subtitle leaves the other showing", async () => {
+        window.__ssoApi.setVisible(false, { slot: 1 });
+        await sleep(120);
+        if (!cueOf(0).textContent.trim()) throw new Error("hiding the second cleared the first");
+        if (cueOf(1).textContent.trim()) throw new Error("the second is still rendering");
+        window.__ssoApi.setVisible(true, { slot: 1 });
+        await sleep(120);
+      });
+
+      check("detaching one subtitle leaves the other attached", async () => {
+        window.__ssoApi.detach(1);
+        await sleep(120);
+        const status = window.__ssoApi.status();
+        if (!status.tracks[0].attached) throw new Error("detaching the second dropped the first");
+        if (status.tracks[1].attached) throw new Error("the second is still attached");
+        await attachSecond();
+        await sleep(120);
+      });
+
+      check("an arrangement placed by hand is not overwritten by the next attach", async () => {
+        window.__ssoApi.arrange("stacked");
+        const before = window.__ssoApi.status().settings.tracks.map((t) => t.posY);
+        window.__ssoApi.detach(1);
+        await attachSecond();
+        await sleep(120);
+        const after = window.__ssoApi.status().settings.tracks.map((t) => t.posY);
+        if (JSON.stringify(before) !== JSON.stringify(after))
+          throw new Error(`stacked ${before} became ${after}`);
+      });
+
+      /* --- study mode -------------------------------------------------------
+       *
+       * Two things have to be true at once: the rare words get marked and
+       * looked up, and nothing the overlay could already do stops working while
+       * that is happening. The last two cases are the second half - they are
+       * the ones that would catch study mode eating a click meant for the film.
+       */
+      const railShadow = () =>
+        [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(".sso-rail"))?.shadowRoot;
+      const wordsIn = (slot) => [...cueOf(slot).querySelectorAll(".sso-w")];
+      const wordEl = (text) => wordsIn(0).find((w) => w.dataset.w === text);
+      // Same cue as showLongCue, held for longer: marking a word is a round
+      // trip through the worker, so the DOM is not settled the moment it renders.
+      const showWordyCue = async () => { video.currentTime = 1300; await sleep(200); };
+
+      check("words are not separate elements until study mode is on", async () => {
+        await showWordyCue();
+        if (wordsIn(0).length !== 0)
+          throw new Error(`${wordsIn(0).length} word elements with study mode off`);
+      });
+
+      check("study mode marks the rare word and leaves the common ones alone", async () => {
+        window.__ssoStudy.updateSettings({ rarityRank: 4000, auto: false });
+        await window.__ssoStudy.setEnabled(true);
+        await showWordyCue();
+        await sleep(200);
+        const rare = wordsIn(0).filter((w) => w.dataset.rare === "true").map((w) => w.dataset.w);
+        if (!rare.includes("frankly"))
+          throw new Error(`"frankly" (rank 14200) was not marked; marked: ${rare.join(", ") || "none"}`);
+        if (rare.includes("about"))
+          throw new Error('"about" (rank 90) was marked, so the threshold is not being applied');
+      });
+
+      check("the threshold decides what counts as rare", async () => {
+        window.__ssoStudy.updateSettings({ rarityRank: 20000 });
+        await sleep(250);
+        if (wordEl("frankly")?.dataset.rare === "true")
+          throw new Error("rank 14200 still marked with the threshold at 20000");
+        window.__ssoStudy.updateSettings({ rarityRank: 4000 });
+        await sleep(250);
+      });
+
+      check("hovering a word looks it up and puts it in the rail", async () => {
+        lookupCalls.length = 0;
+        const word = wordEl("frankly");
+        word.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
+        await sleep(400);
+        if (!lookupCalls.includes("frankly"))
+          throw new Error(`looked up ${JSON.stringify(lookupCalls)} instead`);
+        const terms = [...railShadow().querySelectorAll(".sso-card__term")].map((n) => n.textContent);
+        if (!terms.includes("frankly")) throw new Error(`rail holds ${terms.join(", ") || "nothing"}`);
+      });
+
+      check("the card carries the line the word was said in", () => {
+        const line = railShadow().querySelector(".sso-card__line");
+        if (!line?.textContent.includes("frankly I do not care"))
+          throw new Error(`the card's line reads "${line?.textContent || "nothing"}"`);
+        if (!line.querySelector("mark")) throw new Error("the word is not marked inside its line");
+      });
+
+      check("saving keeps the word with its line, its film and its timestamp", async () => {
+        deckSaves.length = 0;
+        railShadow().querySelector(".sso-card__save").click();
+        await sleep(200);
+        const [entry] = deckSaves;
+        if (!entry) throw new Error("nothing was saved");
+        if (entry.term !== "frankly") throw new Error(`saved "${entry.term}"`);
+        if (!entry.sentence.includes("frankly")) throw new Error("saved without its line");
+        if (entry.timeMs == null) throw new Error("saved without a timestamp");
+      });
+
+      check("a saved word is marked as met before, not as new", async () => {
+        await showWordyCue();
+        await sleep(250);
+        if (wordEl("frankly")?.dataset.saved !== "true")
+          throw new Error("the word is not marked as already saved");
+      });
+
+      check("shift-dragging across words keeps the phrase, not one word", async () => {
+        await showWordyCue();
+        await sleep(200);
+        const from = wordEl("do");
+        const to = wordEl("care");
+        const a = from.getBoundingClientRect();
+        const b = to.getBoundingClientRect();
+        from.dispatchEvent(new PointerEvent("pointerdown", {
+          bubbles: true, composed: true, shiftKey: true, pointerId: 9,
+          clientX: a.left + 2, clientY: a.top + 2,
+        }));
+        to.dispatchEvent(new PointerEvent("pointermove", {
+          bubbles: true, composed: true, pointerId: 9,
+          clientX: b.left + 2, clientY: b.top + 2,
+        }));
+        document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 9 }));
+        await sleep(400);
+        const terms = [...railShadow().querySelectorAll(".sso-card__term")].map((n) => n.textContent);
+        if (!terms.includes("do not care"))
+          throw new Error(`rail holds ${terms.join(" / ") || "nothing"}, not the phrase`);
+      });
+
+      check("a click on the film still reaches the player with study mode on", async () => {
+        await showWordyCue();
+        await sleep(150);
+        let reached = 0;
+        const player = document.getElementById("player");
+        const count = () => reached++;
+        player.addEventListener("click", count);
+        /* The box's own padding, which is subtitle but not a word - a press
+         * there has always been the player's. Left edge rather than right: the
+         * rail docks on the right, and a point underneath a panel legitimately
+         * belongs to the panel, which would make this assert the wrong thing. */
+        const box = cueOf(0).getBoundingClientRect();
+        await dragCue(box.left + 3, box.top + 3, box.left + 3, box.top + 3);
+        player.removeEventListener("click", count);
+        if (reached === 0) throw new Error("study mode swallowed a click meant for the film");
+      });
+
+      check("dragging the subtitle still moves it with study mode on", async () => {
+        const before = window.__ssoApi.status().settings.tracks[0].posY;
+        const box = cueOf(0).getBoundingClientRect();
+        await dragCue(box.left + box.width / 2, box.top + 6, 300, 180);
+        const after = window.__ssoApi.status().settings.tracks[0].posY;
+        if (Math.abs(after - before) < 5)
+          throw new Error(`dragging a word did not move the box: ${before}% -> ${after}%`);
+      });
+
+      check("turning study mode off takes the rail and the marks away", async () => {
+        await window.__ssoStudy.setEnabled(false);
+        await showWordyCue();
+        await sleep(200);
+        if (railShadow()) throw new Error("the rail is still in the page");
+        if (wordsIn(0).some((w) => w.dataset.rare === "true"))
+          throw new Error("words are still marked");
+      });
+
       check("re-injection leaves exactly one overlay", async () => {
+        window.__ssoApi.detach(1);
         const count = () => [...document.querySelectorAll("div")].filter((d) => d.shadowRoot).length;
         const load = (src) => new Promise((ok, no) => {
           const s = document.createElement("script");
@@ -571,6 +853,7 @@
         });
         await load("../src/content.js");
         await load("../src/panel.js");
+        await load("../src/study.js");
         await sleep(150);
         if (count() > 2) throw new Error(`${count()} shadow hosts after re-injection`);
       });

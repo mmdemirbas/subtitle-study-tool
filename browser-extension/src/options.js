@@ -156,12 +156,161 @@ async function renderCache() {
   }
 }
 
+// --- the deck ---------------------------------------------------------------
+
+/* Entries are held in the browser rather than in the daemon, because saving has
+ * to work on the key that saves it, mid-film, whether or not a local service
+ * happens to be running. Export is what gets them out - into Anki, or into
+ * anything else. */
+
+let deckEntries = [];
+
+async function renderDeck() {
+  const { entries } = await call("deckList");
+  deckEntries = entries || [];
+  drawDeck();
+}
+
+function drawDeck() {
+  const needle = el("deckSearch").value.trim().toLowerCase();
+  const shown = needle
+    ? deckEntries.filter((entry) =>
+        [entry.term, entry.sentence, entry.pairedSentence, entry.title]
+          .join(" ")
+          .toLowerCase()
+          .includes(needle),
+      )
+    : deckEntries;
+
+  el("deckLine").textContent = deckEntries.length
+    ? needle
+      ? `${shown.length} of ${deckEntries.length} saved`
+      : `${deckEntries.length} saved`
+    : "Nothing saved yet";
+  el("deckEmpty").hidden = deckEntries.length > 0;
+  el("deckTable").hidden = deckEntries.length === 0;
+
+  const rows = el("deckRows");
+  rows.replaceChildren();
+
+  // Newest first: the words from the film you just watched are the ones you
+  // came here to look at.
+  for (const entry of [...shown].reverse()) {
+    const row = document.createElement("tr");
+
+    const term = document.createElement("td");
+    term.className = "term";
+    term.textContent = entry.term;
+    if (entry.phonetic) {
+      const phonetic = document.createElement("span");
+      phonetic.textContent = entry.phonetic;
+      term.append(phonetic);
+    }
+
+    const detail = document.createElement("td");
+    detail.className = "entry";
+    const sense = entry.definitions?.[0];
+    if (sense) {
+      detail.append(document.createTextNode(`${sense.partOfSpeech}: ${sense.sense}`));
+    }
+    for (const [text, kind] of [
+      [entry.sentence, "line"],
+      [entry.pairedSentence, "paired"],
+      [[entry.title, entry.timeMs != null ? formatTime(entry.timeMs) : ""]
+        .filter(Boolean)
+        .join(" · "), "where"],
+    ]) {
+      if (!text) continue;
+      const line = document.createElement("span");
+      line.dataset.kind = kind;
+      line.textContent = text;
+      detail.append(line);
+    }
+
+    const language = document.createElement("td");
+    language.textContent = (entry.language || "—").toUpperCase();
+
+    const when = document.createElement("td");
+    when.textContent = entry.savedAt ? whenDownloaded(Date.parse(entry.savedAt) / 1000) : "—";
+
+    const actions = document.createElement("td");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "link";
+    remove.textContent = "Delete";
+    remove.title = `Forget "${entry.term}"`;
+    remove.addEventListener("click", async () => {
+      remove.disabled = true;
+      await call("deckRemove", { id: entry.id });
+      el("deckResult").textContent = `Deleted "${entry.term}".`;
+      await renderDeck();
+    });
+    actions.append(remove);
+
+    row.append(term, detail, language, when, actions);
+    rows.append(row);
+  }
+}
+
+function formatTime(ms) {
+  const total = Math.max(0, Math.round(Number(ms) / 1000));
+  const parts = [Math.floor(total / 3600), Math.floor((total % 3600) / 60), total % 60];
+  return parts.map((part) => String(part).padStart(2, "0")).join(":");
+}
+
+/* Downloaded through a blob URL rather than written anywhere: an extension page
+ * has no filesystem, and this keeps the export a normal browser download that
+ * lands wherever downloads land. */
+function download(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  link.click();
+  // Revoked on the next turn of the event loop; revoking synchronously races
+  // the download in some builds.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+async function exportDeck(format) {
+  if (deckEntries.length === 0) {
+    el("deckResult").textContent = "Nothing to export yet.";
+    return;
+  }
+  const { serialise } = await import("./study/deck.js");
+  const stamp = new Date().toISOString().slice(0, 10);
+  if (format === "json") {
+    download(`subtitle-words-${stamp}.json`, serialise(deckEntries, "json"), "application/json");
+  } else {
+    download(`subtitle-words-${stamp}.tsv`, serialise(deckEntries, "tsv"), "text/tab-separated-values");
+  }
+  el("deckResult").textContent = `Exported ${deckEntries.length} word(s).`;
+}
+
+// --- the dictionary permission ----------------------------------------------
+
+const DICTIONARY_ORIGINS = { origins: ["https://api.dictionaryapi.dev/*"] };
+
+async function renderDictionary() {
+  const granted = await chrome.permissions.contains(DICTIONARY_ORIGINS);
+  el("dictLine").textContent = granted
+    ? "Allowed. The extension can look words up on its own when the daemon is stopped."
+    : "Not allowed. Definitions need the daemon running.";
+  el("dictLine").dataset.kind = granted ? "daemon" : "extension";
+  el("dictGrant").hidden = granted;
+  el("dictRevoke").hidden = !granted;
+}
+
 async function load() {
   const stored = await chrome.storage.local.get("sso:provider");
   const config = stored["sso:provider"] || {};
   el("apiKey").value = config.apiKey || "";
   el("languages").value = (config.languages || ["en", "tr"]).join(", ");
   await refresh();
+  await renderDeck();
+  await renderDictionary();
+  // The panel's "Saved words" button links straight here.
+  if (location.hash === "#deck") el("deck").scrollIntoView({ block: "start" });
 }
 
 el("save").addEventListener("click", async () => {
@@ -225,6 +374,36 @@ el("clearAll").addEventListener("click", async () => {
     ? `Deleted ${result.subtitles} subtitle(s) from both stores.`
     : `Deleted ${result.subtitles} here. The daemon is stopped; its copies go on the next sync.`;
   await refresh();
+});
+
+el("deckSearch").addEventListener("input", drawDeck);
+el("deckExportTsv").addEventListener("click", () => exportDeck("tsv"));
+el("deckExportJson").addEventListener("click", () => exportDeck("json"));
+
+el("deckClear").addEventListener("click", async () => {
+  if (deckEntries.length === 0) return;
+  /* Asks, and says how many. Unlike the subtitle cache this costs no quota to
+   * rebuild - it cannot be rebuilt at all, because the films have been watched
+   * and the lines have gone past. */
+  const ok = confirm(
+    `Delete ${deckEntries.length} saved word(s)?\n\n` +
+      "These cannot be recovered. Export first if you want to keep them.",
+  );
+  if (!ok) return;
+  await call("deckClear");
+  el("deckResult").textContent = "Deleted every saved word.";
+  await renderDeck();
+});
+
+el("dictGrant").addEventListener("click", async () => {
+  // Must be called from a user gesture; Chrome refuses the prompt otherwise.
+  await chrome.permissions.request(DICTIONARY_ORIGINS).catch(() => false);
+  await renderDictionary();
+});
+
+el("dictRevoke").addEventListener("click", async () => {
+  await chrome.permissions.remove(DICTIONARY_ORIGINS).catch(() => false);
+  await renderDictionary();
 });
 
 load();

@@ -16,6 +16,9 @@
     "https://*.opensubtitles.com/*",
     "https://*.opensubtitles.org/*"
   ],
+  "optional_host_permissions": [
+    "https://api.dictionaryapi.dev/*"
+  ],
   "options_ui": {
     "page": "src/options.html",
     "open_in_tab": true
@@ -35,7 +38,8 @@
       ],
       "js": [
         "src/content.js",
-        "src/panel.js"
+        "src/panel.js",
+        "src/study.js"
       ],
       "run_at": "document_idle",
       "all_frames": true
@@ -45,7 +49,8 @@
     {
       "resources": [
         "src/panel.css",
-        "src/overlay.css"
+        "src/overlay.css",
+        "src/study.css"
       ],
       "matches": [
         "<all_urls>"

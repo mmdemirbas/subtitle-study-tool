@@ -76,6 +76,16 @@ export function subtitleContext(result, resolved) {
   };
 }
 
+/**
+ * A word's dictionary entry, and its translation when the daemon has a
+ * translator configured. Free, cached daemon-side, no download quota involved.
+ */
+export function lookup(query, language = "en", target = "") {
+  const params = new URLSearchParams({ q: query, lang: language });
+  if (target) params.set("to", target);
+  return call(`/lookup?${params.toString()}`);
+}
+
 export function cached() {
   return call("/cached");
 }
@@ -122,14 +132,14 @@ function options(frameId) {
 }
 
 /** Push cues into the content script, trying every frame until one takes them. */
-export async function attachToTab(tabId, { cues, label, fileId }) {
+export async function attachToTab(tabId, { cues, label, fileId, language, slot = 0 }) {
   let lastReason = "no frame on this page has a playable video";
 
   for (const frameId of await frameIds(tabId)) {
     try {
       const result = await chrome.tabs.sendMessage(
         tabId,
-        { type: "sso:attach", payload: { cues, label, fileId } },
+        { type: "sso:attach", payload: { cues, label, fileId, language, slot } },
         options(frameId),
       );
       if (result?.ok) return result;

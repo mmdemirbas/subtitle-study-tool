@@ -44,6 +44,9 @@ survives Prime Video.
 
 ## The cases
 
+Fifty-five. The first thirty-seven cover the single-subtitle overlay; the rest
+cover two at once and study mode, described at the end.
+
 Thirty-seven, covering: shadow-root isolation, cue colour, italics, speaker
 colour, non-speech dimming, sound symbols, handle visibility under a
 pointer-event-swallowing player, handle size under a button reset, stacking
@@ -71,6 +74,24 @@ preview not getting one, a video too small to be what the page is about not
 getting one, a preview still not getting one once a narrow window has made it
 large enough to clear the size floor, and a player that is merely large — a
 third of the window, not all of it — still getting one.
+
+Six cover two subtitles at once, and every one of them is an *independence*,
+because a shared value is exactly how a dual display goes wrong: one that
+renders both and then moves them together is the bug that looks like the
+feature. The second gets its own box beside the first, the pair arranges itself
+without being asked, each keeps its own offset, dragging one leaves the other,
+hiding one leaves the other showing, detaching one leaves the other attached,
+and an arrangement made by hand is not overwritten by the next attach.
+
+Eleven cover study mode. Half are about it working — words becoming elements
+only once it is on, the rare word marked and the common ones not, the threshold
+deciding which is which, a hover looking a word up into the rail, the card
+carrying the line the word was in, saving keeping that line and the timestamp, a
+saved word marked as met before, and a shift-drag keeping the phrase rather than
+one word. The other half are about it not breaking anything: a click on the film
+still reaching the player, dragging still moving the box, and turning it off
+taking the rail and the marks away. Those three are the ones that matter, since
+a feature that eats a click meant for a film is worse than no feature.
 
 The ad cases advance `video.currentTime` while an ad marker is on screen,
 which is what server-side ad insertion does to the clock. They take a few

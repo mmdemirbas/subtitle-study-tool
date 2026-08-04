@@ -88,6 +88,73 @@
         </div>
         <p class="note" id="cacheResult"></p>
       </section>
+
+      <section class="card" id="deck">
+        <h2>Saved words</h2>
+        <p class="note">
+          Words and phrases kept from study mode, each with the line it was said
+          in and the same moment in the other subtitle. Export as TSV to import
+          into Anki, or as JSON to keep everything.
+        </p>
+
+        <div class="row">
+          <label for="deckSearch" class="visually-hidden">Search saved words</label>
+          <input id="deckSearch" type="search" spellcheck="false"
+                 placeholder="Search words, lines or films" />
+        </div>
+
+        <p class="status" id="deckLine">—</p>
+
+        <div class="table-scroll">
+          <table id="deckTable">
+            <colgroup>
+              <col class="c-term" />
+              <col />
+              <col class="c-lang" />
+              <col class="c-when" />
+              <col class="c-act" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">Word</th>
+                <th scope="col">Meaning and the line it was in</th>
+                <th scope="col">Lang</th>
+                <th scope="col">Saved</th>
+                <th scope="col"><span class="visually-hidden">Actions</span></th>
+              </tr>
+            </thead>
+            <tbody id="deckRows"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="deckEmpty" hidden>
+          Nothing saved yet. Turn study mode on over a film with
+          <kbd>S</kbd>, then press <kbd>D</kbd> to keep a word.
+        </p>
+
+        <div class="row">
+          <button type="button" id="deckExportTsv">Export TSV</button>
+          <button type="button" id="deckExportJson">Export JSON</button>
+          <button type="button" id="deckClear" class="danger">Delete all saved words</button>
+        </div>
+        <p class="note" id="deckResult"></p>
+      </section>
+
+      <section class="card">
+        <h2>Dictionary for study mode</h2>
+        <p class="note">
+          Definitions come from the daemon when it is running. Without it the
+          extension can ask
+          <code>api.dictionaryapi.dev</code> itself, but only if you allow it
+          here — the extension asks for no other site, and that stays true
+          unless you turn this on. Marking rare words and saving them with their
+          line work either way.
+        </p>
+        <p class="status" id="dictLine">—</p>
+        <div class="row">
+          <button type="button" id="dictGrant">Allow the dictionary</button>
+          <button type="button" id="dictRevoke">Remove permission</button>
+        </div>
+      </section>
     </main>
     <script src="options.js" type="module"></script>
   </body>

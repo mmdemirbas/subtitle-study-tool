@@ -220,6 +220,64 @@ tbody tr:last-child td {
   text-overflow: ellipsis;
 }
 
+/* --- the deck ---------------------------------------------------------------
+ *
+ * The one table on this page whose rows are meant to be *read* rather than
+ * scanned: the value of an entry is the sentence, and a sentence truncated to
+ * one line with an ellipsis is not a sentence. So this column wraps, the row
+ * aligns to the top, and the film's name is quieter than the line it came from.
+ */
+
+col.c-term { width: 150px; }
+
+.term {
+  vertical-align: top;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.term span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.entry {
+  vertical-align: top;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.entry span {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+}
+
+/* The line it was said in, and the same moment in the other subtitle. Set apart
+ * with a rule down the left, because they are quotations from the film rather
+ * than anything this tool has to say. */
+.entry span[data-kind="line"],
+.entry span[data-kind="paired"] {
+  padding-left: 8px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+}
+
+.entry span[data-kind="paired"] {
+  font-style: italic;
+}
+
+.entry span[data-kind="where"] {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+#deckSearch {
+  width: 100%;
+}
+
 /* Sizes line up only with tabular figures; without them the digits do not
  * stack and the column cannot be compared by eye. */
 .num {

@@ -1,0 +1,304 @@
+/* The study rail.
+ *
+ * It sits beside a moving picture, which is a harder background than any page:
+ * every value in it changes 24 times a second, and the one constant is that the
+ * film is more interesting to look at than this is. So the rail is dark and
+ * quiet, the type is small and dense, and exactly one colour means anything -
+ * the amber that also underlines a rare word in the subtitle, so the mark on
+ * screen and the card at the side are visibly the same fact.
+ *
+ * Everything is declared rather than inherited: this stylesheet lands inside
+ * arbitrary pages, and although the shadow boundary stops their rules reaching
+ * in, inheritable properties still cross through the host.
+ */
+
+/* The height is capped well short of the bottom of the screen on purpose. The
+ * rail is docked at 12vh and the subtitles sit between 84% and 93%, so a rail
+ * free to grow to the bottom would end up on top of the right-hand subtitle at
+ * exactly the moment it is most useful - eight cards in, mid-film. Ending at
+ * 72vh keeps the two apart without anything having to be dragged, and the rail
+ * scrolls inside itself past that. */
+.sso-rail {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  max-height: 60vh;
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.45;
+  letter-spacing: normal;
+  text-align: left;
+  color: #e8eaed;
+  background: rgba(16, 18, 22, 0.93);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 10px 30px -12px rgba(0, 0, 0, 0.8);
+  overflow: hidden;
+}
+
+/* --- head ------------------------------------------------------------------ */
+
+.sso-rail__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: grab;
+  user-select: none;
+}
+
+.sso-rail__head[data-dragging="true"] {
+  cursor: grabbing;
+}
+
+.sso-rail__title {
+  flex: 1;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #b6bcc6;
+}
+
+.sso-rail__count {
+  min-width: 18px;
+  padding: 1px 6px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: #12141a;
+  background: #e0a458;
+  border-radius: 9px;
+}
+
+.sso-rail__count:empty {
+  display: none;
+}
+
+.sso-rail__x {
+  padding: 0 4px;
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1;
+  color: #9aa1ab;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.sso-rail__x:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.sso-rail__x:active {
+  transform: translateY(1px);
+}
+
+.sso-rail__x:focus-visible {
+  outline: 2px solid #e0a458;
+  outline-offset: 1px;
+}
+
+/* --- list ------------------------------------------------------------------ */
+
+.sso-rail__list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: rgba(255, 255, 255, 0.07); /* shows through as the card hairlines */
+}
+
+.sso-rail__list:empty {
+  display: none;
+}
+
+.sso-rail__note {
+  margin: 0;
+  padding: 12px 12px 14px;
+  font-size: 12px;
+  color: #8d949e;
+}
+
+/* --- a card ---------------------------------------------------------------- */
+
+.sso-card {
+  padding: 9px 11px 10px;
+  background: rgba(16, 18, 22, 0.98);
+}
+
+/* Pinned means "I am reading this" - it survives the trim, so it says so. */
+.sso-card[data-pinned="true"] {
+  background: rgba(34, 30, 22, 0.98);
+  box-shadow: inset 2px 0 0 #e0a458;
+}
+
+.sso-card__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.sso-card__term {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 680;
+  letter-spacing: -0.01em;
+  color: #fff;
+  overflow-wrap: anywhere;
+}
+
+.sso-card__rank {
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: #a9915f;
+}
+
+.sso-card__phonetic {
+  font-size: 12px;
+  color: #8d949e;
+}
+
+.sso-card__def {
+  margin-top: 4px;
+  font-size: 12.5px;
+  color: #d3d7dd;
+}
+
+.sso-card__part {
+  margin-right: 6px;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-style: italic;
+  color: #8d949e;
+}
+
+.sso-card__translation {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #9fd3b4;
+}
+
+.sso-card__note {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #8d949e;
+}
+
+/* The line it was said in. Quieter than the definition and set apart, because
+ * it is evidence rather than the answer - but present, because it is the half
+ * of the entry that makes it worth keeping. */
+.sso-card__line,
+.sso-card__paired {
+  margin-top: 6px;
+  padding-left: 8px;
+  font-size: 12px;
+  border-left: 2px solid rgba(255, 255, 255, 0.16);
+  color: #aeb4bd;
+}
+
+.sso-card__paired {
+  border-left-color: rgba(159, 211, 180, 0.4);
+  color: #94a89c;
+}
+
+.sso-card__line mark {
+  padding: 0 1px;
+  color: #ffd678;
+  background: rgba(224, 164, 88, 0.18);
+  border-radius: 2px;
+}
+
+.sso-card__actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.sso-card__actions button {
+  padding: 3px 10px;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #d3d7dd;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.sso-card__actions button:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+
+.sso-card__actions button:active {
+  transform: translateY(1px);
+}
+
+.sso-card__actions button:focus-visible {
+  outline: 2px solid #e0a458;
+  outline-offset: 1px;
+}
+
+.sso-card__save {
+  color: #12141a !important;
+  background: #e0a458 !important;
+  border-color: #e0a458 !important;
+}
+
+.sso-card__save:hover {
+  background: #edb469 !important;
+}
+
+/* Saved is a state, not a disabled button that failed. It stops being an
+ * action and starts being a label. */
+.sso-card__save:disabled {
+  color: #7f8790 !important;
+  background: transparent !important;
+  border-color: rgba(255, 255, 255, 0.12) !important;
+  cursor: default;
+}
+
+/* --- resize grip ------------------------------------------------------------ */
+
+.sso-rail__grip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+
+.sso-rail__grip:hover {
+  background: rgba(224, 164, 88, 0.4);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sso-rail__x,
+  .sso-card__actions button {
+    transition: none;
+  }
+
+  .sso-rail__x:active,
+  .sso-card__actions button:active {
+    transform: none;
+  }
+}

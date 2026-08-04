@@ -17,11 +17,23 @@
  * width it had just asked for, and the horizontal padding sat outside the cap,
  * so the box could still reach both edges of the screen. One value, one
  * meaning: --sso-width is how wide the subtitle is allowed to get. */
+/* Anchored by the bottom edge, not the centre: --sso-y is where the *last line*
+ * sits. Two consequences, and the second is why it is worth the arithmetic.
+ *
+ * A cue that wraps onto a second line now grows upwards, so the line you are
+ * reading does not slide down the screen as the sentence gets longer. That is
+ * how broadcast subtitles have always behaved and the reason is the same.
+ *
+ * And two subtitles side by side share a baseline whatever their heights. With
+ * a centre anchor a two-line English cue beside a one-line Turkish one put the
+ * two languages at different heights - measured at 715px and 729px, a 14px step
+ * between a pair meant to be read as one thing. Centring is the right anchor
+ * for a box; the bottom is the right anchor for a line of text. */
 .sso-root {
   position: fixed;
   left: var(--sso-x, 50%);
   top: var(--sso-y, 92%);
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -100%);
   width: var(--sso-width, 80vw);
   z-index: 2147483647; /* above player chrome, which often sits near 2^31 */
   display: flex;
@@ -92,13 +104,16 @@
 /* Cues carrying {\an8} sit at the top instead, which is what that override is
  * for: the bottom of the frame is occupied by on-screen text the subtitle
  * would otherwise cover. Only honoured until the position is placed by hand -
- * after that the user's choice outranks the file's. */
+ * after that the user's choice outranks the file's.
+ *
+ * These are bottom edges like every other --sso-y, so "top" is the first line's
+ * baseline near the top of the frame rather than the box's top corner. */
 .sso-root[data-placed="auto"][data-vertical="top"] {
-  top: 10%;
+  top: 16%;
 }
 
 .sso-root[data-placed="auto"][data-vertical="middle"] {
-  top: 50%;
+  top: 54%;
 }
 
 /* The cue is the drag handle. It is the only part of the overlay that takes
@@ -164,6 +179,56 @@
 
 .sso-root[data-dim="true"] .sso-speaker {
   opacity: 0.9;
+}
+
+/* --- study mode ------------------------------------------------------------
+ *
+ * A word is only a separate element while study mode is on, so none of this
+ * applies - and none of the wrapping cost is paid - during ordinary watching.
+ *
+ * The marking has to be readable over a moving picture without becoming the
+ * thing you look at. An underline below the baseline does that: it is visible
+ * against any frame, it does not change the word's colour or weight, and the
+ * eye can ignore it. A background highlight cannot - it competes with the film
+ * for every frame the line is on screen.
+ */
+
+.sso-w {
+  /* No display change: words must still wrap and space exactly as text. */
+  border-radius: 2px;
+}
+
+.sso-w[data-rare="true"] {
+  text-decoration: underline;
+  text-decoration-color: rgba(255, 214, 120, 0.85);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.18em;
+}
+
+/* Already in the deck. Still marked, because knowing you have met this word
+ * before is itself the useful signal, but marked as settled rather than as
+ * something to look at. */
+.sso-w[data-saved="true"] {
+  text-decoration-color: rgba(140, 220, 170, 0.7);
+  text-decoration-style: dotted;
+}
+
+.sso-root[data-study="true"] .sso-cue {
+  cursor: default;
+}
+
+.sso-root[data-study="true"] .sso-w:hover,
+.sso-w[data-active="true"] {
+  background: rgba(255, 214, 120, 0.22);
+  box-shadow: 0 0 0 2px rgba(255, 214, 120, 0.22);
+  cursor: help;
+}
+
+/* A phrase being swept out with shift held. One highlight for the whole run,
+ * so it reads as a single thing being chosen rather than as several words. */
+.sso-w[data-selected="true"] {
+  background: rgba(120, 190, 255, 0.28);
+  box-shadow: 0 0 0 2px rgba(120, 190, 255, 0.28);
 }
 
 /* The symbol sits before the words rather than replacing them - the point is

@@ -41,6 +41,8 @@
     ["reset", "Reset offset"],
     ["toggleOverlay", "Hide / show"],
     ["togglePanel", "This panel"],
+    ["toggleStudy", "Study mode"],
+    ["saveWord", "Save the top word"],
   ];
 
   let host = null; // the element in the page; carries position only
@@ -51,6 +53,12 @@
   let lastResults = [];
   let lastResolved = null;
   let sheet = null;
+
+  /* Which of the two subtitles the next attach lands on. Not stored: it is a
+   * property of the search you are doing right now, and a remembered value
+   * would silently overwrite a track you had already set up. Reset to the first
+   * free slot every time the panel opens. */
+  let targetSlot = 0;
 
   // --- construction ---------------------------------------------------------
 
@@ -136,7 +144,14 @@
 
     const body = document.createElement("div");
     body.className = "sso-panel__body";
-    body.append(buildStatus(), buildSearch(), buildAppearance(), buildKeys());
+    body.append(
+      buildTracks(),
+      buildSearch(),
+      buildArrangement(),
+      buildAppearance(),
+      buildStudy(),
+      buildKeys(),
+    );
 
     panel.append(head, body);
     shadow.append(panel);
@@ -164,35 +179,29 @@
     return b;
   }
 
-  // --- status and offset ----------------------------------------------------
+  // --- the two subtitles ----------------------------------------------------
 
-  function buildStatus() {
-    const wrap = section("Now showing");
+  /* One card per subtitle, each holding everything that belongs to that one
+   * subtitle: what it is, its timing, how big it is, whether it is showing.
+   *
+   * Grouped this way rather than as four sections of paired controls ("both
+   * offsets", "both sizes") because every question asked here is about one of
+   * the two - "the Turkish one is a second late", "the English one is too big" -
+   * and the answer should be in one place, not split across the panel by
+   * control type. */
+  function buildTracks() {
+    const wrap = section("Subtitles");
 
-    el.attached = document.createElement("p");
-    el.attached.className = "sso-note sso-note--strong";
-    el.attached.textContent = "Nothing attached yet.";
+    el.noneNote = document.createElement("p");
+    el.noneNote.className = "sso-note sso-note--strong";
+    el.noneNote.textContent = "Nothing attached yet.";
 
-    const offsets = document.createElement("div");
-    offsets.className = "sso-row";
-    el.offsetValue = document.createElement("span");
-    el.offsetValue.className = "sso-offset";
-    el.offsetValue.textContent = "0s";
-
-    offsets.append(
-      button("−30s", { onClick: () => api.nudge(-30000), title: "Subtitles 30s earlier" }),
-      button("−1s", { onClick: () => api.nudge(-1000), title: "Subtitles 1s earlier" }),
-      button("−¼", { onClick: () => api.nudge(-250) }),
-      el.offsetValue,
-      button("+¼", { onClick: () => api.nudge(250) }),
-      button("+1s", { onClick: () => api.nudge(1000), title: "Subtitles 1s later" }),
-      button("+30s", { onClick: () => api.nudge(30000), title: "Subtitles 30s later" }),
-      button("Reset", { onClick: () => api.setOffset(0) }),
-    );
+    el.trackCards = [0, 1].map(buildTrackCard);
 
     /* Ad time is measured and subtracted automatically, but the detection
      * leans on player class names that change, so the total is shown and can
-     * be thrown away when it is wrong. */
+     * be thrown away when it is wrong. Shared: an ad interrupts the video, so
+     * it moves both subtitles by the same amount. */
     el.adRow = document.createElement("div");
     el.adRow.className = "sso-row";
     el.adDrift = document.createElement("span");
@@ -203,23 +212,88 @@
       button("Clear", { onClick: () => api.clearAdDrift(), title: "Forget measured ad time" }),
     );
 
+    wrap.append(el.noneNote, ...el.trackCards.map((card) => card.root), el.adRow);
+    return wrap;
+  }
+
+  function buildTrackCard(slot) {
+    const root = document.createElement("div");
+    root.className = "sso-track";
+
+    const head = document.createElement("div");
+    head.className = "sso-track__head";
+
+    /* The radio says which subtitle the bracket keys move. There is one pair of
+     * keys and two things they could shift, and this is the only place that
+     * answer can be given without guessing it from where the pointer is. */
+    const keyed = document.createElement("input");
+    keyed.type = "radio";
+    keyed.name = "sso-keytrack";
+    keyed.title = "The nudge keys move this subtitle";
+    keyed.addEventListener("change", () => api.setKeyTrack(slot));
+
+    const label = document.createElement("span");
+    label.className = "sso-track__label";
+
+    head.append(keyed, label);
+
+    const offsets = document.createElement("div");
+    offsets.className = "sso-row";
+    const offsetValue = document.createElement("span");
+    offsetValue.className = "sso-offset";
+    offsetValue.textContent = "0s";
+    offsets.append(
+      button("−1s", { onClick: () => api.nudge(-1000, { slot }), title: "1s earlier" }),
+      button("−¼", { onClick: () => api.nudge(-250, { slot }) }),
+      offsetValue,
+      button("+¼", { onClick: () => api.nudge(250, { slot }) }),
+      button("+1s", { onClick: () => api.nudge(1000, { slot }), title: "1s later" }),
+      button("Reset", { onClick: () => api.setOffset(0, { slot }) }),
+    );
+
+    const size = slider("Size", 0.6, 2.2, 0.05, 1, (value) =>
+      api.updateTrackSettings(slot, { fontScale: value }),
+    );
+    const width = slider("Width", 20, 100, 1, 80, (value) =>
+      api.updateTrackSettings(slot, { widthPercent: value, placed: true }),
+    );
+
     const actions = document.createElement("div");
     actions.className = "sso-row";
-    el.toggleVisible = button("Hide subtitles", {
-      onClick: () => api.setVisible(!api.status().visible),
+    const visible = button("Hide", {
+      onClick: () => {
+        const track = api.status().tracks[slot];
+        api.setVisible(!track.visible, { slot });
+      },
     });
-    actions.append(el.toggleVisible, button("Detach", { onClick: () => api.detach() }));
+    actions.append(visible, button("Detach", { onClick: () => api.detach(slot) }));
 
-    el.offsetRow = offsets;
-    el.actionsRow = actions;
-    wrap.append(el.attached, offsets, el.adRow, actions);
-    return wrap;
+    root.append(head, offsets, size.row, width.row, actions);
+    return { root, keyed, label, offsetValue, size, width, visible };
   }
 
   // --- search ---------------------------------------------------------------
 
   function buildSearch() {
     const wrap = section("Find a subtitle");
+
+    /* Which subtitle a result attaches to. Named before the search rather than
+     * per result, because it is one decision for the whole list and putting two
+     * buttons on every row would double the width of a list that already has to
+     * fit a film title, a release name and three tags. */
+    const target = document.createElement("div");
+    target.className = "sso-seg";
+    el.targetButtons = [0, 1].map((slot) => {
+      const b = button(`Subtitle ${slot + 1}`, {
+        onClick: () => {
+          targetSlot = slot;
+          refresh(api.status());
+        },
+      });
+      b.className = "sso-seg__b";
+      target.append(b);
+      return b;
+    });
 
     const row = document.createElement("div");
     row.className = "sso-row";
@@ -241,11 +315,53 @@
     el.searchNote = document.createElement("p");
     el.searchNote.className = "sso-note";
 
+    /* A results list for a dual setup is mostly the wrong language: a search
+     * for two languages returns both, and picking the Turkish one out of forty
+     * English ones by reading tags is the slow part. The filter is built from
+     * whatever the search actually returned rather than from a fixed list, so
+     * it never offers a language with nothing behind it. */
+    el.languageFilter = document.createElement("div");
+    el.languageFilter.className = "sso-seg sso-seg--wrap";
+    el.languageFilter.hidden = true;
+
     el.results = document.createElement("ul");
     el.results.className = "sso-results";
 
-    wrap.append(row, el.searchNote, el.results);
+    wrap.append(target, row, el.searchNote, el.languageFilter, el.results);
     return wrap;
+  }
+
+  let languageChoice = "";
+
+  function renderLanguageFilter(results) {
+    const counts = new Map();
+    for (const result of results) {
+      const language = (result.language || "??").toLowerCase();
+      counts.set(language, (counts.get(language) || 0) + 1);
+    }
+
+    // One language is not a choice, so there is nothing to show.
+    el.languageFilter.hidden = counts.size < 2;
+    if (el.languageFilter.hidden) {
+      languageChoice = "";
+      return;
+    }
+
+    const options = [["", `All ${results.length}`], ...[...counts].map(([lang, count]) => [lang, `${lang.toUpperCase()} ${count}`])];
+    el.languageFilter.replaceChildren(
+      ...options.map(([value, text]) => {
+        const b = button(text, {
+          onClick: () => {
+            languageChoice = value;
+            renderLanguageFilter(results);
+            renderResults(results, lastThreshold);
+          },
+        });
+        b.className = "sso-seg__b";
+        b.dataset.on = value === languageChoice ? "true" : "false";
+        return b;
+      }),
+    );
   }
 
   async function runSearch(query) {
@@ -284,12 +400,21 @@
       ? "Nothing matched well. These are guesses — check before attaching."
       : `${lastResults.length} result${lastResults.length === 1 ? "" : "s"}`;
 
-    renderResults(lastResults, response.auto_attach_threshold ?? 0.75);
+    lastThreshold = response.auto_attach_threshold ?? 0.75;
+    languageChoice = "";
+    renderLanguageFilter(lastResults);
+    renderResults(lastResults, lastThreshold);
   }
 
+  let lastThreshold = 0.75;
+
   function renderResults(results, threshold) {
+    const shown = languageChoice
+      ? results.filter((result) => (result.language || "").toLowerCase() === languageChoice)
+      : results;
+
     el.results.replaceChildren(
-      ...results.slice(0, 30).map((result) => {
+      ...shown.slice(0, 30).map((result) => {
         const item = document.createElement("li");
         const b = document.createElement("button");
         b.type = "button";
@@ -335,6 +460,7 @@
   }
 
   async function attachResult(result) {
+    const slot = targetSlot;
     el.searchNote.className = "sso-note";
     el.searchNote.textContent = result.cached ? "Loading…" : "Downloading…";
 
@@ -362,8 +488,15 @@
       cues: response.cues,
       label: `${(result.language || "").toUpperCase()} · ${result.release || result.movie_name}`,
       fileId: result.file_id,
+      language: result.language || "",
+      slot,
     });
     el.searchNote.textContent = "";
+    // Point at the other one, so attaching a second subtitle is finding it and
+    // clicking it rather than finding it, remembering to change the target,
+    // and clicking it.
+    targetSlot = slot === 0 ? 1 : 0;
+    refresh(api.status());
   }
 
   function bestPageTitle() {
@@ -371,23 +504,55 @@
     return info.candidates[0]?.text || document.title;
   }
 
+  // --- arrangement ----------------------------------------------------------
+
+  /* Two buttons that put both subtitles somewhere sensible at once.
+   *
+   * They are actions, not a stored layout mode. A mode would have to either
+   * yield to the next drag - making it not a mode - or resist it, which would
+   * break dragging. So these write the two positions and then stop having an
+   * opinion, and the drag remains the only thing that owns position. */
+  function buildArrangement() {
+    const wrap = section("Arrangement");
+
+    const row = document.createElement("div");
+    row.className = "sso-row";
+    row.append(
+      button("Side by side", {
+        onClick: () => api.arrange("side"),
+        title: "One on the left half, one on the right",
+      }),
+      button("Stacked", {
+        onClick: () => api.arrange("stacked"),
+        title: "One above the other, along the bottom",
+      }),
+      button("Reset", { onClick: () => api.resetPosition(), title: "Both back to bottom centre" }),
+    );
+
+    el.positionRow = document.createElement("div");
+    el.positionRow.className = "sso-row";
+    el.position = document.createElement("span");
+    el.position.className = "sso-note";
+    el.position.style.flex = "1";
+    el.placeButton = button("Move", {
+      onClick: () => api.setPlacing(!api.status().placing),
+      title: "Show a stand-in you can drag, so you need not catch a passing line",
+    });
+    el.positionRow.append(el.position, el.placeButton);
+
+    wrap.append(row, el.positionRow);
+    return wrap;
+  }
+
   // --- appearance -----------------------------------------------------------
 
+  /* What is left here is what both subtitles share. Size and width are per
+   * subtitle and live on the track cards above, next to the subtitle they
+   * belong to. */
   function buildAppearance() {
     const wrap = section("Appearance");
     const settings = api.status().settings;
 
-    el.fontScale = slider("Size", 0.6, 2.2, 0.05, settings.fontScale, (value) =>
-      api.updateSettings({ fontScale: value }),
-    );
-    /* Width has a slider as well as an edge-drag, which the position
-     * deliberately does not. Position is two numbers with no natural slider
-     * and the drag reads them both at once; width is one number, both controls
-     * set it in the same unit, and the slider works when no line is on screen
-     * to take hold of. */
-    el.widthPercent = slider("Width", 20, 100, 1, settings.widthPercent, (value) =>
-      api.updateSettings({ widthPercent: value }),
-    );
     el.background = slider("Backdrop", 0, 1, 0.05, settings.background, (value) =>
       api.updateSettings({ background: value }),
     );
@@ -406,32 +571,85 @@
       api.updateSettings({ dimNonSpeech: on }),
     );
 
-    /* Position is set by dragging the subtitle itself, so there is no slider
-     * for it - two controls for one value would fight each other. This row
-     * says where it is and puts it back. */
-    el.positionRow = document.createElement("div");
-    el.positionRow.className = "sso-row";
-    el.position = document.createElement("span");
-    el.position.className = "sso-note";
-    el.position.style.flex = "1";
-    el.placeButton = button("Move", {
-      onClick: () => api.setPlacing(!api.status().placing),
-      title: "Show a stand-in you can drag, so you need not catch a passing line",
-    });
-    el.positionRow.append(
-      el.position,
-      el.placeButton,
-      button("Reset", { onClick: () => api.resetPosition(), title: "Back to bottom centre" }),
-    );
-
     wrap.append(
-      el.fontScale.row,
-      el.widthPercent.row,
       el.background.row,
-      el.positionRow,
       el.rewrap.row,
       el.showSymbols.row,
       el.dimNonSpeech.row,
+    );
+    return wrap;
+  }
+
+  // --- study ----------------------------------------------------------------
+
+  /* The controls for turning a film into vocabulary.
+   *
+   * study.js owns these settings rather than content.js, because the whole
+   * feature is optional and nothing about ordinary watching should have to know
+   * it exists. That is why this section reads through window.__ssoStudy and
+   * hides itself when that file did not load. */
+  function buildStudy() {
+    const wrap = section("Study");
+    el.studySection = wrap;
+
+    const note = document.createElement("p");
+    note.className = "sso-note";
+    note.textContent =
+      "Marks the words in each line that are rare in film dialogue, and shows what they mean at " +
+      "the side. Hover any word to look it up; shift-drag across words for a phrase.";
+
+    el.studyEnabled = toggle_("Study mode", false, (on) => window.__ssoStudy?.setEnabled(on));
+    el.studyAuto = toggle_("Look up rare words as they are said", true, (on) =>
+      window.__ssoStudy?.updateSettings({ auto: on }),
+    );
+    el.studyPause = toggle_("Pause when a word is clicked", false, (on) =>
+      window.__ssoStudy?.updateSettings({ pauseOnPin: on }),
+    );
+
+    /* The threshold is a slider because the right value is a property of the
+     * reader, not of the film: rank 2000 is where a beginner stops recognising
+     * words and rank 12000 is where somebody comfortable does. Nothing else can
+     * know which of those is on the sofa. */
+    el.studyRank = slider("Rarer than rank", 500, 25000, 500, 4000, (value) =>
+      window.__ssoStudy?.updateSettings({ rarityRank: value }),
+    );
+    el.studyRank.row.title =
+      "A word this far down the frequency list, or missing from it, gets underlined. " +
+      "Lower catches more words.";
+
+    const which = document.createElement("div");
+    which.className = "sso-row";
+    const whichLabel = document.createElement("span");
+    whichLabel.className = "sso-note";
+    whichLabel.style.flex = "1";
+    whichLabel.textContent = "Language being learnt";
+    el.studySlotButtons = [0, 1].map((slot) => {
+      const b = button(`Subtitle ${slot + 1}`, {
+        onClick: () => window.__ssoStudy?.updateSettings({ studySlot: slot }),
+      });
+      b.className = "sso-seg__b";
+      return b;
+    });
+    which.append(whichLabel, ...el.studySlotButtons);
+
+    const actions = document.createElement("div");
+    actions.className = "sso-row";
+    actions.style.marginTop = "8px";
+    actions.append(
+      button("Saved words", {
+        onClick: () => chrome.runtime.sendMessage({ type: "sso:openOptions", hash: "#deck" }),
+        title: "Open the deck on the options page",
+      }),
+    );
+
+    wrap.append(
+      note,
+      el.studyEnabled.row,
+      el.studyAuto.row,
+      el.studyRank.row,
+      which,
+      el.studyPause.row,
+      actions,
     );
     return wrap;
   }
@@ -637,44 +855,86 @@
 
   function refresh(status) {
     if (!host) return;
+    const settings = status.settings;
 
-    el.attached.textContent = status.attached
-      ? `${status.label || `${status.cueCount} lines`} · ${status.cueCount} lines`
-      : status.hasVideo
-        ? "Nothing attached yet."
-        : "No video detected on this page.";
+    el.noneNote.hidden = status.attached;
+    el.noneNote.textContent = status.hasVideo
+      ? "Nothing attached yet."
+      : "No video detected on this page.";
 
-    el.offsetRow.hidden = !status.attached;
+    status.tracks.forEach((track, slot) => {
+      const card = el.trackCards[slot];
+      const geometry = settings.tracks[slot];
+      /* An empty track's card is not shown at all. A second set of controls
+       * that do nothing is worse than no second set: it says the feature is
+       * broken rather than unused. */
+      card.root.hidden = !track.attached;
+      if (!track.attached) return;
+
+      card.label.textContent = `${slot + 1}. ${track.label || "Attached"} · ${track.cueCount} lines`;
+      card.keyed.checked = status.keyTrack === slot;
+      // With one subtitle there is nothing for the keys to be ambiguous about.
+      card.keyed.hidden = status.trackCount < 2;
+      card.offsetValue.textContent = api.formatOffset(track.offsetMs);
+      card.visible.textContent = track.visible ? "Hide" : "Show";
+      card.size.input.value = String(geometry.fontScale);
+      card.size.readout.textContent = String(geometry.fontScale);
+      card.width.input.value = String(Math.round(geometry.widthPercent));
+      card.width.readout.textContent = `${Math.round(geometry.widthPercent)}%`;
+    });
+
     const drift = status.adDriftMs || 0;
     el.adRow.hidden = !status.attached || (drift === 0 && !status.inAd);
     el.adDrift.textContent = status.inAd
       ? "Ad playing — subtitles paused"
       : `Ad time removed: ${(drift / 1000).toFixed(0)}s`;
-    el.actionsRow.hidden = !status.attached;
-    el.offsetValue.textContent = api.formatOffset(status.offsetMs);
-    el.toggleVisible.textContent = status.visible ? "Hide subtitles" : "Show subtitles";
 
-    const settings = status.settings;
-    el.fontScale.input.value = String(settings.fontScale);
-    el.fontScale.readout.textContent = String(settings.fontScale);
-    el.widthPercent.input.value = String(Math.round(settings.widthPercent));
-    el.widthPercent.readout.textContent = `${Math.round(settings.widthPercent)}%`;
+    for (const [slot, b] of el.targetButtons.entries()) {
+      b.dataset.on = targetSlot === slot ? "true" : "false";
+      b.textContent = status.tracks[slot].attached ? `Subtitle ${slot + 1} ⟳` : `Subtitle ${slot + 1}`;
+      b.title = status.tracks[slot].attached
+        ? "Replace what is on this one"
+        : "Attach the next result here";
+    }
+
     el.background.input.value = String(settings.background);
     el.background.readout.textContent = String(settings.background);
     el.placeButton.textContent = status.placing ? "Done" : "Move";
     el.position.textContent = status.placing
-      ? "Drag the stand-in, then Done"
-      : settings.placed
-      ? `Position ${Math.round(settings.posX)}% x ${Math.round(settings.posY)}% — drag the middle to move, an edge to resize`
-      : "Drag the middle of the subtitle to move it, an edge to resize";
+      ? "Drag a stand-in, then Done"
+      : "Drag the middle of a subtitle to move it, an edge to resize";
     el.rewrap.input.checked = Boolean(settings.rewrap);
     el.showSymbols.input.checked = Boolean(settings.showSymbols);
     el.dimNonSpeech.input.checked = Boolean(settings.dimNonSpeech);
+
+    refreshStudy();
 
     for (const [name] of KEY_FIELDS) {
       el.keyButtons[name].textContent = describeCode(settings.keys[name]);
     }
     el.keysToggle.textContent = settings.keysEnabled ? "Disable keys" : "Enable keys";
+  }
+
+  function refreshStudy() {
+    const study = window.__ssoStudy?.settings?.();
+    // study.js is a separate content script; if it did not load there is
+    // nothing to configure and the section should not claim otherwise.
+    el.studySection.hidden = !study;
+    if (!study) return;
+
+    el.studyEnabled.input.checked = study.enabled;
+    el.studyAuto.input.checked = study.auto;
+    el.studyPause.input.checked = study.pauseOnPin;
+    el.studyRank.input.value = String(study.rarityRank);
+    el.studyRank.readout.textContent = study.rarityRank.toLocaleString();
+    for (const [slot, b] of el.studySlotButtons.entries()) {
+      b.dataset.on = study.studySlot === slot ? "true" : "false";
+    }
+
+    // Everything below the switch only means something once it is on.
+    for (const row of [el.studyAuto.row, el.studyRank.row, el.studyPause.row]) {
+      row.dataset.off = study.enabled ? "false" : "true";
+    }
   }
 
   // --- lifecycle ------------------------------------------------------------
@@ -687,7 +947,12 @@
     reparent();
     setHostVisible(host, true);
     unsubscribe ||= api.subscribe(refresh);
-    refresh(api.status());
+    // Point the next attach at the first free subtitle, which is what somebody
+    // opening the panel is nearly always about to fill.
+    const status = api.status();
+    targetSlot = status.tracks.findIndex((track) => !track.attached);
+    if (targetSlot === -1) targetSlot = 0;
+    refresh(status);
     if (!el.query.value) el.query.value = bestPageTitle();
   }
 
