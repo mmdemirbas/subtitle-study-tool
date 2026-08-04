@@ -9,7 +9,7 @@
 import {
   DaemonDownError,
   attachToTab,
-  bestTitleForTab,
+  pageContextForTab,
   pickBest,
   subtitleContext,
   tabStatus,
@@ -123,6 +123,17 @@ async function handleDaemonCall(op, args, sender) {
       return fetchSubtitle(args.fileId, args.context || {});
     case "settings":
       return updateSettings(args.patch || {});
+
+    /* The panel runs inside the player's frame, which on an embedded player can
+     * see neither the page's metadata nor the episode list - and cannot reach
+     * across the origin boundary to look. The worker can address every frame,
+     * so the panel asks it, the way it already asks for everything else. */
+    case "pageContext": {
+      const tab = await tabToDiagnose(args.tabId, sender);
+      if (!tab?.id) return { error: "no tab" };
+      const status = await tabStatus(tab.id);
+      return pageContextForTab(tab, status?.frameId ?? TOP_FRAME);
+    }
     case "sync":
       return syncNow();
     case "cacheList":
@@ -237,12 +248,24 @@ async function runCommand(command) {
  */
 async function planAutoAttach(tab, frameId) {
   const languages = await preferredLanguages();
-  // Prefer what the page says it is over the tab title. Prime Video titles a
-  // detail page "Prime Video: Crime 101"; og:title says "Crime 101".
-  const { title, year, source } = await bestTitleForTab(tab, frameId);
-  const found = await search({ title, year, languages });
+  /* Every frame contributes what it knows and the best of it is used. Prefer
+   * what the page says it is over the tab title: Prime Video titles a detail
+   * page "Prime Video: Crime 101"; og:title says "Crime 101". And prefer
+   * whichever frame names the episode, which on an embedded player is often
+   * the player's frame and nowhere else. */
+  const context = await pageContextForTab(tab, frameId);
+  const { title, year, season, episode } = context;
+  const found = await search({ title, year, season, episode, languages });
 
-  const plan = { languages, title, year, titleSource: source, found };
+  const plan = {
+    languages,
+    title,
+    year,
+    titleSource: context.titleSource,
+    episodeSource: context.episodeSource,
+    context,
+    found,
+  };
 
   if (found.error) return { ...plan, decision: "error", reason: found.error };
 
@@ -253,6 +276,29 @@ async function planAutoAttach(tab, frameId) {
 
   if (!best) {
     return { ...plan, decision: "nothing-found", reason: `No subtitles found for "${query}"` };
+  }
+
+  /* A series whose episode nobody could name is not a confident match, whatever
+   * the title scored.
+   *
+   * Measured on one: the title resolves perfectly, fifty results come back
+   * spanning four seasons, and twenty-six of them share the winning score - so
+   * the tiebreaks decide which episode gets downloaded, and those are language
+   * and whether a file is already on disk. Neither knows what is on screen. The
+   * result is a subtitle for the right series and the wrong episode, which is
+   * indistinguishable from one that has drifted and sends the viewer looking at
+   * the timing for an hour.
+   *
+   * So it refuses, exactly as it does for a film that matched badly, and for
+   * the same reason: it will not spend a download on a guess. */
+  const wantsEpisode = /tv|show|series|episode/i.test(found.resolved?.type || "");
+  const askedEpisode = found.used?.season != null || found.used?.episode != null;
+  if (wantsEpisode && !askedEpisode) {
+    return {
+      ...plan,
+      decision: "unknown-episode",
+      reason: `"${query}" is a series and nothing on the page says which episode — pick one in the panel`,
+    };
   }
 
   /* Refuse to spend a download on something that does not look like what was
@@ -293,7 +339,8 @@ async function autoAttach(tab, frameId, status) {
       return;
     }
 
-    if (plan.decision === "too-weak") {
+    // Both of these mean "a human has to choose", so both open the panel.
+    if (plan.decision === "too-weak" || plan.decision === "unknown-episode") {
       await send(tab.id, frameId, { type: "sso:togglePanel" });
       await notify(tab.id, frameId, plan.reason);
       return;

@@ -283,9 +283,15 @@
   function pageInfo() {
     const candidates = [];
 
+    /* Each candidate carries whatever episode is written into it.
+     *
+     * Parsed here rather than in the worker so that exactly one copy of the
+     * pattern exists. The worker has to *choose* between candidates from
+     * different frames - and choosing needs to know which of them name an
+     * episode - but it never has to read one. */
     const push = (value, source) => {
       const text = String(value || "").trim();
-      if (text) candidates.push({ text, source });
+      if (text) candidates.push({ text, source, episode: matchEpisode(text) });
     };
 
     let year = null;
@@ -322,7 +328,21 @@
       noteYear(near.slice(0, 400));
     }
 
-    return { candidates, year, url: location.href };
+    /* The three places a frame can learn which episode is playing, reported
+     * separately rather than resolved here. Which of them to trust depends on
+     * whether this frame is the one holding the video, and a frame does not
+     * know that about itself - the worker does. */
+    return {
+      candidates,
+      year,
+      url: location.href,
+      isTopFrame: window === window.top,
+      episode: {
+        fromTitle: matchEpisode(document.title),
+        fromMarker: selectedEpisodeOnPage(),
+        fromUrl: matchEpisode(decodeURIComponent(location.pathname + location.search)),
+      },
+    };
   }
 
   function readJsonLd() {
@@ -336,6 +356,51 @@
       }
     }
     return found;
+  }
+
+  // --- placing things in a page that may have moved the coordinate system ----
+
+  /* Work out how this element's own left/top relate to viewport pixels.
+   *
+   * `position: fixed` is only relative to the viewport while no ancestor has a
+   * transform, filter, perspective or backdrop-filter - any of those makes that
+   * ancestor the containing block instead. Streaming pages do this routinely,
+   * and the overlay re-parents itself into the fullscreen element, so injected
+   * UI regularly lands inside one.
+   *
+   * Two shapes of breakage follow, and they look different to a user. A
+   * translated ancestor displaces everything by a constant: the panel is simply
+   * somewhere else. A *scaled* one changes the rate: writing 100px moves it
+   * 80px, so it drifts out from under the pointer as you drag - reported as
+   * "it doesn't move at the same speed as the mouse". Measured on a container
+   * at scale(0.8): 0.8 exactly.
+   *
+   * Both are the same linear mapping, viewport = origin + scale x local, so two
+   * probes solve it. Done once when a drag starts; the writes happen inside one
+   * event handler, so no frame is painted between them and nothing flickers.
+   */
+  function measurePlacement(element, apply) {
+    apply(0, 0);
+    const at0 = element.getBoundingClientRect();
+    apply(100, 100);
+    const at100 = element.getBoundingClientRect();
+
+    // A zero delta would mean the element cannot be moved at all; treating that
+    // as 1 keeps a drag harmless rather than dividing by zero.
+    const scaleX = (at100.left - at0.left) / 100 || 1;
+    const scaleY = (at100.top - at0.top) / 100 || 1;
+
+    return {
+      scaleX,
+      scaleY,
+      /** Where to write, to land at this point on the screen. */
+      toLocal(viewportX, viewportY) {
+        return {
+          x: (viewportX - at0.left) / scaleX,
+          y: (viewportY - at0.top) / scaleY,
+        };
+      },
+    };
   }
 
   // --- diagnostics ----------------------------------------------------------
@@ -434,6 +499,23 @@
    * applied before the filter is a cap on the answer. */
   const MAX_MARKERS_REPORTED = 40;
   const MAX_NODES_SCANNED = 4000;
+
+  /* The episode this page says is being watched, from whatever control marks a
+   * selection. Stops at the first one, unlike the diagnostic scan below which
+   * gathers everything: this answers "which episode", that one answers "what
+   * did you see", and only the second has a reason to keep looking. */
+  function selectedEpisodeOnPage() {
+    let scanned = 0;
+    for (const node of document.querySelectorAll("a,button,li,span,div,option")) {
+      if (++scanned > MAX_NODES_SCANNED) break;
+      if (node.children.length > 2) continue;
+      const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+      if (!text || text.length > 60) continue;
+      const match = matchEpisode(text);
+      if (match && selectionEvidence(node).length > 0) return match;
+    }
+    return null;
+  }
 
   function episodeMarkers() {
     const found = [];
@@ -715,6 +797,27 @@
   }
 
   function onCuePointerMove(slot, event) {
+    /* End a drag whose release was never seen.
+     *
+     * This is the bug behind "I don't even drag, I just hover over the subtitle
+     * and it jumps somewhere else". A press captures the pointer, so while the
+     * capture is held *every* pointer event in the page retargets to the cue
+     * box - which is what makes the feature work. If the matching release never
+     * arrives, that state never ends, and the next time the mouse moves
+     * anywhere the subtitle teleports to it.
+     *
+     * The release goes missing more easily than it sounds: players call
+     * stopPropagation on pointer events inside the player surface, the button
+     * can be let go outside the window, and a page that re-renders under the
+     * pointer can swallow it. Rather than enumerate those, notice the state
+     * that all of them leave behind - a live drag with no button held - and end
+     * it. `buttons` is a bitmask of what is currently down, so zero means the
+     * user is not pressing anything, whatever we were told earlier. */
+    if (drag && event.pointerId === drag.pointerId && event.buttons === 0) {
+      onCuePointerUp(event);
+      return;
+    }
+
     if (!drag || event.pointerId !== drag.pointerId) {
       // Not dragging: say which of the two things a press here would do.
       if (!drag) {
@@ -1179,9 +1282,10 @@
     saveOffset(track);
     notify();
     if (quiet) return;
-    // Name the track only when there are two of them to confuse.
-    const which = attachedTracks().length > 1 ? `Subtitle ${slot + 1}` : "Subtitle";
-    showToast(`${which} offset ${formatOffset(track.offsetMs)}`);
+    // Name the track only when there are two of them to confuse, and say what
+    // the correction did rather than what number it is now.
+    const which = attachedTracks().length > 1 ? `Subtitle ${slot + 1}` : "Subtitles";
+    showToast(`${which} ${describeOffset(track.offsetMs)}`);
   }
 
   const nudge = (deltaMs, { slot = state.keyTrack } = {}) =>
@@ -1190,6 +1294,21 @@
   function formatOffset(ms) {
     const seconds = (ms / 1000).toFixed(2).replace(/\.?0+$/, "");
     return `${ms > 0 ? "+" : ""}${seconds || "0"}s`;
+  }
+
+  /* The offset in words rather than as a signed number.
+   *
+   * A sign is only meaningful once you know the convention, and the convention
+   * here - film time is stream time minus the offset, so a larger offset shows
+   * the line later - is not something anybody should have to hold in their head
+   * while a film is playing. What a viewer perceives is "the text came before
+   * they spoke", and the shortest path from that to a correction is for the
+   * control to be labelled with the symptom and the readout to say what was
+   * done about it. */
+  function describeOffset(ms) {
+    if (!ms) return "matching the file";
+    const seconds = (Math.abs(ms) / 1000).toFixed(2).replace(/\.?0+$/, "");
+    return ms > 0 ? `held back ${seconds}s` : `brought forward ${seconds}s`;
   }
 
   // --- keyboard -------------------------------------------------------------
@@ -1480,6 +1599,10 @@
     setOffset,
     nudge,
     formatOffset,
+    describeOffset,
+    // Shared by the panel and the study rail, which are both dragged around a
+    // page whose coordinate system is not necessarily the viewport's.
+    measurePlacement,
     setPlacing(on) {
       state.placing = Boolean(on);
       for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
@@ -1568,7 +1691,17 @@
    * over the film - precisely where it needs to. Capture runs top-down before
    * any of that. mousemove as well as pointermove, because a few players
    * synthesise only one of the two. */
+  /* The other half of the stale-drag guard above. Capture phase, because a
+   * player that stops propagation on pointer events is exactly the situation
+   * that loses the release in the first place - a bubble-phase listener would
+   * be silenced by the same thing it exists to survive. */
+  function onGlobalPointerEnd(event) {
+    if (drag && event.pointerId === drag.pointerId) onCuePointerUp(event);
+  }
+
   document.addEventListener("keydown", onKeyDown, true);
+  document.addEventListener("pointerup", onGlobalPointerEnd, true);
+  document.addEventListener("pointercancel", onGlobalPointerEnd, true);
   document.addEventListener("pointermove", onPointerMove, { passive: true, capture: true });
   document.addEventListener("mousemove", onPointerMove, { passive: true, capture: true });
   document.addEventListener("fullscreenchange", attachToCorrectParent);
@@ -1585,6 +1718,8 @@
     clearTimeout(toastTimer);
     clearTimeout(handleTimer);
     document.removeEventListener("keydown", onKeyDown, true);
+    document.removeEventListener("pointerup", onGlobalPointerEnd, true);
+    document.removeEventListener("pointercancel", onGlobalPointerEnd, true);
     document.removeEventListener("pointermove", onPointerMove, { capture: true });
     document.removeEventListener("mousemove", onPointerMove, { capture: true });
     document.removeEventListener("fullscreenchange", attachToCorrectParent);

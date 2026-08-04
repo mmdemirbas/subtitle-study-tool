@@ -191,7 +191,14 @@ function condensePlan(plan, { frameId, label }) {
       title: plan.title,
       titleSource: plan.titleSource,
       year: plan.year,
+      season: plan.context?.season ?? null,
+      episode: plan.context?.episode ?? null,
+      episodeSource: plan.episodeSource,
       languages: plan.languages,
+      // How wide the merge was. One frame answering on a page with four is
+      // itself the finding.
+      framesAsked: plan.context?.framesAsked ?? null,
+      candidateCount: plan.context?.candidateCount ?? null,
     },
     // What the daemon made of it after cleaning the title up.
     searchedFor: plan.found?.used || null,

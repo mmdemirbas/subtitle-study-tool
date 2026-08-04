@@ -123,6 +123,7 @@
   }
 
   async function build() {
+    await loadOpenSections();
     host = createHost();
     shadow = host.attachShadow({ mode: "open" });
     shadow.adoptedStyleSheets = [await loadStyles()];
@@ -142,11 +143,35 @@
     close.addEventListener("click", hide);
     head.append(title, close);
 
+    /* Double-click the bar to put the panel back under the CC button. A panel
+     * dragged somewhere unhelpful - behind the player's own controls, half off
+     * a screen that has since been resized - otherwise has to be dragged back
+     * from wherever it went, which is the situation that made it unhelpful. */
+    head.addEventListener("dblclick", (event) => {
+      if (event.target.closest("button")) return;
+      host.style.setProperty("left", "auto", "important");
+      host.style.setProperty("right", `${HANDLE_RIGHT}px`, "important");
+      host.style.setProperty("top", `${HANDLE_TOP + HANDLE_HEIGHT + GAP}px`, "important");
+      chrome.storage.local.remove(POSITION_KEY).catch(() => {});
+      api.showToast("Panel back to the corner");
+    });
+
     const body = document.createElement("div");
     body.className = "sso-panel__body";
-    body.append(
-      buildTracks(),
-      buildSearch(),
+
+    /* Two tiers, not seven sections.
+     *
+     * Only two of these are opened while a film is playing: what is attached
+     * and how it is timed, and finding something to attach. The other five are
+     * set once - where the boxes go, how they look, study, key bindings,
+     * diagnostics - and having them all in the column made a panel taller than
+     * the video it sits on.
+     *
+     * So the rest fold away behind one control. Nothing is removed and nothing
+     * is behind a mode; the default is simply the two that get used. */
+    const more = document.createElement("div");
+    more.className = "sso-more";
+    more.append(
       buildArrangement(),
       buildAppearance(),
       buildStudy(),
@@ -154,20 +179,236 @@
       buildDiagnostics(),
     );
 
-    panel.append(head, body);
+    el.moreToggle = button("More settings", {
+      onClick: () => setMoreOpen(more.dataset.open !== "true"),
+    });
+    el.moreToggle.className = "sso-more__toggle";
+    el.more = more;
+
+    const setMoreOpen = (open) => {
+      more.dataset.open = open ? "true" : "false";
+      el.moreToggle.textContent = open ? "Fewer settings" : "More settings";
+      el.moreToggle.setAttribute("aria-expanded", open ? "true" : "false");
+      chrome.storage.local.set({ [MORE_KEY]: open }).catch(() => {});
+      fitToViewport();
+    };
+    setMoreOpen(moreOpen);
+
+    body.append(buildTracks(), buildSearch(), el.moreToggle, more);
+
+    panel.append(head, body, buildResizeGrip(body));
     shadow.append(panel);
     makeDraggable(head);
+    containGestures(panel);
+    await restoreSize();
     return host;
   }
 
+  /* A corner grip that sets both dimensions at once.
+   *
+   * Width matters because the panel holds film titles and release names, which
+   * are long and get truncated; height matters because how much of the film the
+   * panel is allowed to cover is a judgement about the film, not about the
+   * panel. One grip for both is what a window corner has always been, and it
+   * saves a second control on a surface already accused of being too big.
+   *
+   * The height is applied to the scrolling body rather than the panel, so the
+   * header stays put and only the list gets shorter. */
+  const MIN_WIDTH = 280;
+  const MAX_WIDTH = 640;
+  const MIN_BODY = 140;
+
+  function buildResizeGrip(body) {
+    const grip = document.createElement("div");
+    grip.className = "sso-grip";
+    grip.title = "Drag to resize";
+
+    let from = null;
+    grip.addEventListener("pointerdown", (event) => {
+      from = {
+        x: event.clientX,
+        y: event.clientY,
+        width: host.getBoundingClientRect().width,
+        height: body.getBoundingClientRect().height,
+      };
+      grip.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      event.stopPropagation();
+    });
+
+    grip.addEventListener("pointermove", (event) => {
+      if (!from) return;
+      const width = clamp(from.width + (event.clientX - from.x), MIN_WIDTH, MAX_WIDTH);
+      const height = clamp(
+        from.height + (event.clientY - from.y),
+        MIN_BODY,
+        Math.max(MIN_BODY, window.innerHeight - 120),
+      );
+      applySize(width, height);
+    });
+
+    const end = (event) => {
+      if (!from) return;
+      from = null;
+      grip.releasePointerCapture?.(event.pointerId);
+      chrome.storage.local
+        .set({
+          [SIZE_KEY]: {
+            width: host.getBoundingClientRect().width,
+            body: body.getBoundingClientRect().height,
+          },
+        })
+        .catch(() => {});
+    };
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
+    return grip;
+  }
+
+  const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
+
+  /* The height the user asked for, which is not always the height they can
+   * have: a panel dragged down the screen has less room beneath it than one in
+   * the corner. Kept apart from what gets applied so that moving it back up
+   * restores the size rather than having silently lost it. */
+  let preferredBody = 420;
+
+  function applySize(width, bodyHeight) {
+    // Inline !important, like every other geometry property on the host: the
+    // page's own rules reach the host and a plain assignment would lose to them.
+    host.style.setProperty("width", `${Math.round(width)}px`, "important");
+    preferredBody = bodyHeight;
+    fitToViewport();
+  }
+
+  /* Keep the whole panel on the screen.
+   *
+   * A maximum height alone is not enough - a panel 500px tall starting 400px
+   * down a 780px window still runs off the bottom, taking the second tier and
+   * anything below it with it. What is available is the room under wherever the
+   * panel currently is, so this runs after anything that changes that: opening
+   * it, dragging it, folding a section, resizing the window. */
+  function fitToViewport() {
+    if (!host || host.hidden || !shadow) return;
+    const body = shadow.querySelector(".sso-panel__body");
+    if (!body) return;
+
+    const hostBox = host.getBoundingClientRect();
+    const bodyBox = body.getBoundingClientRect();
+    // Everything that is not the scrolling list: the title bar, borders.
+    const furniture = hostBox.height - bodyBox.height;
+    const available = window.innerHeight - hostBox.top - furniture - 12;
+    body.style.setProperty("max-height", `${Math.round(Math.max(MIN_BODY, Math.min(preferredBody, available)))}px`);
+  }
+
+  async function restoreSize() {
+    try {
+      const stored = await chrome.storage.local.get(SIZE_KEY);
+      const size = stored[SIZE_KEY];
+      if (size?.width) applySize(size.width, size.body || preferredBody);
+    } catch {
+      // The default size is fine.
+    }
+  }
+
+  /* Keep the panel's own gestures inside the panel.
+   *
+   * A video player binds the wheel and the arrow keys to volume and seeking, on
+   * document, and those listeners do not care that the pointer is over an
+   * injected panel - so scrolling this list changed the volume, and it did so
+   * while the list was scrolling, which reads as the page fighting back.
+   *
+   * stopPropagation, never preventDefault: the panel's own scrolling is the
+   * browser's default action for the wheel and must go on working. What is
+   * being stopped is the page *also* hearing about it. CSS overscroll-behavior
+   * handles the other half - a player that relies on scroll chaining rather
+   * than on its own listener.
+   *
+   * Keys are stopped for the same reason but only where they mean something
+   * else here: typing in the search box, and the arrows and page keys, which a
+   * player treats as seek and volume. content.js's own bindings already ignore
+   * events from a field, and they are the extension's, not the page's. */
+  const PLAYER_KEYS = /^(Arrow|Page|Home|End|Space)/;
+
+  function containGestures(panel) {
+    panel.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
+    panel.addEventListener("keydown", (event) => {
+      const target = event.composedPath?.()[0] ?? event.target;
+      const typing =
+        target?.isContentEditable ||
+        /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || "");
+      if (typing || PLAYER_KEYS.test(event.code)) event.stopPropagation();
+    });
+  }
+
+  const OPEN_KEY = "sso:panelOpen";
+  const MORE_KEY = "sso:panelMore";
+  const SIZE_KEY = "sso:panelSize";
+  let moreOpen = false;
+
+  /* Which sections start open. The two that answer "what is on screen and how
+   * do I change it" - everything else is set once and then left alone, and a
+   * panel that shows all seven at full height is taller than the film. */
+  const OPEN_BY_DEFAULT = new Set(["Subtitles", "Find a subtitle"]);
+  let openSections = null; // filled from storage before the panel is built
+
+  /* Sections collapse.
+   *
+   * The panel began as timing controls and has since acquired search, layout,
+   * appearance, study and diagnostics. Every one of them earns its place and
+   * all of them at once is a column taller than the video it sits on. Folding
+   * is the honest fix: nothing is removed, nothing is hidden behind a mode, and
+   * the two sections in daily use are the ones that open by default.
+   *
+   * A real <button> for the header, so it is reachable by keyboard and says
+   * what it does, rather than a div with a click handler. */
   function section(heading) {
     const wrap = document.createElement("div");
     wrap.className = "sso-sec";
-    const h = document.createElement("p");
-    h.className = "sso-sec__h";
-    h.textContent = heading;
-    wrap.append(h);
+
+    const head = document.createElement("button");
+    head.type = "button";
+    head.className = "sso-sec__h";
+
+    const caret = document.createElement("span");
+    caret.className = "sso-sec__caret";
+    caret.textContent = "›"; // rotated by CSS when open
+    const label = document.createElement("span");
+    label.textContent = heading;
+    head.append(caret, label);
+
+    const apply = (open) => {
+      wrap.dataset.open = open ? "true" : "false";
+      head.setAttribute("aria-expanded", open ? "true" : "false");
+    };
+    apply(openSections?.has(heading) ?? OPEN_BY_DEFAULT.has(heading));
+
+    head.addEventListener("click", () => {
+      const open = wrap.dataset.open !== "true";
+      apply(open);
+      if (open) openSections.add(heading);
+      else openSections.delete(heading);
+      chrome.storage.local.set({ [OPEN_KEY]: [...openSections] }).catch(() => {});
+      fitToViewport();
+    });
+
+    /* No wrapper around the contents: a closed section hides everything that is
+     * not the header, with one CSS rule. That keeps every caller appending
+     * straight to the section as it always did, and means folding cannot
+     * introduce a layout box that changes how the contents lay out when open. */
+    wrap.append(head);
     return wrap;
+  }
+
+  async function loadOpenSections() {
+    if (openSections) return;
+    try {
+      const stored = await chrome.storage.local.get([OPEN_KEY, MORE_KEY]);
+      openSections = new Set(stored[OPEN_KEY] || [...OPEN_BY_DEFAULT]);
+      moreOpen = Boolean(stored[MORE_KEY]);
+    } catch {
+      openSections = new Set(OPEN_BY_DEFAULT);
+    }
   }
 
   function button(label, { primary = false, onClick, title } = {}) {
@@ -217,6 +458,83 @@
     return wrap;
   }
 
+  /* Click to nudge, hold to run, and the longer it runs the bigger the steps.
+   *
+   * A quarter-second per click is right for the last adjustment and useless for
+   * the first: a subtitle timed against a different release can be seventeen
+   * seconds out, which is sixty-eight clicks. Escalating while held covers both
+   * without a second pair of controls, a units menu, or the reader knowing in
+   * advance how far out it is - hold until it looks right, let go.
+   *
+   * Toasts are suppressed while running, or every repeat would raise one; the
+   * readout in the panel updates live and one toast lands on release.
+   */
+  const HOLD_DELAY_MS = 350; // a click stays a click
+  const HOLD_TICK_MS = 80;
+  const FAST_AFTER_MS = 900;
+  const FASTER_AFTER_MS = 2400;
+
+  function holdToRepeat(node, slot, direction) {
+    let timer = null;
+    let startedAt = 0;
+    let ranOn = false;
+
+    const stepFor = (heldMs) => {
+      const { smallStepMs, largeStepMs } = api.status().settings;
+      if (heldMs < FAST_AFTER_MS) return smallStepMs;
+      if (heldMs < FASTER_AFTER_MS) return largeStepMs;
+      return largeStepMs * 5;
+    };
+
+    const apply = (quiet) => {
+      const held = startedAt ? Date.now() - startedAt : 0;
+      const current = api.status().tracks[slot].offsetMs;
+      api.setOffset(current + direction * stepFor(held), { slot, quiet });
+    };
+
+    const stop = () => {
+      clearTimeout(timer);
+      timer = null;
+      if (!startedAt) return;
+      startedAt = 0;
+      // One toast for the whole gesture, naming where it ended up.
+      api.setOffset(api.status().tracks[slot].offsetMs, { slot });
+    };
+
+    const tick = () => {
+      apply(true);
+      timer = setTimeout(tick, HOLD_TICK_MS);
+    };
+
+    node.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0) return;
+      ranOn = true;
+      startedAt = Date.now();
+      apply(true);
+      timer = setTimeout(tick, HOLD_DELAY_MS);
+      node.setPointerCapture?.(event.pointerId);
+    });
+
+    for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
+      node.addEventListener(type, stop);
+    }
+
+    /* Keyboard activation still has to work, and it arrives as a click with no
+     * pointer before it. The flag tells the two apart rather than letting a
+     * mouse press count twice. */
+    node.addEventListener("click", () => {
+      if (ranOn) {
+        ranOn = false;
+        return;
+      }
+      startedAt = Date.now();
+      apply(false);
+      startedAt = 0;
+    });
+
+    return node;
+  }
+
   function buildTrackCard(slot) {
     const root = document.createElement("div");
     root.className = "sso-track";
@@ -238,19 +556,82 @@
 
     head.append(keyed, label);
 
+    /* Say what is wrong, not which way to push a number.
+     *
+     * What a viewer perceives is "the text came up before they spoke". Turning
+     * that into a sign means knowing that film time is stream time minus the
+     * offset, so a larger offset shows the line later - which nobody should
+     * have to work out while a film is playing, and getting it backwards
+     * doubles the error and makes the next guess harder.
+     *
+     * So the buttons carry the complaint and the readout says what was done
+     * about it. Shift gives the coarse step, matching the bracket keys. */
     const offsets = document.createElement("div");
-    offsets.className = "sso-row";
+    offsets.className = "sso-row sso-sync";
     const offsetValue = document.createElement("span");
     offsetValue.className = "sso-offset";
-    offsetValue.textContent = "0s";
+
     offsets.append(
-      button("−1s", { onClick: () => api.nudge(-1000, { slot }), title: "1s earlier" }),
-      button("−¼", { onClick: () => api.nudge(-250, { slot }) }),
-      offsetValue,
-      button("+¼", { onClick: () => api.nudge(250, { slot }) }),
-      button("+1s", { onClick: () => api.nudge(1000, { slot }), title: "1s later" }),
-      button("Reset", { onClick: () => api.setOffset(0, { slot }) }),
+      holdToRepeat(
+        button("Text is early", {
+          title:
+            "The line appears before it is spoken, so hold it back. " +
+            "Click to nudge, hold to run.",
+        }),
+        slot,
+        +1,
+      ),
+      holdToRepeat(
+        button("Text is late", {
+          title:
+            "The line appears after it is spoken, so bring it forward. " +
+            "Click to nudge, hold to run.",
+        }),
+        slot,
+        -1,
+      ),
     );
+
+    /* The readout sits under the buttons rather than between them. Three
+     * controls and a reading do not fit across 340px - the Reset was rendering
+     * past the edge of the panel - and they are two different things anyway:
+     * above is what you tell it, below is what it did.
+     *
+     * The reading is also an input. Holding a button runs the offset up
+     * quickly, but somebody who already knows the answer - a subtitle timed for
+     * a release seventeen seconds out - should be able to say seventeen rather
+     * than hold a button until it arrives. Signed seconds, with the words next
+     * to it saying which way that is, so the number never has to be decoded
+     * from the sign alone. */
+    const offsetState = document.createElement("div");
+    offsetState.className = "sso-row sso-sync__state";
+
+    const offsetField = document.createElement("input");
+    offsetField.type = "number";
+    offsetField.step = "0.25";
+    offsetField.className = "sso-sync__field";
+    offsetField.title = "Seconds. Negative brings the subtitle forward.";
+    offsetField.setAttribute("aria-label", "Offset in seconds");
+    const commitField = () => {
+      const seconds = Number(offsetField.value);
+      if (Number.isFinite(seconds)) api.setOffset(Math.round(seconds * 1000), { slot });
+    };
+    offsetField.addEventListener("change", commitField);
+    offsetField.addEventListener("keydown", (event) => {
+      event.stopPropagation(); // typing must not reach the nudge bindings
+      if (event.key === "Enter") commitField();
+    });
+
+    const unit = document.createElement("span");
+    unit.className = "sso-note";
+    unit.textContent = "s";
+
+    const offsetReset = button("Reset", {
+      onClick: () => api.setOffset(0, { slot }),
+      title: "Back to the file's own timing",
+    });
+    offsetReset.className = "sso-linkish";
+    offsetState.append(offsetField, unit, offsetValue, offsetReset);
 
     const size = slider("Size", 0.6, 2.2, 0.05, 1, (value) =>
       api.updateTrackSettings(slot, { fontScale: value }),
@@ -269,8 +650,8 @@
     });
     actions.append(visible, button("Detach", { onClick: () => api.detach(slot) }));
 
-    root.append(head, offsets, size.row, width.row, actions);
-    return { root, keyed, label, offsetValue, size, width, visible };
+    root.append(head, offsets, offsetState, size.row, width.row, actions);
+    return { root, keyed, label, offsetValue, offsetField, offsetReset, size, width, visible };
   }
 
   // --- search ---------------------------------------------------------------
@@ -370,11 +751,19 @@
     el.searchNote.className = "sso-note";
     el.searchNote.textContent = "Searching…";
 
-    const info = api.pageInfo();
+    /* From the worker, not from this frame. The panel is injected into whichever
+     * frame holds the video, and on an embedded player that frame can see
+     * neither the page's metadata nor its episode list. */
+    const context = (await api.daemon("pageContext", {})) || {};
     const response = await api.daemon("search", {
       query,
-      title: query ? "" : (info.candidates[0]?.text || document.title),
-      year: info.year ?? undefined,
+      title: query ? "" : context.title || document.title,
+      year: context.year ?? undefined,
+      /* Sent even when the query was typed. The season and episode are facts
+       * about what is on screen, not about the words in the box - and a viewer
+       * typing "The Americans" is not asking for all six seasons at once. */
+      season: context.season ?? undefined,
+      episode: context.episode ?? undefined,
     });
     if (!response || response.transportError) {
       el.searchNote.className = "sso-note sso-note--warn";
@@ -500,9 +889,9 @@
     refresh(api.status());
   }
 
-  function bestPageTitle() {
-    const info = api.pageInfo();
-    return info.candidates[0]?.text || document.title;
+  async function bestPageTitle() {
+    const context = await api.daemon("pageContext", {});
+    return context?.title || api.pageInfo().candidates[0]?.text || document.title;
   }
 
   // --- arrangement ----------------------------------------------------------
@@ -837,25 +1226,73 @@
 
   // --- dragging -------------------------------------------------------------
 
+  /* Dragging, against a page that may have moved the coordinate system.
+   *
+   * `position: fixed` is only relative to the viewport while no ancestor has a
+   * transform, filter, perspective, backdrop-filter or `will-change` naming one
+   * - any of those makes that ancestor the containing block instead. Video
+   * players use transforms routinely, and the overlay re-parents itself into
+   * the fullscreen element, so the panel regularly lands inside one.
+   *
+   * The symptom is precise and was reported precisely: the panel moves, but not
+   * with the pointer. `left: 300px` puts it 300px from the *ancestor*, while
+   * `event.clientX` is measured from the viewport, so every position is out by
+   * the ancestor's offset and the panel slides away under the cursor.
+   *
+   * Rather than hunt for the offending ancestor, measure the error once: write
+   * a position, read back where the element actually landed, and keep the
+   * difference. Every position afterwards is corrected by it. This is exact for
+   * an offset containing block and costs one extra layout read per drag.
+   */
   function makeDraggable(handle) {
     let origin = null;
+
+    const place = (x, y) => setPosition(`${x}px`, `${y}px`);
 
     handle.addEventListener("pointerdown", (event) => {
       if (event.target.closest("button")) return;
       const box = host.getBoundingClientRect();
-      origin = { x: event.clientX - box.left, y: event.clientY - box.top };
+
+      // Solve the page's coordinate system, then put the panel back where the
+      // probe found it. Both happen in this handler, so nothing is painted in
+      // between and the panel does not flinch.
+      const map = api.measurePlacement(host, place);
+      const back = map.toLocal(box.left, box.top);
+      place(back.x, back.y);
+
+      origin = {
+        map,
+        // Where in the panel it was grabbed, so it does not jump on first move.
+        grabX: event.clientX - box.left,
+        grabY: event.clientY - box.top,
+      };
       handle.dataset.dragging = "true";
       handle.setPointerCapture(event.pointerId);
     });
 
     handle.addEventListener("pointermove", (event) => {
       if (!origin) return;
-      // Clamp so the panel can never be dragged fully off-screen.
-      const maxLeft = Math.max(0, window.innerWidth - host.offsetWidth);
-      const maxTop = Math.max(0, window.innerHeight - 40);
-      const left = Math.min(Math.max(0, event.clientX - origin.x), maxLeft);
-      const top = Math.min(Math.max(0, event.clientY - origin.y), maxTop);
-      setPosition(`${left}px`, `${top}px`);
+      // A live drag with nothing pressed means the release was lost. Same guard
+      // as the subtitle's, for the same reason - see onCuePointerMove.
+      if (event.buttons === 0) {
+        end(event);
+        return;
+      }
+      const box = host.getBoundingClientRect();
+      /* Clamped in viewport pixels, because the screen is what the panel must
+       * stay on. The header's height is the bound rather than a round number:
+       * it is the part that drags the panel back, so it is the part that has to
+       * remain reachable. */
+      const headerHeight = handle.getBoundingClientRect().height || 34;
+      const maxLeft = Math.max(0, window.innerWidth - box.width);
+      const maxTop = Math.max(0, window.innerHeight - headerHeight);
+      const left = Math.min(Math.max(0, event.clientX - origin.grabX), maxLeft);
+      const top = Math.min(Math.max(0, event.clientY - origin.grabY), maxTop);
+
+      const local = origin.map.toLocal(left, top);
+      place(local.x, local.y);
+      // Dragging down the screen leaves less room beneath.
+      fitToViewport();
     });
 
     const end = (event) => {
@@ -893,6 +1330,9 @@
     if (box.left > maxLeft || box.top > maxTop) {
       setPosition(`${Math.min(box.left, maxLeft)}px`, `${Math.min(box.top, maxTop)}px`);
     }
+    // A shorter window leaves less room under the panel, not just less room for
+    // it - so the list has to shrink as well as the panel moving.
+    fitToViewport();
   }
 
   async function restorePosition() {
@@ -910,6 +1350,10 @@
   function refresh(status) {
     if (!host) return;
     const settings = status.settings;
+    /* Attaching a second subtitle adds a whole card, so the panel gets taller
+     * while it is open. Re-fitting on every status round keeps it on the screen
+     * without anything having to remember to ask. */
+    queueMicrotask(fitToViewport);
 
     el.noneNote.hidden = status.attached;
     el.noneNote.textContent = status.hasVideo
@@ -925,11 +1369,22 @@
       card.root.hidden = !track.attached;
       if (!track.attached) return;
 
-      card.label.textContent = `${slot + 1}. ${track.label || "Attached"} · ${track.cueCount} lines`;
+      card.label.textContent =
+        `${slot + 1}. ${track.label || "Attached"} · ` +
+        `${track.cueCount} line${track.cueCount === 1 ? "" : "s"}`;
       card.keyed.checked = status.keyTrack === slot;
       // With one subtitle there is nothing for the keys to be ambiguous about.
       card.keyed.hidden = status.trackCount < 2;
-      card.offsetValue.textContent = api.formatOffset(track.offsetMs);
+      card.offsetValue.textContent = api.describeOffset(track.offsetMs);
+      card.offsetValue.dataset.set = track.offsetMs ? "true" : "false";
+      // Nothing to undo means no undo button, which is also the width that lets
+      // the reading sit on one line.
+      card.offsetReset.hidden = !track.offsetMs;
+      // Not while it is being typed into, or the value rewrites itself under
+      // the cursor between keystrokes.
+      if (shadow.activeElement !== card.offsetField) {
+        card.offsetField.value = String(Math.round(track.offsetMs) / 1000);
+      }
       card.visible.textContent = track.visible ? "Hide" : "Show";
       card.size.input.value = String(geometry.fontScale);
       card.size.readout.textContent = String(geometry.fontScale);
@@ -1007,7 +1462,17 @@
     targetSlot = status.tracks.findIndex((track) => !track.attached);
     if (targetSlot === -1) targetSlot = 0;
     refresh(status);
-    if (!el.query.value) el.query.value = bestPageTitle();
+    /* After the position is restored and the contents are drawn, never before:
+     * how much room is under the panel depends on where the panel is, and
+     * build() runs while it is still in the default corner. Fitting there and
+     * not again let a panel restored halfway down the screen hang off the
+     * bottom, taking the second tier of settings with it. */
+    fitToViewport();
+    // Asynchronous now that it crosses to the worker, so it fills in a moment
+    // after the panel appears rather than holding it up.
+    if (!el.query.value) bestPageTitle().then((title) => {
+      if (!el.query.value) el.query.value = title;
+    });
   }
 
   function hide() {

@@ -175,28 +175,104 @@ export async function tabStatus(tabId) {
  * about, so the content script's candidates are preferred and the tab title is
  * only the fallback.
  */
-export async function bestTitleForTab(tab, frameId) {
-  try {
-    const info = await chrome.tabs.sendMessage(
-      tab.id,
-      { type: "sso:pageInfo" },
-      options(frameId),
-    );
-    const best = info?.candidates?.[0];
+/* How much a source is worth, low is better. Structured metadata is what the
+ * site tells crawlers the page is about; a document title is whatever the page
+ * felt like calling itself. */
+const SOURCE_RANK = {
+  "json-ld": 0,
+  "json-ld-series": 1,
+  "og:title": 2,
+  "twitter:title": 3,
+  h1: 4,
+  "document.title": 5,
+};
+
+/**
+ * What the tab is playing, gathered from every frame at once.
+ *
+ * This does not choose a frame, and that is the whole point. Choosing one is
+ * wrong in both directions, measured on the same site: a player embedded from
+ * one host titles its frame "The Americans (2013) (2013) S01E01" - the only
+ * place on the page that names the episode - while the same site's other player
+ * has an empty title, and the page's own metadata is the only thing left. Ask
+ * for the top frame and the first case loses its episode; ask for the video's
+ * frame and the second case falls back to the tab title and resolves nothing.
+ *
+ * So every frame contributes candidates and the choice is made between the
+ * candidates. One that names an episode wins, because that is the fact which
+ * cannot be recovered further down the pipeline - a title can be cleaned up,
+ * a missing episode number cannot be guessed.
+ */
+export async function pageContextForTab(tab, videoFrameId = null) {
+  const reports = [];
+  for (const frameId of await frameIds(tab.id)) {
+    try {
+      const info = await chrome.tabs.sendMessage(tab.id, { type: "sso:pageInfo" }, options(frameId));
+      if (info?.candidates) reports.push({ frameId, info });
+    } catch {
+      // A frame with no content script contributes nothing, which is fine.
+    }
+  }
+
+  const candidates = reports.flatMap(({ frameId, info }) =>
+    info.candidates.map((candidate) => ({ ...candidate, frameId, year: info.year ?? null })),
+  );
+
+  candidates.sort((a, b) => {
+    const byEpisode = Number(Boolean(b.episode)) - Number(Boolean(a.episode));
+    if (byEpisode !== 0) return byEpisode;
+    const rank = (SOURCE_RANK[a.source] ?? 9) - (SOURCE_RANK[b.source] ?? 9);
+    if (rank !== 0) return rank;
+    // Among equals, the frame holding the video is describing what is loaded.
+    return Number(b.frameId === videoFrameId) - Number(a.frameId === videoFrameId);
+  });
+
+  const best = candidates[0];
+  const episode = pickEpisode(reports, videoFrameId);
+
+  return {
+    // The tab title is the last resort and a worse signal than any of the
+    // above, so it is worth knowing in the report when it was what got used.
+    title: best?.text || tab.title || "",
+    titleSource: best ? `${best.source} (frame ${best.frameId})` : "tab.title (fallback)",
     // The year travels with the title. Without it a common name like "Mercy"
     // cannot be resolved to one film - the index holds eighteen of them.
-    if (best?.text) {
-      return { title: best.text, year: info?.year ?? null, source: best.source };
+    year: best?.year ?? reports.map((r) => r.info.year).find((y) => y != null) ?? null,
+    season: episode?.season ?? null,
+    episode: episode?.episode ?? null,
+    episodeSource: episode?.source ?? null,
+    candidateCount: candidates.length,
+    framesAsked: reports.length,
+  };
+}
+
+/* Which statement about the episode to believe, most authoritative first.
+ *
+ * The player's own frame title outranks the page, because it describes what was
+ * actually loaded into the player - if a viewer picked one episode and the
+ * embed served another, that is the one on screen. The marked control comes
+ * next: it is what the viewer chose, and on a site whose player says nothing it
+ * is the only answer there is.
+ */
+function pickEpisode(reports, videoFrameId) {
+  const at = (frameId) => reports.find((report) => report.frameId === frameId)?.info.episode;
+  const fromVideoTitle = at(videoFrameId)?.fromTitle;
+  if (fromVideoTitle) return { ...fromVideoTitle, source: "the player frame's title" };
+
+  for (const key of ["fromMarker", "fromTitle", "fromUrl"]) {
+    const hit = reports.map((report) => report.info.episode?.[key]).find(Boolean);
+    if (hit) {
+      return {
+        ...hit,
+        source: {
+          fromMarker: "the control marked as chosen on the page",
+          fromTitle: "a frame title",
+          fromUrl: "the address",
+        }[key],
+      };
     }
-  } catch {
-    // No content script, or the frame went away.
   }
-  /* The tab title is the last resort and it is a *worse* signal than anything
-   * above, so it is worth knowing when it was used. On a page whose player is
-   * in a cross-origin iframe, the frame holding the video has none of the
-   * page's metadata, and this is the branch that runs - silently, which is what
-   * makes it hard to see from the outside. */
-  return { title: tab.title || "", year: null, source: "tab.title (fallback)" };
+  return null;
 }
 
 /**

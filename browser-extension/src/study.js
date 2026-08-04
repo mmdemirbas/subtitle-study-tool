@@ -784,25 +784,36 @@
 
   // --- geometry -----------------------------------------------------------------
 
+  /* Same coordinate-system problem as the control panel, same solution - see
+   * measurePlacement in content.js. A rail that slides out from under the
+   * pointer is the identical bug in the identical shape, and it would have been
+   * fixed in one place and not the other if this used its own arithmetic. */
   function makeDraggable(handle) {
     let origin = null;
+    const place = (x, y) => setPosition(`${x}px`, `${y}px`);
 
     handle.addEventListener("pointerdown", (event) => {
       if (event.target.closest("button")) return;
       const box = host.getBoundingClientRect();
-      origin = { x: event.clientX - box.left, y: event.clientY - box.top };
+
+      const map = api.measurePlacement(host, place);
+      const back = map.toLocal(box.left, box.top);
+      place(back.x, back.y);
+
+      origin = { map, grabX: event.clientX - box.left, grabY: event.clientY - box.top };
       handle.dataset.dragging = "true";
       handle.setPointerCapture(event.pointerId);
     });
 
     handle.addEventListener("pointermove", (event) => {
       if (!origin) return;
-      const maxLeft = Math.max(0, window.innerWidth - host.offsetWidth);
+      const box = host.getBoundingClientRect();
+      const maxLeft = Math.max(0, window.innerWidth - box.width);
       const maxTop = Math.max(0, window.innerHeight - 60);
-      setPosition(
-        `${Math.min(Math.max(0, event.clientX - origin.x), maxLeft)}px`,
-        `${Math.min(Math.max(0, event.clientY - origin.y), maxTop)}px`,
-      );
+      const left = Math.min(Math.max(0, event.clientX - origin.grabX), maxLeft);
+      const top = Math.min(Math.max(0, event.clientY - origin.grabY), maxTop);
+      const local = origin.map.toLocal(left, top);
+      place(local.x, local.y);
     });
 
     const end = (event) => {

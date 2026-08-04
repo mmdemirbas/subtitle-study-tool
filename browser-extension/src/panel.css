@@ -91,23 +91,88 @@
 
 /* --- sections -------------------------------------------------------------- */
 
+/* The body scrolls, the panel does not grow past the film.
+ *
+ * `overscroll-behavior: contain` is the load-bearing declaration. Without it a
+ * wheel gesture that reaches the end of this list continues into the page - and
+ * on a video player the page has bound the wheel to the volume, so scrolling to
+ * the bottom of the panel silently mutes the film. Contain stops the chaining
+ * at this boundary. The wheel event is also stopped from propagating in
+ * panel.js, which covers the players that listen for it on document instead of
+ * relying on the scroll actually chaining. */
 .sso-panel__body {
   padding: 10px 12px 12px;
+  max-height: min(70vh, 620px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .sso-sec + .sso-sec {
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: 8px;
+  padding-top: 8px;
   border-top: 1px solid #2b3039;
 }
 
-.sso-sec__h {
-  margin: 0 0 7px;
+/* The header is a button, so it is reachable by keyboard and announces its
+ * state. It has to be un-styled back to a heading first: the button rule below
+ * gives every button a background and a border, which on a full-width section
+ * header reads as a control rather than a title. */
+button.sso-sec__h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 4px 0;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.07em;
+  text-align: left;
   color: #8b929d;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button.sso-sec__h:hover {
+  color: #e8eaed;
+  background: none;
+}
+
+button.sso-sec__h:focus-visible {
+  outline: 2px solid #4c8bf5;
+  outline-offset: 2px;
+}
+
+.sso-sec__caret {
+  display: inline-block;
+  width: 8px;
+  font-size: 11px;
+  line-height: 1;
+  transition: transform 160ms ease;
+}
+
+.sso-sec[data-open="true"] .sso-sec__caret {
+  transform: rotate(90deg);
+}
+
+/* Everything that is not the header. No wrapper element is involved, so an open
+ * section lays out exactly as it did before sections could fold. */
+.sso-sec[data-open="false"] > :not(.sso-sec__h) {
+  display: none;
+}
+
+.sso-sec[data-open="true"] > .sso-sec__h {
+  margin-bottom: 5px;
+  color: #aab1bc;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sso-sec__caret {
+    transition: none;
+  }
 }
 
 .sso-row {
@@ -138,6 +203,139 @@
 
 .sso-note--warn {
   color: #e0a44d;
+}
+
+/* --- moving and resizing ----------------------------------------------------
+ *
+ * Both affordances have to be findable without being told they exist, over a
+ * moving picture, at a glance. The header shows a grab cursor and lifts on
+ * hover; the corner carries the diagonal lines that have meant "drag me" since
+ * windows had corners.
+ */
+
+.sso-panel {
+  position: relative; /* containing block for the corner grip */
+}
+
+.sso-panel__head {
+  cursor: grab;
+  user-select: none;
+  transition: background 160ms ease;
+}
+
+.sso-panel__head:hover {
+  background: #22272f;
+}
+
+.sso-panel__head[data-dragging="true"] {
+  cursor: grabbing;
+  background: #262c35;
+}
+
+.sso-grip {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  /* Two hairlines across the corner. Drawn rather than a glyph so it lands on
+   * the pixel grid at any zoom and needs no font to be present. */
+  background:
+    linear-gradient(135deg, transparent 45%, #566070 45%, #566070 55%, transparent 55%) no-repeat,
+    linear-gradient(135deg, transparent 70%, #566070 70%, #566070 80%, transparent 80%) no-repeat;
+  border-bottom-right-radius: 10px;
+}
+
+.sso-grip:hover {
+  background:
+    linear-gradient(135deg, transparent 45%, #8b929d 45%, #8b929d 55%, transparent 55%) no-repeat,
+    linear-gradient(135deg, transparent 70%, #8b929d 70%, #8b929d 80%, transparent 80%) no-repeat;
+}
+
+/* --- the second tier --------------------------------------------------------
+ *
+ * Five sections that are set once and then left alone, behind one control. Full
+ * width and quiet: it is a door, not an action, and it should not compete with
+ * the primary button in the section above it.
+ */
+
+button.sso-more__toggle {
+  width: 100%;
+  margin-top: 10px;
+  color: #8b929d;
+  background: none;
+  border: 1px dashed #333844;
+}
+
+button.sso-more__toggle:hover:not(:disabled) {
+  color: #e8eaed;
+  background: #22272f;
+}
+
+.sso-more[data-open="false"] {
+  display: none;
+}
+
+/* --- telling the subtitle to move -------------------------------------------
+ *
+ * The two buttons state the complaint, so they are the widest things in the
+ * row and the readout between them is what changed as a result.
+ */
+
+.sso-sync button {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+/* What it did, under what you told it. Two lines rather than one, because
+ * three controls and a reading do not fit across the panel - the Reset was
+ * rendering past its right edge - and because they are different kinds of
+ * thing: above is the instruction, below is the state. */
+.sso-sync__state {
+  margin-top: 4px;
+  gap: 6px;
+}
+
+/* Typed seconds, for when the number is already known. Narrow on purpose: it
+ * is an escape hatch beside the two buttons, not the primary control. */
+.sso-sync__field {
+  width: 62px;
+  padding: 3px 6px;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.sso-offset {
+  font-size: 11px;
+  color: #8b929d;
+}
+
+.sso-offset[data-set="true"] {
+  color: #e8eaed;
+  font-weight: 600;
+}
+
+/* A button that reads as a link: it undoes something rather than doing it, and
+ * a third bordered control on this card would compete with the two that matter. */
+button.sso-linkish {
+  padding: 0;
+  font-size: 11px;
+  color: #7f97c4;
+  background: none;
+  border: 0;
+  text-decoration: underline;
+}
+
+button.sso-linkish:hover:not(:disabled) {
+  color: #a9c0e8;
+  background: none;
+}
+
+button.sso-linkish[hidden] {
+  display: none;
 }
 
 /* --- one subtitle's controls ------------------------------------------------

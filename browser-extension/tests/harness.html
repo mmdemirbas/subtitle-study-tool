@@ -387,15 +387,23 @@
       /* Dragging the cue. The overlay is click-through apart from the cue
        * itself, which sits where people click to pause - so a press that does
        * not move must reach the player, and one that moves must not. */
+      /* `buttons` matters and used to be omitted.
+       *
+       * A real pointermove during a drag reports the button still held; only
+       * once it is released does it read zero. The overlay uses exactly that to
+       * notice a drag whose release went missing - a player that stops
+       * propagation on pointer events loses it routinely - so a helper that
+       * never sets `buttons` describes a gesture no mouse performs, and would
+       * make that guard look broken while the real bug it fixes went untested. */
       const dragCue = async (fromX, fromY, toX, toY) => {
         const cue = shadowOf().querySelector(".sso-cue");
         cue.setPointerCapture = () => {};
         cue.releasePointerCapture = () => {};
-        const ev = (type, x, y) => new PointerEvent(type,
-          { pointerId: 7, clientX: x, clientY: y, button: 0, bubbles: true });
-        cue.dispatchEvent(ev("pointerdown", fromX, fromY));
-        cue.dispatchEvent(ev("pointermove", toX, toY));
-        cue.dispatchEvent(ev("pointerup", toX, toY));
+        const ev = (type, x, y, buttons) => new PointerEvent(type,
+          { pointerId: 7, clientX: x, clientY: y, button: 0, buttons, bubbles: true });
+        cue.dispatchEvent(ev("pointerdown", fromX, fromY, 1));
+        cue.dispatchEvent(ev("pointermove", toX, toY, 1));
+        cue.dispatchEvent(ev("pointerup", toX, toY, 0));
         await sleep(120);
       };
 
@@ -412,6 +420,46 @@
         const s = window.__ssoApi.status().settings.tracks[0];
         if (!s.placed) throw new Error("placed flag not set");
         if (s.posY > 60) throw new Error(`posY still near the bottom: ${s.posY}`);
+      });
+
+      check("a lost release does not leave the subtitle following the pointer", async () => {
+        /* Reported as "I don't even drag, I just hover over the subtitle and it
+         * jumps somewhere else".
+         *
+         * A press captures the pointer, so while the capture is held every
+         * pointer event in the page retargets to the cue box - which is what
+         * makes dragging work at all. Lose the release and that never ends, so
+         * the next movement anywhere teleports the subtitle to it. Players do
+         * lose it: they call stopPropagation on pointer events inside the
+         * player surface.
+         */
+        window.__ssoApi.resetPosition();
+        await sleep(120);
+        const cue = () => shadowOf().querySelector(".sso-cue");
+        cue().setPointerCapture = () => {};
+        cue().releasePointerCapture = () => {};
+        const box = cue().getBoundingClientRect();
+
+        // Press and move, then let go without the cue box ever hearing about it.
+        const ev = (type, x, y, buttons) => new PointerEvent(type,
+          { pointerId: 11, clientX: x, clientY: y, buttons, button: 0, bubbles: true });
+        cue().dispatchEvent(ev("pointerdown", box.left + 30, box.top + 8, 1));
+        cue().dispatchEvent(ev("pointermove", 320, 300, 1));
+        await sleep(80);
+        const afterDrag = window.__ssoApi.status().settings.tracks[0];
+
+        // Now merely hover, with nothing pressed.
+        cue().dispatchEvent(ev("pointermove", 700, 120, 0));
+        await sleep(80);
+        cue().dispatchEvent(ev("pointermove", 250, 500, 0));
+        await sleep(120);
+        const afterHover = window.__ssoApi.status().settings.tracks[0];
+
+        if (afterHover.posX !== afterDrag.posX || afterHover.posY !== afterDrag.posY) {
+          throw new Error(
+            `hovering moved it from ${afterDrag.posX},${afterDrag.posY}` +
+            ` to ${afterHover.posX},${afterHover.posY}`);
+        }
       });
 
       check("the subtitle cannot be dragged off screen", async () => {
@@ -599,6 +647,117 @@
             `handle right edge at ${Math.round(handle.right)}, panel right edge at ${Math.round(panel.right)}`);
         if (panel.top < handle.bottom)
           throw new Error("panel overlaps the handle instead of hanging below it");
+      });
+
+      /* Dragging the panel on a page that has moved the coordinate system.
+       *
+       * `position: fixed` stops being relative to the viewport as soon as an
+       * ancestor has a transform, and streaming pages do that routinely. A
+       * translated ancestor puts the panel somewhere else; a *scaled* one makes
+       * it drift out from under the pointer as you drag, which is what "it
+       * doesn't move at the same speed as the mouse" is.
+       *
+       * Both are checked, because they are one mapping with two failure shapes
+       * and a fix for the first alone leaves the second exactly as it was.
+       */
+      const dragPanelTo = async (targetX, targetY) => {
+        const host = panelShadow().host;
+        const head = panelShadow().querySelector(".sso-panel__head");
+        // A synthetic PointerEvent has no live pointer behind it, so the real
+        // capture calls throw. Same stub the cue drag uses.
+        head.setPointerCapture = () => {};
+        head.releasePointerCapture = () => {};
+        const before = host.getBoundingClientRect();
+        const startX = before.left + 60;
+        const startY = before.top + 10;
+        const send = (type, x, y, buttons) =>
+          head.dispatchEvent(new PointerEvent(type,
+            { bubbles: true, composed: true, pointerId: 7, clientX: x, clientY: y, buttons }));
+        send("pointerdown", startX, startY, 1);
+        await sleep(20);
+        send("pointermove", targetX, targetY, 1);
+        await sleep(40);
+        send("pointerup", targetX, targetY, 0);
+        const after = host.getBoundingClientRect();
+        // The point that was grabbed should still be under the pointer.
+        return {
+          driftX: after.left - (targetX - (startX - before.left)),
+          driftY: after.top - (targetY - (startY - before.top)),
+        };
+      };
+
+      /* Both of these move the panel and must put it back. Later cases press
+       * the middle of the screen expecting to reach the player, and a panel
+       * left where it was dragged is over that point - which cost a run and
+       * presented as study mode eating a click it never saw. */
+      const parkPanel = () => {
+        panelShadow()
+          .querySelector(".sso-panel__head")
+          .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true }));
+      };
+
+      check("the panel follows the pointer inside a translated container", async () => {
+        document.body.style.transform = "translate(40px, 25px)";
+        try {
+          const { driftX, driftY } = await dragPanelTo(430, 300);
+          if (Math.abs(driftX) > 2 || Math.abs(driftY) > 2)
+            throw new Error(`drifted ${Math.round(driftX)},${Math.round(driftY)}px from the pointer`);
+        } finally {
+          document.body.style.transform = "";
+          parkPanel();
+        }
+      });
+
+      check("the panel follows the pointer inside a scaled container", async () => {
+        // The reported symptom: it moves, but not at the pointer's speed.
+        document.body.style.transform = "scale(0.8)";
+        try {
+          const { driftX, driftY } = await dragPanelTo(380, 260);
+          if (Math.abs(driftX) > 2 || Math.abs(driftY) > 2)
+            throw new Error(`drifted ${Math.round(driftX)},${Math.round(driftY)}px from the pointer`);
+        } finally {
+          document.body.style.transform = "";
+          parkPanel();
+        }
+      });
+
+      check("double-clicking the title bar parks the panel back in the corner", async () => {
+        await dragPanelTo(500, 420);
+        parkPanel();
+        await sleep(60);
+        const panel = panelShadow().host.getBoundingClientRect();
+        const handle = shadowOf().querySelector(".sso-handle").getBoundingClientRect();
+        if (Math.abs(handle.right - panel.right) > 8)
+          throw new Error(
+            `parked at ${Math.round(panel.right)}, handle is at ${Math.round(handle.right)}`);
+      });
+
+      check("a wheel over the panel does not reach the page", async () => {
+        /* Players bind the wheel to the volume, on document. Scrolling this
+         * list to its end used to carry on into the page and change it. */
+        let reachedPage = 0;
+        const count = () => reachedPage++;
+        document.addEventListener("wheel", count);
+        const body = panelShadow().querySelector(".sso-panel__body");
+        body.dispatchEvent(new WheelEvent("wheel", { bubbles: true, composed: true, deltaY: 120 }));
+        await sleep(40);
+        document.removeEventListener("wheel", count);
+        if (reachedPage > 0) throw new Error("the page saw the wheel event");
+      });
+
+      check("infrequent settings are folded away until asked for", async () => {
+        const more = panelShadow().querySelector(".sso-more");
+        const toggle = panelShadow().querySelector(".sso-more__toggle");
+        if (!more || !toggle) throw new Error("no second tier in the panel");
+        if (more.dataset.open === "true") toggle.click();
+        await sleep(40);
+        if (more.getBoundingClientRect().height > 0)
+          throw new Error("the folded settings still take up space");
+        toggle.click();
+        await sleep(40);
+        if (more.getBoundingClientRect().height === 0)
+          throw new Error("the settings did not come back");
+        toggle.click();
       });
 
       check("a Turkish Q bracket key nudges the offset", async () => {
@@ -820,9 +979,25 @@
          * rail docks on the right, and a point underneath a panel legitimately
          * belongs to the panel, which would make this assert the wrong thing. */
         const box = cueOf(0).getBoundingClientRect();
-        await dragCue(box.left + 3, box.top + 3, box.left + 3, box.top + 3);
+        const x = box.left + 3;
+        const y = box.top + 3;
+        await dragCue(x, y, x, y);
         player.removeEventListener("click", count);
-        if (reached === 0) throw new Error("study mode swallowed a click meant for the film");
+        if (reached === 0) {
+          /* Name what took it. "Swallowed" sends the reader into study mode's
+           * pointer handling, and the last two times this failed the cause was
+           * something else sitting over the point - which the message can say
+           * and a reader cannot guess. */
+          const boxes = [...shadowOf().querySelectorAll(".sso-cue")];
+          const previous = boxes.map((b) => b.style.pointerEvents);
+          boxes.forEach((b) => (b.style.pointerEvents = "none"));
+          const hit = document.elementFromPoint(x, y);
+          boxes.forEach((b, i) => (b.style.pointerEvents = previous[i]));
+          const name = hit
+            ? `${hit.tagName.toLowerCase()}#${hit.id || "-"}.${(hit.className || "-").toString().slice(0, 30)}`
+            : "nothing";
+          throw new Error(`the click at ${Math.round(x)},${Math.round(y)} went to ${name}`);
+        }
       });
 
       check("dragging the subtitle still moves it with study mode on", async () => {
