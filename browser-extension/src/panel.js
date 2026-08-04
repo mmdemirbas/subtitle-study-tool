@@ -1069,6 +1069,29 @@
       window.__ssoStudy?.updateSettings({ pauseOnPin: on }),
     );
 
+    /* The two halves of the feature, separately. The rail's own x puts it away
+     * without turning study off, so this is where it comes back from - a
+     * control that can only be turned off from somewhere else is a trap. */
+    el.studyRail = toggle_("Show the rail at the side", true, (on) =>
+      window.__ssoStudy?.updateSettings({ showRail: on }),
+    );
+    el.studyHover = toggle_("Answer beside the word on hover", true, (on) =>
+      window.__ssoStudy?.updateSettings({ hoverCard: on }),
+    );
+    el.studyHover.row.title =
+      "Shows what the word means next to the word itself. Works with the rail put away.";
+
+    el.studyFocus = toggle_("Show only the newest word in full", true, (on) =>
+      window.__ssoStudy?.updateSettings({ focus: on }),
+    );
+    el.studyFocus.row.title =
+      "The words under it collapse to the word and its translation, so the rail stays " +
+      "something to glance at. Pinning a word keeps it open.";
+
+    el.studyText = slider("Rail text size", 11, 26, 1, 15, (value) =>
+      window.__ssoStudy?.updateSettings({ textPx: value }),
+    );
+
     /* The threshold is a slider because the right value is a property of the
      * reader, not of the film: rank 2000 is where a beginner stops recognising
      * words and rank 12000 is where somebody comfortable does. Nothing else can
@@ -1111,6 +1134,10 @@
       el.studyAuto.row,
       el.studyRank.row,
       which,
+      el.studyRail.row,
+      el.studyHover.row,
+      el.studyFocus.row,
+      el.studyText.row,
       el.studyPause.row,
       actions,
     );
@@ -1507,15 +1534,30 @@
     el.studyEnabled.input.checked = study.enabled;
     el.studyAuto.input.checked = study.auto;
     el.studyPause.input.checked = study.pauseOnPin;
+    el.studyRail.input.checked = study.showRail;
+    el.studyHover.input.checked = study.hoverCard;
+    el.studyFocus.input.checked = study.focus;
     el.studyRank.input.value = String(study.rarityRank);
     el.studyRank.readout.textContent = study.rarityRank.toLocaleString();
+    el.studyText.input.value = String(study.textPx);
+    el.studyText.readout.textContent = `${study.textPx}px`;
     for (const [slot, b] of el.studySlotButtons.entries()) {
       b.dataset.on = study.studySlot === slot ? "true" : "false";
     }
 
     // Everything below the switch only means something once it is on.
-    for (const row of [el.studyAuto.row, el.studyRank.row, el.studyPause.row]) {
+    for (const row of [
+      el.studyAuto.row,
+      el.studyRank.row,
+      el.studyRail.row,
+      el.studyHover.row,
+      el.studyPause.row,
+    ]) {
       row.dataset.off = study.enabled ? "false" : "true";
+    }
+    // And the two that only mean something once the rail is showing.
+    for (const row of [el.studyFocus.row, el.studyText.row]) {
+      row.dataset.off = study.enabled && study.showRail ? "false" : "true";
     }
   }
 

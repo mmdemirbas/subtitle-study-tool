@@ -89,10 +89,12 @@
             }
             if (msg.op === "lookup") {
               lookupCalls.push(msg.args.query);
+              lookupTargets.push(msg.args.target);
               return {
                 query: msg.args.query,
                 definitions: [{ partOfSpeech: "verb", sense: `to ${msg.args.query}, in a way` }],
                 phonetic: "/stub/",
+                translation: `${msg.args.query}-in-${msg.args.target || "nothing"}`,
                 source: "harness",
               };
             }
@@ -139,6 +141,7 @@
         sighs: 8800,
       };
       const lookupCalls = [];
+      const lookupTargets = [];
       const deckSaves = [];
 
       // Cue payloads in the exact shape the daemon emits.
@@ -1014,6 +1017,117 @@
         if (!line?.textContent.includes("frankly I do not care"))
           throw new Error(`the card's line reads "${line?.textContent || "nothing"}"`);
         if (!line.querySelector("mark")) throw new Error("the word is not marked inside its line");
+      });
+
+      const hover = async (word) => {
+        wordEl(word).dispatchEvent(
+          new PointerEvent("pointerover", { bubbles: true, composed: true }),
+        );
+        await sleep(400);
+      };
+
+      const popShadow = () =>
+        [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(".sso-pop"))
+          ?.shadowRoot;
+
+      check("the word is asked for in the other subtitle's language", () => {
+        // Without a target the daemon has nothing to translate into, and the
+        // field it fills has been empty since study mode was written.
+        if (!lookupTargets.filter(Boolean).length)
+          throw new Error(`every lookup asked for target ${JSON.stringify(lookupTargets)}`);
+      });
+
+      check("only the word being read is shown in full", async () => {
+        // The complaint: words stayed while new ones arrived under them, so
+        // nothing in the rail was ever the thing being looked at.
+        await hover("talking");
+        await sleep(200);
+        const cards = [...railShadow().querySelectorAll(".sso-card")];
+        const full = cards.filter((c) => c.dataset.focused === "true");
+        if (full.length !== 1)
+          throw new Error(`${full.length} of ${cards.length} cards are shown in full, want 1`);
+        const collapsed = cards.find((c) => c.dataset.focused === "false");
+        if (collapsed?.querySelector(".sso-card__line"))
+          throw new Error("a collapsed card still quotes its whole line");
+      });
+
+      check("a collapsed card still says what the word means", () => {
+        const collapsed = [...railShadow().querySelectorAll(".sso-card")].find(
+          (c) => c.dataset.focused === "false",
+        );
+        if (collapsed && !collapsed.querySelector(".sso-card__gloss")?.textContent)
+          throw new Error("collapsed to the word alone, with no translation");
+      });
+
+      check("the rail holds only a few words at a time", () => {
+        const cards = railShadow().querySelectorAll(".sso-card").length;
+        if (cards > 3) throw new Error(`${cards} cards in the rail`);
+      });
+
+      check("hovering answers beside the word, leading with the translation", async () => {
+        await hover("frankly");
+        const pop = popShadow()?.querySelector(".sso-pop");
+        if (!pop || pop.hidden) throw new Error("nothing appeared beside the word");
+        const translation = pop.querySelector(".sso-pop__translation")?.textContent || "";
+        if (!translation.includes("frankly-in-"))
+          throw new Error(`the popup reads "${pop.textContent}"`);
+      });
+
+      check("the answer beside the word survives the rail being put away", async () => {
+        // "I could want to hide the study panel but still want to see the
+        // translation on hover" - so the rail's x is not an off switch.
+        window.__ssoStudy.updateSettings({ showRail: false });
+        await sleep(120);
+        const railHost = [...document.querySelectorAll("div")].find((d) =>
+          d.shadowRoot?.querySelector(".sso-rail"),
+        );
+        if (railHost && !railHost.hidden) throw new Error("the rail is still showing");
+
+        await hover("talking");
+        const pop = popShadow()?.querySelector(".sso-pop");
+        if (!pop || pop.hidden) throw new Error("no answer with the rail put away");
+        window.__ssoStudy.updateSettings({ showRail: true });
+        await sleep(120);
+      });
+
+      check("the answer goes away when the pointer leaves the word", async () => {
+        await hover("frankly");
+        railShadow().dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
+        await sleep(80);
+        const pop = popShadow()?.querySelector(".sso-pop");
+        if (pop && !pop.hidden) throw new Error("the answer stayed after the pointer moved off");
+      });
+
+      check("the rail can be resized from any corner", async () => {
+        const grips = railShadow().querySelectorAll(".sso-rail__grip");
+        if (grips.length !== 4) throw new Error(`${grips.length} grips, want one per corner`);
+        const before = window.__ssoStudy.settings();
+        const grip = railShadow().querySelector(".sso-rail__grip--sw");
+        grip.setPointerCapture = () => {};
+        grip.releasePointerCapture = () => {};
+        const box = grip.getBoundingClientRect();
+        const ev = (type, x, y, buttons) =>
+          new PointerEvent(type, { pointerId: 9, clientX: x, clientY: y, buttons, bubbles: true });
+        grip.dispatchEvent(ev("pointerdown", box.left, box.top, 1));
+        grip.dispatchEvent(ev("pointermove", box.left - 60, box.top + 50, 1));
+        grip.dispatchEvent(ev("pointerup", box.left - 60, box.top + 50, 0));
+        await sleep(120);
+        const after = window.__ssoStudy.settings();
+        if (after.width <= before.width)
+          throw new Error(`width went ${before.width} -> ${after.width}`);
+        if (!(after.height > 0)) throw new Error("the corner set no height");
+      });
+
+      check("the text size is one setting the whole rail follows", async () => {
+        const term = railShadow().querySelector(".sso-card__term");
+        const before = parseFloat(getComputedStyle(term).fontSize);
+        window.__ssoStudy.updateSettings({ textPx: 22 });
+        await sleep(120);
+        const after = parseFloat(getComputedStyle(railShadow().querySelector(".sso-card__term")).fontSize);
+        if (!(after > before + 3))
+          throw new Error(`the word went ${before}px -> ${after}px with the setting at 22`);
+        window.__ssoStudy.updateSettings({ textPx: 15 });
+        await sleep(120);
       });
 
       check("saving keeps the word with its line, its film and its timestamp", async () => {

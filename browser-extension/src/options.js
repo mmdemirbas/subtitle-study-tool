@@ -287,15 +287,20 @@ async function exportDeck(format) {
   el("deckResult").textContent = `Exported ${deckEntries.length} word(s).`;
 }
 
-// --- the dictionary permission ----------------------------------------------
+// --- the lookup permissions ---------------------------------------------------
 
-const DICTIONARY_ORIGINS = { origins: ["https://api.dictionaryapi.dev/*"] };
+/* Two origins, granted and revoked together: they are one feature to the reader
+ * - "look this word up" - and splitting them into two switches would ask about
+ * a distinction that only exists in the implementation. */
+const DICTIONARY_ORIGINS = {
+  origins: ["https://api.dictionaryapi.dev/*", "https://api.mymemory.translated.net/*"],
+};
 
 async function renderDictionary() {
   const granted = await chrome.permissions.contains(DICTIONARY_ORIGINS);
   el("dictLine").textContent = granted
-    ? "Allowed. The extension can look words up on its own when the daemon is stopped."
-    : "Not allowed. Definitions need the daemon running.";
+    ? "Allowed. The extension can look words up and translate them on its own when the daemon is stopped."
+    : "Not allowed. Definitions and translations need the daemon running.";
   el("dictLine").dataset.kind = granted ? "daemon" : "extension";
   el("dictGrant").hidden = granted;
   el("dictRevoke").hidden = !granted;

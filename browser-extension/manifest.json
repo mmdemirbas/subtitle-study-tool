@@ -17,7 +17,8 @@
     "https://*.opensubtitles.org/*"
   ],
   "optional_host_permissions": [
-    "https://api.dictionaryapi.dev/*"
+    "https://api.dictionaryapi.dev/*",
+    "https://api.mymemory.translated.net/*"
   ],
   "options_ui": {
     "page": "src/options.html",

@@ -150,7 +150,7 @@ async function handleDaemonCall(op, args, sender) {
     case "rank":
       return { ranks: await rank(args.words || [], args.language) };
     case "lookup":
-      return lookup({ query: args.query, language: args.language });
+      return lookup({ query: args.query, language: args.language, target: args.target });
     case "lookupReady":
       return { dictionary: await canReachDictionary() };
     case "deckSave":

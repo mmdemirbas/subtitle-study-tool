@@ -25,6 +25,50 @@ const DICTIONARY_ORIGIN = "https://api.dictionaryapi.dev";
 const DICTIONARY_URL = (word) =>
   `${DICTIONARY_ORIGIN}/api/v2/entries/en/${encodeURIComponent(word)}`;
 
+const TRANSLATOR_ORIGIN = "https://api.mymemory.translated.net";
+const TRANSLATOR_URL = (term, from, to) =>
+  `${TRANSLATOR_ORIGIN}/get?q=${encodeURIComponent(term)}&langpair=${from}|${to}`;
+
+/* The same scoring the daemon does, and here for the same reason condense() is:
+ * this path runs when the daemon is not listening, and a translation that only
+ * works with a daemon running is a translation most sessions do not get. The
+ * rules are in lookups.py next to the recorded payloads that justify them -
+ * briefly: the archive's own first answer can be a quality-0 entry, and a word
+ * it does not know comes back unchanged. */
+const MAX_EXTRA_WORDS = 3;
+const MAX_TRANSLATION_CHARS = 80;
+
+export function pickTranslation(payload, term) {
+  if (!payload || typeof payload !== "object") return "";
+  const source = String(term || "").trim().toLowerCase();
+  const allowedWords = source.split(/\s+/).filter(Boolean).length + MAX_EXTRA_WORDS;
+
+  const usable = (text) => {
+    const candidate = String(text || "").trim();
+    if (!candidate || candidate.toLowerCase() === source) return false;
+    return (
+      candidate.length <= MAX_TRANSLATION_CHARS &&
+      candidate.split(/\s+/).filter(Boolean).length <= allowedWords
+    );
+  };
+
+  let best = "";
+  let bestScore = 0;
+  for (const match of Array.isArray(payload.matches) ? payload.matches : []) {
+    if (!match || typeof match !== "object") continue;
+    if (!usable(match.translation)) continue;
+    const score = (Number(match.match) || 0) * ((Number(match.quality) || 0) / 100);
+    if (score > bestScore) {
+      best = String(match.translation).trim();
+      bestScore = score;
+    }
+  }
+  if (best) return best;
+
+  const fallback = String(payload.responseData?.translatedText || "");
+  return usable(fallback) ? fallback.trim() : "";
+}
+
 const CACHE_KEY = "sso:lookupCache";
 /* Enough to cover a film's worth of unfamiliar words many times over, small
  * enough that the whole map is one storage read. Definitions do not go stale,
@@ -59,8 +103,17 @@ function remember(key, entry) {
 
 /** Has the user granted the dictionary origin? Never prompts. */
 export async function canReachDictionary() {
+  return granted(DICTIONARY_ORIGIN);
+}
+
+/** Has the user granted the translator origin? Never prompts. */
+export async function canReachTranslator() {
+  return granted(TRANSLATOR_ORIGIN);
+}
+
+async function granted(origin) {
   try {
-    return await chrome.permissions.contains({ origins: [`${DICTIONARY_ORIGIN}/*`] });
+    return await chrome.permissions.contains({ origins: [`${origin}/*`] });
   } catch {
     return false;
   }
@@ -72,26 +125,29 @@ export async function canReachDictionary() {
  * Always resolves. `definitions` empty plus `unavailable` set is the normal
  * shape when nothing could answer, and the caller shows the word anyway.
  */
-export async function lookup({ query, language = "en" }) {
+export async function lookup({ query, language = "en", target = "" }) {
   const term = String(query || "").trim().toLowerCase();
   if (!term) return { query: "", definitions: [], unavailable: "nothing to look up" };
 
-  const key = `${language}:${term}`;
+  // The target is part of the key: the same word wanted in a different language
+  // is a different answer, and leaving it out served Turkish to a reader who
+  // had since switched the other subtitle to something else.
+  const key = `${language}>${target}:${term}`;
   await loadCache();
   const hit = cache.get(key);
   if (hit) return { ...hit, source: `${hit.source} (cached)` };
 
-  const result = await resolve(term, language);
+  const result = await resolve(term, language, target);
   // Only a real answer is worth keeping. Caching "the daemon was down" would
   // mean starting the daemon changed nothing until the cache was cleared.
   if (result.definitions.length > 0 || result.translation) remember(key, result);
   return result;
 }
 
-async function resolve(term, language) {
+async function resolve(term, language, target) {
   if (await daemonUp()) {
     try {
-      const payload = await daemon.lookup(term, language);
+      const payload = await daemon.lookup(term, language, target);
       if (payload && !payload.error) {
         return {
           query: term,
@@ -106,10 +162,27 @@ async function resolve(term, language) {
     }
   }
 
-  /* Multi-word phrases have no entry in a word dictionary, so asking is a
-   * request that can only 404. The daemon may still have answered above if it
-   * has a translator configured, which is why this check is here and not at the
-   * top of lookup(). */
+  /* The two halves are independent: a phrase has no dictionary entry but does
+   * have a translation, and a language other than English has no dictionary at
+   * all. Asking for both and reporting whichever arrives beats letting the one
+   * that cannot answer decide there is no answer. */
+  const [definition, translation] = await Promise.all([
+    resolveDefinition(term, language),
+    resolveTranslation(term, language, target),
+  ]);
+
+  if (translation) {
+    const { unavailable, ...rest } = definition;
+    // A translation is an answer; only say "unavailable" when nothing came.
+    return { ...rest, translation };
+  }
+  return definition;
+}
+
+async function resolveDefinition(term, language) {
+  if (language !== "en") {
+    return { query: term, definitions: [], unavailable: `No dictionary available for ${language}.` };
+  }
   if (/\s/.test(term)) {
     return {
       query: term,
@@ -117,7 +190,6 @@ async function resolve(term, language) {
       unavailable: "Phrases are not in the dictionary. Saved with its line either way.",
     };
   }
-
   if (!(await canReachDictionary())) {
     return {
       query: term,
@@ -140,6 +212,23 @@ async function resolve(term, language) {
       definitions: [],
       unavailable: `Dictionary lookup failed: ${error?.message || error}`,
     };
+  }
+}
+
+async function resolveTranslation(term, language, target) {
+  const from = String(language || "").slice(0, 2);
+  const to = String(target || "").slice(0, 2);
+  if (!from || !to || from === to) return "";
+  if (!(await canReachTranslator())) return "";
+
+  try {
+    const response = await fetch(TRANSLATOR_URL(term, from, to));
+    if (!response.ok) return "";
+    return pickTranslation(await response.json(), term);
+  } catch {
+    // The definition is still worth showing, and a learner does not need to be
+    // told the translator was busy.
+    return "";
   }
 }
 

@@ -12,21 +12,29 @@
  * in, inheritable properties still cross through the host.
  */
 
-/* The height is capped well short of the bottom of the screen on purpose. The
- * rail is docked at 12vh and the subtitles sit between 84% and 93%, so a rail
- * free to grow to the bottom would end up on top of the right-hand subtitle at
- * exactly the moment it is most useful - eight cards in, mid-film. Ending at
- * 72vh keeps the two apart without anything having to be dragged, and the rail
- * scrolls inside itself past that. */
+/* Until a corner is dragged the height is the contents', capped short of the
+ * bottom of the screen: the rail is docked at 12vh and the subtitles sit
+ * between 84% and 93%, so one free to grow to the bottom would end up standing
+ * on the right-hand subtitle at exactly the moment it is most useful. A dragged
+ * corner replaces both the height and the cap, because a reader who has just
+ * set a height has said where they want the bottom edge to be.
+ *
+ * One size drives the rail, set from the settings and read by everything under
+ * it in `em`. It was a column of fixed pixel sizes, which meant "make the text
+ * bigger" had no single lever to pull and the rail stayed at a size chosen for
+ * a settings page rather than for a dark room with a film in it. */
 .sso-rail {
   position: relative;
   display: flex;
   flex-direction: column;
-  max-height: 60vh;
+  /* A cap, never a floor. Setting it as a height too made a rail holding one
+   * card into a tall empty rectangle standing on the film - the resize said
+   * "you may be this big", and it heard "be this big". */
+  max-height: var(--sso-study-height, 60vh);
   margin: 0;
   padding: 0;
   font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
-  font-size: 13px;
+  font-size: var(--sso-study-text, 15px);
   font-weight: 400;
   font-style: normal;
   line-height: 1.45;
@@ -154,7 +162,7 @@
 
 .sso-card__term {
   flex: 1;
-  font-size: 16px;
+  font-size: 1.07em;
   font-weight: 680;
   letter-spacing: -0.01em;
   color: #fff;
@@ -162,7 +170,7 @@
 }
 
 .sso-card__rank {
-  font-size: 10.5px;
+  font-size: 0.7em;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -170,19 +178,19 @@
 }
 
 .sso-card__phonetic {
-  font-size: 12px;
+  font-size: 0.8em;
   color: #8d949e;
 }
 
 .sso-card__def {
   margin-top: 4px;
-  font-size: 12.5px;
+  font-size: 0.87em;
   color: #d3d7dd;
 }
 
 .sso-card__part {
   margin-right: 6px;
-  font-size: 10.5px;
+  font-size: 0.72em;
   font-weight: 700;
   font-style: italic;
   color: #8d949e;
@@ -190,13 +198,13 @@
 
 .sso-card__translation {
   margin-top: 4px;
-  font-size: 13px;
+  font-size: 0.95em;
   color: #9fd3b4;
 }
 
 .sso-card__note {
   margin-top: 4px;
-  font-size: 12px;
+  font-size: 0.82em;
   color: #8d949e;
 }
 
@@ -207,7 +215,7 @@
 .sso-card__paired {
   margin-top: 6px;
   padding-left: 8px;
-  font-size: 12px;
+  font-size: 0.82em;
   border-left: 2px solid rgba(255, 255, 255, 0.16);
   color: #aeb4bd;
 }
@@ -233,7 +241,7 @@
 .sso-card__actions button {
   padding: 3px 10px;
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 0.78em;
   font-weight: 600;
   color: #d3d7dd;
   background: rgba(255, 255, 255, 0.08);
@@ -276,19 +284,125 @@
   cursor: default;
 }
 
-/* --- resize grip ------------------------------------------------------------ */
+/* --- the collapsed cards ----------------------------------------------------
+ *
+ * Everything but the one being read. Quieter on every axis - dimmer ink, less
+ * padding, no quoted line - so the focused card wins the column without having
+ * to be made louder itself.
+ */
+
+.sso-card[data-focused="false"] {
+  padding: 6px 11px 7px;
+  cursor: pointer;
+  background: rgba(16, 18, 22, 0.98);
+}
+
+.sso-card[data-focused="false"] .sso-card__term {
+  font-size: 0.95em;
+  font-weight: 600;
+  color: #b6bcc6;
+}
+
+.sso-card[data-focused="false"]:hover .sso-card__term {
+  color: #fff;
+}
+
+.sso-card__gloss {
+  font-size: 0.85em;
+  color: #7f9c8b;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- resize grips ------------------------------------------------------------
+ *
+ * Four, so that whichever corner is off the screen is never the only one. See
+ * the panel's grips: same shape, same reason.
+ */
 
 .sso-rail__grip {
   position: absolute;
-  top: 0;
-  left: 0;
-  bottom: 0;
-  width: 6px;
-  cursor: ew-resize;
+  width: 16px;
+  height: 16px;
 }
+
+.sso-rail__grip--nw { top: 0; left: 0; }
+.sso-rail__grip--ne { top: 0; right: 0; }
+.sso-rail__grip--sw { bottom: 0; left: 0; }
+.sso-rail__grip--se { bottom: 0; right: 0; }
 
 .sso-rail__grip:hover {
   background: rgba(224, 164, 88, 0.4);
+}
+
+/* --- the answer beside the word ---------------------------------------------
+ *
+ * The same dark surface as the rail, deliberately: it is the same fact in a
+ * different place, and a second visual language would read as a second
+ * feature. Narrow, because it sits over the picture and is one or two lines.
+ */
+
+.sso-pop {
+  box-sizing: border-box;
+  max-width: 340px;
+  margin: 0;
+  padding: 8px 11px 9px;
+  font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-size: var(--sso-study-text, 15px);
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.4;
+  letter-spacing: normal;
+  text-align: left;
+  color: #e8eaed;
+  background: rgba(16, 18, 22, 0.96);
+  border: 1px solid rgba(224, 164, 88, 0.45);
+  border-radius: 9px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 10px 28px -12px rgba(0, 0, 0, 0.85);
+}
+
+.sso-pop[hidden] {
+  display: none;
+}
+
+.sso-pop__term {
+  font-size: 0.86em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #a9915f;
+}
+
+/* The line the reader came for, so it is the largest thing in the box. */
+.sso-pop__translation {
+  margin-top: 1px;
+  font-size: 1.16em;
+  font-weight: 600;
+  color: #9fd3b4;
+  overflow-wrap: anywhere;
+}
+
+.sso-pop__def {
+  margin-top: 4px;
+  font-size: 0.85em;
+  color: #c8ccd3;
+}
+
+.sso-pop__part {
+  margin-right: 6px;
+  font-size: 0.72em;
+  font-weight: 700;
+  font-style: italic;
+  color: #8d949e;
+}
+
+.sso-pop__note {
+  margin-top: 2px;
+  font-size: 0.82em;
+  color: #8d949e;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -140,18 +140,18 @@
       </section>
 
       <section class="card">
-        <h2>Dictionary for study mode</h2>
+        <h2>Dictionary and translation for study mode</h2>
         <p class="note">
-          Definitions come from the daemon when it is running. Without it the
-          extension can ask
-          <code>api.dictionaryapi.dev</code> itself, but only if you allow it
-          here — the extension asks for no other site, and that stays true
-          unless you turn this on. Marking rare words and saving them with their
-          line work either way.
+          Both come from the daemon when it is running. Without it the extension
+          can ask <code>api.dictionaryapi.dev</code> for what a word means and
+          <code>api.mymemory.translated.net</code> for what it is in your other
+          subtitle's language — but only if you allow it here. The extension
+          asks for no other site, and that stays true unless you turn this on.
+          Marking rare words and saving them with their line work either way.
         </p>
         <p class="status" id="dictLine">—</p>
         <div class="row">
-          <button type="button" id="dictGrant">Allow the dictionary</button>
+          <button type="button" id="dictGrant">Allow lookups</button>
           <button type="button" id="dictRevoke">Remove permission</button>
         </div>
       </section>

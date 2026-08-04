@@ -62,10 +62,17 @@
      * over the picture. It is a slider because the right value is a property of
      * the reader, not of the film. */
     rarityRank: 4000,
-    // Three at most per line. A line where six words are rare is a line that
-    // needs the subtitle, not a vocabulary list.
-    maxPerCue: 3,
-    keep: 8,
+    /* Two at most per line, and three in the rail. Both were larger, and the
+     * rail became something to read instead of something to glance at: words
+     * from four lines ago were still there while new ones arrived under them,
+     * so nothing was ever the thing being looked at. A rail is a focus, not a
+     * transcript - the deck is where words go to be kept. */
+    maxPerCue: 2,
+    keep: 3,
+    /* Only the newest is worth the full entry; the ones under it are there to
+     * be recognised, not read, so they collapse to the word and its
+     * translation. Pinning a card opts it back into the full entry. */
+    focus: true,
     // Shortest word worth marking, in letters. Below three it is function
     // words and interjections, which are never the problem.
     minLetters: 3,
@@ -74,8 +81,20 @@
     // Empty means "whatever language that subtitle is in".
     language: "",
     pauseOnPin: false,
-    width: 300,
+    width: 320,
+    // 0 means "as tall as its contents". A dragged bottom edge sets a number.
+    height: 0,
+    /* The rail was set in 12px against a film, which is a size for a settings
+     * page and not for something read at a glance in the dark while something
+     * else is moving. */
+    textPx: 15,
     dwellMs: 140,
+    /* The rail can be put away without turning study off. What is left is the
+     * word under the pointer answered where the pointer already is, which is
+     * the whole feature for anyone who does not want a column of cards over
+     * the picture. */
+    showRail: true,
+    hoverCard: true,
   };
 
   let settings = { ...DEFAULT_SETTINGS };
@@ -96,6 +115,15 @@
   let hoverTimer = null;
   let hoveredWord = null;
   let selection = null;
+
+  /* The answer shown beside the word itself, in its own host so that it works
+   * with the rail put away. Proximity: a translation is about one word, and the
+   * place it is wanted is next to that word, not in a column at the edge of the
+   * screen that the eye has to leave the subtitle to read. */
+  let popupHost = null;
+  let popupShadow = null;
+  let popupEl = null;
+  let popupTerm = "";
 
   /* Ranks are asked for over a message, so they are cached here: a film says
    * "the" a thousand times and every line shares most of its words with the
@@ -128,8 +156,21 @@
   }
 
   function applySettings() {
-    if (host) host.style.setProperty("width", `${settings.width}px`, "important");
-    if (railEl) railEl.dataset.auto = settings.auto ? "true" : "false";
+    if (host) {
+      host.style.setProperty("width", `${settings.width}px`, "important");
+      // Study can be on with the rail put away; the host stays in the tree so
+      // that turning it back on does not have to rebuild it.
+      host.hidden = !settings.showRail;
+    }
+    if (railEl) {
+      railEl.dataset.auto = settings.auto ? "true" : "false";
+      railEl.style.setProperty("--sso-study-text", `${settings.textPx}px`);
+      // 0 is "as tall as its contents", which is not a height any element can
+      // be given - it is the absence of one.
+      if (settings.height > 0) railEl.style.setProperty("--sso-study-height", `${settings.height}px`);
+      else railEl.style.removeProperty("--sso-study-height");
+    }
+    if (popupEl) popupEl.style.setProperty("--sso-study-text", `${settings.textPx}px`);
     // Marking depends on the threshold, so a changed threshold has to re-mark
     // the line that is already on screen rather than wait for the next one.
     remarkCurrent();
@@ -198,6 +239,11 @@
 
   function onCue(slot, cue, cueBox) {
     if (!settings.enabled || slot !== settings.studySlot) return;
+
+    // The words this was anchored to are about to be replaced, so an answer
+    // left on screen would be pointing at nothing.
+    hoveredWord = null;
+    hidePopup();
 
     current = { slot, cue, cueBox, words: [], token: current.token + 1 };
     if (!cue) return;
@@ -403,16 +449,139 @@
     const word = event.composedPath?.()[0];
     if (!word?.classList?.contains?.("sso-w")) {
       clearTimeout(hoverTimer);
+      hoveredWord = null;
+      hidePopup();
       return;
     }
     if (word === hoveredWord) return;
 
     hoveredWord = word;
     clearTimeout(hoverTimer);
+    hidePopup();
     hoverTimer = setTimeout(() => {
       if (hoveredWord !== word || !word.isConnected) return;
-      addCard(word.dataset.w, { rank: rankOf(word), language: studyLanguage() });
+      const term = word.dataset.w;
+      const language = studyLanguage();
+      if (settings.hoverCard) showPopup(word, term, language);
+      // With the rail put away the popup is the whole answer; adding to a list
+      // nobody can see would only spend lookups.
+      if (settings.showRail) addCard(term, { rank: rankOf(word), language });
     }, settings.dwellMs);
+  }
+
+  // --- the answer beside the word -----------------------------------------------
+
+  async function buildPopup() {
+    if (popupHost) return;
+    popupHost = document.createElement("div");
+    for (const [property, value] of Object.entries({
+      all: "initial",
+      position: "fixed",
+      top: "0",
+      left: "0",
+      "z-index": "2147483646",
+      "pointer-events": "none", // never in the way of the film or of a drag
+    })) {
+      popupHost.style.setProperty(property, value, "important");
+    }
+    popupShadow = popupHost.attachShadow({ mode: "open" });
+    popupShadow.adoptedStyleSheets = [await loadStyles()];
+    popupEl = document.createElement("div");
+    popupEl.className = "sso-pop";
+    popupEl.hidden = true;
+    popupShadow.append(popupEl);
+    (host?.parentElement || document.body).appendChild(popupHost);
+    applySettings();
+  }
+
+  async function showPopup(word, term, language) {
+    await buildPopup();
+    if (hoveredWord !== word || !word.isConnected) return;
+
+    popupTerm = term;
+    drawPopup(term, null);
+    placePopup(word);
+
+    const entry = await lookUp(term, language);
+    // The pointer moved on while the lookup was in flight; answering now would
+    // put this word's meaning beside a different one.
+    if (popupTerm !== term || hoveredWord !== word || !word.isConnected) return;
+    drawPopup(term, entry);
+    placePopup(word);
+  }
+
+  function drawPopup(term, entry) {
+    if (!popupEl) return;
+    popupEl.replaceChildren();
+    popupEl.hidden = false;
+
+    const head = document.createElement("div");
+    head.className = "sso-pop__term";
+    head.textContent = term;
+    popupEl.append(head);
+
+    if (entry === null) {
+      const wait = document.createElement("div");
+      wait.className = "sso-pop__note";
+      wait.textContent = "Looking up…";
+      popupEl.append(wait);
+      return;
+    }
+
+    /* The translation leads. It is the one line that answers "what is this",
+     * and a learner reading a subtitle in the dark has time for one line. */
+    if (entry.translation) {
+      const translation = document.createElement("div");
+      translation.className = "sso-pop__translation";
+      translation.textContent = entry.translation;
+      popupEl.append(translation);
+    }
+
+    for (const definition of (entry.definitions || []).slice(0, 2)) {
+      const line = document.createElement("div");
+      line.className = "sso-pop__def";
+      const part = document.createElement("span");
+      part.className = "sso-pop__part";
+      part.textContent = definition.partOfSpeech;
+      line.append(part, document.createTextNode(definition.sense));
+      popupEl.append(line);
+    }
+
+    if (!entry.translation && !(entry.definitions || []).length) {
+      const note = document.createElement("div");
+      note.className = "sso-pop__note";
+      note.textContent = entry.unavailable || "Nothing found for that word.";
+      popupEl.append(note);
+    }
+  }
+
+  /* Above the word, and below it when there is no room above - the subtitle is
+   * usually at the bottom of the screen, so above is almost always right, and
+   * "almost always" is exactly the case that needs the other branch written. */
+  function placePopup(word) {
+    if (!popupHost || !popupEl) return;
+    const anchor = word.getBoundingClientRect();
+    const box = popupEl.getBoundingClientRect();
+    const gap = 10;
+
+    let top = anchor.top - box.height - gap;
+    if (top < 4) top = Math.min(anchor.bottom + gap, window.innerHeight - box.height - 4);
+
+    const left = clamp(
+      anchor.left + anchor.width / 2 - box.width / 2,
+      4,
+      Math.max(4, window.innerWidth - box.width - 4),
+    );
+    popupHost.style.setProperty("transform", `translate(${Math.round(left)}px, ${Math.round(top)}px)`, "important");
+  }
+
+  function hidePopup() {
+    popupTerm = "";
+    if (popupEl) popupEl.hidden = true;
+  }
+
+  function clamp(value, low, high) {
+    return Math.min(Math.max(value, low), high);
   }
 
   // --- the rail -----------------------------------------------------------------
@@ -452,8 +621,12 @@
     close.className = "sso-rail__x";
     close.type = "button";
     close.textContent = "×";
-    close.title = "Turn study mode off";
-    close.addEventListener("click", () => setEnabled(false));
+    /* Puts the rail away without turning study off. Hovering a word still
+     * answers next to the word, which for a reader who wants the picture
+     * rather than a column of cards is the whole feature. Study itself goes
+     * off from the control panel, where turning it back on also lives. */
+    close.title = "Put the rail away — hovering a word still answers";
+    close.addEventListener("click", () => updateSettings({ showRail: false }));
     head.append(title, countEl, close);
 
     listEl = document.createElement("div");
@@ -529,12 +702,40 @@
     listEl.prepend(card.node);
     trim();
     refreshCount();
+    refocus();
     dedupeSentences();
 
-    const response = await api.daemon("lookup", { query: term, language });
-    card.lookup = response || { definitions: [], unavailable: "Lookup failed." };
+    card.lookup = await lookUp(term, language);
     if (card.node?.isConnected) redrawCard(card);
     return card;
+  }
+
+  /* One place both the rail and the hover popup ask through, and one place the
+   * target language is decided: the other subtitle's, because that is the
+   * language the reader has already chosen to read this film in. */
+  const lookupCache = new Map();
+
+  async function lookUp(term, language) {
+    const target = translationTarget();
+    const key = `${language}>${target}:${term}`;
+    if (lookupCache.has(key)) return lookupCache.get(key);
+
+    const pending = api
+      .daemon("lookup", { query: term, language, target })
+      .then((response) => response || { definitions: [], unavailable: "Lookup failed." })
+      .catch(() => ({ definitions: [], unavailable: "Lookup failed." }));
+    lookupCache.set(key, pending);
+    const settled = await pending;
+    // Hold the value rather than the promise, and do not hold a failure: a
+    // lookup that failed because the daemon was starting should be asked again.
+    if (settled.definitions?.length || settled.translation) lookupCache.set(key, settled);
+    else lookupCache.delete(key);
+    return settled;
+  }
+
+  function translationTarget() {
+    const other = settings.studySlot === 0 ? 1 : 0;
+    return (api.trackInfo(other).language || "").toLowerCase().slice(0, 2);
   }
 
   /* The other subtitle at this exact moment. For a learner this is the single
@@ -550,6 +751,7 @@
     cards = [card, ...cards.filter((item) => item !== card)];
     listEl.prepend(card.node);
     redrawCard(card);
+    refocus();
     dedupeSentences();
   }
 
@@ -600,11 +802,32 @@
     return node;
   }
 
+  /* Which card is the one being looked at. Everything else in the rail is
+   * there to be recognised out of the corner of an eye, so it collapses to the
+   * word and what it means - which is what the reader would have kept anyway.
+   *
+   * Pinning is how a reader says "no, that one" - so a pinned card is never
+   * collapsed, whatever has arrived since. */
+  function isFocused(card) {
+    return !settings.focus || card.pinned || cards[0] === card;
+  }
+
+  function refocus() {
+    for (const card of cards) {
+      const wanted = isFocused(card);
+      if (card.focused === wanted) continue;
+      card.focused = wanted;
+      redrawCard(card);
+    }
+  }
+
   function redrawCard(card, into) {
     const node = into || card.node;
     if (!node) return;
+    card.focused = isFocused(card);
     node.dataset.pinned = card.pinned ? "true" : "false";
     node.dataset.saved = card.saved ? "true" : "false";
+    node.dataset.focused = card.focused ? "true" : "false";
     node.replaceChildren();
 
     const head = document.createElement("div");
@@ -621,11 +844,45 @@
     head.append(term, meta);
     node.append(head);
 
+    /* Collapsed: the word, and the one line that says what it is. Clicking it
+     * pins it, which is also what expands it - one gesture, because "keep this"
+     * and "show me more of this" are the same intention. */
+    if (!card.focused) {
+      if (card.lookup?.translation) {
+        const gloss = document.createElement("div");
+        gloss.className = "sso-card__gloss";
+        gloss.textContent = card.lookup.translation;
+        node.append(gloss);
+      }
+      node.title = "Click to keep this one open";
+      node.onclick = () => {
+        card.pinned = true;
+        refocus();
+        trim();
+        refreshCount();
+      };
+      return;
+    }
+    node.onclick = null;
+    node.title = "";
+
     if (card.lookup?.phonetic) {
       const phon = document.createElement("div");
       phon.className = "sso-card__phonetic";
       phon.textContent = card.lookup.phonetic;
       node.append(phon);
+    }
+
+    /* The translation leads, above the definition, the same way it does in the
+     * popup: it is the line that answers "what is this", and a card the reader
+     * meets mid-film gets read from the top down until they have their answer.
+     * Having the two disagree about which line matters made the same fact look
+     * like two different features. */
+    if (card.lookup?.translation) {
+      const translation = document.createElement("div");
+      translation.className = "sso-card__translation";
+      translation.textContent = card.lookup.translation;
+      node.append(translation);
     }
 
     if (card.lookup === null) {
@@ -648,13 +905,6 @@
       note.className = "sso-card__note";
       note.textContent = card.lookup.unavailable;
       node.append(note);
-    }
-
-    if (card.lookup?.translation) {
-      const translation = document.createElement("div");
-      translation.className = "sso-card__translation";
-      translation.textContent = card.lookup.translation;
-      node.append(translation);
     }
 
     /* The line it was said in, with the word marked inside it. This is the part
@@ -684,6 +934,7 @@
     pin.addEventListener("click", () => {
       card.pinned = !card.pinned;
       redrawCard(card);
+      refocus();
       trim();
       refreshCount();
     });
@@ -829,35 +1080,94 @@
     handle.addEventListener("pointercancel", end);
   }
 
-  /* The rail's left edge resizes it. A definition is prose, so its width is the
-   * one dimension that decides whether the rail is readable or a column of two
-   * words per line, and it depends on the film's aspect ratio and the size of
-   * the screen - neither of which a default can know. */
+  /* All four corners, like the panel and for the same reason: the rail can be
+   * dragged anywhere, so whichever single corner were chosen would be the one
+   * off the screen exactly when the rail is too big to fit - which is when
+   * resizing it is what the reader wants.
+   *
+   * Width decides whether a definition reads as prose or as a column of two
+   * words per line; height decides how much of the film the rail is standing
+   * on. Both depend on the screen and the film, so neither has a right default.
+   */
+  const CORNERS = [
+    { name: "nw", dx: -1, dy: -1, cursor: "nwse-resize" },
+    { name: "ne", dx: +1, dy: -1, cursor: "nesw-resize" },
+    { name: "sw", dx: -1, dy: +1, cursor: "nesw-resize" },
+    { name: "se", dx: +1, dy: +1, cursor: "nwse-resize" },
+  ];
+
+  const MIN_WIDTH = 200;
+  const MAX_WIDTH = 620;
+  const MIN_HEIGHT = 120;
+
   function makeResizable() {
+    for (const corner of CORNERS) railEl.append(buildGrip(corner));
+  }
+
+  function buildGrip(corner) {
     const grip = document.createElement("div");
-    grip.className = "sso-rail__grip";
+    grip.className = `sso-rail__grip sso-rail__grip--${corner.name}`;
+    grip.style.cursor = corner.cursor;
     grip.title = "Drag to resize";
-    railEl.append(grip);
 
     let from = null;
+
     grip.addEventListener("pointerdown", (event) => {
-      from = { x: event.clientX, width: settings.width };
-      grip.setPointerCapture(event.pointerId);
+      const box = host.getBoundingClientRect();
+      from = {
+        x: event.clientX,
+        y: event.clientY,
+        width: box.width,
+        height: box.height,
+        left: box.left,
+        top: box.top,
+        map: api.measurePlacement(host, (x, y) => setPosition(`${x}px`, `${y}px`)),
+      };
+      // measurePlacement moved it; put it back before the drag begins.
+      const back = from.map.toLocal(box.left, box.top);
+      setPosition(`${back.x}px`, `${back.y}px`);
+
+      grip.setPointerCapture?.(event.pointerId);
       event.preventDefault();
+      event.stopPropagation();
     });
+
     grip.addEventListener("pointermove", (event) => {
       if (!from) return;
-      // Grows leftwards, so a leftward drag is a wider rail.
-      const width = Math.round(from.width + (from.x - event.clientX));
-      updateSettings({ width: Math.min(Math.max(width, 200), 560) });
+      if (event.buttons === 0) {
+        end(event);
+        return;
+      }
+      const width = clamp(from.width + (event.clientX - from.x) * corner.dx, MIN_WIDTH, MAX_WIDTH);
+      const height = clamp(
+        from.height + (event.clientY - from.y) * corner.dy,
+        MIN_HEIGHT,
+        Math.max(MIN_HEIGHT, window.innerHeight - 40),
+      );
+      updateSettings({ width: Math.round(width), height: Math.round(height) });
+
+      /* Pulling a left or top edge grows the rail away from the pointer unless
+       * the opposite edge is pinned, so move it by however much it actually
+       * grew - which is not what the pointer did once the size hit a limit. */
+      const grewX = corner.dx < 0 ? width - from.width : 0;
+      const grewY = corner.dy < 0 ? host.getBoundingClientRect().height - from.height : 0;
+      if (grewX || grewY) {
+        const local = from.map.toLocal(from.left - grewX, from.top - grewY);
+        setPosition(`${local.x}px`, `${local.y}px`);
+      }
     });
+
     const end = (event) => {
       if (!from) return;
       from = null;
       grip.releasePointerCapture?.(event.pointerId);
+      chrome.storage.local
+        .set({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } })
+        .catch(() => {});
     };
     grip.addEventListener("pointerup", end);
     grip.addEventListener("pointercancel", end);
+    return grip;
   }
 
   function setPosition(left, top) {
@@ -898,6 +1208,9 @@
       document.body ||
       document.documentElement;
     if (target && host.parentElement !== target) target.appendChild(host);
+    // The popup is anchored to the subtitle, so it has to follow the subtitle
+    // into fullscreen or it renders behind the film.
+    if (popupHost && target && popupHost.parentElement !== target) target.appendChild(popupHost);
     rescale();
   }
 
@@ -933,6 +1246,15 @@
       host = null;
       shadow = null;
       railEl = listEl = countEl = noteEl = null;
+      // The popup goes the same way and for the same reason: a live reference
+      // to a removed element is what brought the rail back on the next mouse
+      // movement, and a second host would do it a second time.
+      popupHost?.remove();
+      popupHost = null;
+      popupShadow = null;
+      popupEl = null;
+      popupTerm = "";
+      hoveredWord = null;
       clearTimeout(hoverTimer);
       cards = [];
       // Words stay wrapped in whatever line is on screen, which is harmless -
@@ -946,6 +1268,9 @@
       return;
     }
 
+    // Turning study on with the rail put away from a previous session would
+    // look like nothing happened.
+    if (!settings.showRail) updateSettings({ showRail: true });
     if (!host) await build();
     reparent();
     setStudyFlag(true);
@@ -1003,6 +1328,10 @@
     host?.remove();
     host = null;
     shadow = null;
+    popupHost?.remove();
+    popupHost = null;
+    popupShadow = null;
+    popupEl = null;
     cards = [];
     delete window.__ssoStudy;
     delete window.__ssoStudyTeardown;
