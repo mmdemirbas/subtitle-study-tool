@@ -106,9 +106,24 @@
             return {};
           },
         },
+        /* Matches chrome.storage.local's actual surface, not just the calls
+         * that happened to exist when this was written. A missing method
+         * throws inside a .catch()-ed promise, which passes silently: the
+         * suite reported 62/62 green while three real calls were failing. */
         storage: { local: {
-          get: async (k) => (typeof k === "string" ? { [k]: store[k] } : {}),
+          get: async (k) => {
+            const keys = typeof k === "string" ? [k] : Array.isArray(k) ? k : Object.keys(k ?? store);
+            const out = {};
+            for (const key of keys) if (key in store) out[key] = store[key];
+            return out;
+          },
           set: async (o) => Object.assign(store, o),
+          remove: async (k) => {
+            for (const key of typeof k === "string" ? [k] : k) delete store[key];
+          },
+          clear: async () => {
+            for (const key of Object.keys(store)) delete store[key];
+          },
         } },
       };
 
@@ -1060,6 +1075,13 @@
       });
 
       // --- run ------------------------------------------------------------
+      /* An error nobody caught is a failure even when every assertion holds.
+       * Rejected promises count too: most of this code reports failure by
+       * rejecting inside a .catch() that discards it. */
+      const loose = [];
+      window.addEventListener("error", (e) => loose.push(e.message));
+      window.addEventListener("unhandledrejection", (e) => loose.push(String(e.reason?.message ?? e.reason)));
+
       (async () => {
         await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1 });
         await sleep(250);
@@ -1084,10 +1106,22 @@
           }
           out.append(row);
         }
+        for (const message of [...new Set(loose)]) {
+          const row = document.createElement("div");
+          row.className = "case fail";
+          row.textContent = "nothing caught this error";
+          const why = document.createElement("div");
+          why.className = "why";
+          why.textContent = message;
+          row.append(why);
+          out.append(row);
+        }
+
+        const total = cases.length + new Set(loose).size;
         const summary = document.getElementById("summary");
-        summary.textContent = `${passed}/${cases.length} passed`;
-        summary.style.color = passed === cases.length ? "#59c27f" : "#e8705f";
-        window.__harness = { passed, total: cases.length };
+        summary.textContent = `${passed}/${total} passed`;
+        summary.style.color = passed === total ? "#59c27f" : "#e8705f";
+        window.__harness = { passed, total, loose: [...new Set(loose)] };
       })();
     </script>
   </body>

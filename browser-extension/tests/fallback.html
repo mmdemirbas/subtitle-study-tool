@@ -41,10 +41,22 @@
       const store = {};
       globalThis.chrome = {
         runtime: { getManifest: () => ({ version: "0.1.0" }) },
+        /* The whole surface, not only today's callers - see harness.html. */
         storage: {
           local: {
-            get: async (key) => (typeof key === "string" ? { [key]: store[key] } : { ...store }),
+            get: async (k) => {
+              const keys = typeof k === "string" ? [k] : Array.isArray(k) ? k : Object.keys(k ?? store);
+              const out = {};
+              for (const key of keys) if (key in store) out[key] = store[key];
+              return out;
+            },
             set: async (obj) => Object.assign(store, obj),
+            remove: async (k) => {
+              for (const key of typeof k === "string" ? [k] : k) delete store[key];
+            },
+            clear: async () => {
+              for (const key of Object.keys(store)) delete store[key];
+            },
           },
         },
       };
@@ -469,6 +481,11 @@
       });
 
       // --- run ------------------------------------------------------------
+      // An error nobody caught is a failure even when every assertion holds.
+      const loose = [];
+      window.addEventListener("error", (e) => loose.push(e.message));
+      window.addEventListener("unhandledrejection", (e) => loose.push(String(e.reason?.message ?? e.reason)));
+
       const out = document.getElementById("results");
       let passed = 0;
       for (const { name, fn } of cases) {
@@ -489,10 +506,22 @@
         }
         out.append(row);
       }
+      for (const message of [...new Set(loose)]) {
+        const row = document.createElement("div");
+        row.className = "case fail";
+        row.textContent = "nothing caught this error";
+        const why = document.createElement("div");
+        why.className = "why";
+        why.textContent = message;
+        row.append(why);
+        out.append(row);
+      }
+
+      const total = cases.length + new Set(loose).size;
       const summary = document.getElementById("summary");
-      summary.textContent = `${passed}/${cases.length} passed`;
-      summary.style.color = passed === cases.length ? "#59c27f" : "#e8705f";
-      window.__harness = { passed, total: cases.length };
+      summary.textContent = `${passed}/${total} passed`;
+      summary.style.color = passed === total ? "#59c27f" : "#e8705f";
+      window.__harness = { passed, total, loose: [...new Set(loose)] };
     </script>
   </body>
 </html>
