@@ -48,6 +48,42 @@ elements reading `S06-E10`, `S06-E09` … and exactly one carrying `active`:
 <button class="btn-episode active" idepisode="oi0t">S01-E01</button>
 ```
 
+## Second correction: the fix proposed below was wrong
+
+Two captures from the reporting user's own browser, one before playback and one
+during, settled it — and reversed the first recommendation.
+
+**The site has two player servers, and they behave oppositely.**
+
+| | `#M` — `embed-host-2.example` | `BackUp` — `embed-host.example` → `embed-host-3.example` |
+|---|---|---|
+| Video frame's `document.title` | *(empty)* | `The Americans (2013) (2013) S01E01` |
+| Title source used | `tab.title` fallback | `document.title` **of the player frame** |
+| Season / episode sent | none | **1 / 1** |
+| Resolved | nothing | the americans (Tvshow) |
+| Decision | `too-weak` | `attach` |
+| Best English | `- Transit (TV Series)` @ 0.667 | `S01E01 Pilot` @ **0.957** |
+| Second, Turkish | — | `S01E01 Pilot` @ **0.975** |
+| Tied at top score | 1 | 1 |
+
+On the BackUp server the whole thing works, both languages, exact episode — and
+it works **because** it asks the player's frame, which names the episode. The
+top frame never does; it only ever says "The Americans", which is the 26-way tie.
+
+So "read the top frame instead" would have taken a 0.957 exact-episode match and
+replaced it with a series-only search. The player frame is not the *wrong*
+frame. It is an *unreliable* one: sometimes the only source that knows the
+episode, sometimes empty. A rule that always prefers either frame is wrong in
+one of the two cases.
+
+**The corrected fix is to stop choosing a frame at all.** Collect title
+candidates from every frame, and choose between the candidates rather than
+between their sources — preferring one that carries a season and episode,
+because that is the thing that cannot be recovered later. And send the season
+and episode as fields, taken from whichever frame has them, or from the control
+marked as chosen on the page when no title carries them. Against these two
+captures that produces the exact episode on both servers.
+
 ## What the extension actually did
 
 Captured by the extension's own diagnostic, on this page, with S01-E01 selected.
@@ -182,46 +218,54 @@ and both were artefacts of the test rather than facts about the page: a fresh
 visit marks nothing until an episode is clicked, and the player iframe does not
 load until then either. The reproduction has to include the click.
 
-## The advert is probably not involved
+## The remaining open question: a hundred seconds
 
-Measured in the player frame, before playback:
+The two captures disagree about how long the episode is:
 
-```
-duration      4164.64 s  (69.4 min)
-currentTime   0
-src           blob:…     (MSE)
-readyState    4
-```
+| Server | `duration` |
+|---|---|
+| `#M` — `embed-host-2.example` | 4165 s |
+| `BackUp` — `embed-host-3.example` | **4265 s** |
 
-The Americans pilot runs about 68 minutes, so the media the player is holding is
-the episode, not the episode with breaks stitched into it. The player is JW
-Player; a pre-roll there is normally a separate media element, in which case the
-show's `currentTime` starts at zero and there is no drift to correct.
+The same episode, a hundred seconds apart. Neither matched a single ad marker:
+`adMarkersMatched: 0` in every frame of both captures, because `AD_MARKERS` is a
+list of Prime Video class names and these are JW Player and embed-host.
 
-Two things are worth stating precisely, because neither was tested:
+A hundred seconds of something at the front of one stream would put every cue in
+that stream a hundred seconds out — which is what "TR-EN looks unsynced" would
+look like once the right episode is attached, and it is *constant*, so the
+bracket keys fix it once and the offset is then remembered per file.
 
-- **This was not observed with an advert actually playing.** The claim above is
-  read off the media element's own duration, not from watching a break happen.
-- **If an advert *is* stitched in, the existing correction cannot fire here.**
-  `AD_MARKERS` in `content.js` is a list of Prime Video class names; **zero** of
-  them match anything in this player.
+**What this is has not been established.** A hundred seconds could be a stitched
+pre-roll, a recap the other encode lacks, or a different cut. Telling them apart
+needs one measurement nobody has taken yet: with subtitles attached and the
+offset set so a line lands correctly, does the correction still hold an hour in?
+Constant means it is a fixed head, and the offset is the whole answer. Growing
+means something is stitched mid-stream and the marker list needs an entry for
+this player.
 
-A cheap way to settle it while watching: if the subtitles need a *constant*
-offset that you set once and never touch again, the advert is irrelevant. If
-they drift further out after each break, it is stitched and the marker list
-needs an entry for this player.
+### An argument this document made and has withdrawn
+
+It previously reasoned from the `#M` server's duration alone — 4165 s against a
+pilot that runs about 68 minutes — that the stream was the episode and nothing
+was stitched into it. One number from one encode, with no second encode to
+compare against, was not enough to carry that: the BackUp server reports 4265 s
+for the same episode. The reasoning was sound and the evidence was one
+measurement short.
 
 ## What follows
 
 In order of how much each one costs to get wrong:
 
-1. **Ask the top frame for metadata, not the video's frame.** In the service
-   worker this is a change of which `frameId` gets the `sso:pageInfo` message,
-   with the video's frame kept as the fallback for pages that have no separate
-   top frame. The panel is more than that: it runs inside the player's frame and
-   cannot read across a cross-origin boundary itself, so it has to ask the
-   worker, the way it already asks for everything to do with the daemon.
-   Without this, every iframe-hosted player searches on the tab title alone.
+1. **Stop choosing a frame; choose between candidates.** Ask every frame for its
+   title candidates, merge them, and rank — preferring one that carries a season
+   and episode, then structured metadata (`json-ld`, `og:title`) over a bare
+   `document.title`. This is the corrected item: preferring *either* frame
+   unconditionally is wrong on one of the two servers this site offers, and the
+   two captures show both. The panel needs the same merged view, and it runs
+   inside the player's frame where it cannot read across a cross-origin
+   boundary, so it has to ask the worker — the way it already does for the
+   daemon.
 2. **Read the season and episode off the page** — the active item in an episode
    control, and the URL, in the same spirit as the existing title candidates.
 3. **Refuse to auto-attach an episode nobody identified.** When the search
