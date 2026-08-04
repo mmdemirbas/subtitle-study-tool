@@ -379,6 +379,13 @@
    * probes solve it. Done once when a drag starts; the writes happen inside one
    * event handler, so no frame is painted between them and nothing flickers.
    */
+  /* The one place a track's position reaches the DOM, so the drag's probe and
+   * the settings both move it by the same lever. */
+  function writePosition(root, x, y) {
+    root.style.setProperty("--sso-x", `${x}%`);
+    root.style.setProperty("--sso-y", `${y}%`);
+  }
+
   function measurePlacement(element, apply) {
     apply(0, 0);
     const at0 = element.getBoundingClientRect();
@@ -399,6 +406,10 @@
           x: (viewportX - at0.left) / scaleX,
           y: (viewportY - at0.top) / scaleY,
         };
+      },
+      /** Where this written value currently sits on the screen. */
+      toViewport(localX, localY) {
+        return { x: at0.left + localX * scaleX, y: at0.top + localY * scaleY };
       },
     };
   }
@@ -773,8 +784,7 @@
       const fontPx = (picture * TEXT_FRACTION_OF_PICTURE * track.fontScale) / scale;
       root.style.setProperty("--sso-font-size", `${fontPx.toFixed(2)}px`);
       root.style.setProperty("--sso-bg", `rgba(0, 0, 0, ${background})`);
-      root.style.setProperty("--sso-x", `${track.posX}%`);
-      root.style.setProperty("--sso-y", `${track.posY}%`);
+      writePosition(root, track.posX, track.posY);
       root.style.setProperty("--sso-width", `${track.widthPercent}vw`);
       root.dataset.dim = dimNonSpeech ? "true" : "false";
       // Once placed by hand, a cue's own {\an8} no longer moves it.
@@ -864,33 +874,71 @@
       return;
     }
 
-    if (drag.sizing) {
-      onResizeMove(event);
-      return;
-    }
-
     if (!drag.moved) {
       const far =
         Math.abs(event.clientX - drag.startX) > DRAG_THRESHOLD_PX ||
         Math.abs(event.clientY - drag.startY) > DRAG_THRESHOLD_PX;
       if (!far) return;
       drag.moved = true;
-      views[drag.slot].root.dataset.dragging = "true";
+      beginGesture();
     }
 
-    /* Vertical clamp only, so the subtitle cannot be dragged off the bottom or
-     * top and lost. The horizontal one belongs to updateSettings, which knows
-     * the width the box is allowed rather than the width of this one line.
-     *
-     * posY is the box's bottom edge, so it may reach 100 but never go below its
-     * own height - at which point the top of the box is at the top of the
-     * screen. */
-    const box = views[drag.slot].cueBox.getBoundingClientRect();
-    const height = (box.height / window.innerHeight) * 100;
-    const x = (event.clientX / window.innerWidth) * 100;
-    const y = clamp((event.clientY / window.innerHeight) * 100, height, 100);
+    if (drag.sizing) {
+      onResizeMove(event);
+      return;
+    }
 
-    updateTrackSettings(drag.slot, { posX: round1(x), posY: round1(y), placed: true });
+    /* Keep the box on screen. The bound is a fact about the screen, so it is
+     * applied in screen pixels and converted afterwards - clamping the written
+     * percentage instead would assume those percentages span the viewport,
+     * which is the assumption `drag.map` exists to stop making.
+     *
+     * Everything here is the box's top-left corner, because that is what the
+     * map reports; the bottom-centre anchor the CSS uses differs from it by a
+     * transform the map has already absorbed. */
+    const box = views[drag.slot].root.getBoundingClientRect();
+    const x = clamp(event.clientX - drag.grabX, 0, Math.max(0, window.innerWidth - box.width));
+    const y = clamp(event.clientY - drag.grabY, 0, Math.max(0, window.innerHeight - box.height));
+    const local = drag.map.toLocal(x, y);
+
+    updateTrackSettings(drag.slot, {
+      posX: round1(local.x),
+      posY: round1(local.y),
+      placed: true,
+    });
+  }
+
+  /* Runs once, when a press turns into a gesture.
+   *
+   * Solves for how a written percentage maps to the screen, and for where the
+   * pointer sits relative to the box's anchor. The second is the fix for "it
+   * goes further than I drag" and "once it is up I cannot bring it down":
+   * the anchor is the box's *bottom* edge, and the old drag wrote the pointer
+   * straight into it, so the first move threw away where inside the box you
+   * had grabbed. Grab a two-line cue near its top and nudge it down, and it
+   * jumped up by most of its height before tracking - down became up. Grab
+   * high, drag up, and it covered its own height extra. Holding the offset
+   * for the whole gesture makes the box follow the pointer and nothing else. */
+  function beginGesture() {
+    const view = views[drag.slot];
+    const track = state.settings.tracks[drag.slot];
+
+    view.root.dataset[drag.sizing ? "sizing" : "dragging"] = "true";
+
+    drag.map = measurePlacement(view.root, (x, y) => writePosition(view.root, x, y));
+    writePosition(view.root, track.posX, track.posY);
+
+    /* Measured from the press, not from the move that crossed the threshold.
+     * The offset is "where inside the box the user took hold of it", which the
+     * press is the only event that knows: taking it from the first move folds
+     * that whole move into the offset and the box never catches up. */
+    const corner = drag.map.toViewport(track.posX, track.posY);
+    drag.grabX = drag.startX - corner.x;
+    drag.grabY = drag.startY - corner.y;
+
+    // Fixed for the gesture: the box grows about its centre, and reading the
+    // centre back off a box that is being resized would have it chase itself.
+    drag.centreX = corner.x + view.root.getBoundingClientRect().width / 2;
   }
 
   /* The box grows about its centre, so the width is twice the distance from
@@ -898,14 +946,15 @@
    * box's own, which shifts as the box grows and would have the drag chasing
    * itself. */
   function onResizeMove(event) {
-    if (!drag.moved) {
-      if (Math.abs(event.clientX - drag.startX) <= DRAG_THRESHOLD_PX) return;
-      drag.moved = true;
-      views[drag.slot].root.dataset.sizing = "true";
-    }
-    const centre = (state.settings.tracks[drag.slot].posX / 100) * window.innerWidth;
-    const half = Math.abs(event.clientX - centre);
-    const percent = ((half * 2) / window.innerWidth) * 100;
+    /* Screen pixels from the centre, and the centre measured on screen rather
+     * than assumed from the stored percentage.
+     *
+     * The width is set in `vw`, which is the viewport's width whatever the
+     * containing block is - so unlike the move, this converts with the host's
+     * own scale and not with the placement's. A scaled ancestor still renders
+     * those vw larger, which is the part that has to be divided back out. */
+    const half = Math.abs(event.clientX - drag.centreX);
+    const percent = (((half * 2) / window.innerWidth) * 100) / hostScale();
     updateTrackSettings(drag.slot, {
       widthPercent: round1(clamp(percent, MIN_WIDTH_PERCENT, MAX_WIDTH_PERCENT)),
       placed: true,

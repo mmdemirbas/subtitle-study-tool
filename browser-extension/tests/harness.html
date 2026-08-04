@@ -503,6 +503,54 @@
         }
       });
 
+      /* The two tests above pass whether or not the box keeps hold of the point
+       * you grabbed, because they only ask that it moved a lot. These ask that
+       * it moved the RIGHT amount, which is the whole complaint: the anchor is
+       * the box's bottom edge, so writing the pointer straight into it threw
+       * away where inside the box the press had landed. */
+      const grabAndDrag = async (grabDX, grabDY, byX, byY) => {
+        window.__ssoApi.resetPosition();
+        await sleep(120);
+        const cue = shadowOf().querySelector(".sso-cue");
+        const before = cue.getBoundingClientRect();
+        const fromX = before.left + grabDX;
+        const fromY = before.top + grabDY;
+        // Several moves, as a real pointer sends - one big jump would hide an
+        // error that accumulates per move.
+        const cueEl = shadowOf().querySelector(".sso-cue");
+        cueEl.setPointerCapture = () => {};
+        cueEl.releasePointerCapture = () => {};
+        const ev = (type, x, y, buttons) => new PointerEvent(type,
+          { pointerId: 7, clientX: x, clientY: y, button: 0, buttons, bubbles: true });
+        cueEl.dispatchEvent(ev("pointerdown", fromX, fromY, 1));
+        for (let step = 1; step <= 4; step++) {
+          cueEl.dispatchEvent(ev("pointermove", fromX + (byX * step) / 4, fromY + (byY * step) / 4, 1));
+        }
+        cueEl.dispatchEvent(ev("pointerup", fromX + byX, fromY + byY, 0));
+        await sleep(120);
+        const after = shadowOf().querySelector(".sso-cue").getBoundingClientRect();
+        return { movedX: after.left - before.left, movedY: after.top - before.top };
+      };
+
+      check("the box moves exactly as far as the pointer, not further", async () => {
+        await showSpeakerCue();
+        // Grabbed near the TOP of the box, which is where the old bug was worst:
+        // the bottom anchor jumped to the pointer and the box gained its own
+        // height on the way.
+        const { movedX, movedY } = await grabAndDrag(24, 4, -70, -120);
+        if (Math.abs(movedX - -70) > 3 || Math.abs(movedY - -120) > 3) {
+          throw new Error(`dragged by -70,-120 but the box moved ${Math.round(movedX)},${Math.round(movedY)}`);
+        }
+      });
+
+      check("a small drag downwards moves it downwards", async () => {
+        await showSpeakerCue();
+        // The "once I move it up I cannot bring it down" report: a nudge down
+        // shorter than the box's own height used to move it UP.
+        const { movedY } = await grabAndDrag(24, 4, 0, 18);
+        if (movedY < 12) throw new Error(`nudged down 18px, box moved ${Math.round(movedY)}`);
+      });
+
       check("the subtitle cannot be dragged off screen", async () => {
         await dragCue(300, 260, -800, -800);
         const box = shadowOf().querySelector(".sso-cue").getBoundingClientRect();
