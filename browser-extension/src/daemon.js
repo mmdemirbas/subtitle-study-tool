@@ -182,14 +182,21 @@ export async function bestTitleForTab(tab, frameId) {
       { type: "sso:pageInfo" },
       options(frameId),
     );
-    const best = info?.candidates?.[0]?.text;
+    const best = info?.candidates?.[0];
     // The year travels with the title. Without it a common name like "Mercy"
     // cannot be resolved to one film - the index holds eighteen of them.
-    if (best) return { title: best, year: info?.year ?? null };
+    if (best?.text) {
+      return { title: best.text, year: info?.year ?? null, source: best.source };
+    }
   } catch {
     // No content script, or the frame went away.
   }
-  return { title: tab.title || "", year: null };
+  /* The tab title is the last resort and it is a *worse* signal than anything
+   * above, so it is worth knowing when it was used. On a page whose player is
+   * in a cross-origin iframe, the frame holding the video has none of the
+   * page's metadata, and this is the branch that runs - silently, which is what
+   * makes it hard to see from the outside. */
+  return { title: tab.title || "", year: null, source: "tab.title (fallback)" };
 }
 
 /**

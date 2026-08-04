@@ -1,0 +1,95 @@
+/* The diagnostic report.
+ *
+ * Extends options.css rather than restating it, so the two extension pages read
+ * as one product. Only what a report needs and a settings page does not is
+ * here: term/value pairs, a highlighted row for "this is the one the extension
+ * believed", and a block of raw JSON that has to stay legible without becoming
+ * the loudest thing on the page.
+ */
+
+/* Term and value, one pair per row. A table would be wrong: these are facts
+ * about one thing, not rows of the same kind of thing. */
+.facts {
+  display: grid;
+  grid-template-columns: minmax(150px, max-content) 1fr;
+  gap: 4px 16px;
+  margin: 10px 0 0;
+  font-size: 13px;
+}
+
+.facts dt {
+  color: var(--muted);
+}
+
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A value that is the answer to why the page did not work. One colour, used
+ * only here, so scanning the page finds the problem without reading it. */
+[data-bad="true"] {
+  color: #e0a44d;
+  font-weight: 600;
+}
+
+/* The frame the extension believed, and the result it would have taken. The
+ * whole report is a comparison between what was chosen and what was available,
+ * so the chosen one has to be findable at a glance. */
+tr.believed > td {
+  background: rgba(76, 139, 245, 0.1);
+}
+
+tr.believed b {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #cfe0ff;
+  background: #2f4a7a;
+  border-radius: 8px;
+}
+
+col.c-frame { width: 110px; }
+col.c-num { width: 74px; }
+col.c-flag { width: 74px; }
+
+.plan {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.plan:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.plan h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Present, complete, and quiet. It is there to be copied, not read - the three
+ * sections above exist so that nobody has to read it. */
+.raw {
+  max-height: 420px;
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  white-space: pre;
+}

@@ -338,6 +338,212 @@
     return found;
   }
 
+  // --- diagnostics ----------------------------------------------------------
+
+  /* What this frame can see, for when a page does not work and nobody can say
+   * why from the outside.
+   *
+   * It exists because the interesting failures are all invisible from the
+   * console: the metadata is in one frame and the video is in another, the
+   * content script did or did not load somewhere, the title that got searched
+   * for is not the title on screen. Every one of those is a question about
+   * which frame saw what, and a frame can only be asked from inside it.
+   *
+   * Collected per frame and merged by the service worker, which is the only
+   * thing that can see all of them at once.
+   */
+
+  /* Episode markers, found by shape rather than by selector.
+   *
+   * A site that lists episodes does it with its own class names - `btn-episode`
+   * on one, `ep-item` on another, an <option> on a third - so matching known
+   * selectors would only ever work on pages somebody had already looked at.
+   * What does not vary is that the control says which episode it is, in one of
+   * a few notations, and that the one being watched is marked as chosen.
+   *
+   * Reported rather than acted on: this is the part most likely to be wrong on
+   * a page nobody has seen, so it produces evidence first. */
+  const EPISODE_PATTERNS = [
+    // S01E01, S01-E01, S1 E1, s01.e01
+    /\bS\s*(?<season>\d{1,2})\s*[.\-_ ]?\s*E\s*(?<episode>\d{1,3})\b/i,
+    // 1x01
+    /\b(?<season>\d{1,2})\s*x\s*(?<episode>\d{1,3})\b/i,
+    // Season 1 Episode 2, Sezon 1 Bölüm 2
+    /\b(?:season|sezon)\s*(?<season>\d{1,2})\D{1,12}(?:episode|ep|bölüm|bolum)\s*(?<episode>\d{1,3})\b/i,
+  ];
+
+  function matchEpisode(text) {
+    for (const pattern of EPISODE_PATTERNS) {
+      const match = pattern.exec(text);
+      if (match?.groups) {
+        return {
+          season: Number(match.groups.season),
+          episode: Number(match.groups.episode),
+          matched: match[0],
+        };
+      }
+    }
+    return null;
+  }
+
+  /* "Chosen" is spelled a dozen ways. Checked on the element and a couple of
+   * ancestors, because half the sites that mark a selection mark the <li> and
+   * not the <a> inside it. */
+  const SELECTED_CLASS = /(?:^|[\s_-])(?:active|current|selected|playing|watching|on)(?:$|[\s_-])/i;
+
+  function selectionEvidence(node) {
+    const reasons = [];
+    let cursor = node;
+    for (let depth = 0; cursor && depth < 3; depth++, cursor = cursor.parentElement) {
+      const className = String(cursor.className || "");
+      if (SELECTED_CLASS.test(className)) reasons.push(`class "${className.slice(0, 60)}"@${depth}`);
+      if (cursor.getAttribute?.("aria-current")) reasons.push(`aria-current@${depth}`);
+      if (cursor.getAttribute?.("aria-selected") === "true") reasons.push(`aria-selected@${depth}`);
+      if (cursor.hasAttribute?.("selected")) reasons.push(`selected@${depth}`);
+      if (cursor.dataset?.active != null) reasons.push(`data-active@${depth}`);
+    }
+    return reasons;
+  }
+
+  /** A short, readable path to an element, for pasting into a bug report. */
+  function describeNode(node) {
+    const parts = [];
+    let cursor = node;
+    for (let depth = 0; cursor && depth < 4; depth++, cursor = cursor.parentElement) {
+      const tag = cursor.tagName?.toLowerCase();
+      if (!tag) break;
+      const id = cursor.id ? `#${cursor.id}` : "";
+      const cls = String(cursor.className || "")
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map((name) => `.${name}`)
+        .join("");
+      parts.unshift(`${tag}${id}${cls}`);
+    }
+    return parts.join(" > ");
+  }
+
+  /* Reported markers, and the ceiling on how many are examined.
+   *
+   * These are different numbers for a reason found by running this: a full
+   * series page carries one control per episode - 75 of them for The Americans
+   * - and they are listed newest first, so the one being watched was 75th.
+   * Stopping the *scan* at the reporting limit threw it away and the report
+   * then said, with no caveat, that the page marked no episode as chosen. A cap
+   * applied before the filter is a cap on the answer. */
+  const MAX_MARKERS_REPORTED = 40;
+  const MAX_NODES_SCANNED = 4000;
+
+  function episodeMarkers() {
+    const found = [];
+    let scanned = 0;
+
+    /* Elements with children are usually the list, not an item in it, and the
+     * list's textContent contains every episode - so it matches the first one
+     * and reports the wrong number with total confidence. Two children is the
+     * allowance for an item that wraps its label in a span or carries an icon. */
+    for (const node of document.querySelectorAll("a,button,li,span,div,option,h1,h2,h3,p")) {
+      if (++scanned > MAX_NODES_SCANNED) break;
+      if (node.children.length > 2) continue;
+      const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+      if (!text || text.length > 60) continue;
+      const match = matchEpisode(text);
+      if (!match) continue;
+
+      const selected = selectionEvidence(node);
+      found.push({
+        ...match,
+        text: text.slice(0, 60),
+        path: describeNode(node),
+        selected: selected.length > 0,
+        selectedBecause: selected,
+        visible: node.getBoundingClientRect().width > 0,
+      });
+    }
+
+    // Selected first, then visible: that is the order a reader wants them in,
+    // and it is what decides which survive the cut below.
+    found.sort(
+      (a, b) => Number(b.selected) - Number(a.selected) || Number(b.visible) - Number(a.visible),
+    );
+
+    return {
+      total: found.length,
+      // Never a silent truncation: the report says how many were left out.
+      omitted: Math.max(0, found.length - MAX_MARKERS_REPORTED),
+      scanLimitHit: scanned > MAX_NODES_SCANNED,
+      markers: found.slice(0, MAX_MARKERS_REPORTED),
+    };
+  }
+
+  function describeVideo(video) {
+    if (!video) return null;
+    const box = video.getBoundingClientRect();
+    return {
+      duration: Number.isFinite(video.duration) ? Math.round(video.duration) : null,
+      currentTime: Math.round(video.currentTime),
+      paused: video.paused,
+      width: Math.round(box.width),
+      height: Math.round(box.height),
+      // The URL itself is not wanted - it is long, single-use and identifying.
+      // Which kind it is answers the only question worth asking of it.
+      source: /^blob:/.test(video.currentSrc || "")
+        ? "blob (MSE)"
+        : video.currentSrc
+          ? "direct"
+          : "none",
+      insideLink: Boolean(video.closest("a")),
+      viewportShare: Number(
+        ((box.width * box.height) / (window.innerWidth * window.innerHeight || 1)).toFixed(3),
+      ),
+    };
+  }
+
+  function diagnose() {
+    const info = pageInfo();
+    const chosen = pickVideo();
+    const allVideos = Array.from(document.querySelectorAll("video"));
+
+    return {
+      url: location.href,
+      isTopFrame: window === window.top,
+      title: document.title,
+      version: VERSION,
+
+      // What the title guess would be built from, in the order it prefers.
+      titleCandidates: info.candidates,
+      year: info.year,
+
+      // The question the search cannot currently answer.
+      episodes: episodeMarkers(),
+      episodeInTitle: matchEpisode(document.title),
+      episodeInUrl: matchEpisode(decodeURIComponent(location.pathname + location.search)),
+
+      videoCount: allVideos.length,
+      // Every video, so "the one it picked is not the one playing" is visible.
+      videos: allVideos.slice(0, 6).map(describeVideo),
+      chosenVideo: describeVideo(chosen),
+      hasPlayableVideo: chosen !== null,
+      isPageSubject: isPageSubject(chosen),
+
+      // Whether the ad correction could fire here at all.
+      adMarkersMatched: document.querySelectorAll(AD_MARKERS).length,
+      inAd: state.inAd,
+      adDriftMs: state.adDriftMs,
+
+      attached: state.tracks.map((track, slot) => ({
+        slot,
+        attached: track.cues.length > 0,
+        cueCount: track.cues.length,
+        label: track.label,
+        language: track.language,
+        fileId: track.fileId,
+        offsetMs: track.offsetMs,
+      })),
+    };
+  }
+
   // --- settings -------------------------------------------------------------
 
   async function loadSettings() {
@@ -1189,6 +1395,10 @@
 
       case "sso:pageInfo":
         sendResponse({ hasVideo: hasPlayableVideo(), ...pageInfo() });
+        return false;
+
+      case "sso:diagnose":
+        sendResponse(diagnose());
         return false;
 
       case "sso:attach":

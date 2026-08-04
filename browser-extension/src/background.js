@@ -31,6 +31,7 @@ import {
  * enough that one copy per frame would be wasteful, and the dictionary is a
  * cross-origin call, which an MV3 content script cannot make with extension
  * permissions. */
+import { capture, lastReport, usePlanner } from "./diagnose.js";
 import * as deck from "./study/deck.js";
 import { canReachDictionary, lookup } from "./study/lookup.js";
 import { rank } from "./study/rarity.js";
@@ -71,9 +72,9 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 // --- daemon proxy for panel.js and popup.js ---------------------------------
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "sso:daemon") {
-    handleDaemonCall(message.op, message.args || {})
+    handleDaemonCall(message.op, message.args || {}, sender)
       .then(sendResponse)
       // Transport failures are reported as data rather than thrown, so the
       // caller gets a message instead of an unresolved promise.
@@ -84,6 +85,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   /* The panel is inside a page, which cannot open an extension page itself.
    * Sending it here is the only route, and it keeps the deck one click from
    * where the words are saved rather than somewhere in the browser's menus. */
+  if (message?.type === "sso:openReport") {
+    chrome.tabs
+      .create({ url: chrome.runtime.getURL("src/report.html") })
+      .then(() => sendResponse({ ok: true }), () => sendResponse({ ok: false }));
+    return true;
+  }
+
   if (message?.type === "sso:openOptions") {
     chrome.tabs
       .create({ url: chrome.runtime.getURL(`src/options.html${message.hash || ""}`) })
@@ -103,7 +111,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-async function handleDaemonCall(op, args) {
+async function handleDaemonCall(op, args, sender) {
   switch (op) {
     case "health":
       return providerStatus();
@@ -145,12 +153,39 @@ async function handleDaemonCall(op, args) {
     case "deckClear":
       return deck.clear();
 
+    /* Diagnostics. `capture` runs a search, which is free; nothing here spends
+     * download quota. */
+    /* Which tab to diagnose, in the order of how sure we are:
+     *
+     *   an explicit id   the report page re-capturing the tab it is about
+     *   the sender's tab the control panel, which is inside the page itself
+     *   the active tab   anything else
+     *
+     * The active tab is the fallback rather than the rule because the two
+     * surfaces that ask for this are both cases where it is wrong: the panel
+     * lives in the page (so the sender is the answer, and it stays right if the
+     * user switches tabs while it works) and the report page is a tab of its
+     * own, where the active tab is the report rather than the film. */
+    case "diagnose": {
+      const tab = await tabToDiagnose(args.tabId, sender);
+      if (!tab?.id) return { error: "that tab is gone" };
+      await ensureInjected(tab.id);
+      return capture(tab);
+    }
+    case "lastDiagnostic":
+      return (await lastReport()) || { error: "nothing captured yet" };
+
     default:
       return { error: `unknown daemon operation: ${op}` };
   }
 }
 
 // --- commands ---------------------------------------------------------------
+
+/* One copy of the auto-attach decision, shared with the diagnostic report.
+ * Registered rather than imported, because the planner lives here - the
+ * alternative is an import cycle between this file and diagnose.js. */
+usePlanner(planAutoAttach);
 
 chrome.commands.onCommand.addListener(runCommand);
 
@@ -190,6 +225,58 @@ async function runCommand(command) {
   }
 }
 
+/* Work out what auto-attach should do, without doing any of it.
+ *
+ * Split out from autoAttach so the diagnostic report can state what the
+ * shortcut would do rather than re-deriving it. A second copy of this reasoning
+ * would drift from the first, and a diagnostic that disagrees with the code it
+ * describes is worse than no diagnostic - it sends the reader after the wrong
+ * bug with a document backing them up.
+ *
+ * Searching costs nothing. Downloading does, and none happens here.
+ */
+async function planAutoAttach(tab, frameId) {
+  const languages = await preferredLanguages();
+  // Prefer what the page says it is over the tab title. Prime Video titles a
+  // detail page "Prime Video: Crime 101"; og:title says "Crime 101".
+  const { title, year, source } = await bestTitleForTab(tab, frameId);
+  const found = await search({ title, year, languages });
+
+  const plan = { languages, title, year, titleSource: source, found };
+
+  if (found.error) return { ...plan, decision: "error", reason: found.error };
+
+  const query = found.used?.query || title;
+  const threshold = found.auto_attach_threshold ?? 0.75;
+  const best = pickBest(found.results, languages);
+  Object.assign(plan, { query, threshold, best });
+
+  if (!best) {
+    return { ...plan, decision: "nothing-found", reason: `No subtitles found for "${query}"` };
+  }
+
+  /* Refuse to spend a download on something that does not look like what was
+   * asked for. Searching "Prime Video: Crime 101" once returned "Ekusute" and
+   * "Major Crimes", both of which were downloaded and displayed because
+   * nothing checked. Open the panel instead and let a human decide. */
+  if ((best.match_score ?? 0) < threshold) {
+    return {
+      ...plan,
+      decision: "too-weak",
+      reason: `Nothing matched "${query}" well — pick one in the panel`,
+    };
+  }
+
+  /* The second language, if one is configured and the search turned up a good
+   * enough match for it. */
+  const second = languages
+    .slice(1)
+    .map((language) => pickBest(found.results.filter((r) => r.language === language), [language]))
+    .find((result) => result && (result.match_score ?? 0) >= threshold);
+
+  return { ...plan, second, decision: "attach", reason: "" };
+}
+
 async function autoAttach(tab, frameId, status) {
   if (status && !status.hasVideo) {
     await notify(tab.id, frameId, "No video playing on this page");
@@ -199,55 +286,30 @@ async function autoAttach(tab, frameId, status) {
   try {
     await notify(tab.id, frameId, "Looking for subtitles…");
 
-    const languages = await preferredLanguages();
-    // Prefer what the page says it is over the tab title. Prime Video titles a
-    // detail page "Prime Video: Crime 101"; og:title says "Crime 101".
-    const { title, year } = await bestTitleForTab(tab, frameId);
-    const found = await search({ title, year, languages });
+    const plan = await planAutoAttach(tab, frameId);
 
-    if (found.error) {
-      await notify(tab.id, frameId, found.error);
+    if (plan.decision === "error" || plan.decision === "nothing-found") {
+      await notify(tab.id, frameId, plan.reason);
       return;
     }
 
-    const query = found.used?.query || title;
-    const threshold = found.auto_attach_threshold ?? 0.75;
-    const best = pickBest(found.results, languages);
-
-    if (!best) {
-      await notify(tab.id, frameId, `No subtitles found for "${query}"`);
-      return;
-    }
-
-    /* Refuse to spend a download on something that does not look like what was
-     * asked for. Searching "Prime Video: Crime 101" once returned "Ekusute" and
-     * "Major Crimes", both of which were downloaded and displayed because
-     * nothing checked. Open the panel instead and let a human decide. */
-    if ((best.match_score ?? 0) < threshold) {
+    if (plan.decision === "too-weak") {
       await send(tab.id, frameId, { type: "sso:togglePanel" });
-      await notify(
-        tab.id,
-        frameId,
-        `Nothing matched "${query}" well — pick one in the panel`,
-      );
+      await notify(tab.id, frameId, plan.reason);
       return;
     }
+
+    const { best, second, found } = plan;
 
     if (!(await attachOne(tab, frameId, best, found, 0))) return;
 
-    /* The second language, if one is configured and the search turned up a
-     * good enough match for it.
+    /* The second language, chosen by planAutoAttach above.
      *
      * This is where dual subtitles stop being a thing you assemble by hand: the
      * languages are already in preferences, best-first, and the search already
      * asked for all of them. Silence is the right answer when there is no
      * second language configured or nothing in it matched - the first subtitle
      * is on screen either way, which is what the shortcut promised. */
-    const second = languages
-      .slice(1)
-      .map((language) => pickBest(found.results.filter((r) => r.language === language), [language]))
-      .find((result) => result && (result.match_score ?? 0) >= threshold);
-
     if (second) await attachOne(tab, frameId, second, found, 1);
   } catch (error) {
     await notify(tab.id, frameId, describe(error));
@@ -287,6 +349,15 @@ async function attachOne(tab, frameId, result, found, slot) {
 function describe(error) {
   if (error instanceof DaemonDownError) return error.message;
   return error?.message || "Something went wrong";
+}
+
+async function tabToDiagnose(tabId, sender) {
+  if (tabId != null) {
+    return chrome.tabs.get(Number(tabId)).catch(() => null);
+  }
+  if (sender?.tab?.id != null) return sender.tab;
+  const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return active || null;
 }
 
 /* Self-heal a tab whose content script predates the current version, or has

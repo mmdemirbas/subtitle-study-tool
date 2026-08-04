@@ -207,6 +207,37 @@ cost per call or a local model that has to be resident, and neither decision has
 been made. It matters less than it sounds: with two subtitles up, the sentence
 is already translated by a human in the other one, and the card shows that line.
 
+## When a page does not work
+
+The control panel has **Diagnose this page**. It asks every frame of the page
+what it can see, runs the real search-and-decide code, and opens a report.
+Nothing is downloaded — searching is free, and the capture never fetches a
+subtitle.
+
+It exists because the failures worth diagnosing are invisible from any one
+place. The page metadata is in one frame and the video in another; the title
+that got searched for is not the title on screen; the content script loaded in
+three frames and not the fourth. Each of those is a question about which frame
+saw what, and no frame can answer it about the others — only the service worker
+can, because it is the only thing that can address them all.
+
+The report leads with the answer rather than the data: which frame the extension
+believed and why, what it searched for and where that title came from, whether a
+season and episode were sent, and what it decided. Then the same search run
+against the top frame, so "it asked the wrong frame" is a comparison instead of
+a theory.
+
+Two things are worth knowing about it:
+
+- **It reports what the code does, not a description of it.** The auto-attach
+  decision is one function, called by the shortcut and by the report. A second
+  copy would drift, and a diagnostic that disagrees with the code it describes
+  sends you after the wrong bug with a document backing you up.
+- **It carries no secrets.** No API key, no cookies, no media URLs. Frame
+  addresses are cut back to their origin and first path segment, because a
+  player's URL is often a signed one. The page's own address stays — it is the
+  thing being diagnosed.
+
 ## Why sync is not a problem here
 
 The usual difficulty with an external subtitle track is guessing how far ahead

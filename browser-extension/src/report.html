@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Subtitle Overlay — page diagnostic</title>
+    <link rel="stylesheet" href="options.css" />
+    <link rel="stylesheet" href="report.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Page diagnostic</h1>
+      <p class="note" id="captured">—</p>
+
+      <div class="row">
+        <button type="button" id="recapture" class="primary">Capture this tab again</button>
+        <button type="button" id="copy">Copy the report</button>
+        <button type="button" id="download">Download JSON</button>
+        <span class="note" id="copied"></span>
+      </div>
+
+      <section class="card" id="verdict-card">
+        <h2>What happened</h2>
+        <p class="status" id="verdict">—</p>
+        <p class="note" id="verdict-detail"></p>
+      </section>
+
+      <section class="card">
+        <h2>Which frame the extension believes</h2>
+        <p class="note">
+          Everything the extension knows about the page comes from one frame. On
+          a site whose player sits in a cross-origin iframe, that frame may hold
+          the video and none of the metadata.
+        </p>
+        <p class="status" id="frame-summary">—</p>
+        <div class="table-scroll">
+          <table id="frames-table">
+            <colgroup>
+              <col class="c-frame" />
+              <col />
+              <col class="c-num" />
+              <col class="c-num" />
+              <col class="c-num" />
+              <col class="c-flag" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">Frame</th>
+                <th scope="col">Origin</th>
+                <th scope="col" class="num">Videos</th>
+                <th scope="col" class="num">Titles</th>
+                <th scope="col" class="num">Episodes</th>
+                <th scope="col">Script</th>
+              </tr>
+            </thead>
+            <tbody id="frames-rows"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>The episode</h2>
+        <p class="note">
+          A subtitle for the wrong episode of the right series looks exactly like
+          one that has drifted. This is what the search asked for, and what the
+          page could have told it.
+        </p>
+        <dl class="facts" id="episode-facts"></dl>
+        <div class="table-scroll" id="markers-wrap" hidden>
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Found on the page</th>
+                <th scope="col">Reads</th>
+                <th scope="col">Where</th>
+                <th scope="col">Chosen</th>
+              </tr>
+            </thead>
+            <tbody id="markers-rows"></tbody>
+          </table>
+        </div>
+        <p class="empty" id="markers-empty" hidden>
+          No episode markers found in any frame.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>What was searched for</h2>
+        <p class="note" id="search-compare"></p>
+        <div id="plans"></div>
+      </section>
+
+      <section class="card">
+        <h2>Everything captured</h2>
+        <p class="note">
+          The whole report, as it would be pasted into a bug report. No API key
+          and no cookies. Frame addresses are cut back to the origin and their
+          first path segment, because a player's URL is often a signed one.
+          The page's own address is kept — it is the thing being diagnosed.
+        </p>
+        <pre id="raw" class="raw"></pre>
+      </section>
+    </main>
+    <script src="report.js" type="module"></script>
+  </body>
+</html>

@@ -151,6 +151,7 @@
       buildAppearance(),
       buildStudy(),
       buildKeys(),
+      buildDiagnostics(),
     );
 
     panel.append(head, body);
@@ -779,6 +780,59 @@
     if (code.startsWith("Digit")) return code.slice(5);
     if (code.startsWith("Numpad")) return `num ${code.slice(6)}`;
     return code;
+  }
+
+  // --- diagnostics ----------------------------------------------------------
+
+  /* When a page does not work, the reason is nearly always something no single
+   * frame can see: the metadata is in one frame and the video in another, or
+   * the title that got searched for is not the title on screen. This asks every
+   * frame what it sees, runs the real decision code, and opens the result.
+   *
+   * It costs no download quota - the capture searches, which is free, and never
+   * fetches. */
+  function buildDiagnostics() {
+    const wrap = section("If this page is not working");
+
+    const note = document.createElement("p");
+    note.className = "sso-note";
+    note.textContent =
+      "Captures what each frame of this page can see and what the search would do with it, " +
+      "then opens the result. No downloads are spent.";
+
+    const row = document.createElement("div");
+    row.className = "sso-row";
+    el.diagnose = button("Diagnose this page", {
+      primary: true,
+      onClick: runDiagnostic,
+    });
+    row.append(el.diagnose);
+
+    el.diagnoseNote = document.createElement("p");
+    el.diagnoseNote.className = "sso-note";
+
+    wrap.append(note, row, el.diagnoseNote);
+    return wrap;
+  }
+
+  async function runDiagnostic() {
+    el.diagnose.disabled = true;
+    el.diagnoseNote.className = "sso-note";
+    el.diagnoseNote.textContent = "Asking every frame…";
+    try {
+      const report = await api.daemon("diagnose", {});
+      if (!report || report.error || report.transportError) {
+        el.diagnoseNote.className = "sso-note sso-note--warn";
+        el.diagnoseNote.textContent =
+          report?.error || report?.transportError || "The capture failed.";
+        return;
+      }
+      el.diagnoseNote.textContent = `Captured ${report.frames?.length ?? 0} frame(s). Opening…`;
+      // The page cannot open an extension page itself; the worker can.
+      await chrome.runtime.sendMessage({ type: "sso:openReport" });
+    } finally {
+      el.diagnose.disabled = false;
+    }
   }
 
   // --- dragging -------------------------------------------------------------
