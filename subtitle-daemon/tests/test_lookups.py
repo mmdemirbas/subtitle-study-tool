@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from subtitle_daemon.lookups import Lookups, condense
+from subtitle_daemon.lookups import Lookups, condense, pick_translation
 
 RAW_ENTRY: list[dict[str, Any]] = [
     {
@@ -123,3 +123,115 @@ def test_a_cached_entry_round_trips_as_json(lookups: Lookups) -> None:
     lookups._write("warrant", "en", payload)
     on_disk = json.loads(lookups._path("warrant", "en").read_text(encoding="utf-8"))
     assert on_disk == payload
+
+
+# --- translation ---------------------------------------------------------------
+
+# Recorded from api.mymemory.translated.net rather than invented, because the
+# two ways its answers mislead are things it does and not things imagined for
+# it. Trimmed to the fields the picker reads.
+FRANKLY = {
+    "responseData": {"translatedText": "açıkçası", "match": 0.99},
+    "matches": [
+        {"translation": "açıkçası", "quality": "74", "match": 0.99, "created-by": "MateCat"},
+        {"translation": "açıkçası", "quality": 70, "match": 0.85, "created-by": "MT!"},
+        {
+            "translation": "Şunu içtenlikle söyleyebilirim,",
+            "quality": "74",
+            "match": 0.84,
+            "created-by": "MateCat",
+        },
+    ],
+}
+
+# The archive's own order puts a quality-0 entry first, and the sense the film
+# meant third, behind a sentence about a phone shop.
+GET_DOWN = {
+    "responseData": {"translatedText": "başlamak", "match": 1},
+    "matches": [
+        {"translation": "başlamak", "quality": "0", "match": 1, "created-by": "marco"},
+        {
+            "translation": (
+                "ı was worked turktelekom and vodafone shop on sale in total seventeen months. "
+            ),
+            "quality": 74,
+            "match": 0.98,
+            "created-by": "MateCat",
+        },
+        {"translation": "Çök.", "quality": 74, "match": 0.96, "created-by": "MateCat"},
+    ],
+}
+
+# A word it does not know comes back unchanged, with a confident-looking score.
+UNKNOWN = {
+    "responseData": {"translatedText": "zzzqqxnotaword", "match": 0.85},
+    "matches": [
+        {"translation": "zzzqqxnotaword", "quality": 70, "match": 0.85, "created-by": "MT!"}
+    ],
+}
+
+
+def test_the_best_scored_candidate_wins() -> None:
+    assert pick_translation(FRANKLY, "frankly") == "açıkçası"
+
+
+def test_a_quality_zero_entry_loses_to_a_lower_ranked_good_one() -> None:
+    # The whole reason the list is scored: taking matches[0] returns "başlamak".
+    assert pick_translation(GET_DOWN, "get down") == "Çök."
+
+
+def test_a_long_unrelated_segment_is_not_a_word_translation() -> None:
+    assert "turktelekom" not in pick_translation(GET_DOWN, "get down")
+
+
+def test_handing_the_word_back_unchanged_is_not_a_translation() -> None:
+    assert pick_translation(UNKNOWN, "zzzqqxnotaword") == ""
+
+
+def test_the_echo_is_rejected_whatever_its_case() -> None:
+    raw = {"matches": [{"translation": "Frankly", "quality": 90, "match": 1}]}
+    assert pick_translation(raw, "frankly") == ""
+
+
+def test_responsedata_is_used_when_there_are_no_matches() -> None:
+    raw = {"responseData": {"translatedText": "açıkçası"}, "matches": []}
+    assert pick_translation(raw, "frankly") == "açıkçası"
+
+
+def test_a_shape_that_is_not_a_payload_is_not_a_crash() -> None:
+    assert pick_translation(None, "frankly") == ""
+    assert pick_translation([], "frankly") == ""
+    assert pick_translation({"matches": [None, "nonsense"]}, "frankly") == ""
+
+
+def test_translating_into_the_same_language_asks_nobody(lookups: Lookups) -> None:
+    assert lookups.translate("frankly", "en", "en") == ""
+
+
+def test_a_translation_is_cached_on_disk_and_reused(lookups: Lookups, monkeypatch: Any) -> None:
+    calls = []
+
+    def once(term: str, language: str, target: str) -> str:
+        calls.append(term)
+        return "açıkçası"
+
+    monkeypatch.setattr(lookups, "_fetch_translation", once)
+    assert lookups.translate("frankly", "en", "tr") == "açıkçası"
+    assert lookups.translate("Frankly", "en", "tr") == "açıkçası"
+    assert calls == ["frankly"], "the second lookup should have come off the disk"
+
+
+def test_a_word_with_no_dictionary_still_carries_its_translation(
+    lookups: Lookups, monkeypatch: Any
+) -> None:
+    # The normal case for every language but English, and for every phrase.
+    monkeypatch.setattr(lookups, "_fetch_translation", lambda *args: "açıkçası")
+    payload = lookups.get("dürüst", "tr", "en")
+    assert payload["translation"] == "açıkçası"
+    assert "unavailable" not in payload, "a translation is an answer, not a failure"
+
+
+def test_a_failed_translation_is_not_cached(lookups: Lookups, monkeypatch: Any) -> None:
+    monkeypatch.setattr(lookups, "_fetch_translation", lambda *args: "")
+    lookups.translate("frankly", "en", "tr")
+    assert not lookups._translation_path("frankly", "en", "tr").exists()

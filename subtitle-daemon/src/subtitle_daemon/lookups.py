@@ -13,14 +13,18 @@ not the only one.
 
 No new dependency: urllib, like the rest of the daemon.
 
-What this deliberately does not do is translate. The daemon has no runtime
-dependencies and no API key beyond OpenSubtitles', and a translator means one of
-those - a hosted API with a cost per call, or a local model that has to be
-resident. That decision has not been made, so `translation` is always empty
-here, and the payload carries the field so that a translator can fill it later
-without every reader changing. For a learner watching with two subtitles the
-gap is smaller than it sounds: the sentence is already translated, by a human,
-in the other subtitle, and the overlay shows that line next to the word.
+Two different resources, deliberately kept apart. A DICTIONARY says what a word
+means in its own language, and only English has one worth asking. A TRANSLATION
+says what it is in yours, works in both directions, and is the only one of the
+two that has anything to say about a phrase. They have different providers,
+different coverage and different limits, so they cache separately and either can
+be missing without taking the other with it.
+
+The translator is MyMemory, which needs no key: 5000 chars/day anonymously and
+50000 with an email in the `de` parameter, per
+https://mymemory.translated.net/doc/usagelimits.php. A word is under ten of
+those characters, so the anonymous allowance is several hundred lookups a day
+and the disk cache means a word is only ever spent once.
 """
 
 from __future__ import annotations
@@ -51,6 +55,25 @@ TIMEOUT_SECONDS = 6
 # that can be read in the two seconds a line is on screen.
 MAX_DEFINITIONS = 3
 
+TRANSLATE_URL = "https://api.mymemory.translated.net/get"
+
+# MyMemory answers with a ranked list of candidates, and the top one is not
+# reliably the best: asked for "get down" it put a human-contributed entry of
+# quality 0 first and the sense the film meant third. So the list is scored
+# rather than trusted, by how close the match is and how good the entry claims
+# to be, which puts a quality-0 entry last where it belongs.
+#
+# It also answers a word it does not know by handing the word back unchanged,
+# with a plausible match score. That is a failure wearing a success's clothes,
+# and the only way to see it is to compare with what was asked.
+TRANSLATE_TIMEOUT_SECONDS = 6
+
+# A word's translation is a word, or a short phrase. The archive contains whole
+# paragraphs of unrelated text filed under short keys - one answer to "get down"
+# was a sentence about a phone shop - and length is what separates them.
+MAX_EXTRA_WORDS = 3
+MAX_TRANSLATION_CHARS = 80
+
 
 class Lookups:
     """Dictionary entries, cached on disk. One JSON file per word."""
@@ -58,8 +81,10 @@ class Lookups:
     def __init__(self, root: Path) -> None:
         self._dir = root / "lookups"
         self._dir.mkdir(parents=True, exist_ok=True)
+        self._translations = root / "translations"
+        self._translations.mkdir(parents=True, exist_ok=True)
 
-    def get(self, query: str, language: str) -> dict[str, Any]:
+    def get(self, query: str, language: str, target: str = "") -> dict[str, Any]:
         """A word's entry, from disk if it is there and from the web if not.
 
         Always returns a payload. A word with no entry is a normal answer, not
@@ -68,9 +93,21 @@ class Lookups:
         """
         term = query.strip().lower()
         lang = (language or "en").strip().lower()[:2]
+        into = (target or "").strip().lower()[:2]
         if not term:
             return _empty(term, "nothing to look up")
 
+        payload = self._definition(term, lang)
+        if into and into != lang:
+            payload = {**payload, "translation": self.translate(term, lang, into)}
+            # A word with no dictionary entry but a translation is a useful
+            # answer, not an unavailable one - which is the normal case for
+            # every language except English, and for every phrase.
+            if payload["translation"] and not payload.get("definitions"):
+                payload.pop("unavailable", None)
+        return payload
+
+    def _definition(self, term: str, lang: str) -> dict[str, Any]:
         cached = self._read(term, lang)
         if cached is not None:
             return {**cached, "source": f"{cached.get('source', 'cache')} (cached)"}
@@ -89,6 +126,23 @@ class Lookups:
             self._write(term, lang, payload)
         return payload
 
+    def translate(self, query: str, language: str, target: str) -> str:
+        """What this says in `target`, or "" when nothing trustworthy came back."""
+        term = query.strip()
+        lang = (language or "").strip().lower()[:2]
+        into = (target or "").strip().lower()[:2]
+        if not term or not lang or not into or lang == into:
+            return ""
+
+        cached = self._read_translation(term.lower(), lang, into)
+        if cached is not None:
+            return cached
+
+        answer = self._fetch_translation(term, lang, into)
+        if answer:
+            self._write_translation(term.lower(), lang, into, answer)
+        return answer
+
     # --- disk ---------------------------------------------------------------
 
     def _path(self, term: str, language: str) -> Path:
@@ -106,6 +160,30 @@ class Lookups:
         except (OSError, ValueError):
             # A truncated or hand-edited file is a cache miss, never a crash.
             return None
+
+    def _translation_path(self, term: str, language: str, target: str) -> Path:
+        safe = urllib.parse.quote(term, safe="")
+        return self._translations / f"{language}-{target}-{safe}.json"
+
+    def _read_translation(self, term: str, language: str, target: str) -> str | None:
+        path = self._translation_path(term, language, target)
+        if not path.exists():
+            return None
+        try:
+            stored = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        text = stored.get("translation")
+        return str(text) if isinstance(text, str) and text else None
+
+    def _write_translation(self, term: str, language: str, target: str, text: str) -> None:
+        try:
+            self._translation_path(term, language, target).write_text(
+                json.dumps({"query": term, "translation": text}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError as error:
+            logger.debug("could not cache translation term=%s error=%s", term, error)
 
     def _write(self, term: str, language: str, payload: dict[str, Any]) -> None:
         try:
@@ -133,6 +211,70 @@ class Lookups:
             return _empty(term, "Could not reach the dictionary.")
 
         return {"query": term, **condense(raw), "source": "dictionaryapi.dev"}
+
+    def _fetch_translation(self, term: str, language: str, target: str) -> str:
+        query = urllib.parse.urlencode({"q": term, "langpair": f"{language}|{target}"})
+        request = urllib.request.Request(
+            f"{TRANSLATE_URL}?{query}", headers={"User-Agent": USER_AGENT}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=TRANSLATE_TIMEOUT_SECONDS) as response:
+                raw = json.loads(response.read().decode("utf-8"))
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError) as error:
+            # Silent: the definition is still worth showing, and a learner does
+            # not need to be told the translator was busy.
+            logger.debug("translation unreachable term=%s error=%s", term, error)
+            return ""
+        return pick_translation(raw, term)
+
+
+def pick_translation(raw: Any, term: str) -> str:
+    """The best candidate MyMemory offered, or "" if none of them is one.
+
+    Scored rather than taken in order, because the ranking it ships is not the
+    one a learner wants - see TRANSLATE_URL above for the two ways the first
+    answer is wrong.
+    """
+    if not isinstance(raw, dict):
+        return ""
+
+    source = term.strip().lower()
+    allowed_words = len(source.split()) + MAX_EXTRA_WORDS
+
+    def usable(text: str) -> bool:
+        candidate = text.strip()
+        if not candidate or candidate.lower() == source:
+            # Handing the word back unchanged is how this API says "no".
+            return False
+        return len(candidate) <= MAX_TRANSLATION_CHARS and len(candidate.split()) <= allowed_words
+
+    best = ""
+    best_score = 0.0
+    for match in raw.get("matches") or []:
+        if not isinstance(match, dict):
+            continue
+        text = str(match.get("translation") or "")
+        if not usable(text):
+            continue
+        score = _number(match.get("match"), 0.0) * (_number(match.get("quality"), 0.0) / 100)
+        if score > best_score:
+            best, best_score = text.strip(), score
+
+    if best:
+        return best
+
+    # No scored candidate survived: fall back to the API's own pick, which is
+    # all there is when `matches` is absent.
+    fallback = str((raw.get("responseData") or {}).get("translatedText") or "")
+    return fallback.strip() if usable(fallback) else ""
+
+
+def _number(value: Any, default: float) -> float:
+    """`quality` arrives as 74, as "74", and sometimes not at all."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def condense(raw: Any) -> dict[str, Any]:

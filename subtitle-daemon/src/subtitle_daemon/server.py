@@ -95,7 +95,11 @@ class Service:
 
     def lookup(self, params: dict[str, list[str]]) -> dict[str, Any]:
         """A word's dictionary entry. Free, cached on disk, no quota involved."""
-        return self.lookups.get(_first(params, "q") or "", _first(params, "lang") or "en")
+        return self.lookups.get(
+            _first(params, "q") or "",
+            _first(params, "lang") or "en",
+            _first(params, "to") or "",
+        )
 
     def search(self, params: dict[str, list[str]]) -> dict[str, Any]:
         """Guess what is playing and find candidate subtitles.
