@@ -26,6 +26,7 @@ import pytest
 from subtitle_daemon import server as server_module
 from subtitle_daemon.cache import Cache
 from subtitle_daemon.config import Config
+from subtitle_daemon.lookups import Lookups
 from subtitle_daemon.opensubtitles import (
     DownloadResult,
     Feature,
@@ -103,6 +104,7 @@ def service(tmp_path: Path) -> Iterator[tuple[server_module.Service, StubClient]
     svc = server_module.Service.__new__(server_module.Service)
     svc.config = config
     svc.cache = Cache(tmp_path)
+    svc.lookups = Lookups(tmp_path)
     stub = StubClient()
     svc.client = stub  # type: ignore[assignment]  # structural stand-in for Client
     svc._lock = threading.Lock()
@@ -171,6 +173,28 @@ def test_unknown_endpoint_is_404(http) -> None:
     base, _ = http
     status, _payload = _get(base, "/nope")
     assert status == 404
+
+
+def test_lookup_is_routed_and_costs_no_quota(http) -> None:
+    """The route exists, answers, and never touches the OpenSubtitles client.
+
+    A phrase is used deliberately: it is answered without a network call of any
+    kind, so this stays a test of the routing rather than of the dictionary.
+    """
+    base, client = http
+    status, payload = _get(base, "/lookup?q=give%20it%20a%20rest&lang=en")
+    assert status == 200
+    assert payload["query"] == "give it a rest"
+    assert payload["definitions"] == []
+    assert "Phrases" in payload["unavailable"]
+    assert client.downloads == [], "a lookup spent download quota"
+
+
+def test_lookup_refuses_an_origin_that_is_not_allowed(http) -> None:
+    """Same trust boundary as everything else: a page cannot use the daemon."""
+    base, _ = http
+    status, _payload = _get(base, "/lookup?q=warrant", origin="https://evil.example")
+    assert status == 403
 
 
 def test_search_parses_the_page_title(http) -> None:

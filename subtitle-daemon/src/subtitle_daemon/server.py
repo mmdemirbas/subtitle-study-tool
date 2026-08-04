@@ -13,6 +13,7 @@ Endpoints:
     POST /fetch  {"file_id": N}   download-or-serve-from-cache; may cost quota
     GET  /cached                  what is already on disk
     GET  /cached/{file_id}        cues for a cached subtitle
+    GET  /lookup?q=...            a word's dictionary entry, for study mode
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ from urllib.parse import parse_qs, urlparse
 from . import matching, subtitles, titles
 from .cache import Cache
 from .config import CACHE_DIR, Config
+from .lookups import Lookups
 from .opensubtitles import Client, OpenSubtitlesError, QuotaExceededError
 
 logger = logging.getLogger(__name__)
@@ -73,6 +75,7 @@ class Service:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.cache = Cache(CACHE_DIR)
+        self.lookups = Lookups(CACHE_DIR)
         self.client = Client(config.api_key) if config.has_api_key else None
         self._lock = threading.Lock()
 
@@ -89,6 +92,10 @@ class Service:
             "default_languages": list(self.config.default_languages),
             "cached_subtitles": len(self.cache.list_subtitles()),
         }
+
+    def lookup(self, params: dict[str, list[str]]) -> dict[str, Any]:
+        """A word's dictionary entry. Free, cached on disk, no quota involved."""
+        return self.lookups.get(_first(params, "q") or "", _first(params, "lang") or "en")
 
     def search(self, params: dict[str, list[str]]) -> dict[str, Any]:
         """Guess what is playing and find candidate subtitles.
@@ -631,6 +638,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, self.service.health())
         elif parsed.path == "/search":
             self._send(HTTPStatus.OK, self.service.search(params))
+        elif parsed.path == "/lookup":
+            self._send(HTTPStatus.OK, self.service.lookup(params))
         elif parsed.path == "/cached":
             self._send(HTTPStatus.OK, self.service.cached_list())
         elif match := re.fullmatch(r"/cached/(\d+)", parsed.path):
