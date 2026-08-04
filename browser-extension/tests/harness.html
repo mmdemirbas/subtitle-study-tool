@@ -422,6 +422,32 @@
         if (s.posY > 60) throw new Error(`posY still near the bottom: ${s.posY}`);
       });
 
+      check("subtitle size follows the picture, not the window", async () => {
+        /* Reported as the subtitles rendering bigger on entering fullscreen.
+         * They were 2.6vh - a fraction of the *viewport* - so going fullscreen
+         * resized the text for a reason that has nothing to do with the film.
+         * A subtitle belongs to the picture, so it is the picture it is
+         * measured against, and this holds it to that. */
+        const cue = shadowOf().querySelector(".sso-cue");
+        const ratio = () => {
+          const size = parseFloat(getComputedStyle(cue).fontSize);
+          return size / video.getBoundingClientRect().height;
+        };
+        await showSpeakerCue();
+        const full = ratio();
+        video.style.height = "300px";
+        await sleep(200);
+        const small = ratio();
+        video.style.height = "";
+        await sleep(200);
+
+        if (Math.abs(small - full) / full > 0.05) {
+          throw new Error(
+            `text was ${full.toFixed(4)} of the picture at full size and ` +
+            `${small.toFixed(4)} at 300px - it is tracking the window`);
+        }
+      });
+
       check("a lost release does not leave the subtitle following the pointer", async () => {
         /* Reported as "I don't even drag, I just hover over the subtitle and it
          * jumps somewhere else".

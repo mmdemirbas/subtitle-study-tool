@@ -196,7 +196,7 @@
 
     body.append(buildTracks(), buildSearch(), el.moreToggle, more);
 
-    panel.append(head, body, buildResizeGrip(body));
+    panel.append(head, body, ...buildResizeGrips(body));
     shadow.append(panel);
     makeDraggable(head);
     containGestures(panel);
@@ -218,33 +218,80 @@
   const MAX_WIDTH = 640;
   const MIN_BODY = 140;
 
-  function buildResizeGrip(body) {
+  /* All four corners, not just the bottom-right.
+   *
+   * Reported from fullscreen: the one corner that resized was off the bottom of
+   * the screen and there was no way to reach it. A panel that can only be
+   * resized from the corner furthest from the top-left is a panel that cannot
+   * be resized whenever it is near the bottom, which is exactly when it is too
+   * big. Dragging a left or top corner also moves the panel, so the opposite
+   * corner stays where it is - which is what makes a corner feel like a corner
+   * rather than a slider.
+   */
+  const CORNERS = [
+    { name: "nw", dx: -1, dy: -1, cursor: "nwse-resize" },
+    { name: "ne", dx: +1, dy: -1, cursor: "nesw-resize" },
+    { name: "sw", dx: -1, dy: +1, cursor: "nesw-resize" },
+    { name: "se", dx: +1, dy: +1, cursor: "nwse-resize" },
+  ];
+
+  function buildResizeGrips(body) {
+    return CORNERS.map((corner) => buildResizeGrip(body, corner));
+  }
+
+  function buildResizeGrip(body, corner) {
     const grip = document.createElement("div");
-    grip.className = "sso-grip";
+    grip.className = `sso-grip sso-grip--${corner.name}`;
+    grip.style.cursor = corner.cursor;
     grip.title = "Drag to resize";
 
     let from = null;
     grip.addEventListener("pointerdown", (event) => {
+      const box = host.getBoundingClientRect();
       from = {
         x: event.clientX,
         y: event.clientY,
-        width: host.getBoundingClientRect().width,
+        width: box.width,
         height: body.getBoundingClientRect().height,
+        left: box.left,
+        top: box.top,
+        map: api.measurePlacement(host, (x, y) => setPosition(`${x}px`, `${y}px`)),
       };
-      grip.setPointerCapture(event.pointerId);
+      // measurePlacement moved it; put it back before the drag begins.
+      const back = from.map.toLocal(box.left, box.top);
+      setPosition(`${back.x}px`, `${back.y}px`);
+
+      grip.setPointerCapture?.(event.pointerId);
       event.preventDefault();
       event.stopPropagation();
     });
 
     grip.addEventListener("pointermove", (event) => {
       if (!from) return;
-      const width = clamp(from.width + (event.clientX - from.x), MIN_WIDTH, MAX_WIDTH);
+      if (event.buttons === 0) {
+        end(event);
+        return;
+      }
+      const movedX = (event.clientX - from.x) * corner.dx;
+      const movedY = (event.clientY - from.y) * corner.dy;
+
+      const width = clamp(from.width + movedX, MIN_WIDTH, MAX_WIDTH);
       const height = clamp(
-        from.height + (event.clientY - from.y),
+        from.height + movedY,
         MIN_BODY,
         Math.max(MIN_BODY, window.innerHeight - 120),
       );
       applySize(width, height);
+
+      /* Pulling a left or top edge grows the panel away from the pointer unless
+       * the opposite edge is pinned, so move it by however much it actually
+       * grew - which is not what the pointer did once the size hit a limit. */
+      const grewX = corner.dx < 0 ? width - from.width : 0;
+      const grewY = corner.dy < 0 ? body.getBoundingClientRect().height - from.height : 0;
+      if (grewX || grewY) {
+        const local = from.map.toLocal(from.left - grewX, from.top - grewY);
+        setPosition(`${local.x}px`, `${local.y}px`);
+      }
     });
 
     const end = (event) => {
@@ -263,6 +310,32 @@
     grip.addEventListener("pointerup", end);
     grip.addEventListener("pointercancel", end);
     return grip;
+  }
+
+  /* Undo whatever the page has scaled us by.
+   *
+   * In fullscreen the panel re-parents into the player's fullscreen element,
+   * and if the player has scaled that element the panel is scaled with it -
+   * reported as the panel rendering bigger in fullscreen, with its resize
+   * corner pushed off the screen. Counter-scaling puts it back at the size it
+   * was designed at, whatever the page is doing around it.
+   *
+   * The transform is cleared before measuring, or the second call would measure
+   * the correction it applied the first time and converge on nothing. */
+  function rescale() {
+    if (!host || host.hidden) return;
+    host.style.removeProperty("transform");
+    const rendered = host.getBoundingClientRect().width;
+    const asked = host.offsetWidth;
+    const scale = asked > 0 && rendered > 0 ? rendered / asked : 1;
+
+    if (Math.abs(scale - 1) > 0.01) {
+      host.style.setProperty("transform", `scale(${(1 / scale).toFixed(4)})`, "important");
+      host.style.setProperty("transform-origin", "top left", "important");
+    } else {
+      host.style.removeProperty("transform-origin");
+    }
+    fitToViewport();
   }
 
   const clamp = (value, low, high) => Math.min(Math.max(value, low), high);
@@ -1496,12 +1569,15 @@
       document.body ||
       document.documentElement;
     if (target && host.parentElement !== target) target.appendChild(host);
+    // The fullscreen element may be scaled; what we have just moved into
+    // decides how big the panel renders and where a written position lands.
+    rescale();
   }
 
   document.addEventListener("keydown", onCaptureKey, true);
   window.addEventListener("resize", clampIntoView, { passive: true });
 
-  window.__ssoPanel = { show, hide, toggle, reparent, isCapturingKey };
+  window.__ssoPanel = { show, hide, toggle, reparent, isCapturingKey, rescale };
 
   window.__ssoPanelTeardown = () => {
     document.removeEventListener("keydown", onCaptureKey, true);

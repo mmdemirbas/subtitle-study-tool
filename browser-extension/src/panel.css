@@ -232,15 +232,24 @@ button.sso-sec__h:focus-visible {
   background: #262c35;
 }
 
+/* One grip per corner. The bottom-right carries the visible hatching, because
+ * that is where a reader looks for it; the other three are the same target,
+ * unmarked until hovered, so the panel does not sprout four decorations. Any
+ * one of them being off-screen no longer means the panel cannot be resized. */
 .sso-grip {
   position: absolute;
-  right: 0;
-  bottom: 0;
   width: 18px;
   height: 18px;
-  cursor: nwse-resize;
-  /* Two hairlines across the corner. Drawn rather than a glyph so it lands on
-   * the pixel grid at any zoom and needs no font to be present. */
+}
+
+.sso-grip--nw { top: 0; left: 0; }
+.sso-grip--ne { top: 0; right: 0; }
+.sso-grip--sw { bottom: 0; left: 0; }
+.sso-grip--se { bottom: 0; right: 0; }
+
+/* Two hairlines across the corner. Drawn rather than a glyph so it lands on
+ * the pixel grid at any zoom and needs no font to be present. */
+.sso-grip--se {
   background:
     linear-gradient(135deg, transparent 45%, #566070 45%, #566070 55%, transparent 55%) no-repeat,
     linear-gradient(135deg, transparent 70%, #566070 70%, #566070 80%, transparent 80%) no-repeat;
@@ -248,6 +257,10 @@ button.sso-sec__h:focus-visible {
 }
 
 .sso-grip:hover {
+  background: rgba(76, 139, 245, 0.25);
+}
+
+.sso-grip--se:hover {
   background:
     linear-gradient(135deg, transparent 45%, #8b929d 45%, #8b929d 55%, transparent 55%) no-repeat,
     linear-gradient(135deg, transparent 70%, #8b929d 70%, #8b929d 80%, transparent 80%) no-repeat;

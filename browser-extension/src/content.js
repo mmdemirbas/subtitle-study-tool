@@ -726,14 +726,52 @@
     updateSettings({ tracks: preset.map((geometry) => ({ ...geometry, placed: true })) });
   }
 
+  /* Subtitles are sized against the picture, not the window.
+   *
+   * They used to be 2.6vh, which is the *viewport's* height - so going
+   * fullscreen changed the text size for a reason that has nothing to do with
+   * the film. On a window smaller than the screen the viewport grows on entering
+   * fullscreen and the subtitles grow with it; on a maximised window it barely
+   * moves while the picture doubles, and the text ends up relatively tiny.
+   * Measured: the same 20px whether the video was 778px tall or 300px.
+   *
+   * A subtitle belongs to the picture. Sizing it off the video's rendered height
+   * makes it the same fraction of the frame at every window size, fullscreen or
+   * not, which is what "it should not change when I go fullscreen" means. */
+  const TEXT_FRACTION_OF_PICTURE = 0.026;
+
+  function pictureHeight() {
+    const box = state.video?.getBoundingClientRect();
+    // Before a video is picked - or if it is collapsed while loading - the
+    // window is the only thing to go on.
+    return box && box.height > 80 ? box.height : window.innerHeight;
+  }
+
+  /* How much the page has scaled whatever we are inside.
+   *
+   * Fullscreen is the common case: the overlay re-parents into the fullscreen
+   * element, and if the player has scaled that element then everything we draw
+   * is scaled with it. `offsetWidth` is what we asked for, the bounding rect is
+   * what was rendered, and the ratio between them is the factor to divide by so
+   * a size in viewport pixels comes out at that size on the screen. */
+  function hostScale() {
+    if (!host) return 1;
+    const rendered = host.getBoundingClientRect().width;
+    const asked = host.offsetWidth;
+    return asked > 0 && rendered > 0 ? rendered / asked : 1;
+  }
+
   function applySettings() {
     if (views.length === 0) return;
     const { background, dimNonSpeech } = state.settings;
+    const picture = pictureHeight();
+    const scale = hostScale();
 
     views.forEach((view, slot) => {
       const track = state.settings.tracks[slot];
       const { root } = view;
-      root.style.setProperty("--sso-font-size", `${2.6 * track.fontScale}vh`);
+      const fontPx = (picture * TEXT_FRACTION_OF_PICTURE * track.fontScale) / scale;
+      root.style.setProperty("--sso-font-size", `${fontPx.toFixed(2)}px`);
       root.style.setProperty("--sso-bg", `rgba(0, 0, 0, ${background})`);
       root.style.setProperty("--sso-x", `${track.posX}%`);
       root.style.setProperty("--sso-y", `${track.posY}%`);
@@ -1085,7 +1123,13 @@
     if (!state.video || !state.video.isConnected) {
       state.video = pickVideo();
       if (!state.video) return;
+      applySettings();
     }
+    /* Every tick, not only when the video is first picked: attach() and the
+     * frame probes also assign state.video, so hanging this off the "we just
+     * found one" branch left the observer watching nothing on the path most
+     * films actually take. It exits on an identity check when unchanged. */
+    watchVideoSize();
     if (!state.visible || !anyAttached()) {
       // "Nothing is showing", not "redraw" - otherwise this clears the text on
       // every tick forever.
@@ -1699,7 +1743,37 @@
     if (drag && event.pointerId === drag.pointerId) onCuePointerUp(event);
   }
 
+  /* The picture changes size without any setting changing: entering fullscreen,
+   * resizing the window, a player switching to theatre mode. Since the subtitle
+   * is sized off the picture, each of those has to re-derive it - otherwise the
+   * text keeps the size it had for a frame that is no longer there.
+   *
+   * A ResizeObserver on the video covers the cases no event announces, which is
+   * most of them; the two explicit listeners cover the moment of the fullscreen
+   * transition, when the video's own box may not have settled yet. */
+  const videoResize =
+    typeof ResizeObserver === "function" ? new ResizeObserver(() => applySettings()) : null;
+  let observedVideo = null;
+
+  function watchVideoSize() {
+    if (!videoResize || state.video === observedVideo) return;
+    if (observedVideo) videoResize.unobserve(observedVideo);
+    observedVideo = state.video;
+    if (observedVideo) videoResize.observe(observedVideo);
+  }
+
+  const onViewportChange = () => {
+    applySettings();
+    // Fullscreen can scale what we are inside, which changes where a written
+    // position lands as well as how big things look.
+    window.__ssoPanel?.rescale?.();
+    window.__ssoStudy?.rescale?.();
+  };
+
   document.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("resize", onViewportChange, { passive: true });
+  document.addEventListener("fullscreenchange", onViewportChange);
+  document.addEventListener("webkitfullscreenchange", onViewportChange);
   document.addEventListener("pointerup", onGlobalPointerEnd, true);
   document.addEventListener("pointercancel", onGlobalPointerEnd, true);
   document.addEventListener("pointermove", onPointerMove, { passive: true, capture: true });
@@ -1717,7 +1791,12 @@
     ticker = null;
     clearTimeout(toastTimer);
     clearTimeout(handleTimer);
+    videoResize?.disconnect();
+    observedVideo = null;
     document.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("resize", onViewportChange);
+    document.removeEventListener("fullscreenchange", onViewportChange);
+    document.removeEventListener("webkitfullscreenchange", onViewportChange);
     document.removeEventListener("pointerup", onGlobalPointerEnd, true);
     document.removeEventListener("pointercancel", onGlobalPointerEnd, true);
     document.removeEventListener("pointermove", onPointerMove, { capture: true });

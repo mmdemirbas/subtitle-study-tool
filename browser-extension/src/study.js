@@ -898,6 +898,24 @@
       document.body ||
       document.documentElement;
     if (target && host.parentElement !== target) target.appendChild(host);
+    rescale();
+  }
+
+  /* Same counter-scale as the panel: a fullscreen element the player has scaled
+   * scales everything re-parented into it, and a study rail that renders half
+   * again as large in fullscreen is the same complaint. */
+  function rescale() {
+    if (!host) return;
+    host.style.removeProperty("transform");
+    const rendered = host.getBoundingClientRect().width;
+    const asked = host.offsetWidth;
+    const scale = asked > 0 && rendered > 0 ? rendered / asked : 1;
+    if (Math.abs(scale - 1) > 0.01) {
+      host.style.setProperty("transform", `scale(${(1 / scale).toFixed(4)})`, "important");
+      host.style.setProperty("transform-origin", "top right", "important");
+    } else {
+      host.style.removeProperty("transform-origin");
+    }
   }
 
   // --- lifecycle ----------------------------------------------------------------
@@ -963,6 +981,7 @@
     onCue,
     claimPointerDown,
     reparent,
+    rescale,
     toggle,
     saveTop,
     setEnabled,
