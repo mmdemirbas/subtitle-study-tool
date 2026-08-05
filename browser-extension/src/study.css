@@ -101,6 +101,79 @@
   color: var(--sso-ink-3);
 }
 
+/* --- how study works --------------------------------------------------------
+ *
+ * The rail's own settings, on the rail. They were eleven controls in a control
+ * panel about subtitles, and every one of them describes this surface - which
+ * is what makes this the right place for them. Scrolls, because the rail is
+ * often shorter than the list.
+ */
+
+.sso-rail__settings {
+  padding: 4px 11px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sso-set {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-2);
+}
+
+.sso-set--check {
+  cursor: pointer;
+}
+
+.sso-set__label {
+  flex: none;
+  width: 8.5em;
+}
+
+.sso-set input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--sso-accent);
+}
+
+.sso-set input[type="checkbox"] {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--sso-accent);
+}
+
+.sso-set__value {
+  flex: none;
+  width: 4em;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--sso-ink-3);
+}
+
+button.sso-set__action {
+  width: 100%;
+  margin-top: 10px;
+  padding: 5px 9px;
+  font-family: inherit;
+  font-size: var(--sso-t-small);
+  font-weight: 600;
+  color: var(--sso-ink-2);
+  background: var(--sso-fill);
+  border: 1px solid var(--sso-line);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+button.sso-set__action:hover {
+  color: var(--sso-ink);
+  background: var(--sso-fill-hover);
+}
+
 /* --- a card ---------------------------------------------------------------- */
 
 /* Transparent, deliberately: the rail is the one surface that carries the

@@ -1668,6 +1668,102 @@
         if (after !== before - 1) throw new Error(`${before} cards became ${after}`);
       });
 
+      check("the rail carries its own settings", async () => {
+        /* They were eleven controls in a panel about subtitles, every one of
+         * them describing this surface. Settings belong on the thing they
+         * change. */
+        const shadow = railShadow();
+        const gear = [...shadow.querySelectorAll(".sso-win__head button")]
+          .find((b) => b.textContent === "⚙");
+        if (!gear) throw new Error("no way into the rail's settings");
+        gear.click();
+        await sleep(120);
+
+        const screen = shadow.querySelector(".sso-rail__settings");
+        if (screen.hidden || screen.getBoundingClientRect().height === 0)
+          throw new Error("the settings did not open");
+        // The words are not on screen, so neither are the controls for them.
+        if (!shadow.querySelector(".sso-rail__list").hidden)
+          throw new Error("the words are still there behind the settings");
+        const clear = [...shadow.querySelectorAll(".sso-icon--word")]
+          .find((b) => b.textContent === "Clear");
+        if (clear && !clear.hidden) throw new Error("it offers to empty a list that is not showing");
+
+        // A control here reaches the setting it names.
+        const before = window.__ssoStudy.settings().textPx;
+        const text = [...screen.querySelectorAll(".sso-set")]
+          .find((r) => r.textContent.includes("Text size"))
+          .querySelector('input[type="range"]');
+        text.value = String(before === 22 ? 18 : 22);
+        text.dispatchEvent(new Event("input", { bubbles: true }));
+        await sleep(120);
+        if (window.__ssoStudy.settings().textPx === before)
+          throw new Error(`the text size stayed at ${before}`);
+        text.value = String(before);
+        text.dispatchEvent(new Event("input", { bubbles: true }));
+        await sleep(80);
+
+        const back = [...shadow.querySelectorAll(".sso-win__head button")]
+          .find((b) => b.textContent === "‹");
+        if (!back || back.hidden) throw new Error("no way back to the words");
+        back.click();
+        await sleep(120);
+        if (!shadow.querySelector(".sso-rail__settings").hidden)
+          throw new Error("back did not return to the words");
+      });
+
+      check("the panel keeps only the switch the rail cannot carry", async () => {
+        /* The rail does not exist while study is off, so a switch reachable
+         * only from the rail could never be turned back on. Everything that is
+         * not that went to the rail. */
+        await window.__ssoPanel.show();
+        await sleep(150);
+        const gear = [...panelShadow().querySelectorAll(".sso-win__head button")]
+          .find((b) => b.textContent === "⚙");
+        gear.click();
+        await sleep(120);
+        const section = [...panelShadow().querySelectorAll(".sso-sec")]
+          .find((s) => s.querySelector(".sso-sec__h")?.textContent.includes("Study"));
+        if (!section) throw new Error("no study section in the panel");
+        if (section.dataset.open !== "true") section.querySelector(".sso-sec__h").click();
+        await sleep(80);
+
+        const sliders = section.querySelectorAll('input[type="range"]');
+        if (sliders.length > 0)
+          throw new Error(`${sliders.length} study sliders are still in the panel`);
+        const boxes = section.querySelectorAll('input[type="checkbox"]');
+        if (boxes.length !== 1)
+          throw new Error(`${boxes.length} study switches in the panel, want just the master`);
+        panelShadow().querySelector(".sso-panel__back").click();
+        await sleep(80);
+      });
+
+      check("the card says which subtitle is being learnt", async () => {
+        /* It was a third "Subtitle 1 / Subtitle 2" pair, in a third place,
+         * meaning a third thing. It names a subtitle, so it lives on one. */
+        await window.__ssoPanel.show();
+        await sleep(150);
+        const chips = [...panelShadow().querySelectorAll(".sso-track__learn")];
+        if (chips.length !== 2) throw new Error(`${chips.length} learning chips, want one per card`);
+
+        const shown = chips.filter((c) => !c.hidden);
+        const attached = window.__ssoApi.status().trackCount;
+        if (attached < 2) {
+          if (shown.length) throw new Error("it asks which to learn with one subtitle attached");
+          return;
+        }
+        const lit = shown.filter((c) => c.dataset.on === "true");
+        if (lit.length !== 1) throw new Error(`${lit.length} chips lit, want exactly one`);
+
+        const was = window.__ssoStudy.settings().studySlot;
+        shown[was === 0 ? 1 : 0].click();
+        await sleep(120);
+        if (window.__ssoStudy.settings().studySlot === was)
+          throw new Error("clicking the other card's chip did not move study to it");
+        window.__ssoStudy.updateSettings({ studySlot: was });
+        await sleep(80);
+      });
+
       check("the rail can be emptied", async () => {
         const clear = [...railShadow().querySelectorAll(".sso-icon--word")].find(
           (b) => b.textContent === "Clear",

@@ -129,6 +129,12 @@
   let noteEl = null;
   let clearEl = null;
   let foldEl = null;
+  let gearEl = null;
+  let backEl = null;
+  let titleEl = null;
+  let settingsEl = null;
+  let railScreen = "words";
+  let setEls = null;
   let sheets = null;
 
   /* Cards currently in the rail, newest first. Held here rather than read back
@@ -206,6 +212,7 @@
     }
     // Marking depends on the threshold, so a changed threshold has to re-mark
     // the line that is already on screen rather than wait for the next one.
+    refreshRailSettings();
     remarkCurrent();
   }
 
@@ -680,7 +687,34 @@
      * off from the control panel, where turning it back on also lives. */
     close.title = "Put the rail away — hovering a word still answers";
     close.addEventListener("click", () => updateSettings({ showRail: false }));
-    head.append(title, countEl, clearEl, foldEl, close);
+
+    /* Study's settings live here now rather than in the control panel.
+     *
+     * They were a section of eleven controls in a panel that is about
+     * subtitles, and every one of them describes this surface: how big its text
+     * is, how solid it is over the film, how many words it keeps, what counts
+     * as rare. Settings belong on the thing they change, and this is the thing.
+     *
+     * What stays in the panel is the master switch, because the rail does not
+     * exist when study is off and a switch you can only reach by first being in
+     * the state it turns on is not a switch. */
+    gearEl = document.createElement("button");
+    gearEl.className = "sso-icon";
+    gearEl.type = "button";
+    gearEl.textContent = "⚙";
+    gearEl.title = "How study works";
+    gearEl.addEventListener("click", () => showRailScreen("settings"));
+
+    backEl = document.createElement("button");
+    backEl.className = "sso-icon";
+    backEl.type = "button";
+    backEl.textContent = "‹";
+    backEl.title = "Back to the words";
+    backEl.hidden = true;
+    backEl.addEventListener("click", () => showRailScreen("words"));
+
+    titleEl = title;
+    head.append(backEl, title, countEl, clearEl, gearEl, foldEl, close);
 
     listEl = document.createElement("div");
     listEl.className = "sso-rail__list";
@@ -688,7 +722,10 @@
     noteEl = document.createElement("p");
     noteEl.className = "sso-rail__note";
 
-    railEl.append(head, listEl, noteEl);
+    settingsEl = buildRailSettings();
+    settingsEl.hidden = true;
+
+    railEl.append(head, listEl, noteEl, settingsEl);
     shadow.append(railEl);
 
     makeDraggable(head);
@@ -701,6 +738,120 @@
   /* Two sheets. chrome.css carries what makes this a window and the control
    * panel adopts the same one, which is what keeps the two floating surfaces
    * speaking one language; study.css goes second so it can override any of it. */
+  /* The rail's two faces: the words, and how they get there.
+   *
+   * Two, not a stack - there is nowhere to go from the settings but back. The
+   * head's own controls come and go with it, because Clear and the count are
+   * about a list that is not on screen. */
+  function showRailScreen(name) {
+    railScreen = name;
+    const settings_ = name === "settings";
+    settingsEl.hidden = !settings_;
+    listEl.hidden = settings_;
+    backEl.hidden = !settings_;
+    gearEl.hidden = settings_;
+    countEl.hidden = settings_;
+    clearEl.hidden = settings_ || cards.length === 0;
+    titleEl.textContent = settings_ ? "How study works" : "Study";
+    if (!settings_) emptyNote();
+    else noteEl.hidden = true;
+  }
+
+  /* One control per thing study does, in the order a reader meets them: what
+   * gets marked, which subtitle is being learnt from, what appears where, and
+   * then how this box looks. */
+  function buildRailSettings() {
+    const wrap = document.createElement("div");
+    wrap.className = "sso-rail__settings";
+
+    const check = (label, key, hint) => {
+      const row = document.createElement("label");
+      row.className = "sso-set sso-set--check";
+      if (hint) row.title = hint;
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.addEventListener("change", () => updateSettings({ [key]: input.checked }));
+      const said = document.createElement("span");
+      said.textContent = label;
+      row.append(input, said);
+      wrap.append(row);
+      return { row, input };
+    };
+
+    const range = (label, key, min, max, step, format, hint) => {
+      const row = document.createElement("label");
+      row.className = "sso-set";
+      if (hint) row.title = hint;
+      const said = document.createElement("span");
+      said.className = "sso-set__label";
+      said.textContent = label;
+      const input = document.createElement("input");
+      input.type = "range";
+      input.min = String(min);
+      input.max = String(max);
+      input.step = String(step);
+      const readout = document.createElement("span");
+      readout.className = "sso-set__value";
+      input.addEventListener("input", () => {
+        const value = Number(input.value);
+        readout.textContent = format(value);
+        updateSettings({ [key]: key === "opacity" ? value / 100 : value });
+      });
+      row.append(said, input, readout);
+      wrap.append(row);
+      return { row, input, readout, format };
+    };
+
+    setEls = {
+      auto: check("Mark rare words as they are said", "auto",
+        "Without this, nothing is marked until you hover a word."),
+      /* The threshold is a slider because the right value is a property of the
+       * reader, not of the film: rank 2000 is where a beginner stops
+       * recognising words and rank 12000 is where somebody comfortable does.
+       * Nothing else can know which of those is on the sofa. */
+      rank: range("Rarer than", "rarityRank", 500, 25000, 500, (v) => v.toLocaleString(),
+        "A word this far down the frequency list, or missing from it, gets underlined."),
+      keep: range("Words kept", "keep", 1, 8, 1, (v) => String(v),
+        "How many stay on the rail. Pinned words survive past this."),
+      hover: check("Answer beside the word on hover", "hoverCard",
+        "Shows what a word means next to the word itself. Works with the rail put away."),
+      focus: check("Only the newest word in full", "focus",
+        "The rest collapse to the word and its meaning, so the rail stays something to glance at."),
+      pause: check("Pause when a word is clicked", "pauseOnPin"),
+      text: range("Text size", "textPx", 11, 26, 1, (v) => `${v}px`),
+      opacity: range("Background", "opacity", 20, 100, 5, (v) => `${v}%`,
+        "How solid this box is over the film."),
+    };
+
+    const deck = document.createElement("button");
+    deck.className = "sso-set__action";
+    deck.type = "button";
+    deck.textContent = "Saved words";
+    deck.title = "Open the deck on the options page";
+    deck.addEventListener("click", () =>
+      chrome.runtime.sendMessage({ type: "sso:openOptions", hash: "#deck" }),
+    );
+    wrap.append(deck);
+    return wrap;
+  }
+
+  /* Written whenever the settings change, so the screen agrees with the rail
+   * even when something else moved a value - a corner drag setting the text
+   * size, or the panel's master switch. */
+  function refreshRailSettings() {
+    if (!setEls) return;
+    for (const [key, control] of Object.entries(setEls)) {
+      const name = { auto: "auto", rank: "rarityRank", keep: "keep", hover: "hoverCard",
+        focus: "focus", pause: "pauseOnPin", text: "textPx", opacity: "opacity" }[key];
+      const value = name === "opacity" ? Math.round(settings.opacity * 100) : settings[name];
+      if (control.input.type === "checkbox") control.input.checked = Boolean(value);
+      else {
+        control.input.value = String(value);
+        control.readout.textContent = control.format(Number(value));
+      }
+    }
+  }
+
   async function loadStyles() {
     if (sheets) return sheets;
     const files = ["src/chrome.css", "src/study.css"];
@@ -718,7 +869,7 @@
   function emptyNote() {
     if (!noteEl) return;
     const empty = cards.length === 0;
-    noteEl.hidden = !empty;
+    noteEl.hidden = !empty || railScreen === "settings";
     noteEl.textContent = settings.auto
       ? "Rare words appear here as they are said. Hover any word to look it up; shift-drag for a phrase."
       : "Hover a word in the subtitle to look it up. Shift-drag across words for a phrase.";
@@ -872,7 +1023,9 @@
 
   function refreshCount() {
     if (countEl) countEl.textContent = cards.length ? String(cards.length) : "";
-    if (clearEl) clearEl.hidden = cards.length === 0;
+    // The head's list controls belong to a list that is not on screen while the
+    // settings are, so the screen has the last word on whether they show.
+    if (clearEl) clearEl.hidden = cards.length === 0 || railScreen === "settings";
     emptyNote();
   }
 

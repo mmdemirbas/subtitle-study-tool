@@ -839,7 +839,24 @@
       ]);
     });
 
-    head.append(caret, label, shut, keysChip, more);
+    /* Which subtitle is the language being learnt.
+     *
+     * It was a "Subtitle 1 / Subtitle 2" pair in the study section - a third
+     * copy of that control, in a third place, meaning a third thing. It names a
+     * subtitle, so it belongs on that subtitle, beside the other chip that says
+     * what this one is for. */
+    const learnChip = document.createElement("button");
+    learnChip.className = "sso-track__learn";
+    learnChip.type = "button";
+    learnChip.textContent = "learning";
+    learnChip.title = "Study marks the rare words in this subtitle";
+    learnChip.addEventListener("click", (event) => {
+      event.stopPropagation();
+      window.__ssoStudy?.updateSettings({ studySlot: slot });
+      refresh(api.status());
+    });
+
+    head.append(caret, label, shut, learnChip, keysChip, more);
     head.addEventListener("click", () => toggleTrack(slot));
 
     /* One row: say what is wrong, twice as fast or twice as fine, and read what
@@ -941,7 +958,7 @@
     body.append(offsets);
 
     root.append(head, body);
-    return { root, caret, keyed, keysChip, label, shut, offsetField, more };
+    return { root, caret, keyed, keysChip, learnChip, label, shut, offsetField, more };
   }
 
   /* --- how one subtitle looks -------------------------------------------------
@@ -1554,6 +1571,17 @@
    * feature is optional and nothing about ordinary watching should have to know
    * it exists. That is why this section reads through window.__ssoStudy and
    * hides itself when that file did not load. */
+  /* Two controls, and everything else moved.
+   *
+   * This was eleven controls in a panel about subtitles, all of them describing
+   * the rail: how big its text is, how solid it is over the film, how many
+   * words it keeps, what counts as rare. Settings belong on the thing they
+   * change, so they are on the rail's own gear now.
+   *
+   * The master switch has to stay here, because the rail does not exist while
+   * study is off - a switch you can only reach by first being in the state it
+   * turns on is not a switch. "Saved words" stays for the same reason: the deck
+   * outlives any one film and has to be reachable with study off. */
   function buildStudy() {
     const wrap = section("Study");
     el.studySection = wrap;
@@ -1565,68 +1593,10 @@
       "the side. Hover any word to look it up; shift-drag across words for a phrase.";
 
     el.studyEnabled = toggle_("Study mode", false, (on) => window.__ssoStudy?.setEnabled(on));
-    el.studyAuto = toggle_("Look up rare words as they are said", true, (on) =>
-      window.__ssoStudy?.updateSettings({ auto: on }),
-    );
-    el.studyPause = toggle_("Pause when a word is clicked", false, (on) =>
-      window.__ssoStudy?.updateSettings({ pauseOnPin: on }),
-    );
 
-    /* The two halves of the feature, separately. The rail's own x puts it away
-     * without turning study off, so this is where it comes back from - a
-     * control that can only be turned off from somewhere else is a trap. */
-    el.studyRail = toggle_("Show the rail at the side", true, (on) =>
-      window.__ssoStudy?.updateSettings({ showRail: on }),
-    );
-    el.studyHover = toggle_("Answer beside the word on hover", true, (on) =>
-      window.__ssoStudy?.updateSettings({ hoverCard: on }),
-    );
-    el.studyHover.row.title =
-      "Shows what the word means next to the word itself. Works with the rail put away.";
-
-    el.studyFocus = toggle_("Show only the newest word in full", true, (on) =>
-      window.__ssoStudy?.updateSettings({ focus: on }),
-    );
-    el.studyFocus.row.title =
-      "The words under it collapse to the word and its translation, so the rail stays " +
-      "something to glance at. Pinning a word keeps it open.";
-
-    el.studyText = slider("Rail text size", 11, 26, 1, 15, (value) =>
-      window.__ssoStudy?.updateSettings({ textPx: value }),
-    );
-
-    el.studyOpacity = slider("Rail background", 20, 100, 5, 93, (value) =>
-      window.__ssoStudy?.updateSettings({ opacity: value / 100 }),
-    );
-    el.studyOpacity.row.title =
-      "How solid the rail is over the film. Lower lets the frame through; text over a " +
-      "moving picture needs some backing to stay readable.";
-
-    /* The threshold is a slider because the right value is a property of the
-     * reader, not of the film: rank 2000 is where a beginner stops recognising
-     * words and rank 12000 is where somebody comfortable does. Nothing else can
-     * know which of those is on the sofa. */
-    el.studyRank = slider("Rarer than rank", 500, 25000, 500, 4000, (value) =>
-      window.__ssoStudy?.updateSettings({ rarityRank: value }),
-    );
-    el.studyRank.row.title =
-      "A word this far down the frequency list, or missing from it, gets underlined. " +
-      "Lower catches more words.";
-
-    const which = document.createElement("div");
-    which.className = "sso-row";
-    const whichLabel = document.createElement("span");
-    whichLabel.className = "sso-note";
-    whichLabel.style.flex = "1";
-    whichLabel.textContent = "Language being learnt";
-    el.studySlotButtons = [0, 1].map((slot) => {
-      const b = button(`Subtitle ${slot + 1}`, {
-        onClick: () => window.__ssoStudy?.updateSettings({ studySlot: slot }),
-      });
-      b.className = "sso-seg__b";
-      return b;
-    });
-    which.append(whichLabel, ...el.studySlotButtons);
+    el.studyWhere = document.createElement("p");
+    el.studyWhere.className = "sso-note";
+    el.studyWhere.textContent = "Everything else about study is on the rail's own \u2699.";
 
     const actions = document.createElement("div");
     actions.className = "sso-row";
@@ -1638,20 +1608,7 @@
       }),
     );
 
-    wrap.append(
-      note,
-      el.studyEnabled.row,
-      el.studyAuto.row,
-      el.studyRank.row,
-      which,
-      el.studyRail.row,
-      el.studyHover.row,
-      el.studyFocus.row,
-      el.studyText.row,
-      el.studyOpacity.row,
-      el.studyPause.row,
-      actions,
-    );
+    wrap.append(note, el.studyEnabled.row, el.studyWhere, actions);
     return wrap;
   }
 
@@ -1971,6 +1928,12 @@
       card.keysChip.dataset.on = status.keyTrack === slot ? "true" : "false";
       // With one subtitle there is nothing for the keys to be ambiguous about.
       card.keysChip.hidden = status.trackCount < 2;
+
+      /* Only where it is a choice: study has to be on for it to mean anything,
+       * and there has to be another subtitle for it to be a choice at all. */
+      const study = window.__ssoStudy?.settings?.();
+      card.learnChip.hidden = !study?.enabled || status.trackCount < 2;
+      card.learnChip.dataset.on = study?.studySlot === slot ? "true" : "false";
       card.shut.hidden = open;
       card.shut.textContent = track.offsetMs
         ? api.describeOffset(track.offsetMs)
@@ -2061,36 +2024,10 @@
     if (!study) return;
 
     el.studyEnabled.input.checked = study.enabled;
-    el.studyAuto.input.checked = study.auto;
-    el.studyPause.input.checked = study.pauseOnPin;
-    el.studyRail.input.checked = study.showRail;
-    el.studyHover.input.checked = study.hoverCard;
-    el.studyFocus.input.checked = study.focus;
-    el.studyRank.input.value = String(study.rarityRank);
-    el.studyRank.readout.textContent = study.rarityRank.toLocaleString();
-    el.studyText.input.value = String(study.textPx);
-    el.studyText.readout.textContent = `${study.textPx}px`;
-    const opacity = Math.round(study.opacity * 100);
-    el.studyOpacity.input.value = String(opacity);
-    el.studyOpacity.readout.textContent = `${opacity}%`;
-    for (const [slot, b] of el.studySlotButtons.entries()) {
-      b.dataset.on = study.studySlot === slot ? "true" : "false";
-    }
-
-    // Everything below the switch only means something once it is on.
-    for (const row of [
-      el.studyAuto.row,
-      el.studyRank.row,
-      el.studyRail.row,
-      el.studyHover.row,
-      el.studyPause.row,
-    ]) {
-      row.dataset.off = study.enabled ? "false" : "true";
-    }
-    // And the two that only mean something once the rail is showing.
-    for (const row of [el.studyFocus.row, el.studyText.row, el.studyOpacity.row]) {
-      row.dataset.off = study.enabled && study.showRail ? "false" : "true";
-    }
+    /* Where the rest of it went, said only while it is somewhere the reader can
+     * actually go. With study off there is no rail to carry a gear, and a note
+     * pointing at a surface that does not exist is worse than no note. */
+    el.studyWhere.hidden = !study.enabled;
   }
 
   // --- lifecycle ------------------------------------------------------------

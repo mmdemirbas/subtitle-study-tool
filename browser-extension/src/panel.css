@@ -417,6 +417,31 @@ button.sso-more__toggle:hover:not(:disabled) {
   color: var(--sso-accent-ink);
 }
 
+/* Which subtitle study reads. Amber, because that is what a marked word is in
+ * the subtitle and on the rail - the same colour meaning the same thing in a
+ * third place, rather than a second blue meaning something else. */
+button.sso-track__learn {
+  flex: none;
+  padding: 1px 6px;
+  font-size: var(--sso-t-micro);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--sso-ink-3);
+  background: none;
+  border: 0;
+  border-radius: 5px;
+}
+
+button.sso-track__learn:hover:not(:disabled) {
+  color: var(--sso-ink);
+  background: var(--sso-fill);
+}
+
+button.sso-track__learn[data-on="true"] {
+  color: #d8a86a;
+}
+
 .sso-track__keys input[type="radio"] {
   width: 11px;
   height: 11px;
