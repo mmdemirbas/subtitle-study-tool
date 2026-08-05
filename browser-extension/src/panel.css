@@ -301,17 +301,15 @@ button.sso-more__toggle:hover:not(:disabled) {
  * answer split across the panel by kind of control is an answer you have to
  * assemble.
  *
- * The cards fold, and the normal case for this tool is two attached at once -
- * the language being learnt and the one it is being learnt from. Two open
- * cards is the same seven controls twice, three hundred and fifty pixels of
- * near-identical layout whose differences are two small numbers. So the one
- * the keys are pointed at is open and the other is a line, on the same
- * expand-and-collapse idiom the study rail uses for its words.
+ * A card does not fold. It did while it was seven controls tall, back when two
+ * of them filled the panel; it is a title and one row now, so the fold saved
+ * twenty-six pixels and cost the timing row - the one thing on this surface
+ * that is touched while a film is playing.
  */
 
 .sso-track {
   background: var(--sso-surface-2);
-  border: 1px solid var(--sso-line-soft);
+  border: 1px solid var(--sso-line);
   border-radius: 9px;
 }
 
@@ -319,36 +317,11 @@ button.sso-more__toggle:hover:not(:disabled) {
   margin-top: 6px;
 }
 
-.sso-track[data-open="true"] {
-  border-color: var(--sso-line);
-}
-
 .sso-track__head {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 9px;
-  cursor: pointer;
-}
-
-.sso-track[data-open="true"] > .sso-track__head {
-  padding-bottom: 5px;
-}
-
-.sso-track__caret {
-  flex: none;
-  width: 9px;
-  padding: 0;
-  font-size: 10px;
-  line-height: 1;
-  color: var(--sso-ink-3);
-  background: none;
-  border: 0;
-  cursor: pointer;
-}
-
-.sso-track__head:hover .sso-track__caret {
-  color: var(--sso-ink);
+  padding: 7px 9px 5px;
 }
 
 .sso-track__label {
@@ -363,27 +336,8 @@ button.sso-more__toggle:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-/* What a shut card still has to answer: is this one timed right. Shown only
- * while collapsed, because open the readout below says it in full. */
-.sso-track__shut {
-  flex: none;
-  font-size: var(--sso-t-small);
-  font-variant-numeric: tabular-nums;
-  color: var(--sso-ink-3);
-}
-
-.sso-track__shut[data-set="true"] {
-  color: var(--sso-accent-ink);
-}
-
 .sso-track__body {
   padding: 0 9px 9px;
-}
-
-/* The caret said folded while every control stayed on screen: the head had a
- * rule for the folded state and the body had none. */
-.sso-track[data-open="false"] > .sso-track__body {
-  display: none;
 }
 
 /* An unlabelled radio in a title row is a dot whose meaning has to be guessed.

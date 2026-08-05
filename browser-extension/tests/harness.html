@@ -853,29 +853,21 @@
        * remembering to look.
        */
 
-      check("a folded subtitle card takes its controls with it", async () => {
+      check("every attached subtitle shows its timing without being opened", async () => {
+        /* The card used to fold, from when it was seven controls tall. It is a
+         * title and one row now, so the fold saved twenty-six pixels and hid
+         * the timing - the one thing here that is used while a film plays. */
         const cards = [...panelShadow().querySelectorAll(".sso-track")].filter((c) => !c.hidden);
-        if (!cards.length) throw new Error("nothing attached to fold");
-        const card = cards[0];
-        const body = card.querySelector(".sso-track__body");
-        const caret = card.querySelector(".sso-track__caret");
-        if (card.dataset.open !== "true") caret.click();
-        await sleep(40);
-        const open = body.getBoundingClientRect().height;
-        if (open === 0) throw new Error("an open card has no controls in it");
-
-        caret.click();
-        await sleep(40);
-        /* The caret said folded while every control stayed on screen: the head
-         * had a rule for the folded state and the body had none. */
-        if (body.getBoundingClientRect().height !== 0)
-          throw new Error(`folded, and ${Math.round(body.getBoundingClientRect().height)}px of controls stayed`);
-        if (card.querySelector(".sso-track__shut").hidden)
-          throw new Error("folded to a title bar that does not say how it is timed");
-
-        caret.click();
-        await sleep(40);
-        if (body.getBoundingClientRect().height === 0) throw new Error("it would not unfold");
+        if (!cards.length) throw new Error("nothing attached to look at");
+        for (const card of cards) {
+          const body = card.querySelector(".sso-track__body");
+          if (body.getBoundingClientRect().height === 0)
+            throw new Error("an attached subtitle has no timing row on screen");
+          if (card.querySelector(".sso-sync").getBoundingClientRect().height === 0)
+            throw new Error("the timing row is there but has no height");
+        }
+        if (panelShadow().querySelector(".sso-track__caret"))
+          throw new Error("a card still carries a fold");
       });
 
       check("the panel can be made bigger than its contents need", async () => {
@@ -915,8 +907,6 @@
          * of the panel. This measures the thing itself, at both ends of the
          * range the corner grips allow. */
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        if (card.dataset.open !== "true") card.querySelector(".sso-track__caret").click();
-        await sleep(40);
         const row = card.querySelector(".sso-sync");
         const host = panelShadow().host;
         const was = host.getBoundingClientRect().width;
@@ -1082,8 +1072,6 @@
         /* It was a menu item: open the menu, find it, click it - three actions
          * for the thing readers do most after over-shooting a nudge. */
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        if (card.dataset.open !== "true") card.querySelector(".sso-track__caret").click();
-        await sleep(60);
         const clear = card.querySelector(".sso-sync__clear");
         if (!clear) throw new Error("no way to undo the timing from the card");
 

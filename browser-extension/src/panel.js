@@ -775,23 +775,6 @@
     const head = document.createElement("div");
     head.className = "sso-track__head";
 
-    /* Two attached subtitles is the normal way this tool is used - the language
-     * being learnt and the one it is being learnt from - and two open cards is
-     * the same seven controls twice, three hundred and fifty pixels of
-     * near-identical layout whose differences are two small numbers. So a card
-     * folds to its title, on the same idiom the study rail uses for a word.
-     *
-     * `open` is undefined until the reader says otherwise, and the default is
-     * then "the one the keys are pointed at, or the only one there is". Once
-     * they have clicked, their answer stands. */
-    const caret = document.createElement("button");
-    caret.className = "sso-track__caret";
-    caret.type = "button";
-    caret.addEventListener("click", (event) => {
-      event.stopPropagation();
-      toggleTrack(slot);
-    });
-
     /* The radio says which subtitle the bracket keys move. There is one pair of
      * keys and two things they could shift, and this is the only place that
      * answer can be given without guessing it from where the pointer is.
@@ -816,11 +799,6 @@
 
     const label = document.createElement("span");
     label.className = "sso-track__label";
-
-    /* What a shut card still has to answer. Open, the readout below says it in
-     * full; shut, this is the only line there is. */
-    const shut = document.createElement("span");
-    shut.className = "sso-track__shut";
 
     /* Everything this subtitle can have done to it, on demand.
      *
@@ -913,8 +891,14 @@
       api.setVisible(!api.status().tracks[slot].visible, { slot });
     });
 
-    head.append(caret, label, shut, learnChip, keysChip, visible, more);
-    head.addEventListener("click", () => toggleTrack(slot));
+    /* No fold on a card.
+     *
+     * It carried one over from when a card was seven controls tall and two of
+     * them filled the panel. A card is a title and one row now - about sixty
+     * pixels - so folding it saves twenty-six of them and costs the timing row,
+     * which is the one thing on this surface that is used while a film runs.
+     * A control that hides the only thing worth showing is not worth a click. */
+    head.append(label, learnChip, keysChip, visible, more);
 
     /* One row: say what is wrong, twice as fast or twice as fine, and read what
      * it did in the middle.
@@ -1033,7 +1017,7 @@
     body.append(offsets);
 
     root.append(head, body);
-    return { root, caret, keyed, keysChip, learnChip, label, shut, offsetField, offsetReset, visible, more };
+    return { root, keyed, keysChip, learnChip, label, offsetField, offsetReset, visible, more };
   }
 
   /* --- how one subtitle looks -------------------------------------------------
@@ -1400,17 +1384,6 @@
        * check which subtitle they downloaded, which is where the fault is. */
       api.showToast("These two do not look like the same film");
     }
-    refresh(api.status());
-  }
-
-  /* Which track cards are open. `undefined` means the reader has not said, and
-   * refresh() then picks the keyed one; a boolean is their answer and outlives
-   * every status round. */
-  const trackOpen = [undefined, undefined];
-
-  function toggleTrack(slot) {
-    const card = el.trackCards[slot];
-    trackOpen[slot] = card.root.dataset.open !== "true";
     refresh(api.status());
   }
 
@@ -2091,15 +2064,6 @@
       card.root.hidden = !track.attached;
       if (!track.attached) return;
 
-      /* Until the reader has folded one themselves, the open card is the one
-       * the keys point at - which with a single subtitle is always that one, so
-       * nothing folds until there is a second card to fold against. */
-      const open = trackOpen[slot] ?? (status.trackCount < 2 || status.keyTrack === slot);
-      card.root.dataset.open = open ? "true" : "false";
-      card.caret.textContent = open ? "▾" : "▸";
-      card.caret.title = open ? "Fold this subtitle's controls" : "Show this subtitle's controls";
-      card.caret.setAttribute("aria-expanded", open ? "true" : "false");
-
       card.label.textContent = `${slot + 1}. ${track.label || "Attached"}`;
       card.keyed.checked = status.keyTrack === slot;
       /* A chip appears on the card the thing is true of, and nowhere else.
@@ -2117,12 +2081,7 @@
       card.keysChip.hidden = status.trackCount < 2 || !keyed;
       card.learnChip.dataset.on = learning ? "true" : "false";
       card.learnChip.hidden = !study?.enabled || status.trackCount < 2 || !learning;
-      card.shut.hidden = open;
       const stretched = track.rate && track.rate !== 1;
-      card.shut.textContent = track.offsetMs || stretched
-        ? api.describeOffset(track.offsetMs) + (stretched ? " · stretched" : "")
-        : `${track.cueCount} line${track.cueCount === 1 ? "" : "s"}`;
-      card.shut.dataset.set = track.offsetMs || stretched ? "true" : "false";
       card.offsetField.dataset.set = track.offsetMs ? "true" : "false";
       // Not while it is being typed into, or the value rewrites itself under
       // the cursor between keystrokes.
