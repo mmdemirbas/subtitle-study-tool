@@ -129,7 +129,7 @@
   let noteEl = null;
   let clearEl = null;
   let foldEl = null;
-  let sheet = null;
+  let sheets = null;
 
   /* Cards currently in the rail, newest first. Held here rather than read back
    * out of the DOM so the save key has something to name without a selector. */
@@ -518,9 +518,10 @@
       popupHost.style.setProperty(property, value, "important");
     }
     popupShadow = popupHost.attachShadow({ mode: "open" });
-    popupShadow.adoptedStyleSheets = [await loadStyles()];
+    popupShadow.adoptedStyleSheets = await loadStyles();
     popupEl = document.createElement("div");
-    popupEl.className = "sso-pop";
+    // A window too, so it takes the same ink, lines and radius as the rail.
+    popupEl.className = "sso-win sso-pop";
     popupEl.hidden = true;
     popupShadow.append(popupEl);
     (host?.parentElement || document.body).appendChild(popupHost);
@@ -638,35 +639,39 @@
     }
 
     shadow = host.attachShadow({ mode: "open" });
-    shadow.adoptedStyleSheets = [await loadStyles()];
+    shadow.adoptedStyleSheets = await loadStyles();
 
     railEl = document.createElement("div");
-    railEl.className = "sso-rail";
+    railEl.className = "sso-win sso-rail";
 
     const head = document.createElement("div");
-    head.className = "sso-rail__head";
+    head.className = "sso-win__head";
     const title = document.createElement("span");
-    title.className = "sso-rail__title";
+    title.className = "sso-win__title";
     title.textContent = "Study";
+    /* How many words are here. A plain number in the quiet ink: it was an amber
+     * pill, which made the least actionable fact on the surface the loudest
+     * thing on it and spent the one colour that means "this word is marked". */
     countEl = document.createElement("span");
     countEl.className = "sso-rail__count";
 
     /* Three controls, in the order they get reached for: empty it, fold it,
-     * put it away. All on the head, which is the thing they act on. */
+     * put it away. All on the head, which is the thing they act on, and all in
+     * the one treatment the control panel's head buttons use. */
     clearEl = document.createElement("button");
-    clearEl.className = "sso-rail__act";
+    clearEl.className = "sso-icon sso-icon--word";
     clearEl.type = "button";
     clearEl.textContent = "Clear";
     clearEl.title = "Empty the rail";
     clearEl.addEventListener("click", clearCards);
 
     foldEl = document.createElement("button");
-    foldEl.className = "sso-rail__act";
+    foldEl.className = "sso-icon";
     foldEl.type = "button";
     foldEl.addEventListener("click", () => updateSettings({ folded: !settings.folded }));
 
     const close = document.createElement("button");
-    close.className = "sso-rail__x";
+    close.className = "sso-icon sso-icon--close";
     close.type = "button";
     close.textContent = "×";
     /* Puts the rail away without turning study off. Hovering a word still
@@ -693,12 +698,21 @@
     return host;
   }
 
+  /* Two sheets. chrome.css carries what makes this a window and the control
+   * panel adopts the same one, which is what keeps the two floating surfaces
+   * speaking one language; study.css goes second so it can override any of it. */
   async function loadStyles() {
-    if (sheet) return sheet;
-    const css = await fetch(chrome.runtime.getURL("src/study.css")).then((r) => r.text());
-    sheet = new CSSStyleSheet();
-    sheet.replaceSync(css);
-    return sheet;
+    if (sheets) return sheets;
+    const files = ["src/chrome.css", "src/study.css"];
+    const texts = await Promise.all(
+      files.map((file) => fetch(chrome.runtime.getURL(file)).then((r) => r.text())),
+    );
+    sheets = texts.map((css) => {
+      const made = new CSSStyleSheet();
+      made.replaceSync(css);
+      return made;
+    });
+    return sheets;
   }
 
   function emptyNote() {
@@ -940,29 +954,35 @@
       removeCard(card);
     });
 
-    head.append(caret, term, meta, drop);
+    head.append(caret, term);
+
+    /* The head is one line and it carries everything about the word itself.
+     *
+     * Open, that is the pronunciation - which had a row of its own, spending a
+     * whole line on the quietest thing in the card and pushing the answer
+     * further from the question. Shut, it is the translation, which is the
+     * reason to collapse a card rather than remove it: a shut card used to be
+     * two lines, so folding four of them saved four rows instead of eight and
+     * the density the fold was for never arrived. */
+    if (!card.focused && card.lookup?.translation) {
+      const gloss = document.createElement("span");
+      gloss.className = "sso-card__gloss";
+      gloss.textContent = card.lookup.translation;
+      head.append(gloss);
+    } else if (card.focused && card.lookup?.phonetic) {
+      const phon = document.createElement("span");
+      phon.className = "sso-card__phonetic";
+      phon.textContent = card.lookup.phonetic;
+      head.append(phon);
+    }
+
+    head.append(meta, drop);
     // The whole head toggles, not only the caret: it is a 12px target beside a
     // 300px one that means the same thing.
     head.addEventListener("click", () => toggleCard(card));
     node.append(head);
 
-    // Collapsed: the word, and the one line that says what it is.
-    if (!card.focused) {
-      if (card.lookup?.translation) {
-        const gloss = document.createElement("div");
-        gloss.className = "sso-card__gloss";
-        gloss.textContent = card.lookup.translation;
-        node.append(gloss);
-      }
-      return;
-    }
-
-    if (card.lookup?.phonetic) {
-      const phon = document.createElement("div");
-      phon.className = "sso-card__phonetic";
-      phon.textContent = card.lookup.phonetic;
-      node.append(phon);
-    }
+    if (!card.focused) return;
 
     /* The translation leads, above the definition, the same way it does in the
      * popup: it is the line that answers "what is this", and a card the reader
@@ -1002,9 +1022,9 @@
      * that makes the entry worth keeping, so it is in the card and not behind
      * an expander. */
     if (card.sentence && !card.hideSentence) {
-      node.append(sentenceLine(card.sentence, card.term, "sso-card__line"));
+      node.append(sentenceLine(card.sentence, card.term, "sso-card__line", card.language));
       if (card.pairedSentence) {
-        node.append(sentenceLine(card.pairedSentence, "", "sso-card__paired"));
+        node.append(sentenceLine(card.pairedSentence, "", "sso-card__paired", card.pairedLanguage));
       }
     }
 
@@ -1021,6 +1041,7 @@
     const pin = document.createElement("button");
     pin.type = "button";
     pin.className = "sso-card__pin";
+    pin.dataset.on = card.pinned ? "true" : "false";
     pin.textContent = card.pinned ? "Unpin" : "Pin";
     pin.addEventListener("click", () => {
       card.pinned = !card.pinned;
@@ -1036,26 +1057,36 @@
 
   /* Highlight the word inside its own sentence. textContent throughout, never
    * innerHTML: this string came out of a subtitle file off the internet. */
-  function sentenceLine(sentence, term, className) {
+  function sentenceLine(sentence, term, className, language) {
     const line = document.createElement("div");
     line.className = className;
+
+    /* Which language this line is in. The two quoted lines were told apart only
+     * by the colour of a 2px rule down their left edge, and a reader studying a
+     * language they cannot yet read at a glance is exactly the reader who
+     * cannot use that cue. */
+    if (language) {
+      const tag = document.createElement("span");
+      tag.className = "sso-card__lang";
+      tag.textContent = language.slice(0, 2);
+      line.append(tag);
+    }
+
+    const text = document.createElement("span");
     const flat = sentence.replace(/\s*\n\s*/g, " ");
-    if (!term) {
-      line.textContent = flat;
-      return line;
-    }
-    const at = flat.toLowerCase().indexOf(term);
+    const at = term ? flat.toLowerCase().indexOf(term) : -1;
     if (at === -1) {
-      line.textContent = flat;
-      return line;
+      text.textContent = flat;
+    } else {
+      const mark = document.createElement("mark");
+      mark.textContent = flat.slice(at, at + term.length);
+      text.append(
+        document.createTextNode(flat.slice(0, at)),
+        mark,
+        document.createTextNode(flat.slice(at + term.length)),
+      );
     }
-    const mark = document.createElement("mark");
-    mark.textContent = flat.slice(at, at + term.length);
-    line.append(
-      document.createTextNode(flat.slice(0, at)),
-      mark,
-      document.createTextNode(flat.slice(at + term.length)),
-    );
+    line.append(text);
     return line;
   }
 
@@ -1186,7 +1217,7 @@
 
   function buildGrip(corner) {
     const grip = document.createElement("div");
-    grip.className = `sso-rail__grip sso-rail__grip--${corner.name}`;
+    grip.className = `sso-grip sso-grip--${corner.name}`;
     grip.style.cursor = corner.cursor;
     grip.title = "Drag to resize";
 

@@ -3,17 +3,25 @@
  * It sits beside a moving picture, which is a harder background than any page:
  * every value in it changes 24 times a second, and the one constant is that the
  * film is more interesting to look at than this is. So the rail is dark and
- * quiet, the type is small and dense, and exactly one colour means anything -
- * the amber that also underlines a rare word in the subtitle, so the mark on
- * screen and the card at the side are visibly the same fact.
+ * quiet, the type is dense, and exactly one colour means anything - the amber
+ * that also underlines a rare word in the subtitle, so the mark on screen and
+ * the card at the side are visibly the same fact.
  *
- * Everything is declared rather than inherited: this stylesheet lands inside
- * arbitrary pages, and although the shadow boundary stops their rules reaching
- * in, inheritable properties still cross through the host.
+ * The surface is warm-neutral rather than the panel's cool grey, and that is
+ * the accent's doing: an amber highlight on a blue-grey box reads as two
+ * unrelated light sources on one object. Warm surface, warm accent. It also
+ * means the two windows are told apart from the corner of the eye, before
+ * either has been read.
+ *
+ * The window furniture - title bar, head buttons, corner grips, folded state -
+ * is in chrome.css and shared with the control panel. Everything here is
+ * declared rather than inherited: this stylesheet lands inside arbitrary pages,
+ * and although the shadow boundary stops their rules reaching in, inheritable
+ * properties still cross through the host.
  */
 
 /* Until a corner is dragged the height is the contents', capped short of the
- * bottom of the screen: the rail is docked at 12vh and the subtitles sit
+ * bottom of the screen: the rail is docked near the top and the subtitles sit
  * between 84% and 93%, so one free to grow to the bottom would end up standing
  * on the right-hand subtitle at exactly the moment it is most useful. A dragged
  * corner replaces both the height and the cap, because a reader who has just
@@ -24,7 +32,20 @@
  * bigger" had no single lever to pull and the rail stayed at a size chosen for
  * a settings page rather than for a dark room with a film in it. */
 .sso-rail {
-  position: relative;
+  --sso-accent: #e0a458;
+  --sso-accent-ink: #d8a86a;
+  --sso-answer: #9fd3b4;
+
+  /* A ratio from the one size the reader sets, 0.68 to 1.3 - a span of 1.9,
+   * which is what makes the word the largest thing in its card and the rank
+   * beside it the smallest. It was 0.72 to 1.07 before: a span of 1.5, at
+   * which a card reads as one flat size with some of it slightly bolder. */
+  --sso-t-micro: 0.68em;
+  --sso-t-small: 0.8em;
+  --sso-t-body: 0.88em;
+  --sso-t-lead: 1.05em;
+  --sso-t-term: 1.3em;
+
   display: flex;
   flex-direction: column;
   /* A cap, never a floor. Setting it as a height too made a rail holding one
@@ -33,135 +54,38 @@
   max-height: var(--sso-study-height, 60vh);
   margin: 0;
   padding: 0;
-  font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-size: var(--sso-study-text, 15px);
-  font-weight: 400;
-  font-style: normal;
-  line-height: 1.45;
-  letter-spacing: normal;
-  text-align: left;
-  color: #e8eaed;
-  background: rgba(16, 18, 22, var(--sso-study-alpha, 0.93));
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 10px;
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.5),
-    0 10px 30px -12px rgba(0, 0, 0, 0.8);
+  background: rgba(22, 19, 16, var(--sso-study-alpha, 0.93));
   overflow: hidden;
 }
 
 /* --- head ------------------------------------------------------------------ */
 
-.sso-rail__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.05);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  cursor: grab;
-  user-select: none;
-}
-
-.sso-rail__head[data-dragging="true"] {
-  cursor: grabbing;
-}
-
-.sso-rail__title {
-  flex: 1;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #b6bcc6;
-}
-
+/* How many words are on the rail. It was an amber pill, which made a count -
+ * the least actionable fact on the surface - the loudest thing on it, and spent
+ * the one colour that is supposed to mean "this word is marked". A number in
+ * the quiet ink says the same thing and leaves the amber to the words. */
 .sso-rail__count {
-  min-width: 18px;
-  padding: 1px 6px;
+  flex: none;
   font-size: 11px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  text-align: center;
-  color: #12141a;
-  background: #e0a458;
-  border-radius: 9px;
+  color: var(--sso-ink-3);
 }
 
 .sso-rail__count:empty {
   display: none;
 }
 
-.sso-rail__x {
-  padding: 0 4px;
-  font-family: inherit;
-  font-size: 16px;
-  line-height: 1;
-  color: #9aa1ab;
-  background: none;
-  border: 0;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: color 160ms ease, background 160ms ease;
-}
-
-.sso-rail__x:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.sso-rail__x:active {
-  transform: translateY(1px);
-}
-
-.sso-rail__x:focus-visible {
-  outline: 2px solid #e0a458;
-  outline-offset: 1px;
-}
-
-/* Clear and fold. Quieter than the x, which is the only one of the three that
- * takes the rail off the screen. */
-.sso-rail__act {
-  padding: 1px 6px;
-  font-family: inherit;
-  font-size: 0.68em;
-  font-weight: 600;
-  line-height: 1.5;
-  color: #9aa1ab;
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 5px;
-  cursor: pointer;
-  transition: color 160ms ease, background 160ms ease;
-}
-
-.sso-rail__act:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.16);
-}
-
-.sso-rail__act:focus-visible {
-  outline: 2px solid #e0a458;
-  outline-offset: 1px;
-}
-
-.sso-rail__act[hidden] {
-  display: none;
-}
-
-/* Folded: the title bar and nothing else, so the frame underneath is visible
- * without the rail being put away and having to be found again. */
-.sso-rail[data-folded="true"] > .sso-rail__list,
-.sso-rail[data-folded="true"] > .sso-rail__note,
-.sso-rail[data-folded="true"] > .sso-rail__grip {
-  display: none;
-}
-
 /* --- list ------------------------------------------------------------------ */
 
+/* The pad at the foot is for the corner grips, which sit over whatever is in
+ * the last eighteen pixels of the rail. Without it the final collapsed row's
+ * rank is under the hatching and cannot be read. */
 .sso-rail__list {
   display: flex;
   flex-direction: column;
+  padding-bottom: 8px;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -173,8 +97,8 @@
 .sso-rail__note {
   margin: 0;
   padding: 12px 12px 14px;
-  font-size: 12px;
-  color: #8d949e;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-3);
 }
 
 /* --- a card ---------------------------------------------------------------- */
@@ -184,22 +108,26 @@
  * setting doing visibly nothing. Cards are separated by a hairline of their
  * own rather than by gaps in an opaque backing, for the same reason. */
 .sso-card {
-  padding: 9px 11px 10px;
+  padding: 8px 11px 10px;
   background: transparent;
 }
 
 .sso-card + .sso-card {
-  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  border-top: 1px solid var(--sso-line-soft);
 }
 
 /* Pinned means "I am reading this" - it survives the trim, so it says so. A
  * wash rather than a colour, so it tints whatever is behind instead of
- * replacing it. */
+ * replacing it. This and the underline in the subtitle are the whole amber
+ * budget: one colour, meaning one thing, in both places it appears. */
 .sso-card[data-pinned="true"] {
-  background: rgba(224, 164, 88, 0.12);
-  box-shadow: inset 2px 0 0 #e0a458;
+  background: rgba(224, 164, 88, 0.1);
+  box-shadow: inset 2px 0 0 var(--sso-accent);
 }
 
+/* The word and everything about the word, on one line. The phonetic used to
+ * drop to a line of its own under the term, which spent a whole row on the
+ * quietest thing in the card and pushed the answer further from the question. */
 .sso-card__head {
   display: flex;
   align-items: baseline;
@@ -212,20 +140,20 @@
  * place to aim at. */
 .sso-card__caret {
   flex: none;
-  width: 13px;
+  width: 11px;
   padding: 0;
   font-family: inherit;
-  font-size: 0.8em;
+  font-size: var(--sso-t-small);
   line-height: 1;
   text-align: left;
-  color: #9aa1ab;
+  color: var(--sso-ink-3);
   background: none;
   border: 0;
   cursor: pointer;
 }
 
 .sso-card__head:hover .sso-card__caret {
-  color: #e0a458;
+  color: var(--sso-accent);
 }
 
 /* One word off the rail. Held back until the card is under the pointer: it is
@@ -236,13 +164,15 @@
   font-family: inherit;
   font-size: 1em;
   line-height: 1;
-  color: #6d747d;
+  color: var(--sso-ink-3);
   background: none;
   border: 0;
   border-radius: 4px;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 160ms ease, color 160ms ease;
+  transition:
+    opacity var(--sso-motion) ease,
+    color var(--sso-motion) ease;
 }
 
 .sso-card:hover .sso-card__drop,
@@ -251,154 +181,186 @@
 }
 
 .sso-card__drop:hover {
-  color: #f0836f;
+  color: var(--sso-danger);
   background: rgba(240, 131, 111, 0.14);
 }
 
-.sso-card__drop:focus-visible {
-  outline: 2px solid #e0a458;
-  outline-offset: 1px;
-}
-
+/* The largest thing on the surface, because it is the thing being asked
+ * about. */
 .sso-card__term {
-  flex: 1;
-  font-size: 1.07em;
-  font-weight: 680;
-  letter-spacing: -0.01em;
+  flex: none;
+  font-size: var(--sso-t-term);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
   color: #fff;
   overflow-wrap: anywhere;
 }
 
+.sso-card__phonetic {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Why this word is on the rail at all. Diagnostic, so it is the smallest thing
+ * in the card and in the quiet ink - it was amber and in the top right corner,
+ * competing with the word for the strongest position on the card. */
 .sso-card__rank {
-  font-size: 0.7em;
+  flex: none;
+  /* Right-aligned whether or not a phonetic sits between it and the word. The
+   * middle of this row is optional; its two ends are not. */
+  margin-left: auto;
+  font-size: var(--sso-t-micro);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-  color: #a9915f;
+  color: var(--sso-ink-3);
 }
 
-.sso-card__phonetic {
-  font-size: 0.8em;
-  color: #8d949e;
+/* The line the reader came for, directly under the word: it is the answer, so
+ * nothing sits between the question and it. The popup orders the same two the
+ * same way - having them disagree made one fact look like two features. */
+.sso-card__translation {
+  margin-top: 2px;
+  font-size: var(--sso-t-lead);
+  font-weight: 600;
+  color: var(--sso-answer);
+  overflow-wrap: anywhere;
 }
 
 .sso-card__def {
   margin-top: 4px;
-  font-size: 0.87em;
-  color: #d3d7dd;
+  font-size: var(--sso-t-body);
+  color: var(--sso-ink-2);
 }
 
 .sso-card__part {
   margin-right: 6px;
-  font-size: 0.72em;
+  font-size: var(--sso-t-micro);
   font-weight: 700;
   font-style: italic;
-  color: #8d949e;
-}
-
-.sso-card__translation {
-  margin-top: 4px;
-  font-size: 0.95em;
-  color: #9fd3b4;
+  color: var(--sso-ink-3);
 }
 
 .sso-card__note {
   margin-top: 4px;
-  font-size: 0.82em;
-  color: #8d949e;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-3);
 }
 
 /* The line it was said in. Quieter than the definition and set apart, because
  * it is evidence rather than the answer - but present, because it is the half
- * of the entry that makes it worth keeping. */
+ * of the entry that makes it worth keeping.
+ *
+ * Both lines carry their language, because the only thing telling them apart
+ * used to be the colour of a 2px rule, and a reader studying a language they
+ * cannot yet read at a glance is precisely who cannot use that cue. */
 .sso-card__line,
 .sso-card__paired {
+  display: flex;
+  gap: 6px;
   margin-top: 6px;
-  padding-left: 8px;
-  font-size: 0.82em;
-  border-left: 2px solid rgba(255, 255, 255, 0.16);
-  color: #aeb4bd;
+  padding-left: 7px;
+  font-size: var(--sso-t-small);
+  border-left: 2px solid var(--sso-line);
+  color: var(--sso-ink-2);
 }
 
 .sso-card__paired {
-  border-left-color: rgba(159, 211, 180, 0.4);
-  color: #94a89c;
+  border-left-color: rgba(159, 211, 180, 0.35);
+  color: #8fa397;
+}
+
+.sso-card__lang {
+  flex: none;
+  padding-top: 0.1em;
+  font-size: var(--sso-t-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sso-ink-3);
+}
+
+.sso-card__paired .sso-card__lang {
+  color: rgba(159, 211, 180, 0.6);
 }
 
 .sso-card__line mark {
   padding: 0 1px;
   color: #ffd678;
-  background: rgba(224, 164, 88, 0.18);
+  background: rgba(224, 164, 88, 0.2);
   border-radius: 2px;
 }
 
 .sso-card__actions {
   display: flex;
   gap: 6px;
-  margin-top: 8px;
+  margin-top: 9px;
 }
 
+/* Both quiet. Neither is what the card is for, and the amber they used to
+ * fight over belongs to the marked word - a Save button painted in it was the
+ * loudest thing in a card whose subject is the word above it. */
 .sso-card__actions button {
   padding: 3px 10px;
   font-family: inherit;
-  font-size: 0.78em;
+  font-size: var(--sso-t-small);
   font-weight: 600;
-  color: #d3d7dd;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--sso-ink-2);
+  background: var(--sso-fill);
+  border: 1px solid var(--sso-line);
   border-radius: 6px;
   cursor: pointer;
-  transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+  transition:
+    background var(--sso-motion) ease,
+    color var(--sso-motion) ease;
 }
 
 .sso-card__actions button:hover {
-  background: rgba(255, 255, 255, 0.16);
-  color: #fff;
+  background: var(--sso-fill-hover);
+  color: var(--sso-ink);
 }
 
 .sso-card__actions button:active {
   transform: translateY(1px);
 }
 
-.sso-card__actions button:focus-visible {
-  outline: 2px solid #e0a458;
-  outline-offset: 1px;
-}
-
-.sso-card__save {
-  color: #12141a !important;
-  background: #e0a458 !important;
-  border-color: #e0a458 !important;
-}
-
-.sso-card__save:hover {
-  background: #edb469 !important;
-}
-
-/* Saved is a state, not a disabled button that failed. It stops being an
- * action and starts being a label. */
+/* Saved is a state, not a disabled button that failed. It stops being an action
+ * and becomes a label - and a quiet one: painted in the accent it was the
+ * loudest thing in a card whose subject is the word three lines above it. */
 .sso-card__save:disabled {
-  color: #7f8790 !important;
-  background: transparent !important;
-  border-color: rgba(255, 255, 255, 0.12) !important;
+  color: var(--sso-ink-3);
+  background: transparent;
+  border-color: var(--sso-line-soft);
   cursor: default;
+}
+
+.sso-card__pin[data-on="true"] {
+  color: var(--sso-accent-ink);
+  border-color: rgba(224, 164, 88, 0.35);
 }
 
 /* --- the collapsed cards ----------------------------------------------------
  *
- * Everything but the one being read. Quieter on every axis - dimmer ink, less
- * padding, no quoted line - so the focused card wins the column without having
- * to be made louder itself.
+ * Everything but the one being read, on one line: the word and what it means,
+ * which is what a reader would have kept anyway. It took two lines before, so
+ * collapsing four cards saved four rows instead of eight and the density the
+ * fold was for never arrived.
  */
 
 .sso-card[data-focused="false"] {
-  padding: 6px 11px 7px;
+  padding: 5px 11px 6px;
 }
 
 .sso-card[data-focused="false"] .sso-card__term {
-  font-size: 0.95em;
+  font-size: var(--sso-t-lead);
   font-weight: 600;
-  color: #b6bcc6;
+  color: var(--sso-ink-2);
 }
 
 .sso-card[data-focused="false"]:hover .sso-card__term {
@@ -406,32 +368,13 @@
 }
 
 .sso-card__gloss {
-  font-size: 0.85em;
-  color: #7f9c8b;
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
+  font-size: var(--sso-t-small);
+  color: #7f9c8b;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* --- resize grips ------------------------------------------------------------
- *
- * Four, so that whichever corner is off the screen is never the only one. See
- * the panel's grips: same shape, same reason.
- */
-
-.sso-rail__grip {
-  position: absolute;
-  width: 16px;
-  height: 16px;
-}
-
-.sso-rail__grip--nw { top: 0; left: 0; }
-.sso-rail__grip--ne { top: 0; right: 0; }
-.sso-rail__grip--sw { bottom: 0; left: 0; }
-.sso-rail__grip--se { bottom: 0; right: 0; }
-
-.sso-rail__grip:hover {
-  background: rgba(224, 164, 88, 0.4);
 }
 
 /* --- the answer beside the word ---------------------------------------------
@@ -442,79 +385,63 @@
  */
 
 .sso-pop {
+  --sso-answer: #9fd3b4;
+
   box-sizing: border-box;
   max-width: 340px;
   margin: 0;
   padding: 8px 11px 9px;
-  font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-size: var(--sso-study-text, 15px);
-  font-weight: 400;
-  font-style: normal;
-  line-height: 1.4;
-  letter-spacing: normal;
-  text-align: left;
-  color: #e8eaed;
   /* A floor under the setting: the popup is two lines over a moving picture
    * and has no room to be read through. */
-  background: rgba(16, 18, 22, max(0.8, var(--sso-study-alpha, 0.96)));
-  border: 1px solid rgba(224, 164, 88, 0.45);
-  border-radius: 9px;
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.5),
-    0 10px 28px -12px rgba(0, 0, 0, 0.85);
-}
-
-.sso-pop[hidden] {
-  display: none;
+  background: rgba(22, 19, 16, max(0.8, var(--sso-study-alpha, 0.96)));
+  border-color: rgba(224, 164, 88, 0.4);
 }
 
 .sso-pop__term {
-  font-size: 0.86em;
+  font-size: var(--sso-t-small);
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  color: #a9915f;
+  color: var(--sso-ink-3);
 }
 
 /* The line the reader came for, so it is the largest thing in the box. */
 .sso-pop__translation {
   margin-top: 1px;
-  font-size: 1.16em;
+  font-size: var(--sso-t-term);
   font-weight: 600;
-  color: #9fd3b4;
+  line-height: 1.25;
+  color: var(--sso-answer);
   overflow-wrap: anywhere;
 }
 
 .sso-pop__def {
-  margin-top: 4px;
-  font-size: 0.85em;
-  color: #c8ccd3;
+  margin-top: 5px;
+  font-size: var(--sso-t-body);
+  color: var(--sso-ink-2);
 }
 
 .sso-pop__part {
   margin-right: 6px;
-  font-size: 0.72em;
+  font-size: var(--sso-t-micro);
   font-weight: 700;
   font-style: italic;
-  color: #8d949e;
+  color: var(--sso-ink-3);
 }
 
 .sso-pop__note {
   margin-top: 2px;
-  font-size: 0.82em;
-  color: #8d949e;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-3);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sso-rail__x,
-  .sso-rail__act,
-  .sso-card__caret,
   .sso-card__drop,
   .sso-card__actions button {
     transition: none;
   }
 
-  .sso-rail__x:active,
   .sso-card__actions button:active {
     transform: none;
   }

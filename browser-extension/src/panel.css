@@ -8,6 +8,12 @@
  * `all: initial` on the host only resets the host, never its descendants -
  * a shadow boundary is what actually stops the cascade.
  *
+ * Everything that makes this a window - the surface, the title bar, the head
+ * buttons, the corner grips, the folded state - is in chrome.css, adopted
+ * ahead of this sheet and shared with the study rail. What is here is what the
+ * panel alone knows about: its own surface colour, its accent, its type scale,
+ * and the controls.
+ *
  * Consequence for editing: selectors here are scoped to the shadow tree, so
  * they cannot leak outward and page rules cannot reach in. The .sso- prefixes
  * are kept for readability, not isolation.
@@ -16,95 +22,50 @@
 /* All appearance lives here rather than on :host. The host carries inline
  * !important geometry, which would outrank anything :host declared, and page
  * rules outrank :host for normal declarations anyway. This element is inside
- * the shadow tree, so nothing outside can touch it. */
+ * the shadow tree, so nothing outside can touch it.
+ *
+ * Cool-neutral, with one blue that means "act". The rail beside it is warm
+ * with an amber accent, because it is read rather than operated - which window
+ * is which is answerable from the corner of the eye. */
 .sso-panel {
-  display: block;
+  --sso-accent: #4c8bf5;
+  --sso-accent-ink: #93b9fb;
+  --sso-surface-2: rgba(255, 255, 255, 0.045);
+
+  /* A ratio, not sizes picked one at a time. 10 / 11.5 / 13 / 14.5 at a step
+   * of about 1.13: tighter than the 1.22 that suits a document, because the
+   * panel is 340px wide and dense by intention, and a 20px heading in it would
+   * be a headline on an instrument. The span is therefore narrower than a
+   * reading surface should ever use, and the hierarchy leans correspondingly
+   * harder on weight, ink step and grouping - which is a deliberate trade for
+   * this surface, not an oversight to be fixed by nudging one size. */
+  --sso-t-micro: 10px;
+  --sso-t-small: 11.5px;
+  --sso-t-body: 13px;
+  --sso-t-lead: 14.5px;
+
   width: 100%;
   max-height: 82vh;
   overflow: hidden auto;
-  font-family: -apple-system, "SF Pro Text", Helvetica, Arial, sans-serif;
-  font-size: 13px;
-  font-weight: 400;
-  font-style: normal;
-  line-height: 1.45;
-  letter-spacing: normal;
-  text-align: left;
-  text-transform: none;
-  color: #e8eaed;
-  background: rgba(20, 22, 27, 0.97);
-  border: 1px solid #333844;
-  border-radius: 10px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
-  color-scheme: dark;
+  font-size: var(--sso-t-body);
+  background: rgba(19, 21, 26, 0.97);
 }
 
-[hidden] {
-  /* The UA rule for [hidden] is display:none, which any author `display`
-   * declaration outranks - and .sso-row sets display:flex. Without this the
-   * offset controls stay on screen with nothing attached. */
-  display: none !important;
+/* --- head ------------------------------------------------------------------- */
+
+/* The count of what is attached, beside the name. The title bar is the one
+ * part of a folded panel still on screen, so it carries the state that decides
+ * whether it is worth unfolding. */
+.sso-panel__state {
+  flex: none;
+  font-size: var(--sso-t-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--sso-ink-3);
 }
 
-
-* {
-  box-sizing: border-box;
-  font-family: inherit;
-  color: inherit;
-}
-
-/* --- header ---------------------------------------------------------------- */
-
-.sso-panel__head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 10px 9px 12px;
-  border-bottom: 1px solid #2b3039;
-  cursor: grab;
-  user-select: none;
-}
-
-.sso-panel__head[data-dragging="true"] {
-  cursor: grabbing;
-}
-
-.sso-panel__title {
-  flex: 1;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-.sso-panel__x,
-.sso-panel__fold {
-  padding: 2px 7px;
-  font-size: 14px;
-  line-height: 1;
-  background: transparent;
-  border: 1px solid #333844;
-  border-radius: 5px;
-  cursor: pointer;
-}
-
-.sso-panel__x:hover,
-.sso-panel__fold:hover {
-  background: #262b35;
-}
-
-.sso-panel__fold {
-  font-size: 11px;
-}
-
-/* Folded: the title bar and nothing else, so the film is visible without the
- * panel being closed and having to be found again. The rail does the same.
- *
- * The grips go with the body. A folded panel is a title bar, and dragging a
- * corner of it would be sizing something that is not on screen - the numbers
- * would be applied to the body and only appear on unfolding, which is the
- * definition of a surprise. */
-.sso-panel[data-folded="true"] > .sso-panel__body,
-.sso-panel[data-folded="true"] > .sso-grip {
-  display: none;
+.sso-panel__state[data-on="true"] {
+  color: var(--sso-accent-ink);
 }
 
 /* --- sections -------------------------------------------------------------- */
@@ -126,9 +87,9 @@
 }
 
 .sso-sec + .sso-sec {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid #2b3039;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--sso-line-soft);
 }
 
 /* The header is a button, so it is reachable by keyboard and announces its
@@ -141,13 +102,13 @@ button.sso-sec__h {
   gap: 6px;
   width: 100%;
   margin: 0;
-  padding: 4px 0;
-  font-size: 10px;
+  padding: 3px 0;
+  font-size: var(--sso-t-micro);
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.07em;
+  letter-spacing: 0.08em;
   text-align: left;
-  color: #8b929d;
+  color: var(--sso-ink-3);
   background: none;
   border: 0;
   border-radius: 4px;
@@ -155,13 +116,8 @@ button.sso-sec__h {
 }
 
 button.sso-sec__h:hover {
-  color: #e8eaed;
+  color: var(--sso-ink);
   background: none;
-}
-
-button.sso-sec__h:focus-visible {
-  outline: 2px solid #4c8bf5;
-  outline-offset: 2px;
 }
 
 .sso-sec__caret {
@@ -169,7 +125,7 @@ button.sso-sec__h:focus-visible {
   width: 8px;
   font-size: 11px;
   line-height: 1;
-  transition: transform 160ms ease;
+  transition: transform var(--sso-motion) ease;
 }
 
 .sso-sec[data-open="true"] .sso-sec__caret {
@@ -183,14 +139,8 @@ button.sso-sec__h:focus-visible {
 }
 
 .sso-sec[data-open="true"] > .sso-sec__h {
-  margin-bottom: 5px;
-  color: #aab1bc;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sso-sec__caret {
-    transition: none;
-  }
+  margin-bottom: 6px;
+  color: var(--sso-ink-2);
 }
 
 .sso-row {
@@ -210,78 +160,46 @@ button.sso-sec__h:focus-visible {
 
 .sso-note {
   margin: 6px 0 0;
-  font-size: 11.5px;
-  color: #8b929d;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-3);
   overflow-wrap: anywhere;
 }
 
 .sso-note--strong {
-  color: #e8eaed;
+  color: var(--sso-ink);
 }
 
 .sso-note--warn {
   color: #e0a44d;
 }
 
-/* --- moving and resizing ----------------------------------------------------
+/* --- nothing attached -------------------------------------------------------
  *
- * Both affordances have to be findable without being told they exist, over a
- * moving picture, at a glance. The header shows a grab cursor and lifts on
- * hover; the corner carries the diagonal lines that have meant "drag me" since
- * windows had corners.
+ * The first thing a new reader sees, so it is a state that was designed rather
+ * than a sentence where the content would go. It says what this panel is for,
+ * why it is empty, and carries the control that ends the emptiness - the whole
+ * point being that the answer is one click away and not a hunt through the
+ * section below it.
  */
 
-.sso-panel {
-  position: relative; /* containing block for the corner grip */
+.sso-empty {
+  padding: 14px 12px 15px;
+  text-align: center;
+  background: var(--sso-surface-2);
+  border: 1px dashed var(--sso-line);
+  border-radius: 9px;
 }
 
-.sso-panel__head {
-  cursor: grab;
-  user-select: none;
-  transition: background 160ms ease;
+.sso-empty__title {
+  font-size: var(--sso-t-body);
+  font-weight: 600;
+  color: var(--sso-ink);
 }
 
-.sso-panel__head:hover {
-  background: #22272f;
-}
-
-.sso-panel__head[data-dragging="true"] {
-  cursor: grabbing;
-  background: #262c35;
-}
-
-/* One grip per corner. The bottom-right carries the visible hatching, because
- * that is where a reader looks for it; the other three are the same target,
- * unmarked until hovered, so the panel does not sprout four decorations. Any
- * one of them being off-screen no longer means the panel cannot be resized. */
-.sso-grip {
-  position: absolute;
-  width: 18px;
-  height: 18px;
-}
-
-.sso-grip--nw { top: 0; left: 0; }
-.sso-grip--ne { top: 0; right: 0; }
-.sso-grip--sw { bottom: 0; left: 0; }
-.sso-grip--se { bottom: 0; right: 0; }
-
-/* Two hairlines across the corner. Drawn rather than a glyph so it lands on
- * the pixel grid at any zoom and needs no font to be present. */
-.sso-grip--se {
-  background:
-    linear-gradient(135deg, transparent 45%, #566070 45%, #566070 55%, transparent 55%) no-repeat,
-    linear-gradient(135deg, transparent 70%, #566070 70%, #566070 80%, transparent 80%) no-repeat;
-  border-bottom-right-radius: 10px;
-}
-
-.sso-grip:hover {
-  background: rgba(76, 139, 245, 0.25);
-}
-
-.sso-grip--se:hover {
-  background:
-    linear-gradient(135deg, transparent 45%, #8b929d 45%, #8b929d 55%, transparent 55%) no-repeat,
-    linear-gradient(135deg, transparent 70%, #8b929d 70%, #8b929d 80%, transparent 80%) no-repeat;
+.sso-empty__note {
+  margin: 3px 0 9px;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-3);
 }
 
 /* --- the second tier --------------------------------------------------------
@@ -294,18 +212,150 @@ button.sso-sec__h:focus-visible {
 button.sso-more__toggle {
   width: 100%;
   margin-top: 10px;
-  color: #8b929d;
+  color: var(--sso-ink-3);
   background: none;
-  border: 1px dashed #333844;
+  border: 1px dashed var(--sso-line);
 }
 
 button.sso-more__toggle:hover:not(:disabled) {
-  color: #e8eaed;
-  background: #22272f;
+  color: var(--sso-ink);
+  background: var(--sso-fill);
 }
 
 .sso-more[data-open="false"] {
   display: none;
+}
+
+/* --- one subtitle's controls ------------------------------------------------
+ *
+ * Each attached subtitle gets a card holding everything that belongs to it -
+ * timing, size, width, whether it is showing. Grouped by subtitle rather than
+ * by control type, because every question here is about one of the two, and an
+ * answer split across the panel by kind of control is an answer you have to
+ * assemble.
+ *
+ * The cards fold, and the normal case for this tool is two attached at once -
+ * the language being learnt and the one it is being learnt from. Two open
+ * cards is the same seven controls twice, three hundred and fifty pixels of
+ * near-identical layout whose differences are two small numbers. So the one
+ * the keys are pointed at is open and the other is a line, on the same
+ * expand-and-collapse idiom the study rail uses for its words.
+ */
+
+.sso-track {
+  background: var(--sso-surface-2);
+  border: 1px solid var(--sso-line-soft);
+  border-radius: 9px;
+}
+
+.sso-track + .sso-track {
+  margin-top: 6px;
+}
+
+.sso-track[data-open="true"] {
+  border-color: var(--sso-line);
+}
+
+.sso-track__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  cursor: pointer;
+}
+
+.sso-track[data-open="true"] > .sso-track__head {
+  padding-bottom: 5px;
+}
+
+.sso-track__caret {
+  flex: none;
+  width: 9px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--sso-ink-3);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.sso-track__head:hover .sso-track__caret {
+  color: var(--sso-ink);
+}
+
+.sso-track__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--sso-t-lead);
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--sso-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What a shut card still has to answer: is this one timed right. Shown only
+ * while collapsed, because open the readout below says it in full. */
+.sso-track__shut {
+  flex: none;
+  font-size: var(--sso-t-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--sso-ink-3);
+}
+
+.sso-track__shut[data-set="true"] {
+  color: var(--sso-accent-ink);
+}
+
+.sso-track__body {
+  padding: 0 9px 9px;
+}
+
+/* The caret said folded while every control stayed on screen: the head had a
+ * rule for the folded state and the body had none. */
+.sso-track[data-open="false"] > .sso-track__body {
+  display: none;
+}
+
+/* An unlabelled radio in a title row is a dot whose meaning has to be guessed.
+ * The dot is still the control - it is one of two, which is what a radio is -
+ * but the card that owns it says so in words, and only that card, so the word
+ * is the answer to "why is this one different" rather than a legend to read
+ * twice. */
+.sso-track__keys {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 5px 1px 3px;
+  font-size: var(--sso-t-micro);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--sso-ink-3);
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.sso-track__keys:hover {
+  background: var(--sso-fill);
+}
+
+/* Which one has the keys is a state, not an action, so it is said in ink and
+ * not in a filled pill. A blue chip in the corner of the card was the second
+ * loudest thing on the panel and it was pointing at the quietest fact. */
+.sso-track__keys[data-on="true"] {
+  color: var(--sso-accent-ink);
+}
+
+.sso-track__keys input[type="radio"] {
+  width: 11px;
+  height: 11px;
+  margin: 0;
+  accent-color: var(--sso-accent);
+  cursor: pointer;
 }
 
 /* --- telling the subtitle to move -------------------------------------------
@@ -325,102 +375,58 @@ button.sso-more__toggle:hover:not(:disabled) {
  * rendering past its right edge - and because they are different kinds of
  * thing: above is the instruction, below is the state. */
 .sso-sync__state {
-  margin-top: 4px;
+  margin-top: 5px;
   gap: 6px;
 }
 
 /* Typed seconds, for when the number is already known. Narrow on purpose: it
- * is an escape hatch beside the two buttons, not the primary control. */
-.sso-sync__field {
-  width: 62px;
+ * is an escape hatch beside the two buttons, not the primary control.
+ *
+ * Written with the panel in front of it because `input[type="number"]` in the
+ * controls section is (0,1,1) - an attribute selector counts as a class - and
+ * so is a bare `input.sso-sync__field`. A tie goes to whichever comes later,
+ * which is the generic width:100%: the field filled the row, the reading beside
+ * it wrapped onto two lines, and the Reset was pushed out of sight entirely. */
+.sso-panel input.sso-sync__field {
+  flex: none;
+  width: 58px;
   padding: 3px 6px;
-  font-size: 11.5px;
+  font-size: var(--sso-t-small);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
 .sso-offset {
-  font-size: 11px;
-  color: #8b929d;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--sso-t-small);
+  font-variant-numeric: tabular-nums;
+  color: var(--sso-ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sso-offset[data-set="true"] {
-  color: #e8eaed;
+  color: var(--sso-ink);
   font-weight: 600;
 }
 
 /* A button that reads as a link: it undoes something rather than doing it, and
  * a third bordered control on this card would compete with the two that matter. */
 button.sso-linkish {
+  flex: none;
   padding: 0;
-  font-size: 11px;
-  color: #7f97c4;
+  font-size: var(--sso-t-small);
+  color: var(--sso-accent-ink);
   background: none;
   border: 0;
   text-decoration: underline;
 }
 
 button.sso-linkish:hover:not(:disabled) {
-  color: #a9c0e8;
+  color: #c3d6fc;
   background: none;
-}
-
-button.sso-linkish[hidden] {
-  display: none;
-}
-
-/* --- one subtitle's controls ------------------------------------------------
- *
- * Each attached subtitle gets a card holding everything that belongs to it -
- * timing, size, width, whether it is showing. Grouped by subtitle rather than
- * by control type, because every question here is about one of the two, and an
- * answer split across the panel by kind of control is an answer you have to
- * assemble.
- */
-
-.sso-track {
-  padding: 8px 9px 9px;
-  background: #1c2029;
-  border: 1px solid #2b3039;
-  border-radius: 8px;
-}
-
-.sso-track + .sso-track {
-  margin-top: 6px;
-}
-
-.sso-track[hidden] {
-  display: none;
-}
-
-.sso-track__head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-bottom: 7px;
-}
-
-.sso-track__label {
-  flex: 1;
-  min-width: 0;
-  font-size: 12px;
-  font-weight: 600;
-  color: #e8eaed;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sso-track__head input[type="radio"] {
-  width: 13px;
-  height: 13px;
-  margin: 0;
-  accent-color: #4c8bf5;
-  cursor: pointer;
-}
-
-.sso-track__head input[type="radio"][hidden] {
-  display: none;
 }
 
 /* --- segmented choice -------------------------------------------------------
@@ -441,20 +447,28 @@ button.sso-linkish[hidden] {
   flex-wrap: wrap;
 }
 
-.sso-seg[hidden] {
-  display: none;
+/* What the choice is about, on the row with it. */
+.sso-seg__lead {
+  flex: none;
+  align-self: center;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-3);
 }
 
 button.sso-seg__b {
   flex: 1;
   padding: 4px 8px;
-  font-size: 11.5px;
+  font-size: var(--sso-t-small);
 }
 
+/* Selected, not primary. Filled at nearly the weight of the Search button
+ * beside it, the two blues split the emphasis budget and neither read as the
+ * thing to press: this one is a choice already made, so it is stated by its
+ * border and its ink and leaves the fill to the action. */
 button.sso-seg__b[data-on="true"] {
-  color: #fff;
-  background: #2f4a7a;
-  border-color: #4c8bf5;
+  color: var(--sso-accent-ink);
+  background: rgba(76, 139, 245, 0.1);
+  border-color: rgba(76, 139, 245, 0.55);
 }
 
 /* A control whose setting is off does not disappear - that would hide what the
@@ -467,16 +481,24 @@ button.sso-seg__b[data-on="true"] {
 
 button {
   padding: 5px 9px;
-  font-size: 12px;
+  font-size: var(--sso-t-body);
   font-weight: 500;
-  background: #232830;
-  border: 1px solid #333844;
-  border-radius: 6px;
+  color: var(--sso-ink);
+  background: var(--sso-fill);
+  border: 1px solid var(--sso-line);
+  border-radius: var(--sso-r-ctl);
   cursor: pointer;
+  transition:
+    background var(--sso-motion) ease,
+    border-color var(--sso-motion) ease;
 }
 
 button:hover:not(:disabled) {
-  background: #2c323c;
+  background: var(--sso-fill-hover);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 button:disabled {
@@ -484,7 +506,12 @@ button:disabled {
   cursor: default;
 }
 
+/* The panel's one primary, and it belongs to the empty state: that is the only
+ * moment here with a single obvious next action. Once a subtitle is attached
+ * this is an adjustment surface, and a filled blue button would be claiming
+ * otherwise. */
 button.sso-primary {
+  color: #fff;
   background: #2f5da8;
   border-color: #3b6fc4;
 }
@@ -497,36 +524,34 @@ input[type="text"],
 input[type="number"] {
   width: 100%;
   padding: 5px 7px;
-  font-size: 12px;
-  background: #1b1f26;
-  border: 1px solid #333844;
-  border-radius: 6px;
+  font-size: var(--sso-t-body);
+  color: var(--sso-ink);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--sso-line);
+  border-radius: var(--sso-r-ctl);
+}
+
+input[type="text"]::placeholder {
+  color: var(--sso-ink-3);
 }
 
 input[type="text"]:focus,
 input[type="number"]:focus {
   outline: none;
-  border-color: #4d8ae0;
+  border-color: var(--sso-accent);
 }
 
 input[type="range"] {
   width: 100%;
-  accent-color: #4d8ae0;
-}
-
-.sso-offset {
-  min-width: 56px;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-  color: #b9c0ca;
+  accent-color: var(--sso-accent);
 }
 
 .sso-label {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11.5px;
-  color: #b9c0ca;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-2);
 }
 
 .sso-label span:first-child {
@@ -549,15 +574,15 @@ input[type="range"] {
   width: 13px;
   height: 13px;
   margin: 0;
-  accent-color: #4d8ae0;
+  accent-color: var(--sso-accent);
 }
 
 .sso-value {
-  width: 40px;
+  width: 42px;
   flex: none;
   font-variant-numeric: tabular-nums;
   text-align: right;
-  color: #8b929d;
+  color: var(--sso-ink-3);
 }
 
 /* --- results --------------------------------------------------------------- */
@@ -571,13 +596,13 @@ input[type="range"] {
 }
 
 .sso-results li + li {
-  border-top: 1px solid #2b3039;
+  border-top: 1px solid var(--sso-line-soft);
 }
 
 .sso-result {
   display: block;
   width: 100%;
-  padding: 7px 4px;
+  padding: 7px 5px;
   text-align: left;
   background: none;
   border: 0;
@@ -586,7 +611,11 @@ input[type="range"] {
 }
 
 .sso-result:hover {
-  background: #262b35;
+  background: var(--sso-fill);
+}
+
+.sso-result:active {
+  transform: none;
 }
 
 .sso-result__top {
@@ -599,13 +628,13 @@ input[type="range"] {
   font-size: 9.5px;
   font-weight: 700;
   letter-spacing: 0.05em;
-  color: #6aa9ff;
+  color: var(--sso-accent-ink);
 }
 
 .sso-result__name {
   flex: 1;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--sso-t-body);
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -615,8 +644,8 @@ input[type="range"] {
   display: block;
   overflow: hidden;
   margin-top: 1px;
-  font-size: 10.5px;
-  color: #8b929d;
+  font-size: var(--sso-t-micro);
+  color: var(--sso-ink-3);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -624,10 +653,10 @@ input[type="range"] {
 .sso-tag {
   padding: 0 5px;
   font-size: 9.5px;
-  line-height: 1.5;
-  background: #2c323c;
+  line-height: 1.6;
+  background: var(--sso-fill);
   border-radius: 4px;
-  color: #b9c0ca;
+  color: var(--sso-ink-2);
   white-space: nowrap;
 }
 
@@ -646,17 +675,28 @@ input[type="range"] {
   grid-template-columns: 1fr auto;
   gap: 5px 8px;
   align-items: center;
-  font-size: 11.5px;
-  color: #b9c0ca;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-2);
 }
 
 .sso-key {
   min-width: 92px;
   font-family: "SF Mono", ui-monospace, Menlo, monospace !important;
-  font-size: 11px;
+  font-size: var(--sso-t-small);
 }
 
 .sso-key[data-capturing="true"] {
-  border-color: #4d8ae0;
-  color: #6aa9ff;
+  border-color: var(--sso-accent);
+  color: var(--sso-accent-ink);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sso-sec__caret,
+  button {
+    transition: none;
+  }
+
+  button:active:not(:disabled) {
+    transform: none;
+  }
 }

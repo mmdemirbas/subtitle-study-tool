@@ -754,7 +754,7 @@
        */
       const dragPanelTo = async (targetX, targetY) => {
         const host = panelShadow().host;
-        const head = panelShadow().querySelector(".sso-panel__head");
+        const head = panelShadow().querySelector(".sso-win__head");
         // A synthetic PointerEvent has no live pointer behind it, so the real
         // capture calls throw. Same stub the cue drag uses.
         head.setPointerCapture = () => {};
@@ -784,7 +784,7 @@
        * presented as study mode eating a click it never saw. */
       const parkPanel = () => {
         panelShadow()
-          .querySelector(".sso-panel__head")
+          .querySelector(".sso-win__head")
           .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true }));
       };
 
@@ -822,6 +822,88 @@
         if (Math.abs(handle.right - panel.right) > 8)
           throw new Error(
             `parked at ${Math.round(panel.right)}, handle is at ${Math.round(handle.right)}`);
+      });
+
+      /* --- the redesign's load-bearing geometry --------------------------------
+       *
+       * Every one of these was a defect a screenshot caught after the tests were
+       * green, which is the argument for their existing: the assertions below
+       * are the numbers those screenshots were read for, so the next change to
+       * either stylesheet has to answer to them rather than to somebody
+       * remembering to look.
+       */
+
+      check("a folded subtitle card takes its controls with it", async () => {
+        const cards = [...panelShadow().querySelectorAll(".sso-track")].filter((c) => !c.hidden);
+        if (!cards.length) throw new Error("nothing attached to fold");
+        const card = cards[0];
+        const body = card.querySelector(".sso-track__body");
+        const caret = card.querySelector(".sso-track__caret");
+        if (card.dataset.open !== "true") caret.click();
+        await sleep(40);
+        const open = body.getBoundingClientRect().height;
+        if (open === 0) throw new Error("an open card has no controls in it");
+
+        caret.click();
+        await sleep(40);
+        /* The caret said folded while every control stayed on screen: the head
+         * had a rule for the folded state and the body had none. */
+        if (body.getBoundingClientRect().height !== 0)
+          throw new Error(`folded, and ${Math.round(body.getBoundingClientRect().height)}px of controls stayed`);
+        if (card.querySelector(".sso-track__shut").hidden)
+          throw new Error("folded to a title bar that does not say how it is timed");
+
+        caret.click();
+        await sleep(40);
+        if (body.getBoundingClientRect().height === 0) throw new Error("it would not unfold");
+      });
+
+      check("the typed-offset field leaves room for the reading beside it", async () => {
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        if (card.dataset.open !== "true") card.querySelector(".sso-track__caret").click();
+        await sleep(40);
+        const field = card.querySelector(".sso-sync__field");
+        const row = field.parentElement;
+        /* `input[type="number"]` and `input.sso-sync__field` are both (0,1,1),
+         * so the generic width:100% won on source order: the field filled the
+         * row, the reading wrapped onto two lines and Reset was pushed out of
+         * the panel entirely. */
+        if (field.getBoundingClientRect().width > 80)
+          throw new Error(`the field is ${Math.round(field.getBoundingClientRect().width)}px wide and eats the row`);
+        const reading = card.querySelector(".sso-offset");
+        if (reading.getBoundingClientRect().height > row.getBoundingClientRect().height)
+          throw new Error("the reading wrapped past its row");
+      });
+
+      check("picking a result does not move the target out from under you", async () => {
+        /* Reported: "when I select a subtitle from the list 1, it switches to
+         * list 2 immediately". It did - the target flipped after every attach
+         * to save a click for somebody building a pair. What it cost was the
+         * equally common next move: that release was wrong, try the one below
+         * it. The second pick then went to the other subtitle instead of
+         * replacing the first, and nothing said so until two were on screen. */
+        const shadow = panelShadow();
+        const targets = [...shadow.querySelectorAll(".sso-seg--target .sso-seg__b")];
+        if (targets.length !== 2) throw new Error("no way to pick which subtitle a result fills");
+        targets[0].click();
+        await sleep(40);
+        if (targets[0].dataset.on !== "true") throw new Error("subtitle 1 would not be selected");
+
+        const search = [...shadow.querySelectorAll("button")].find((b) => b.textContent === "Search");
+        search.click();
+        await sleep(150);
+        const result = shadow.querySelector(".sso-result");
+        if (!result) throw new Error("the search returned nothing to pick");
+        result.click();
+        await sleep(200);
+
+        if (targets[0].dataset.on !== "true")
+          throw new Error("the target moved to subtitle 2 on its own");
+        // And the pick did land where it said it would. Nothing is detached
+        // afterwards: the stubbed fetch hands back this harness's own cues, so
+        // subtitle 1 is carrying what it was carrying before the test ran.
+        if (!window.__ssoApi.status().tracks[0].attached)
+          throw new Error("subtitle 1 is still empty");
       });
 
       check("a wheel over the panel does not reach the page", async () => {
@@ -1145,7 +1227,7 @@
       });
 
       check("the rail can be emptied", async () => {
-        const clear = [...railShadow().querySelectorAll(".sso-rail__act")].find(
+        const clear = [...railShadow().querySelectorAll(".sso-icon--word")].find(
           (b) => b.textContent === "Clear",
         );
         if (!clear) throw new Error("no way to empty it");
@@ -1163,7 +1245,7 @@
         const list = railShadow().querySelector(".sso-rail__list");
         if (getComputedStyle(list).display !== "none")
           throw new Error("the words are still standing on the frame");
-        const head = railShadow().querySelector(".sso-rail__head");
+        const head = railShadow().querySelector(".sso-win__head");
         if (head.getBoundingClientRect().height < 10)
           throw new Error("folding took the title bar with it, so there is no way back");
 
@@ -1191,11 +1273,47 @@
         await sleep(120);
       });
 
+      check("a collapsed word is one line, not two", async () => {
+        /* The whole point of collapsing. The gloss used to drop to a row of its
+         * own under the term, so folding four cards saved four rows instead of
+         * eight and the density the fold exists for never arrived. */
+        // Newest first, so "frankly" stays the open card at the top: the save
+        // cases below reach for the first one on the rail.
+        await hover("care");
+        await hover("frankly");
+        await sleep(160);
+        const cards = railShadow().querySelectorAll(".sso-card");
+        const shut = [...cards].find((c) => c.dataset.focused === "false");
+        if (!shut) throw new Error("nothing collapsed to measure");
+        const head = shut.querySelector(".sso-card__head").getBoundingClientRect();
+        const whole = shut.getBoundingClientRect();
+        if (whole.height > head.height + 14)
+          throw new Error(`a shut card is ${Math.round(whole.height)}px around a ${Math.round(head.height)}px line`);
+        const gloss = shut.querySelector(".sso-card__gloss");
+        if (gloss && gloss.getBoundingClientRect().top > head.bottom)
+          throw new Error("the meaning is on a second line");
+      });
+
+      check("both windows are cut from the same chrome", async () => {
+        /* One stylesheet, adopted by both, is the only thing keeping two
+         * floating surfaces from drifting into two visual languages again. If
+         * the shared sheet stops being adopted these read as empty strings. */
+        for (const [name, shadow] of [["panel", panelShadow()], ["rail", railShadow()]]) {
+          const win = shadow.querySelector(".sso-win");
+          if (!win) throw new Error(`the ${name} is not built as a window`);
+          const ink = getComputedStyle(win).getPropertyValue("--sso-ink").trim();
+          if (!ink) throw new Error(`the ${name} has no shared chrome under it`);
+          if (!shadow.querySelector(".sso-win__head")) throw new Error(`the ${name} has no shared title bar`);
+          const radius = getComputedStyle(win).borderTopLeftRadius;
+          if (radius !== "10px") throw new Error(`the ${name} rounds to ${radius}`);
+        }
+      });
+
       check("the rail can be resized from any corner", async () => {
-        const grips = railShadow().querySelectorAll(".sso-rail__grip");
+        const grips = railShadow().querySelectorAll(".sso-grip");
         if (grips.length !== 4) throw new Error(`${grips.length} grips, want one per corner`);
         const before = window.__ssoStudy.settings();
-        const grip = railShadow().querySelector(".sso-rail__grip--sw");
+        const grip = railShadow().querySelector(".sso-grip--sw");
         grip.setPointerCapture = () => {};
         grip.releasePointerCapture = () => {};
         const box = grip.getBoundingClientRect();
@@ -1322,8 +1440,8 @@
        * failure rather than an inconsistency nobody notices.
        */
       const SURFACES = [
-        { name: "panel", sel: ".sso-panel", head: ".sso-panel__head", grip: ".sso-grip" },
-        { name: "rail", sel: ".sso-rail", head: ".sso-rail__head", grip: ".sso-rail__grip" },
+        { name: "panel", sel: ".sso-panel", head: ".sso-win__head", grip: ".sso-grip" },
+        { name: "rail", sel: ".sso-rail", head: ".sso-win__head", grip: ".sso-grip" },
       ];
 
       const hostFor = (sel) =>

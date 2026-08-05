@@ -52,7 +52,7 @@
   let unsubscribe = null;
   let lastResults = [];
   let lastResolved = null;
-  let sheet = null;
+  let sheets = null;
 
   /* Which of the two subtitles the next attach lands on. Not stored: it is a
    * property of the search you are doing right now, and a remembered value
@@ -114,43 +114,62 @@
   /* A constructable stylesheet rather than a <style> element: adopted sheets
    * are not subject to the page's Content-Security-Policy, and many streaming
    * sites ship a restrictive style-src. */
+  /* Two sheets, not one. chrome.css carries what makes this a window - surface,
+   * title bar, head buttons, corner grips, folded state - and the study rail
+   * adopts the same one, which is what stops the two floating surfaces drifting
+   * into different visual languages again. It goes first so panel.css can
+   * override any of it. */
   async function loadStyles() {
-    if (sheet) return sheet;
-    const css = await fetch(chrome.runtime.getURL("src/panel.css")).then((r) => r.text());
-    sheet = new CSSStyleSheet();
-    sheet.replaceSync(css);
-    return sheet;
+    if (sheets) return sheets;
+    const files = ["src/chrome.css", "src/panel.css"];
+    const texts = await Promise.all(
+      files.map((file) => fetch(chrome.runtime.getURL(file)).then((r) => r.text())),
+    );
+    sheets = texts.map((css) => {
+      const made = new CSSStyleSheet();
+      made.replaceSync(css);
+      return made;
+    });
+    return sheets;
   }
 
   async function build() {
     await loadOpenSections();
     host = createHost();
     shadow = host.attachShadow({ mode: "open" });
-    shadow.adoptedStyleSheets = [await loadStyles()];
+    shadow.adoptedStyleSheets = await loadStyles();
 
     const panel = document.createElement("div");
-    panel.className = "sso-panel";
+    panel.className = "sso-win sso-panel";
     el.panel = panel;
 
     const head = document.createElement("div");
-    head.className = "sso-panel__head";
+    head.className = "sso-win__head";
     const title = document.createElement("div");
-    title.className = "sso-panel__title";
+    title.className = "sso-win__title";
     title.textContent = "Subtitle Overlay";
+
+    /* What is attached, in the title bar. Folded, the bar is all that is left
+     * on screen, so it has to carry the one fact that decides whether the panel
+     * is worth opening again. */
+    el.state = document.createElement("span");
+    el.state.className = "sso-panel__state";
+
     /* Folds to the title bar, the same control the study rail has. Different
      * from closing: the panel stays where it was put and at the size it was
      * given, so a glance at the film does not cost finding it again. */
     el.fold = document.createElement("button");
-    el.fold.className = "sso-panel__fold";
+    el.fold.className = "sso-icon";
     el.fold.type = "button";
     el.fold.addEventListener("click", () => setFolded(!folded));
 
     const close = document.createElement("button");
-    close.className = "sso-panel__x";
+    close.className = "sso-icon sso-icon--close";
+    close.type = "button";
     close.textContent = "×";
     close.title = "Close";
     close.addEventListener("click", hide);
-    head.append(title, el.fold, close);
+    head.append(title, el.state, el.fold, close);
 
     /* Double-click the bar to put the panel back under the CC button. A panel
      * dragged somewhere unhelpful - behind the player's own controls, half off
@@ -453,6 +472,7 @@
    * panel that shows all seven at full height is taller than the film. */
   const OPEN_BY_DEFAULT = new Set(["Subtitles", "Find a subtitle"]);
   let openSections = null; // filled from storage before the panel is built
+  const sections = new Map(); // heading -> { apply, wrap }, for opening one from elsewhere
 
   /* Sections collapse.
    *
@@ -499,7 +519,22 @@
      * straight to the section as it always did, and means folding cannot
      * introduce a layout box that changes how the contents lay out when open. */
     wrap.append(head);
+    sections.set(heading, { apply, wrap });
     return wrap;
+  }
+
+  /* Opening a section from somewhere else on the panel - the empty state
+   * sending a reader to the search that fills it. Goes through the same apply
+   * and the same storage write, so a section opened this way is open in the
+   * same sense as one that was clicked. */
+  function setSectionOpen(heading, open) {
+    const found = sections.get(heading);
+    if (!found || (found.wrap.dataset.open === "true") === open) return;
+    found.apply(open);
+    if (open) openSections.add(heading);
+    else openSections.delete(heading);
+    chrome.storage.local.set({ [OPEN_KEY]: [...openSections] }).catch(() => {});
+    fitToViewport();
   }
 
   async function loadOpenSections() {
@@ -536,9 +571,34 @@
   function buildTracks() {
     const wrap = section("Subtitles");
 
+    /* Nothing attached is the first thing most readers see, so it is a state
+     * that was designed rather than the sentence that fits where the content
+     * would go. It says what the panel is for, why it is empty, and carries the
+     * control that ends the emptiness - which is the whole point, because the
+     * search that answers it is a section further down and behind a heading. */
+    el.none = document.createElement("div");
+    el.none.className = "sso-empty";
+    el.noneTitle = document.createElement("div");
+    el.noneTitle.className = "sso-empty__title";
     el.noneNote = document.createElement("p");
-    el.noneNote.className = "sso-note sso-note--strong";
-    el.noneNote.textContent = "Nothing attached yet.";
+    el.noneNote.className = "sso-empty__note";
+    /* It runs the search rather than pointing at it. The field below is already
+     * filled with the page's own title, so "find a subtitle for this" is one
+     * click, not three - and the button is then the primary action honestly,
+     * instead of a second blue button whose job is to scroll the reader down to
+     * the first one. With nothing typed there is nothing to run, so it opens
+     * the section and takes the cursor there instead. */
+    el.noneAction = button("Find a subtitle", {
+      primary: true,
+      onClick: () => {
+        setSectionOpen("Find a subtitle", true);
+        const query = el.query.value.trim();
+        if (query) return runSearch(query);
+        el.query.focus();
+        el.query.select();
+      },
+    });
+    el.none.append(el.noneTitle, el.noneNote, el.noneAction);
 
     el.trackCards = [0, 1].map(buildTrackCard);
 
@@ -556,7 +616,7 @@
       button("Clear", { onClick: () => api.clearAdDrift(), title: "Forget measured ad time" }),
     );
 
-    wrap.append(el.noneNote, ...el.trackCards.map((card) => card.root), el.adRow);
+    wrap.append(el.none, ...el.trackCards.map((card) => card.root), el.adRow);
     return wrap;
   }
 
@@ -644,19 +704,55 @@
     const head = document.createElement("div");
     head.className = "sso-track__head";
 
+    /* Two attached subtitles is the normal way this tool is used - the language
+     * being learnt and the one it is being learnt from - and two open cards is
+     * the same seven controls twice, three hundred and fifty pixels of
+     * near-identical layout whose differences are two small numbers. So a card
+     * folds to its title, on the same idiom the study rail uses for a word.
+     *
+     * `open` is undefined until the reader says otherwise, and the default is
+     * then "the one the keys are pointed at, or the only one there is". Once
+     * they have clicked, their answer stands. */
+    const caret = document.createElement("button");
+    caret.className = "sso-track__caret";
+    caret.type = "button";
+    caret.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleTrack(slot);
+    });
+
     /* The radio says which subtitle the bracket keys move. There is one pair of
      * keys and two things they could shift, and this is the only place that
-     * answer can be given without guessing it from where the pointer is. */
+     * answer can be given without guessing it from where the pointer is.
+     *
+     * It sits in a chip that says "keys", because a bare radio in a title row
+     * is a dot whose meaning has to be guessed - and the guess a reader makes
+     * is usually "this is the selected one", which is a different question with
+     * a different answer. */
     const keyed = document.createElement("input");
     keyed.type = "radio";
     keyed.name = "sso-keytrack";
-    keyed.title = "The nudge keys move this subtitle";
+    keyed.setAttribute("aria-label", "The nudge keys move this subtitle");
     keyed.addEventListener("change", () => api.setKeyTrack(slot));
+
+    const keysChip = document.createElement("label");
+    keysChip.className = "sso-track__keys";
+    keysChip.title = "The [ and ] keys nudge this subtitle";
+    const keysWord = document.createElement("span");
+    keysWord.textContent = "keys";
+    keysChip.append(keyed, keysWord);
+    keysChip.addEventListener("click", (event) => event.stopPropagation());
 
     const label = document.createElement("span");
     label.className = "sso-track__label";
 
-    head.append(keyed, label);
+    /* What a shut card still has to answer. Open, the readout below says it in
+     * full; shut, this is the only line there is. */
+    const shut = document.createElement("span");
+    shut.className = "sso-track__shut";
+
+    head.append(caret, label, shut, keysChip);
+    head.addEventListener("click", () => toggleTrack(slot));
 
     /* Say what is wrong, not which way to push a number.
      *
@@ -752,8 +848,23 @@
     });
     actions.append(visible, button("Detach", { onClick: () => api.detach(slot) }));
 
-    root.append(head, offsets, offsetState, size.row, width.row, actions);
-    return { root, keyed, label, offsetValue, offsetField, offsetReset, size, width, visible };
+    const body = document.createElement("div");
+    body.className = "sso-track__body";
+    body.append(offsets, offsetState, size.row, width.row, actions);
+
+    root.append(head, body);
+    return { root, caret, keyed, keysChip, label, shut, offsetValue, offsetField, offsetReset, size, width, visible };
+  }
+
+  /* Which track cards are open. `undefined` means the reader has not said, and
+   * refresh() then picks the keyed one; a boolean is their answer and outlives
+   * every status round. */
+  const trackOpen = [undefined, undefined];
+
+  function toggleTrack(slot) {
+    const card = el.trackCards[slot];
+    trackOpen[slot] = card.root.dataset.open !== "true";
+    refresh(api.status());
   }
 
   // --- search ---------------------------------------------------------------
@@ -765,8 +876,17 @@
      * per result, because it is one decision for the whole list and putting two
      * buttons on every row would double the width of a list that already has to
      * fit a film title, a release name and three tags. */
+    /* Said in words, because the panel has a second row of buttons reading
+     * "Subtitle 1 / Subtitle 2" - the one telling study which of the two to
+     * read from - and two identical segmented controls a section apart, each
+     * meaning something different, is a control the reader has to test to
+     * understand. */
     const target = document.createElement("div");
-    target.className = "sso-seg";
+    target.className = "sso-seg sso-seg--target";
+    const targetLabel = document.createElement("span");
+    targetLabel.className = "sso-seg__lead";
+    targetLabel.textContent = "Attach to";
+    target.append(targetLabel);
     el.targetButtons = [0, 1].map((slot) => {
       const b = button(`Subtitle ${slot + 1}`, {
         onClick: () => {
@@ -794,7 +914,12 @@
     grow.className = "sso-grow";
     grow.append(el.query);
 
-    row.append(grow, button("Search", { primary: true, onClick: () => runSearch(el.query.value.trim()) }));
+    /* Not primary. The panel's one primary is the empty state's button, and the
+     * empty state is on screen exactly when there is one obvious thing to do;
+     * once a subtitle is attached this is an adjustment surface with no single
+     * next action, and a filled blue button in it would be claiming otherwise.
+     * Enter in the field runs the same search. */
+    row.append(grow, button("Search", { onClick: () => runSearch(el.query.value.trim()) }));
 
     el.searchNote = document.createElement("p");
     el.searchNote.className = "sso-note";
@@ -983,11 +1108,23 @@
       language: result.language || "",
       slot,
     });
-    el.searchNote.textContent = "";
-    // Point at the other one, so attaching a second subtitle is finding it and
-    // clicking it rather than finding it, remembering to change the target,
-    // and clicking it.
-    targetSlot = slot === 0 ? 1 : 0;
+    /* The target stays where the reader put it.
+     *
+     * It used to flip to the other subtitle here, to save a click for somebody
+     * building a pair. It cost more than it saved: picking a result moved the
+     * selection under the reader at the moment they were looking at the list,
+     * and the next equally common intent - that release was wrong, try the one
+     * below it - then silently attached to the other slot instead of replacing.
+     * A guess about the next click is not worth making when getting it wrong is
+     * invisible until two subtitles are on screen.
+     *
+     * The convenience it was buying is a note instead, which costs one click
+     * and no surprise. */
+    el.searchNote.className = "sso-note";
+    const other = slot === 0 ? 1 : 0;
+    el.searchNote.textContent = api.status().tracks[other].attached
+      ? `Attached to subtitle ${slot + 1}.`
+      : `Attached to subtitle ${slot + 1}. Pick “Subtitle ${other + 1}” above to add a second one.`;
     refresh(api.status());
   }
 
@@ -1441,10 +1578,18 @@
      * without anything having to remember to ask. */
     queueMicrotask(fitToViewport);
 
-    el.noneNote.hidden = status.attached;
+    el.none.hidden = status.attached;
+    el.noneTitle.textContent = status.hasVideo ? "No subtitle attached" : "No video on this page";
     el.noneNote.textContent = status.hasVideo
-      ? "Nothing attached yet."
-      : "No video detected on this page.";
+      ? "Search for the film or series and pick a result — it goes straight onto the video."
+      : "Open something that plays, then come back.";
+    el.noneAction.hidden = !status.hasVideo;
+
+    // The one fact a folded title bar has to carry.
+    el.state.textContent = status.attached
+      ? `${status.trackCount} attached`
+      : status.hasVideo ? "nothing attached" : "no video";
+    el.state.dataset.on = status.attached ? "true" : "false";
 
     status.tracks.forEach((track, slot) => {
       const card = el.trackCards[slot];
@@ -1455,12 +1600,25 @@
       card.root.hidden = !track.attached;
       if (!track.attached) return;
 
-      card.label.textContent =
-        `${slot + 1}. ${track.label || "Attached"} · ` +
-        `${track.cueCount} line${track.cueCount === 1 ? "" : "s"}`;
+      /* Until the reader has folded one themselves, the open card is the one
+       * the keys point at - which with a single subtitle is always that one, so
+       * nothing folds until there is a second card to fold against. */
+      const open = trackOpen[slot] ?? (status.trackCount < 2 || status.keyTrack === slot);
+      card.root.dataset.open = open ? "true" : "false";
+      card.caret.textContent = open ? "▾" : "▸";
+      card.caret.title = open ? "Fold this subtitle's controls" : "Show this subtitle's controls";
+      card.caret.setAttribute("aria-expanded", open ? "true" : "false");
+
+      card.label.textContent = `${slot + 1}. ${track.label || "Attached"}`;
       card.keyed.checked = status.keyTrack === slot;
+      card.keysChip.dataset.on = status.keyTrack === slot ? "true" : "false";
       // With one subtitle there is nothing for the keys to be ambiguous about.
-      card.keyed.hidden = status.trackCount < 2;
+      card.keysChip.hidden = status.trackCount < 2;
+      card.shut.hidden = open;
+      card.shut.textContent = track.offsetMs
+        ? api.describeOffset(track.offsetMs)
+        : `${track.cueCount} line${track.cueCount === 1 ? "" : "s"}`;
+      card.shut.dataset.set = track.offsetMs ? "true" : "false";
       card.offsetValue.textContent = api.describeOffset(track.offsetMs);
       card.offsetValue.dataset.set = track.offsetMs ? "true" : "false";
       // Nothing to undo means no undo button, which is also the width that lets

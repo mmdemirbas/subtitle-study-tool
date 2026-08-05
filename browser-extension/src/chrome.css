@@ -1,0 +1,263 @@
+/* Window furniture, shared by the control panel and the study rail.
+ *
+ * Two floating windows stand on the same film, and they had grown two
+ * different visual languages: one bordered its buttons and washed them in a
+ * flat grey, the other tinted them with white alpha; one closed with a boxed
+ * glyph, the other with a bare one; one head bar was an opaque strip, the
+ * other a wash. Nothing about either was wrong on its own, and together they
+ * read as two features from two products.
+ *
+ * So everything that makes a window a window is declared once, here, and both
+ * shadow roots adopt it ahead of the sheet that styles their contents. What
+ * stays surface-specific is what the surfaces genuinely disagree about: the
+ * panel is cool-neutral with a blue accent because it acts on the film; the
+ * rail is warm-neutral with amber because it is a reading surface and amber is
+ * already the colour of a marked word in the subtitle. One hue family per
+ * surface, and the difference between them tells you which window you are
+ * looking at before you read a word of it.
+ *
+ * Tokens are declared on the surface element rather than on :host. `all:
+ * initial` on a host does not reset custom properties - the property registry
+ * is outside what `all` covers - so a page defining --ink would inherit
+ * straight through into the shadow tree. Declaring them inside overrides
+ * anything arriving from outside, and the --sso- prefix makes the collision
+ * unlikely to begin with.
+ */
+
+.sso-win {
+  /* Ink, in three steps. Anything that needs a fourth is trying to say
+   * something that hierarchy should be saying instead. */
+  --sso-ink: #eef0f3;
+  --sso-ink-2: #a7aeb9;
+  --sso-ink-3: #79808b;
+
+  /* Lines and fills are alpha, never flat colours: both surfaces are
+   * translucent over a moving picture, and a flat #2b3039 hairline on a rail
+   * set to 40% opacity is an opaque line floating on a transparent box. */
+  --sso-line: rgba(255, 255, 255, 0.11);
+  --sso-line-soft: rgba(255, 255, 255, 0.06);
+  --sso-fill: rgba(255, 255, 255, 0.06);
+  --sso-fill-hover: rgba(255, 255, 255, 0.13);
+
+  --sso-danger: #f0836f;
+  --sso-r-win: 10px;
+  --sso-r-ctl: 7px;
+  --sso-motion: 160ms;
+
+  position: relative; /* containing block for the corner grips */
+  display: block;
+  font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-weight: 400;
+  font-style: normal;
+  line-height: 1.45;
+  letter-spacing: normal;
+  text-align: left;
+  text-transform: none;
+  color: var(--sso-ink);
+  border: 1px solid var(--sso-line);
+  border-radius: var(--sso-r-win);
+  /* Two layers. A single wide blur leaves the window in fog over a bright
+   * frame, which reads as faded rather than raised; the 1px contact shadow is
+   * what actually separates it from the picture. */
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.55),
+    0 12px 32px -14px rgba(0, 0, 0, 0.85);
+  color-scheme: dark;
+}
+
+.sso-win * {
+  box-sizing: border-box;
+  font-family: inherit;
+  color: inherit;
+}
+
+[hidden] {
+  /* The UA rule for [hidden] is display:none, which any author `display`
+   * declaration outranks - and rows here set display:flex. Without this, a
+   * control hidden by JavaScript stays on screen. */
+  display: none !important;
+}
+
+/* --- the title bar ----------------------------------------------------------
+ *
+ * The name of the window is chrome, not content, so it is set as a quiet
+ * uppercase label and the contents are left to win the surface. The bar is
+ * also the drag handle, which is why it lifts on hover: the affordance has to
+ * be findable over a moving picture without anyone being told it exists.
+ */
+
+.sso-win__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 5px 5px 11px;
+  border-bottom: 1px solid var(--sso-line-soft);
+  cursor: grab;
+  user-select: none;
+  transition: background var(--sso-motion) ease;
+}
+
+.sso-win__head:hover {
+  background: var(--sso-fill);
+}
+
+.sso-win__head[data-dragging="true"] {
+  cursor: grabbing;
+  background: var(--sso-fill-hover);
+}
+
+.sso-win__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sso-ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One treatment for everything in a title bar. Previously the panel had
+ * bordered boxes and the rail had bare glyphs and pill buttons, so "fold" and
+ * "close" looked like different classes of thing depending on which window
+ * they were in. Quiet at rest, because none of them is what the window is
+ * for; 24px square, because that is the smallest comfortable pointer target. */
+.sso-icon {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--sso-ink-3);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    color var(--sso-motion) ease,
+    background var(--sso-motion) ease;
+}
+
+.sso-icon:hover:not(:disabled) {
+  color: var(--sso-ink);
+  background: var(--sso-fill-hover);
+}
+
+.sso-icon:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.sso-icon:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* The one control that takes the window off the screen says so on hover. */
+.sso-icon--close {
+  font-size: 15px;
+}
+
+.sso-icon--close:hover {
+  color: var(--sso-danger);
+  background: rgba(240, 131, 111, 0.15);
+}
+
+/* A word rather than a glyph, at the same height as the glyphs beside it. It
+ * carries a hairline at rest, which the glyph buttons do not need: set in the
+ * same uppercase as the window's own title, an unbordered word in a title bar
+ * reads as a second title rather than as something to press. */
+.sso-icon--word {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  border: 1px solid var(--sso-line);
+}
+
+/* --- focus ------------------------------------------------------------------
+ *
+ * One ring for both windows, in whichever accent the surface owns, declared
+ * once so a control added later cannot be the one that forgot it.
+ */
+
+.sso-win :focus-visible {
+  outline: 2px solid var(--sso-accent, #6aa1f8);
+  outline-offset: 1px;
+}
+
+/* --- folded -----------------------------------------------------------------
+ *
+ * The title bar and nothing else, so the film is visible without the window
+ * being closed and having to be found again.
+ *
+ * Everything that is not the head goes, which includes the grips: a folded
+ * window is a title bar, and dragging a corner of it would size a body that is
+ * not on screen - the numbers landing silently and appearing on unfold, which
+ * is the definition of a surprise. Written against the head rather than
+ * against a list of bodies, so a window that grows a second child later cannot
+ * forget to hide it.
+ */
+
+.sso-win[data-folded="true"] > :not(.sso-win__head) {
+  display: none;
+}
+
+/* --- corner grips -----------------------------------------------------------
+ *
+ * Four, so that whichever corner is off the screen is never the only one. That
+ * is the case that matters: a window is hardest to resize exactly when it is
+ * too big, which is when its bottom-right is past the edge.
+ *
+ * The bottom-right carries the visible hatching because that is where a reader
+ * looks for it. The other three are the same target, unmarked until hovered,
+ * so the window does not sprout four decorations.
+ */
+
+.sso-grip {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+}
+
+.sso-grip--nw { top: 0; left: 0; }
+.sso-grip--ne { top: 0; right: 0; }
+.sso-grip--sw { bottom: 0; left: 0; }
+.sso-grip--se { bottom: 0; right: 0; }
+
+/* Two hairlines across the corner, drawn rather than set as a glyph so they
+ * land on the pixel grid at any zoom and need no font to be present. */
+.sso-grip--se {
+  background:
+    linear-gradient(135deg, transparent 45%, var(--sso-ink-3) 45%, var(--sso-ink-3) 55%, transparent 55%) no-repeat,
+    linear-gradient(135deg, transparent 70%, var(--sso-ink-3) 70%, var(--sso-ink-3) 80%, transparent 80%) no-repeat;
+  border-bottom-right-radius: var(--sso-r-win);
+}
+
+.sso-grip:hover {
+  background: var(--sso-fill-hover);
+}
+
+.sso-grip--se:hover {
+  background:
+    linear-gradient(135deg, transparent 45%, var(--sso-ink) 45%, var(--sso-ink) 55%, transparent 55%) no-repeat,
+    linear-gradient(135deg, transparent 70%, var(--sso-ink) 70%, var(--sso-ink) 80%, transparent 80%) no-repeat;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sso-win__head,
+  .sso-icon {
+    transition: none;
+  }
+
+  .sso-icon:active:not(:disabled) {
+    transform: none;
+  }
+}

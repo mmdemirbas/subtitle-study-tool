@@ -49,6 +49,7 @@
   "web_accessible_resources": [
     {
       "resources": [
+        "src/chrome.css",
         "src/panel.css",
         "src/overlay.css",
         "src/study.css"
