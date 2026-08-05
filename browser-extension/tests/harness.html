@@ -2242,6 +2242,114 @@
         if (!hostFor(".sso-rail")) throw new Error("attaching did not bring it back");
       });
 
+      check("a stretched subtitle shows the right line at the right moment", async () => {
+        /* The display model is `stream = rate * fileTime + offset + adDrift`.
+         * Every one of these assertions is invisible while rate is 1, which is
+         * exactly why they are here: a sign or an order-of-operations mistake
+         * in that expression would pass every other test in this file. */
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasGeometry = api.status().settings.tracks.map((t) => ({ ...t }));
+
+        const cues = [
+          { start: 60000, end: 62000, text: "early line" },
+          { start: 600000, end: 602000, text: "late line" },
+        ];
+        await api.attach({ cues, label: "stretched", fileId: 5150, language: "en", slot: 0 });
+        await sleep(120);
+
+        const showing = () => shadowOf().querySelector('.sso-root[data-slot="0"] .sso-cue').textContent;
+        const at = async (seconds) => { video.currentTime = seconds; await sleep(140); return showing(); };
+
+        // Rate 1 first: the baseline this must not disturb.
+        if (!(await at(601)).includes("late")) throw new Error("the plain case is already wrong");
+
+        /* A subtitle timed for 25fps against a 23.976 encode: its clock runs
+         * fast, so a line the file puts at ten minutes is spoken later. */
+        const rate = 25 / (24000 / 1001);
+        api.setRate(rate, { slot: 0, quiet: true });
+        await sleep(120);
+        // 600s of file time lands at 600 * rate of stream time.
+        const late = await at(600 * rate + 1);
+        if (!late.includes("late"))
+          throw new Error(`at ${(600 * rate + 1).toFixed(1)}s a stretched subtitle showed "${late}"`);
+        // And the unstretched moment is now too early for it.
+        const early = await at(601);
+        if (early.includes("late"))
+          throw new Error("the stretch did not move the later line at all");
+
+        /* Ad drift comes off before the division, because it is measured in
+         * stream seconds - an advert takes the same real time whatever the film
+         * is encoded at. Dividing it too would be invisible at rate 1. */
+        api.setRate(1, { slot: 0, quiet: true });
+        await sleep(100);
+
+        /* And a nudge is a constant shift in display time whatever the rate,
+         * which is the reason the offset is applied outside the division rather
+         * than inside it. */
+        api.setRate(rate, { slot: 0, quiet: true });
+        api.setOffset(0, { slot: 0, quiet: true });
+        await sleep(100);
+        const before = video.currentTime;
+        const shownAt = 600 * rate;
+        video.currentTime = shownAt + 1;
+        await sleep(120);
+        api.nudge(2000, { slot: 0 });
+        await sleep(120);
+        video.currentTime = shownAt + 3;
+        await sleep(140);
+        if (!showing().includes("late"))
+          throw new Error("a 2s nudge did not move the line by 2s of stream time");
+        video.currentTime = before;
+
+        api.setRate(1, { slot: 0, quiet: true });
+        for (const slot of [0, 1]) {
+          if (wasAttached[slot]) {
+            await api.attach({
+              cues: CUES, label: slot ? "second" : "first", fileId: slot + 1,
+              language: slot ? "tr" : "en", slot,
+            });
+          } else {
+            api.detach(slot);
+          }
+        }
+        api.updateSettings({ tracks: wasGeometry });
+        await sleep(150);
+      });
+
+      check("a timing saved before rates existed still loads", async () => {
+        /* The stored value went from a bare number to an object. Reading has to
+         * accept both, or the first thing this change does to an existing
+         * reader is forget every offset they ever set. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        await chrome.storage.local.set({ "sso:offset:7777": -3500 });
+        await api.attach({ cues: CUES, label: "old", fileId: 7777, language: "en", slot: 1 });
+        await sleep(150);
+        const track = api.status().tracks[1];
+        if (track.offsetMs !== -3500)
+          throw new Error(`an old bare-number offset loaded as ${track.offsetMs}`);
+        if (track.rate !== 1) throw new Error(`it invented a rate of ${track.rate}`);
+
+        // And what it writes back is readable next time.
+        api.setRate(1.0427, { slot: 1, quiet: true });
+        await sleep(100);
+        await api.attach({ cues: CUES, label: "again", fileId: 7777, language: "en", slot: 1 });
+        await sleep(150);
+        if (Math.abs(api.status().tracks[1].rate - 1.0427) > 1e-9)
+          throw new Error(`the rate did not survive a round trip: ${api.status().tracks[1].rate}`);
+
+        api.setRate(1, { slot: 1, quiet: true });
+        await chrome.storage.local.remove("sso:offset:7777");
+        if (wasAttached[1]) {
+          await api.attach({ cues: CUES, label: "second", fileId: 2, language: "tr", slot: 1 });
+        } else {
+          api.detach(1);
+        }
+        await sleep(120);
+      });
+
       check("attaching a second subtitle lines it up on its own", async () => {
         /* End to end, through attach: the thing the reader actually does.
          *

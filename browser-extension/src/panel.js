@@ -833,7 +833,12 @@
         {
           label: "Reset timing",
           title: "Back to the file's own timing",
-          onClick: () => api.setOffset(0, { slot }),
+          onClick: () => {
+            // Both: a stretched subtitle is not back to the file's own timing
+            // until the stretch goes with the offset.
+            api.setRate(1, { slot, quiet: true });
+            api.setOffset(0, { slot });
+          },
         },
         {
           label: "Replace…",
@@ -1250,7 +1255,13 @@
     }
     if (answer.verdict === "apply") {
       api.showToast(`Lined up · ${api.describeOffset(answer.offsetMs)}`, {
-        action: { label: "Undo", onClick: () => api.setOffset(0, { slot }) },
+        action: {
+          label: "Undo",
+          onClick: () => {
+            api.setRate(1, { slot, quiet: true });
+            api.setOffset(0, { slot });
+          },
+        },
       });
     } else if (answer.verdict === "offer") {
       const was = api.status().tracks[slot].offsetMs;
@@ -1983,10 +1994,11 @@
       card.learnChip.hidden = !study?.enabled || status.trackCount < 2;
       card.learnChip.dataset.on = study?.studySlot === slot ? "true" : "false";
       card.shut.hidden = open;
-      card.shut.textContent = track.offsetMs
-        ? api.describeOffset(track.offsetMs)
+      const stretched = track.rate && track.rate !== 1;
+      card.shut.textContent = track.offsetMs || stretched
+        ? api.describeOffset(track.offsetMs) + (stretched ? " · stretched" : "")
         : `${track.cueCount} line${track.cueCount === 1 ? "" : "s"}`;
-      card.shut.dataset.set = track.offsetMs ? "true" : "false";
+      card.shut.dataset.set = track.offsetMs || stretched ? "true" : "false";
       card.offsetField.dataset.set = track.offsetMs ? "true" : "false";
       // Not while it is being typed into, or the value rewrites itself under
       // the cursor between keystrokes.

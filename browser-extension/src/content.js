@@ -255,6 +255,9 @@
   const newTrack = () => ({
     cues: [],
     offsetMs: 0,
+    // How fast this file's clock runs against the film's. 1 is the same speed;
+    // a framerate mismatch is a fraction of a per cent either side.
+    rate: 1,
     activeIndex: -1,
     label: "",
     fileId: null,
@@ -795,6 +798,7 @@
         language: track.language,
         fileId: track.fileId,
         offsetMs: track.offsetMs,
+        rate: track.rate,
       })),
     };
   }
@@ -1430,8 +1434,22 @@
   }
 
   /** Stream time, less this subtitle's own offset and everything that was an ad. */
+  /* Where we are in this subtitle file's own clock.
+   *
+   * The display model is `stream = rate * fileTime + offset + adDrift`, so this
+   * is the inverse. Two details it would be easy to get wrong and impossible to
+   * notice while rate is 1:
+   *
+   * The ad drift comes off before the division, because it is measured in
+   * stream seconds - an advert takes the same real time whatever the film is
+   * encoded at. And the divisor applies to the whole remaining time, which
+   * stretches cue ends by the same factor as cue starts, which is right: a
+   * film played 4% slow has lines on screen 4% longer.
+   *
+   * Rate defaults to 1, where this is exactly the expression it replaced. */
   function filmTimeMs(track) {
-    return state.video.currentTime * 1000 - track.offsetMs - state.adDriftMs;
+    const stream = state.video.currentTime * 1000 - state.adDriftMs - track.offsetMs;
+    return track.rate && track.rate !== 1 ? stream / track.rate : stream;
   }
 
   let lastAdPoll = 0;
@@ -1573,19 +1591,53 @@
 
   const offsetKey = (fileId) => `sso:offset:${fileId}`;
 
+  /* What was last done to this file's timing.
+   *
+   * A bare number for every installation that predates rates, and an object
+   * since. Reading has to accept both, or the first thing this change does to
+   * an existing reader is forget every offset they have set. daemon.js writes
+   * the same key - keep the two in step. */
   async function loadOffset(fileId) {
-    if (fileId == null) return 0;
+    if (fileId == null) return { offsetMs: 0, rate: 1 };
     try {
       const stored = await chrome.storage.local.get(offsetKey(fileId));
-      return Number(stored[offsetKey(fileId)]) || 0;
+      const saved = stored[offsetKey(fileId)];
+      if (typeof saved === "number") return { offsetMs: saved, rate: 1 };
+      return {
+        offsetMs: Number(saved?.offsetMs) || 0,
+        rate: Number(saved?.rate) || 1,
+      };
     } catch {
-      return 0;
+      return { offsetMs: 0, rate: 1 };
     }
   }
 
   function saveOffset(track) {
     if (track.fileId == null) return;
-    chrome.storage.local.set({ [offsetKey(track.fileId)]: track.offsetMs }).catch(() => {});
+    chrome.storage.local
+      .set({ [offsetKey(track.fileId)]: { offsetMs: track.offsetMs, rate: track.rate } })
+      .catch(() => {});
+  }
+
+  /* How fast this file's clock runs against the film's.
+   *
+   * A subtitle timed for 25fps against a 23.976 encode starts right and is
+   * minutes out by the end - the one error no offset can fix, and the one that
+   * looks like the subtitle "drifting". Kept separate from the offset because
+   * nudging still means the same thing under a rate: a constant shift in
+   * display time is a constant shift whatever the stretch. */
+  function setRate(rate, { slot = state.keyTrack, quiet = false } = {}) {
+    const track = state.tracks[slot];
+    const next = Number(rate);
+    track.rate = Number.isFinite(next) && next > 0 ? next : 1;
+    track.activeIndex = NEEDS_REDRAW;
+    saveOffset(track);
+    notify();
+    if (!quiet) {
+      showToast(track.rate === 1
+        ? "Subtitle back to the film's own speed"
+        : `Subtitle running ${((track.rate - 1) * 100).toFixed(1)}% ${track.rate > 1 ? "fast" : "slow"}`);
+    }
   }
 
   function setOffset(ms, { quiet = false, slot = state.keyTrack } = {}) {
@@ -1660,8 +1712,11 @@
     } else if (event.code === "Escape" && state.placing) {
       window.__ssoApi.setPlacing(false);
     } else if (event.code === keys.reset) {
-      setOffset(0);
-      showToast("Subtitle offset reset");
+      // Both, because a subtitle that has been stretched is not back to the
+      // file's own timing until the stretch goes too.
+      setRate(1, { quiet: true });
+      setOffset(0, { quiet: true });
+      showToast("Subtitle back to the file's own timing");
     } else if (event.code === keys.toggleOverlay) {
       setVisible(!state.visible);
       showToast(state.visible ? "Subtitles shown" : "Subtitles hidden");
@@ -1695,7 +1750,9 @@
     track.label = label || "";
     track.fileId = fileId ?? null;
     track.language = language || "";
-    track.offsetMs = await loadOffset(track.fileId);
+    const timing = await loadOffset(track.fileId);
+    track.offsetMs = timing.offsetMs;
+    track.rate = timing.rate;
     track.activeIndex = NEEDS_REDRAW;
     track.visible = true;
     state.adDriftMs = 0;
@@ -1736,7 +1793,7 @@
      * Only when the reader has not already timed this file by hand. A saved
      * offset is an answer they gave, and overwriting it would be this deciding
      * it knows better. */
-    const aligned = track.offsetMs === 0 ? autoAlign(index) : null;
+    const aligned = track.offsetMs === 0 && track.rate === 1 ? autoAlign(index) : null;
     const said = `Subtitle ${index + 1} on - ${track.cues.length} lines` +
       `${track.label ? ` · ${track.label}` : ""}`;
 
@@ -1794,13 +1851,22 @@
     );
     if (!answer.ok) return { ...answer, referenceSlot };
 
-    /* The aligner maps reference-file time to target-file time. What the track
-     * needs is a display offset, and the reference is already being displayed
-     * at its own - so the target's offset is the reference's, less the gap
-     * between the two files. */
-    const offsetMs = Math.round(reference.offsetMs - answer.shiftMs);
-    const proposal = { ...answer, referenceSlot, offsetMs };
-    if (answer.verdict === "apply") setOffset(offsetMs, { slot, quiet: true });
+    /* The aligner maps reference-file time to target-file time:
+     * `tB = rate * tA + shift`. The reference is already on screen at its own
+     * offset and rate, and what the target needs is the pair that puts the same
+     * words on screen at the same moment.
+     *
+     * Composing the two: the target's rate is the reference's divided by the
+     * gap's, and its offset is the reference's less the gap, scaled. With both
+     * rates at 1 - which is nearly always - this is `offset - shift` and
+     * nothing else, which is the case worth reading. */
+    const rate = reference.rate / answer.rate;
+    const offsetMs = Math.round(reference.offsetMs - (reference.rate * answer.shiftMs) / answer.rate);
+    const proposal = { ...answer, referenceSlot, offsetMs, trackRate: rate };
+    if (answer.verdict === "apply") {
+      if (rate !== 1) setRate(rate, { slot, quiet: true });
+      setOffset(offsetMs, { slot, quiet: true });
+    }
     return proposal;
   }
 
@@ -1906,6 +1972,7 @@
         attached: track.cues.length > 0,
         cueCount: track.cues.length,
         offsetMs: track.offsetMs,
+        rate: track.rate,
         label: track.label,
         fileId: track.fileId,
         language: track.language,
@@ -2031,6 +2098,7 @@
     detach,
     setVisible,
     setOffset,
+    setRate,
     nudge,
     formatOffset,
     describeOffset,
