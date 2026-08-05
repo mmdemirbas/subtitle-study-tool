@@ -825,6 +825,12 @@
           onClick: () => api.setVisible(!track.visible, { slot }),
         },
         {
+          label: "Line up with the other",
+          title: "Work out the gap from where the two subtitles say the same things",
+          hidden: api.status().trackCount < 2,
+          onClick: () => lineUp(slot),
+        },
+        {
           label: "Reset timing",
           title: "Back to the file's own timing",
           onClick: () => api.setOffset(0, { slot }),
@@ -1158,6 +1164,7 @@
     node.setAttribute("role", "menu");
 
     for (const item of items) {
+      if (item?.hidden) continue;
       if (item === null) {
         const rule = document.createElement("div");
         rule.className = "sso-menu__rule";
@@ -1223,6 +1230,47 @@
     api.showToast(`Subtitle ${slot + 1} removed${label ? ` · ${label}` : ""}`, {
       action: { label: "Undo", onClick: () => api.undoRemove() },
     });
+    refresh(api.status());
+  }
+
+  /* Work out the gap between the two subtitles, and say what happened.
+   *
+   * Three outcomes, because the aligner has three answers. Sure enough to act
+   * on, and it has already acted - the toast carries the undo. Probably right,
+   * and the reader gets one click to say so, because a subtitle silently
+   * shifted by the wrong amount is harder to diagnose than one nobody touched.
+   * Or not confident at all, and the honest thing is to say the two files do
+   * not look like the same film rather than to shift by the best of a bad lot.
+   */
+  function lineUp(slot) {
+    const answer = api.autoAlign?.(slot);
+    if (!answer) {
+      api.showToast("Nothing to line this up against");
+      return;
+    }
+    if (answer.verdict === "apply") {
+      api.showToast(`Lined up · ${api.describeOffset(answer.offsetMs)}`, {
+        action: { label: "Undo", onClick: () => api.setOffset(0, { slot }) },
+      });
+    } else if (answer.verdict === "offer") {
+      const was = api.status().tracks[slot].offsetMs;
+      api.showToast(`These look ${api.describeOffset(answer.offsetMs)} apart. Use it?`, {
+        action: {
+          label: "Line up",
+          onClick: () => {
+            api.setOffset(answer.offsetMs, { slot, quiet: true });
+            api.showToast(`Lined up · ${api.describeOffset(answer.offsetMs)}`, {
+              action: { label: "Undo", onClick: () => api.setOffset(was, { slot }) },
+            });
+          },
+        },
+      });
+    } else {
+      /* Named, not generic. "Could not sync" sends a reader to try the same
+       * thing again; "these do not look like the same film" sends them to
+       * check which subtitle they downloaded, which is where the fault is. */
+      api.showToast("These two do not look like the same film");
+    }
     refresh(api.status());
   }
 

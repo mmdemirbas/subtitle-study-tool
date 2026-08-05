@@ -1720,12 +1720,34 @@
     // moving the mouse summons it.
     revealHandle();
 
-    showToast(
-      track.cues.length > 0
-        ? `Subtitle ${index + 1} on - ${track.cues.length} lines${track.label ? ` · ${track.label}` : ""}`
-        : "That subtitle had no readable lines",
-    );
-    return { ok: true, cueCount: track.cues.length, slot: index };
+    if (track.cues.length === 0) {
+      showToast("That subtitle had no readable lines");
+      return { ok: true, cueCount: 0, slot: index };
+    }
+
+    /* Line it up against the one already here, if there is one.
+     *
+     * This is the moment worth spending arithmetic on: two subtitles for the
+     * same film, one of them already timed the way the reader wants it, and the
+     * other timed against a different release. Both describe the same speech,
+     * so the offset between them is the number that keeps appearing in the
+     * differences between their cue times.
+     *
+     * Only when the reader has not already timed this file by hand. A saved
+     * offset is an answer they gave, and overwriting it would be this deciding
+     * it knows better. */
+    const aligned = track.offsetMs === 0 ? autoAlign(index) : null;
+    const said = `Subtitle ${index + 1} on - ${track.cues.length} lines` +
+      `${track.label ? ` · ${track.label}` : ""}`;
+
+    if (aligned?.verdict === "apply") {
+      showToast(`${said}, lined up ${describeOffset(track.offsetMs)}`, {
+        action: { label: "Undo", onClick: () => setOffset(0, { slot: index }) },
+      });
+    } else {
+      showToast(said);
+    }
+    return { ok: true, cueCount: track.cues.length, slot: index, aligned };
   }
 
   /* The last subtitle taken off, so it can be put back.
@@ -1740,6 +1762,47 @@
    * stays an undo. Past this it would be a wastebasket, which needs somewhere
    * to live and a way to empty it, and this is two subtitles, not a filesystem. */
   const UNDO_MS = 30000;
+
+  /* Line one subtitle up against the other.
+   *
+   * Returns what the aligner said, or null when there is nothing to compare
+   * against or align.js did not load - the extension has to keep working
+   * without it, because a file that fails to load should cost a feature and not
+   * the whole overlay.
+   *
+   * Applies the answer only when the aligner is sure enough to be trusted
+   * without asking. Anything less confident comes back as a proposal for the
+   * panel to offer, because a subtitle silently shifted by the wrong amount is
+   * harder to diagnose than one that was never touched.
+   */
+  function autoAlign(slot, { against = null } = {}) {
+    const aligner = globalThis.__ssoAlign;
+    if (!aligner) return null;
+    const target = state.tracks[slot];
+    if (!target || target.cues.length === 0) return null;
+
+    const referenceSlot = against ?? state.tracks.findIndex(
+      (track, index) => index !== slot && track.cues.length > 0,
+    );
+    if (referenceSlot < 0) return null;
+    const reference = state.tracks[referenceSlot];
+    if (!reference || reference.cues.length === 0) return null;
+
+    const answer = aligner.align(
+      reference.cues.map((cue) => cue.start),
+      target.cues.map((cue) => cue.start),
+    );
+    if (!answer.ok) return { ...answer, referenceSlot };
+
+    /* The aligner maps reference-file time to target-file time. What the track
+     * needs is a display offset, and the reference is already being displayed
+     * at its own - so the target's offset is the reference's, less the gap
+     * between the two files. */
+    const offsetMs = Math.round(reference.offsetMs - answer.shiftMs);
+    const proposal = { ...answer, referenceSlot, offsetMs };
+    if (answer.verdict === "apply") setOffset(offsetMs, { slot, quiet: true });
+    return proposal;
+  }
 
   /** Drop one track, or every track when no slot is named. */
   function detach(slot) {
@@ -2003,6 +2066,7 @@
     resetSettings,
     resetKeys,
     applyLook,
+    autoAlign,
     looks: LOOKS,
     fonts: FONTS,
     showToast,

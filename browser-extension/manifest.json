@@ -38,6 +38,7 @@
         "<all_urls>"
       ],
       "js": [
+        "src/align.js",
         "src/content.js",
         "src/panel.js",
         "src/study.js"

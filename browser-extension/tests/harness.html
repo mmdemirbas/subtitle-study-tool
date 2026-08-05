@@ -179,6 +179,7 @@
       }
     </script>
 
+    <script src="../src/align.js"></script>
     <script src="../src/content.js"></script>
     <script src="../src/panel.js"></script>
     <script src="../src/study.js"></script>
@@ -1208,6 +1209,129 @@
         await sleep(80);
       });
 
+      /* --- lining two subtitles up ---------------------------------------------
+       *
+       * Pure arithmetic on two lists of cue start times, so these need no video,
+       * no attach and no timing. The cue lists are synthetic and deliberately
+       * irregular: a regular grid self-correlates at every lag and would make
+       * even unrelated files look like a perfect match.
+       */
+      const speech = (count, seed) => {
+        // A cheap deterministic generator - gaps around 2.8s, log-normal-ish,
+        // which is what real dialogue looks like.
+        let x = seed;
+        const next = () => (x = (x * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+        const out = [];
+        let t = 30000;
+        for (let i = 0; i < count; i++) {
+          t += 600 + Math.round(4200 * next() * next() * 3);
+          out.push(t);
+        }
+        return out;
+      };
+
+      check("two subtitles for the same film are lined up exactly", async () => {
+        const align = window.__ssoAlign;
+        if (!align) throw new Error("the aligner did not load");
+        const a = speech(900, 7);
+        for (const gap of [0, 4400, -12800, 42000, -120000]) {
+          const answer = align.align(a, a.map((t) => t + gap));
+          if (!answer.ok) throw new Error(`refused a ${gap}ms shift (conf ${answer.confidence})`);
+          if (answer.shiftMs !== gap)
+            throw new Error(`said ${answer.shiftMs} for a ${gap}ms shift`);
+          if (answer.rate !== 1) throw new Error(`invented a rate of ${answer.rate}`);
+        }
+      });
+
+      check("a framerate mismatch is recognised as one of the real ratios", async () => {
+        /* A subtitle timed for 25fps against a 23.976 encode starts right and
+         * drifts by minutes. The rate is picked from a closed set rather than
+         * fitted: a free fit needs a constant-offset peak to seed it, and a 4%
+         * stretch is exactly what destroys that peak. */
+        const align = window.__ssoAlign;
+        const a = speech(1100, 11);
+        for (const rate of align.RATES) {
+          if (rate === 1) continue;
+          const answer = align.align(a, a.map((t) => Math.round(t * rate)));
+          if (!answer.ok) throw new Error(`refused a ${rate} stretch`);
+          if (Math.abs(answer.rate - rate) > 1e-9)
+            throw new Error(`said ${answer.rate} for a stretch of ${rate}`);
+        }
+      });
+
+      check("two different films are refused, not shifted by the best of a bad lot", async () => {
+        /* The whole design. An aligner that always returns a number is worse
+         * than none: the number it gives for two unrelated films is confident
+         * and wrong, and a subtitle silently shifted is harder to diagnose than
+         * one nobody touched. */
+        const align = window.__ssoAlign;
+        for (const seed of [3, 19, 101, 777]) {
+          const answer = align.align(speech(1000, seed), speech(1000, seed + 5000));
+          if (answer.ok)
+            throw new Error(`accepted two unrelated films at ${answer.confidence}`);
+          if (answer.verdict !== "no") throw new Error(`verdict was ${answer.verdict}`);
+        }
+      });
+
+      check("a partial subtitle still lines up, and a tiny one is declined", async () => {
+        const align = window.__ssoAlign;
+        const a = speech(1200, 23);
+        // Forced subtitles: a tenth of the film, scattered through it.
+        const forced = a.filter((_, i) => i % 10 === 0).map((t) => t + 6500);
+        const partial = align.align(a, forced);
+        if (!partial.ok) throw new Error(`refused a forced-subtitle track (${partial.confidence})`);
+        if (partial.shiftMs !== 6500) throw new Error(`said ${partial.shiftMs}, want 6500`);
+
+        // Below what any honest answer can be given for.
+        const tiny = align.align(a, a.slice(0, 6).map((t) => t + 1000));
+        if (tiny.ok) throw new Error("gave an answer from six cues");
+        if (tiny.reason !== "too-few-cues") throw new Error(`reason was ${tiny.reason}`);
+      });
+
+      check("a gap beyond the search range is declined rather than mis-fitted", async () => {
+        const align = window.__ssoAlign;
+        const a = speech(900, 31);
+        const answer = align.align(a, a.map((t) => t + align.MAX_OFFSET_MS + 60000));
+        if (answer.ok) throw new Error(`claimed a ${answer.shiftMs}ms answer past the range`);
+      });
+
+      check("bad input is refused rather than thrown or looped on", async () => {
+        const align = window.__ssoAlign;
+        for (const [what, a, b] of [
+          ["nothing", [], []],
+          ["undefined", undefined, undefined],
+          ["not numbers", [1, NaN, "x", null], [2, 3]],
+          ["one cue", [1000], [2000]],
+        ]) {
+          const answer = align.align(a, b);
+          if (answer.ok) throw new Error(`${what} produced an answer`);
+        }
+      });
+
+      check("a line being spoken can be picked from the ones near it", async () => {
+        /* The case no arithmetic covers: one subtitle, nothing to compare it
+         * against, and it is out by more than can be eyeballed. Note the naive
+         * version - shift so the cue on screen starts now - can only ever move a
+         * subtitle later, because the cue on screen is the one whose window
+         * contains the current time. So the anchor is the nearest cue start. */
+        const align = window.__ssoAlign;
+        const cues = [
+          { start: 10000, end: 12000, text: "one" },
+          { start: 22000, end: 24000, text: "two" },
+          { start: 41000, end: 43000, text: "three" },
+        ];
+        const near = align.proposeAnchors(22300, cues);
+        if (near[0].text !== "two") throw new Error(`nearest was "${near[0].text}"`);
+        if (near[0].offsetMs !== 0) throw new Error(`offset ${near[0].offsetMs}, want 0`);
+        // A subtitle that is late needs a negative offset, which the naive
+        // version cannot produce at all.
+        const late = align.proposeAnchors(9000, cues);
+        if (!(late[0].offsetMs < 0)) throw new Error(`offset ${late[0].offsetMs} is not negative`);
+        // And nothing from the far side of the film.
+        if (align.proposeAnchors(500000, cues).length !== 0)
+          throw new Error("offered a line minutes away");
+      });
+
       check("the way to another subtitle knows there is not always room", async () => {
         /* The plus passes the first free slot, and findIndex returns -1 when
          * there is none. That reached the screen as "The result you pick
@@ -2116,6 +2240,57 @@
         await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1 });
         await sleep(250);
         if (!hostFor(".sso-rail")) throw new Error("attaching did not bring it back");
+      });
+
+      check("attaching a second subtitle lines it up on its own", async () => {
+        /* End to end, through attach: the thing the reader actually does.
+         *
+         * Both slots are replaced, because this harness's own cue list is five
+         * lines and the aligner declines to have an opinion below twelve - and
+         * quite right. Everything is put back afterwards, geometry included:
+         * attach() arranges two subtitles side by side the first time neither
+         * has been placed by hand, and later cases assert on that. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasGeometry = api.status().settings.tracks.map((t) => ({ ...t }));
+
+        const long = speech(600, 47).map((start) => ({ start, end: start + 1800, text: "line" }));
+        const late = long.map((cue) => ({ start: cue.start + 8000, end: cue.end + 8000, text: cue.text }));
+        await api.attach({ cues: long, label: "reference", fileId: 4241, language: "en", slot: 0 });
+        await sleep(120);
+        await api.attach({ cues: late, label: "mistimed", fileId: 4242, language: "tr", slot: 1 });
+        await sleep(200);
+
+        const after = api.status().tracks[1];
+        if (!after.attached) throw new Error("it did not attach");
+        /* Minus eight seconds, and the sign is the point. This subtitle's cues
+         * start eight seconds later than the reference's, so to put the same
+         * words on screen at the same moment it has to be brought forward -
+         * film time is stream time minus the offset. Getting this backwards is
+         * the single easiest mistake in the whole feature and it doubles the
+         * error rather than fixing it. */
+        if (Math.abs(after.offsetMs + 8000) > 250)
+          throw new Error(`offset came out at ${after.offsetMs}, want about -8000`);
+
+        // And a subtitle for a different film is left exactly as it arrived.
+        const unrelated = speech(600, 913).map((start) => ({ start, end: start + 1800, text: "x" }));
+        await api.attach({ cues: unrelated, label: "elsewhere", fileId: 4243, language: "tr", slot: 1 });
+        await sleep(200);
+        if (api.status().tracks[1].offsetMs !== 0)
+          throw new Error(`a different film was shifted by ${api.status().tracks[1].offsetMs}ms`);
+
+        for (const slot of [0, 1]) {
+          if (wasAttached[slot]) {
+            await api.attach({
+              cues: CUES, label: slot ? "second" : "first", fileId: slot + 1,
+              language: slot ? "tr" : "en", slot,
+            });
+          } else {
+            api.detach(slot);
+          }
+        }
+        api.updateSettings({ tracks: wasGeometry });
+        await sleep(150);
       });
 
       check("re-injection leaves exactly one overlay", async () => {
