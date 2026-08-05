@@ -35,20 +35,20 @@
   const GAP = 10;
   const PANEL_WIDTH = 340;
 
+  /* The two study bindings are not here. They belong to study, and study's
+   * settings are on the rail's own gear - the same rule that moved everything
+   * else about it off this surface. */
   const KEY_FIELDS = [
     ["earlier", "Subtitles earlier"],
     ["later", "Subtitles later"],
     ["reset", "Reset offset"],
     ["toggleOverlay", "Hide / show"],
     ["togglePanel", "This panel"],
-    ["toggleStudy", "Study mode"],
-    ["saveWord", "Save the top word"],
   ];
 
   let host = null; // the element in the page; carries position only
   let shadow = null; // everything else lives in here
   let el = {};
-  let capturing = null;
   let unsubscribe = null;
   let lastResults = [];
   let lastResolved = null;
@@ -1214,7 +1214,10 @@
         height: 420,
         accent: "#4c8bf5",
         accentInk: "#93b9fb",
-        onClose: () => refresh(api.status()),
+        onClose: () => {
+          api.cancelCapture();
+          refresh(api.status());
+        },
       });
       settingsWindow.body.append(buildAppearance(), buildKeys(), buildDiagnostics());
     }
@@ -1740,26 +1743,61 @@
 
   // --- key bindings ---------------------------------------------------------
 
+  /* Off until asked for, and switchable one at a time.
+   *
+   * Seven unmodified single letters on a page that belongs to somebody else:
+   * players bind letters of their own, and a search field that has not taken
+   * focus yet turns every one of them into a surprise. Nothing here is needed
+   * to use the tool - the panel opens from the CC button, and every binding
+   * has a control beside the thing it acts on - so the shortcuts are a
+   * convenience a reader turns on, not a default they discover by accident.
+   *
+   * Each binding also switches off by itself, which is the same question asked
+   * about one key: somebody who wants only the two nudge keys should not have
+   * to accept five more to get them. */
   function buildKeys() {
     const wrap = section("Keys");
 
-    const note = document.createElement("p");
-    note.className = "sso-note";
-    note.textContent =
-      "Bindings follow the physical key, so they stay in the same place on any layout.";
+    el.keysEnabled = toggle_("Keyboard shortcuts", false, (on) =>
+      api.updateSettings({ keysEnabled: on }),
+    );
+    el.keysEnabled.row.title = "One key each, with no modifier held";
+
+    el.keysOff = document.createElement("p");
+    el.keysOff.className = "sso-note";
+    el.keysOff.textContent = "Off, so none of these will fire. They can still be set up now.";
 
     const grid = document.createElement("div");
     grid.className = "sso-keys";
     el.keyButtons = {};
+    el.keyClears = {};
 
     for (const [name, label] of KEY_FIELDS) {
       const caption = document.createElement("span");
       caption.textContent = label;
-      const b = button("", { title: "Click, then press a key" });
+
+      const b = button("", { title: "Click, then press the key you want" });
       b.className = "sso-key";
-      b.addEventListener("click", () => beginCapture(name, b));
+      b.addEventListener("click", () => rebind(name, b));
       el.keyButtons[name] = b;
-      grid.append(caption, b);
+
+      /* One shortcut off, without touching the rest. It shows only when there
+       * is a binding to remove, which is also when the row has anything to
+       * say - an unset row is already off and offering to unset it twice is
+       * how a settings page fills up with controls that do nothing. */
+      const clear = document.createElement("button");
+      clear.className = "sso-key__clear";
+      clear.type = "button";
+      clear.textContent = "⌫";
+      clear.title = `Switch "${label}" off`;
+      clear.setAttribute("aria-label", `Switch "${label}" off`);
+      clear.addEventListener("click", () => api.updateSettings({ keys: { [name]: "" } }));
+      el.keyClears[name] = clear;
+
+      const cell = document.createElement("div");
+      cell.className = "sso-keys__cell";
+      cell.append(b, clear);
+      grid.append(caption, cell);
     }
 
     const actions = document.createElement("div");
@@ -1768,71 +1806,48 @@
     actions.append(
       button("Reset keys", {
         onClick: () => api.resetKeys(),
-        title: "Put the bindings back to their defaults",
+        title: "Put every binding back to its default",
       }),
-      button("Disable keys", {
-        onClick: () => api.updateSettings({ keysEnabled: !api.status().settings.keysEnabled }),
+      button("Switch them all off", {
+        onClick: () => api.updateSettings({
+          keys: Object.fromEntries(KEY_FIELDS.map(([name]) => [name, ""])),
+        }),
+        title: "Leave every binding unset",
       }),
     );
-    el.keysToggle = actions.lastChild;
 
-    wrap.append(note, grid, actions);
+    wrap.append(el.keysEnabled.row, el.keysOff, grid, actions);
     return wrap;
   }
 
-  function beginCapture(name, target) {
-    if (capturing) capturing.target.dataset.capturing = "false";
-    capturing = { name, target };
+  /* Reading the keystroke is content.js's job: there are two surfaces with
+   * bindings on them now, and "listen at the document in the capture phase and
+   * stop the key from also doing what it is bound to" is not a clause to write
+   * twice. */
+  async function rebind(name, target) {
     target.dataset.capturing = "true";
     target.textContent = "press a key…";
-  }
-
-  /* Capture runs at the document level in the capture phase so the binding is
-   * read before the page or content.js can act on the keystroke. */
-  function onCaptureKey(event) {
-    if (!capturing) return;
-    event.preventDefault();
-    event.stopPropagation();
-
-    const { name, target } = capturing;
-    capturing = null;
+    const key = await api.captureKey();
     target.dataset.capturing = "false";
-
-    if (event.code === "Escape") {
-      refresh(api.status());
-      return;
-    }
-    api.updateSettings({ keys: { [name]: event.code } });
+    if (key) api.updateSettings({ keys: { [name]: key } });
+    else refresh(api.status());
   }
 
-  const isCapturingKey = () => capturing !== null;
-
-  /* KeyboardEvent.code is precise but unreadable. Show where the key actually
-   * is rather than what the spec calls it. */
-  function describeCode(code) {
-    if (!code) return "unset";
+  /* What to print on the key.
+   *
+   * It printed KeyboardEvent.code, which names the switch under the finger and
+   * not the letter on it: "BracketLeft" on a Turkish layout is the key that
+   * types ğ, and no amount of explaining makes that a useful thing to read. */
+  function describeKey(key) {
+    if (!key) return "off";
     const named = {
-      BracketLeft: "[ key",
-      BracketRight: "] key",
-      Backslash: "\\ key",
-      Semicolon: "; key",
-      Quote: "' key",
-      Comma: ", key",
-      Period: ". key",
-      Slash: "/ key",
-      Minus: "- key",
-      Equal: "= key",
-      Space: "space",
-      ArrowLeft: "←",
-      ArrowRight: "→",
-      ArrowUp: "↑",
-      ArrowDown: "↓",
+      " ": "space",
+      ArrowLeft: "←", ArrowRight: "→", ArrowUp: "↑", ArrowDown: "↓",
+      Enter: "enter", Tab: "tab", Backspace: "backspace",
     };
-    if (named[code]) return named[code];
-    if (code.startsWith("Key")) return code.slice(3);
-    if (code.startsWith("Digit")) return code.slice(5);
-    if (code.startsWith("Numpad")) return `num ${code.slice(6)}`;
-    return code;
+    if (named[key]) return named[key];
+    // As it looks on the keyboard, which for a letter is the capital.
+    return key.length === 1 ? key.toUpperCase() : key;
   }
 
   // --- diagnostics ----------------------------------------------------------
@@ -2115,10 +2130,14 @@
     el.showSymbols.input.checked = Boolean(settings.showSymbols);
     el.dimNonSpeech.input.checked = Boolean(settings.dimNonSpeech);
 
+    el.keysEnabled.input.checked = Boolean(settings.keysEnabled);
+    el.keysOff.hidden = Boolean(settings.keysEnabled);
     for (const [name] of KEY_FIELDS) {
-      el.keyButtons[name].textContent = describeCode(settings.keys[name]);
+      const key = settings.keys[name];
+      el.keyButtons[name].textContent = describeKey(key);
+      el.keyButtons[name].dataset.set = key ? "true" : "false";
+      el.keyClears[name].hidden = !key;
     }
-    el.keysToggle.textContent = settings.keysEnabled ? "Disable keys" : "Enable keys";
   }
 
   // --- lifecycle ------------------------------------------------------------
@@ -2154,6 +2173,8 @@
 
   function hide() {
     closeMenu();
+    // A binding half-read is not a binding; the button that asked is going.
+    api.cancelCapture();
     settingsWindow?.hide();
     if (host) setHostVisible(host, false);
     if (unsubscribe) {
@@ -2180,13 +2201,12 @@
     rescale();
   }
 
-  document.addEventListener("keydown", onCaptureKey, true);
   window.addEventListener("resize", clampIntoView, { passive: true });
 
   /* applySize is exported for the harness, which measures the sync row at both
    * ends of the width the corner grips allow. Driving the grips with synthetic
    * pointer events to get there would be testing the grips, not the row. */
-  window.__ssoPanel = { show, hide, toggle, reparent, isCapturingKey, rescale, applySize };
+  window.__ssoPanel = { show, hide, toggle, reparent, rescale, applySize };
 
   window.__ssoPanelTeardown = () => {
     // Both live on hosts outside this shadow tree, so removing the panel does
@@ -2194,7 +2214,6 @@
     closeMenu();
     settingsWindow?.destroy();
     settingsWindow = null;
-    document.removeEventListener("keydown", onCaptureKey, true);
     window.removeEventListener("resize", clampIntoView);
     unsubscribe?.();
     unsubscribe = null;

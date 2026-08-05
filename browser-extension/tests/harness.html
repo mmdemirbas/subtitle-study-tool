@@ -1677,12 +1677,87 @@
         await sleep(40);
       });
 
-      check("a Turkish Q bracket key nudges the offset", async () => {
+      check("the shortcuts do nothing until they are turned on", async () => {
+        /* Seven unmodified letters on somebody else's page. Players bind
+         * letters of their own and a search field that has not taken focus
+         * turns each one into a surprise, so they are a convenience a reader
+         * asks for rather than a default they discover. */
+        window.__ssoApi.updateSettings({ keysEnabled: false });
+        await sleep(30);
+        const before = window.__ssoApi.status().offsetMs;
+        const later = window.__ssoApi.defaults.keys.later;
+        document.dispatchEvent(new KeyboardEvent("keydown",
+          { key: later, code: "KeyH", bubbles: true }));
+        await sleep(50);
+        if (window.__ssoApi.status().offsetMs !== before)
+          throw new Error("a key fired with the shortcuts switched off");
+        if (window.__ssoApi.defaults.keysEnabled !== false)
+          throw new Error("they are on out of the box");
+
+        /* And every default is a plain letter. Measured on this machine's
+         * layout - Turkish Q - the key beside P types ğ, so a default of "["
+         * would need a modifier the handler refuses on purpose. */
+        for (const [name, key] of Object.entries(window.__ssoApi.defaults.keys)) {
+          if (!/^[a-z]$/.test(key))
+            throw new Error(`the default for ${name} is "${key}", which is not a plain letter`);
+        }
+      });
+
+      check("a binding is the key the layout types, not the key under it", async () => {
+        /* It matched KeyboardEvent.code, which names the physical switch. That
+         * keeps a binding in the same place on every layout, and the place is
+         * the one thing about it nobody can see: on a Turkish Q layout the key
+         * right of P types ğ, and "the shortcut is BracketRight" tells a reader
+         * nothing about what to press. */
+        window.__ssoApi.resetKeys();
+        window.__ssoApi.updateSettings({ keysEnabled: true });
+        await sleep(30);
+        const start = window.__ssoApi.status().offsetMs;
+        document.dispatchEvent(new KeyboardEvent("keydown",
+          { key: "ğ", code: "BracketLeft", bubbles: true }));
+        await sleep(50);
+        if (window.__ssoApi.status().offsetMs !== start)
+          throw new Error("ğ nudged a subtitle bound to h");
+
+        // The key that types h, wherever it happens to sit.
+        document.dispatchEvent(new KeyboardEvent("keydown",
+          { key: "h", code: "Semicolon", bubbles: true }));
+        await sleep(50);
+        if (window.__ssoApi.status().offsetMs === start)
+          throw new Error("h did not nudge, whatever key it came from");
+
+        // An old binding stored as a code is translated rather than left dead.
+        window.__ssoApi.updateSettings({ keys: { later: "BracketRight" } });
+        await sleep(30);
+        if (window.__ssoApi.status().settings.keys.later !== "]")
+          throw new Error(`a stored code became ${window.__ssoApi.status().settings.keys.later}`);
+      });
+
+      check("a shortcut can be switched off on its own", async () => {
+        window.__ssoApi.updateSettings({ keysEnabled: true, keys: { later: "" } });
+        await sleep(30);
         const before = window.__ssoApi.status().offsetMs;
         document.dispatchEvent(new KeyboardEvent("keydown",
-          { key: "ğ", code: "BracketRight", bubbles: true }));
+          { key: "h", code: "KeyH", bubbles: true }));
         await sleep(50);
-        if (window.__ssoApi.status().offsetMs === before) throw new Error("offset unchanged");
+        if (window.__ssoApi.status().offsetMs !== before)
+          throw new Error("the binding was unset and still fired");
+
+        /* And nothing takes an unset binding's place. It is stored as an empty
+         * string, and a keystroke that types nothing at all - which is what a
+         * malformed or synthetic event looks like - would otherwise match
+         * every shortcut that had been switched off. */
+        document.dispatchEvent(new KeyboardEvent("keydown", { code: "Backquote", bubbles: true }));
+        await sleep(50);
+        if (window.__ssoApi.status().offsetMs !== before)
+          throw new Error("a dead key fired the shortcut that was switched off");
+
+        window.__ssoApi.resetKeys();
+        await sleep(30);
+        if (window.__ssoApi.status().settings.keys.later !== window.__ssoApi.defaults.keys.later)
+          throw new Error("reset did not put the binding back");
+        if (window.__ssoApi.status().settings.keysEnabled !== true)
+          throw new Error("resetting the bindings also switched the shortcuts off");
       });
 
       check("typing in the panel search box does not nudge", async () => {
@@ -1690,7 +1765,7 @@
         input.focus();
         const before = window.__ssoApi.status().offsetMs;
         input.dispatchEvent(new KeyboardEvent("keydown",
-          { key: "ğ", code: "BracketRight", bubbles: true, composed: true }));
+          { key: "h", code: "KeyH", bubbles: true, composed: true }));
         await sleep(50);
         if (window.__ssoApi.status().offsetMs !== before) throw new Error("typing changed the offset");
       });
@@ -2046,6 +2121,55 @@
           throw new Error("closing it took the words away too");
       });
 
+      check("study's own keys are set where study is set", async () => {
+        /* They were two rows in the control panel's Keys grid, beside the
+         * bindings for timing and for the panel itself, after everything else
+         * about study had moved to the rail. A binding belongs with the thing
+         * it does. Reading the keystroke stays in content.js, which owns the
+         * settings and has to stop the key doing what it is bound to while it
+         * is being read - one copy of that clause, not two. */
+        const gear = [...railShadow().querySelectorAll(".sso-win__head button")]
+          .find((b) => b.textContent === "⚙");
+        gear.click();
+        await sleep(250);
+        const sheet = [...document.querySelectorAll("div")]
+          .find((d) => d.shadowRoot?.querySelector(".sso-rail__settings"))?.shadowRoot;
+        if (!sheet) throw new Error("no settings window opened");
+
+        const cells = [...sheet.querySelectorAll(".sso-set__keycell")];
+        if (cells.length !== 2) throw new Error(`${cells.length} bindings on the rail, want 2`);
+
+        window.__ssoApi.resetKeys();
+        await sleep(60);
+        const key = cells[0].querySelector("button");
+        if (key.textContent !== "S") throw new Error(`the study binding reads "${key.textContent}"`);
+
+        // Rebinding: the button asks, content.js reads, the setting changes.
+        key.click();
+        await sleep(60);
+        if (key.textContent !== "press a key…")
+          throw new Error("it did not ask for a key");
+        document.dispatchEvent(new KeyboardEvent("keydown",
+          { key: "M", code: "KeyM", shiftKey: true, bubbles: true }));
+        await sleep(120);
+        if (window.__ssoApi.status().settings.keys.toggleStudy !== "m")
+          throw new Error(
+            `bound to "${window.__ssoApi.status().settings.keys.toggleStudy}" - Shift should not ` +
+            `be part of it`);
+        if (key.textContent !== "M") throw new Error(`the button reads "${key.textContent}"`);
+
+        // And off, on its own.
+        cells[0].querySelectorAll("button")[1].click();
+        await sleep(120);
+        if (window.__ssoApi.status().settings.keys.toggleStudy !== "")
+          throw new Error("switching one binding off left it bound");
+
+        window.__ssoApi.resetKeys();
+        await sleep(60);
+        sheet.querySelector(".sso-icon--close").click();
+        await sleep(150);
+      });
+
       check("study is a switch on the subtitles, and nothing in the settings", async () => {
         /* The switch has to be on this surface at all because the rail it
          * belongs to does not exist while study is off. It was a section in
@@ -2054,15 +2178,10 @@
         await window.__ssoPanel.show();
         await sleep(150);
 
-        /* Everything but the key bindings, which still list the two study keys
-         * and are moved in the commit that rewrites how keys are bound. */
         const sheet = await openSettings();
-        const rest = [...sheet.querySelectorAll(".sso-sec")]
-          .filter((s) => !s.querySelector(".sso-keys"))
-          .map((s) => s.textContent)
-          .join(" ");
-        if (/study|word|rare|deck/i.test(rest))
-          throw new Error(`study is still in the settings: ${rest.slice(0, 90)}`);
+        const said = sheet.textContent || "";
+        if (/study|word|rare|deck/i.test(said))
+          throw new Error(`study is still in the settings: ${said.slice(0, 120)}`);
         sheetShadow().querySelector(".sso-icon--close").click();
         await sleep(120);
 

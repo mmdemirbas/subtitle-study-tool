@@ -1065,6 +1065,11 @@ input.sso-swatch::-webkit-color-swatch {
 /* --- key bindings ---------------------------------------------------------- */
 
 .sso-keys {
+  /* Off the master switch above it, which otherwise reads as the first row of
+   * the grid rather than the thing that governs all of them. */
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--sso-line-soft);
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 5px 8px;
@@ -1073,10 +1078,40 @@ input.sso-swatch::-webkit-color-swatch {
   color: var(--sso-ink-2);
 }
 
+/* The key and the way to switch it off, together: the second is about the
+ * first and nothing else, so it sits on it rather than in a column of its own
+ * where every row would carry one whether or not it had anything to remove. */
+.sso-keys__cell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .sso-key {
-  min-width: 92px;
+  min-width: 74px;
   font-family: "SF Mono", ui-monospace, Menlo, monospace !important;
   font-size: var(--sso-t-small);
+}
+
+/* An unset binding says so in the quiet ink: it is a state, not a value, and
+ * "off" set like a keycap reads as a key called Off. */
+.sso-key[data-set="false"] {
+  color: var(--sso-ink-3);
+  font-family: inherit !important;
+}
+
+button.sso-key__clear {
+  min-width: 24px;
+  padding: 3px 0;
+  font-size: 12px;
+  color: var(--sso-ink-3);
+  background: none;
+  border-color: transparent;
+}
+
+button.sso-key__clear:hover:not(:disabled) {
+  color: var(--sso-danger);
+  background: var(--sso-fill);
 }
 
 .sso-key[data-capturing="true"] {

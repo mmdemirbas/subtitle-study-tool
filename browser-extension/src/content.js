@@ -207,17 +207,62 @@
     dimNonSpeech: true,
     smallStepMs: 250,
     largeStepMs: 1000,
+    /* The key the layout produces, not the key the keyboard has under it.
+     *
+     * These were KeyboardEvent.code - BracketLeft, KeyP - which names the
+     * physical switch. That keeps a binding in the same place on every layout,
+     * and the place is the only thing about it a reader cannot see: on a
+     * Turkish Q layout the two keys right of P are ğ and ü, and "the shortcut
+     * is BracketLeft" tells nobody which key to press. A binding is a promise
+     * about what to type, so it is what the keyboard types.
+     *
+     * An empty string is a shortcut that is switched off, one at a time.
+     *
+     * Letters, and no punctuation. The old defaults were the bracket keys,
+     * which is a fine choice for a binding on the physical key and a poor one
+     * for a binding on the character: measured on this machine's layout,
+     * Turkish Q, the key beside P types ğ and "[" needs a modifier the handler
+     * deliberately refuses. A letter is on every Latin layout unmodified. */
     keys: {
-      earlier: "BracketLeft",
-      later: "BracketRight",
-      reset: "Backslash",
-      togglePanel: "KeyP",
-      toggleOverlay: "KeyO",
-      toggleStudy: "KeyS",
-      saveWord: "KeyD",
+      earlier: "g",
+      later: "h",
+      reset: "b",
+      togglePanel: "p",
+      toggleOverlay: "v",
+      toggleStudy: "s",
+      saveWord: "d",
     },
-    keysEnabled: true,
+    /* Off until asked for.
+     *
+     * Seven single letters, unmodified, on a page that is somebody else's -
+     * players bind letters of their own, and a search box that has not taken
+     * focus yet turns every one of them into a surprise. Nothing here is
+     * needed to use the tool: the panel opens from the CC button and every
+     * binding has a control beside the thing it acts on. */
+    keysEnabled: false,
   };
+
+  /* What the old physical bindings typed on a US layout.
+   *
+   * Stored settings carry codes, and a code left in place would simply never
+   * match again - the shortcuts would go quiet with nothing said. Anything not
+   * in this table is dropped to "off" rather than guessed at, because a
+   * shortcut that fires on the wrong key is worse than one that does not fire. */
+  const KEY_FROM_CODE = {
+    BracketLeft: "[", BracketRight: "]", Backslash: "\\", Semicolon: ";",
+    Quote: "'", Comma: ",", Period: ".", Slash: "/", Minus: "-", Equal: "=",
+    Space: " ", Backquote: "`",
+  };
+
+  function keyFromStored(value) {
+    if (typeof value !== "string" || value === "") return "";
+    if (value.length === 1) return value.toLowerCase(); // already a key
+    if (KEY_FROM_CODE[value]) return KEY_FROM_CODE[value];
+    if (/^Key[A-Z]$/.test(value)) return value.slice(3).toLowerCase();
+    if (/^Digit[0-9]$/.test(value)) return value.slice(5);
+    if (/^Arrow(Left|Right|Up|Down)$/.test(value)) return value;
+    return "";
+  }
 
   /* Mid-roll ads and the clock they break.
    *
@@ -867,7 +912,12 @@
     const next = {
       ...DEFAULT_SETTINGS,
       ...saved,
-      keys: { ...DEFAULT_SETTINGS.keys, ...(saved.keys || {}) },
+      /* Bindings saved as codes are translated, not kept: a code no longer
+       * matches anything, so the shortcuts would go quiet with nothing said. */
+      keys: Object.fromEntries(
+        Object.entries({ ...DEFAULT_SETTINGS.keys, ...(saved.keys || {}) })
+          .map(([name, value]) => [name, keyFromStored(value)]),
+      ),
       tracks: DEFAULT_SETTINGS.tracks.map((base, slot) => ({
         ...base,
         ...(saved.tracks?.[slot] || {}),
@@ -897,7 +947,15 @@
     const next = {
       ...state.settings,
       ...patch,
-      keys: { ...state.settings.keys, ...(patch.keys || {}) },
+      /* Normalised on the way in, not only on the way out of storage: this is
+       * the one door every binding comes through, so "a stored binding is a
+       * key the layout types" holds after any write rather than only after a
+       * reload. A settings object written by an older version, arriving here
+       * through a storage change in another frame, is translated too. */
+      keys: Object.fromEntries(
+        Object.entries({ ...state.settings.keys, ...(patch.keys || {}) })
+          .map(([name, value]) => [name, keyFromStored(value)]),
+      ),
       tracks: state.settings.tracks.map((track) => ({ ...track })),
     };
     if (patch.tracks) {
@@ -949,11 +1007,11 @@
     return { ok: true };
   }
 
+  /* The bindings, and not whether they are on. A reader who has turned the
+   * shortcuts on and then wants one binding back is asking for that binding,
+   * not to be switched off again by a button that says "reset keys". */
   function resetKeys() {
-    updateSettings({
-      keys: { ...DEFAULT_SETTINGS.keys },
-      keysEnabled: DEFAULT_SETTINGS.keysEnabled,
-    });
+    updateSettings({ keys: { ...DEFAULT_SETTINGS.keys } });
   }
 
   /* Put both boxes somewhere sensible in one action.
@@ -1954,8 +2012,75 @@
 
   // --- keyboard -------------------------------------------------------------
 
-  /* Matching on event.code keeps bindings on the same physical keys across
-   * layouts. Modifier chords are ignored so page and browser shortcuts win. */
+  /* What this keystroke typed.
+   *
+   * event.key, which is the character the layout produced - the same thing the
+   * binding stores. Shift is the complication: the large nudge step is Shift
+   * and the same key, and Shift over "[" types "{", which matches nothing. The
+   * layout map answers exactly that question - it maps a physical key to the
+   * character this layout puts on it - so the code goes through it and comes
+   * back as the unshifted character. Chrome ships it; where it is missing the
+   * letters still work, because Shift over "p" types "P" and case is folded. */
+  let layoutMap = null;
+  navigator.keyboard?.getLayoutMap?.().then((map) => { layoutMap = map; }).catch(() => {});
+
+  function typedKeys(event) {
+    const typed = [String(event.key || "").toLowerCase()];
+    const unshifted = layoutMap?.get?.(event.code);
+    if (unshifted) typed.push(String(unshifted).toLowerCase());
+    return typed;
+  }
+
+  /* An unset binding is an empty string and must never match. Without the
+   * guard every keystroke that produces nothing - a dead key, a modifier on
+   * its own - would fire whichever shortcut had been switched off. */
+  const isKey = (typed, binding) =>
+    Boolean(binding) && typed.includes(String(binding).toLowerCase());
+
+  /* Reading a binding, for whoever is showing the bindings.
+   *
+   * It lives here rather than in the panel because there are two surfaces with
+   * key bindings on them now - the panel's settings and the study rail's - and
+   * two copies of "listen at the document, in the capture phase, and stop the
+   * keystroke from also doing what it is bound to" is two places for that last
+   * clause to be forgotten. Resolves with the key, or with null for Escape. */
+  let captureResolve = null;
+  const isCapturingKey = () => captureResolve !== null;
+
+  function captureKey() {
+    cancelCapture();
+    return new Promise((resolve) => { captureResolve = resolve; });
+  }
+
+  function cancelCapture() {
+    const resolve = captureResolve;
+    captureResolve = null;
+    resolve?.(null);
+  }
+
+  const MODIFIERS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock"]);
+
+  function onCaptureKey(event) {
+    if (!captureResolve) return;
+    // A modifier on its own is somebody reaching for a chord, not a binding.
+    if (MODIFIERS.has(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    const resolve = captureResolve;
+    captureResolve = null;
+    if (event.key === "Escape") {
+      resolve(null);
+      return;
+    }
+    /* The unshifted character, so binding a key with Shift held stores the key
+     * rather than the shifted symbol - Shift and "[" types "{", and a binding
+     * of "{" would never fire again. */
+    const unshifted = layoutMap?.get?.(event.code);
+    resolve(String(unshifted || event.key).toLowerCase());
+  }
+
+  /* Modifier chords are ignored so page and browser shortcuts win. */
   function onKeyDown(event) {
     if (!state.settings.keysEnabled) return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
@@ -1971,34 +2096,36 @@
     ) {
       return;
     }
-    if (window.__ssoPanel?.isCapturingKey?.()) return;
+    // A keystroke being read as a binding must not also do what it is bound to.
+    if (isCapturingKey()) return;
 
     const keys = state.settings.keys;
+    const typed = typedKeys(event);
     const step = event.shiftKey ? state.settings.largeStepMs : state.settings.smallStepMs;
     let handled = true;
 
-    if (event.code === keys.togglePanel) {
+    if (isKey(typed, keys.togglePanel)) {
       window.__ssoPanel?.toggle();
     } else if (!anyAttached()) {
       handled = false; // the rest only make sense with something attached
-    } else if (event.code === keys.earlier) {
+    } else if (isKey(typed, keys.earlier)) {
       nudge(-step);
-    } else if (event.code === keys.later) {
+    } else if (isKey(typed, keys.later)) {
       nudge(step);
-    } else if (event.code === "Escape" && state.placing) {
+    } else if (event.key === "Escape" && state.placing) {
       window.__ssoApi.setPlacing(false);
-    } else if (event.code === keys.reset) {
+    } else if (isKey(typed, keys.reset)) {
       // Both, because a subtitle that has been stretched is not back to the
       // file's own timing until the stretch goes too.
       setRate(1, { quiet: true });
       setOffset(0, { quiet: true });
       showToast("Subtitle back to the file's own timing");
-    } else if (event.code === keys.toggleOverlay) {
+    } else if (isKey(typed, keys.toggleOverlay)) {
       setVisible(!state.visible);
       showToast(state.visible ? "Subtitles shown" : "Subtitles hidden");
-    } else if (event.code === keys.toggleStudy) {
+    } else if (isKey(typed, keys.toggleStudy)) {
       handled = Boolean(window.__ssoStudy?.toggle());
-    } else if (event.code === keys.saveWord) {
+    } else if (isKey(typed, keys.saveWord)) {
       handled = Boolean(window.__ssoStudy?.saveTop());
     } else {
       handled = false;
@@ -2435,6 +2562,9 @@
     updateTrackSettings,
     resetSettings,
     resetKeys,
+    captureKey,
+    cancelCapture,
+    isCapturingKey,
     applyLook,
     autoAlign,
     looks: LOOKS,
@@ -2538,6 +2668,10 @@
     window.__ssoStudy?.rescale?.();
   };
 
+  /* Before onKeyDown, so a keystroke being read as a binding is taken out of
+   * the way first. Both are capture-phase at the document, so this one has to
+   * be registered first to run first. */
+  document.addEventListener("keydown", onCaptureKey, true);
   document.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("resize", onViewportChange, { passive: true });
   document.addEventListener("fullscreenchange", onViewportChange);
@@ -2561,6 +2695,7 @@
     clearTimeout(handleTimer);
     videoResize?.disconnect();
     observedVideo = null;
+    document.removeEventListener("keydown", onCaptureKey, true);
     document.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("resize", onViewportChange);
     document.removeEventListener("fullscreenchange", onViewportChange);

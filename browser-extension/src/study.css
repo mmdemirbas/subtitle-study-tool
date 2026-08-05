@@ -155,6 +155,70 @@
   color: var(--sso-ink-3);
 }
 
+/* The two study bindings, in study's own settings. The grid matches the rows
+ * above it - label left, control right - so a binding reads as one more thing
+ * about study rather than a section grafted on. */
+.sso-set__keys {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 8px;
+  align-items: center;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--sso-line-soft);
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-2);
+}
+
+.sso-set__keycell {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+button.sso-set__key {
+  min-width: 66px;
+  padding: 3px 8px;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink);
+  background: var(--sso-fill);
+  border: 1px solid var(--sso-line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+button.sso-set__key:hover {
+  background: var(--sso-fill-hover);
+}
+
+button.sso-set__key[data-set="false"] {
+  font-family: inherit;
+  color: var(--sso-ink-3);
+}
+
+button.sso-set__key[data-capturing="true"] {
+  color: var(--sso-accent-ink);
+  border-color: var(--sso-accent);
+}
+
+button.sso-set__key--clear {
+  min-width: 0;
+  padding: 3px 6px;
+  /* Fixed, not the rail's em scale: everything else here grows with the text
+   * size the reader sets, and a 0.8em backspace glyph on a small rail is a
+   * smudge. */
+  font-size: 13px;
+  color: var(--sso-ink-3);
+  background: none;
+  border-color: transparent;
+}
+
+button.sso-set__key--clear:hover {
+  color: var(--sso-danger);
+  background: var(--sso-fill);
+}
+
 button.sso-set__action {
   width: 100%;
   margin-top: 10px;

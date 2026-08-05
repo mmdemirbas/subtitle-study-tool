@@ -133,6 +133,7 @@
   let titleEl = null;
   let settingsEl = null;
   let setEls = null;
+  let keyEls = null;
   let sheets = null;
 
   /* Cards currently in the rail, newest first. Held here rather than read back
@@ -825,6 +826,53 @@
         "How solid this box is over the film."),
     };
 
+    /* Study's two key bindings, with study's other settings.
+     *
+     * They were in the control panel's Keys grid, which is where the bindings
+     * for timing and for the panel itself live - and nothing else about study
+     * is on that surface any more. A binding belongs with the thing it does.
+     *
+     * The keystroke is read by content.js, which owns the settings and already
+     * has to stop a key being read from also doing what it is bound to. */
+    const keys = document.createElement("div");
+    keys.className = "sso-set__keys";
+    keyEls = {};
+    for (const [name, label] of [["toggleStudy", "Study mode"], ["saveWord", "Save the top word"]]) {
+      const said = document.createElement("span");
+      said.textContent = label;
+
+      const b = document.createElement("button");
+      b.className = "sso-set__key";
+      b.type = "button";
+      b.title = "Click, then press the key you want";
+      b.addEventListener("click", async () => {
+        b.dataset.capturing = "true";
+        b.textContent = "press a key…";
+        const key = await api.captureKey();
+        b.dataset.capturing = "false";
+        if (key) api.updateSettings({ keys: { [name]: key } });
+        refreshRailSettings();
+      });
+
+      const clear = document.createElement("button");
+      clear.className = "sso-set__key sso-set__key--clear";
+      clear.type = "button";
+      clear.textContent = "⌫";
+      clear.title = `Switch "${label}" off`;
+      clear.setAttribute("aria-label", `Switch "${label}" off`);
+      clear.addEventListener("click", () => {
+        api.updateSettings({ keys: { [name]: "" } });
+        refreshRailSettings();
+      });
+
+      const cell = document.createElement("div");
+      cell.className = "sso-set__keycell";
+      cell.append(b, clear);
+      keys.append(said, cell);
+      keyEls[name] = { b, clear };
+    }
+    wrap.append(keys);
+
     const deck = document.createElement("button");
     deck.className = "sso-set__action";
     deck.type = "button";
@@ -837,10 +885,27 @@
     return wrap;
   }
 
+  /* What to print on the key: the character the layout types, as it looks on
+   * the keyboard. It used to print KeyboardEvent.code. */
+  function describeKey(key) {
+    if (!key) return "off";
+    const named = { " ": "space", ArrowLeft: "←", ArrowRight: "→", ArrowUp: "↑", ArrowDown: "↓" };
+    return named[key] || (key.length === 1 ? key.toUpperCase() : key);
+  }
+
   /* Written whenever the settings change, so the screen agrees with the rail
    * even when something else moved a value - a corner drag setting the text
    * size, or the panel's master switch. */
   function refreshRailSettings() {
+    if (keyEls) {
+      const bound = api.status().settings.keys;
+      for (const [name, { b, clear }] of Object.entries(keyEls)) {
+        if (b.dataset.capturing === "true") continue; // it is asking, leave it asking
+        b.textContent = describeKey(bound[name]);
+        b.dataset.set = bound[name] ? "true" : "false";
+        clear.hidden = !bound[name];
+      }
+    }
     if (!setEls) return;
     for (const [key, control] of Object.entries(setEls)) {
       const name = { auto: "auto", rank: "rarityRank", keep: "keep", hover: "hoverCard",
