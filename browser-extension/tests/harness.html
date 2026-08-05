@@ -1016,11 +1016,22 @@
          * it. The second pick then went to the other subtitle instead of
          * replacing the first, and nothing said so until two were on screen. */
         const shadow = panelShadow();
-        const targets = [...shadow.querySelectorAll(".sso-seg--target .sso-seg__b")];
-        if (targets.length !== 2) throw new Error("no way to pick which subtitle a result fills");
-        targets[0].click();
-        await sleep(40);
-        if (targets[0].dataset.on !== "true") throw new Error("subtitle 1 would not be selected");
+        /* Which subtitle a result fills is carried by the route in, not asked
+         * again on the screen: you said it by which plus you pressed, or by
+         * whose menu you opened Replace from. */
+        const card = [...shadow.querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        card.querySelector(".sso-track__more").click();
+        await sleep(60);
+        [...shadow.querySelectorAll(".sso-menu__item")]
+          .find((b) => b.textContent === "Replace…").click();
+        await sleep(80);
+        if (shadow.querySelector(".sso-screen[hidden]") === null)
+          throw new Error("the screens did not switch");
+        const said = shadow.querySelector(".sso-find__for").textContent;
+        if (!/subtitle 1/i.test(said)) throw new Error(`the screen says "${said}"`);
+        // No slot that does not exist. The plus passes the first free slot and
+        // there is not always one; -1 read as "becomes subtitle 0".
+        if (/subtitle 0/i.test(said)) throw new Error(`the screen says "${said}"`);
 
         const search = [...shadow.querySelectorAll("button")].find((b) => b.textContent === "Search");
         search.click();
@@ -1030,13 +1041,16 @@
         result.click();
         await sleep(200);
 
-        if (targets[0].dataset.on !== "true")
-          throw new Error("the target moved to subtitle 2 on its own");
+        const after = shadow.querySelector(".sso-find__for").textContent;
+        if (!/subtitle 1/i.test(after))
+          throw new Error(`the target moved: the screen now says "${after}"`);
         // And the pick did land where it said it would. Nothing is detached
         // afterwards: the stubbed fetch hands back this harness's own cues, so
         // subtitle 1 is carrying what it was carrying before the test ran.
         if (!window.__ssoApi.status().tracks[0].attached)
           throw new Error("subtitle 1 is still empty");
+        panelShadow().querySelector(".sso-panel__back").click();
+        await sleep(60);
       });
 
       check("a wheel over the panel does not reach the page", async () => {
@@ -1052,19 +1066,109 @@
         if (reachedPage > 0) throw new Error("the page saw the wheel event");
       });
 
-      check("infrequent settings are folded away until asked for", async () => {
-        const more = panelShadow().querySelector(".sso-more");
-        const toggle = panelShadow().querySelector(".sso-more__toggle");
-        if (!more || !toggle) throw new Error("no second tier in the panel");
-        if (more.dataset.open === "true") toggle.click();
+      check("the subtitles screen carries no settings, and settings are one click away", async () => {
+        /* Replaces a case that asserted a "More settings" fold. The sections
+         * already folded, so that button was a second fold on top of a fold;
+         * what it was really hiding is that the column mixed two kinds of thing
+         * - the subtitles you are watching, and places you go to set something
+         * up. Those are screens now. */
+        const shadow = panelShadow();
+        if (shadow.querySelector(".sso-more") || shadow.querySelector(".sso-more__toggle"))
+          throw new Error("the second tier is still there");
+
+        const root = shadow.querySelector(".sso-screen");
+        if (root.hidden) throw new Error("the panel did not open on the subtitles");
+        for (const heading of ["Arrangement", "Appearance", "Keys"]) {
+          const on = [...root.querySelectorAll(".sso-sec__h")]
+            .some((h) => h.textContent.includes(heading));
+          if (on) throw new Error(`"${heading}" is on the subtitles screen`);
+        }
+
+        const gear = [...shadow.querySelectorAll(".sso-win__head button")]
+          .find((b) => b.textContent === "⚙");
+        if (!gear) throw new Error("no way to reach the settings");
+        gear.click();
+        await sleep(80);
+        if (!root.hidden) throw new Error("the subtitles screen is still showing");
+        const settings = [...shadow.querySelectorAll(".sso-screen")].find((s) => !s.hidden);
+        if (!settings.querySelector(".sso-keys")) throw new Error("the settings are not on it");
+        // The back control must not be a caret, or the generic window test's
+        // /^[▾▸]$/ fold-button search picks it up instead of the fold.
+        const back = shadow.querySelector(".sso-panel__back");
+        if (back.hidden) throw new Error("no way back");
+        if (/^[▾▸]$/.test(back.textContent))
+          throw new Error(`the back control reads "${back.textContent}", which is the fold's glyph`);
+        back.click();
+        await sleep(80);
+        if (root.hidden) throw new Error("back did not return to the subtitles");
+      });
+
+      check("the way to another subtitle knows there is not always room", async () => {
+        /* The plus passes the first free slot, and findIndex returns -1 when
+         * there is none. That reached the screen as "The result you pick
+         * becomes subtitle 0." and would have attached to a slot that does not
+         * exist. Found by rendering it, not by a failing test. */
+        const shadow = panelShadow();
+        const add = shadow.querySelector(".sso-add");
+        if (!add) throw new Error("no way to add a subtitle");
+        const both = window.__ssoApi.status().tracks.map((t) => t.attached);
+
+        // With one slot free the plus is there, and it names the free one.
+        if (both[1]) window.__ssoApi.detach(1);
+        await sleep(80);
+        if (add.hidden) throw new Error("there is room and no way to use it");
+        add.click();
+        await sleep(80);
+        let said = shadow.querySelector(".sso-find__for").textContent;
+        if (!/subtitle 2\b/i.test(said)) throw new Error(`with slot 2 free it says "${said}"`);
+        shadow.querySelector(".sso-panel__back").click();
+        await sleep(60);
+
+        // With both full there is nowhere to add, and nothing offers to.
+        await window.__ssoApi.attach({ cues: CUES, label: "second", fileId: 99, language: "tr", slot: 1 });
+        await sleep(120);
+        if (!add.hidden) throw new Error("it offers to add a third subtitle");
+        // And if it is reached anyway, it lands on a slot that exists rather
+        // than on findIndex's -1, which read as "becomes subtitle 0".
+        add.click();
+        await sleep(80);
+        said = shadow.querySelector(".sso-find__for").textContent;
+        if (!/subtitle [12]\b/i.test(said)) throw new Error(`with both full it says "${said}"`);
+        shadow.querySelector(".sso-panel__back").click();
+        await sleep(60);
+
+        if (!both[1]) {
+          window.__ssoApi.detach(1);
+          await sleep(80);
+        }
+      });
+
+      check("folding and reopening always land on the subtitles", async () => {
+        /* Otherwise the bar reads "SETTINGS ‹" with nothing under it and the
+         * only way out is to unfold first - so folded would be three states
+         * instead of one. */
+        const shadow = panelShadow();
+        const fold = [...shadow.querySelectorAll(".sso-win__head button")]
+          .find((b) => /^[▾▸]$/.test(b.textContent));
+        [...shadow.querySelectorAll(".sso-win__head button")]
+          .find((b) => b.textContent === "⚙").click();
+        await sleep(60);
+        fold.click(); // fold from the settings screen
+        await sleep(60);
+        fold.click(); // and back open
+        await sleep(60);
+        if (shadow.querySelector(".sso-screen").hidden)
+          throw new Error("it unfolded onto the screen it was folded from");
+
+        [...shadow.querySelectorAll(".sso-win__head button")]
+          .find((b) => b.textContent === "⚙").click();
+        await sleep(60);
+        window.__ssoPanel.hide();
         await sleep(40);
-        if (more.getBoundingClientRect().height > 0)
-          throw new Error("the folded settings still take up space");
-        toggle.click();
-        await sleep(40);
-        if (more.getBoundingClientRect().height === 0)
-          throw new Error("the settings did not come back");
-        toggle.click();
+        await window.__ssoPanel.show();
+        await sleep(80);
+        if (panelShadow().querySelector(".sso-screen").hidden)
+          throw new Error("it reopened on the screen it was closed from");
       });
 
       check("removing a subtitle can be undone, box and all", async () => {

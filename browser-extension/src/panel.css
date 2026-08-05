@@ -86,6 +86,46 @@
   overscroll-behavior: contain;
 }
 
+/* --- screens ----------------------------------------------------------------
+ *
+ * Siblings in the body with all but one hidden, in flow rather than absolutely
+ * positioned. fitToViewport works out the furniture height by subtracting the
+ * body's height from the host's, so an out-of-flow screen would leave the body
+ * sized for whichever screen is not showing - a search with thirty results
+ * clipped to the height of two subtitle cards.
+ */
+
+.sso-screen[hidden] {
+  display: none;
+}
+
+/* Back out of a screen. Mirrored from the section carets so the two carets on
+ * this surface point the same way for the same reason. */
+.sso-panel__back {
+  font-size: 15px;
+}
+
+/* --- the way to another subtitle -------------------------------------------- */
+
+button.sso-add {
+  width: 100%;
+  margin-top: 8px;
+  color: var(--sso-ink-2);
+  background: none;
+  border: 1px dashed var(--sso-line);
+}
+
+button.sso-add:hover:not(:disabled) {
+  color: var(--sso-ink);
+  background: var(--sso-fill);
+}
+
+/* Where the next result lands, said as a fact. */
+.sso-find__for {
+  margin: 0 0 8px;
+  color: var(--sso-ink-2);
+}
+
 .sso-sec + .sso-sec {
   margin-top: 10px;
   padding-top: 10px;

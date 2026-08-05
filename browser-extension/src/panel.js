@@ -149,11 +149,36 @@
     title.className = "sso-win__title";
     title.textContent = "Subtitle Overlay";
 
+    el.title = title;
+
+    /* Back out of a screen. It lives in the title bar because that is where the
+     * screen's name is, and it is a "‹" rather than a "▸" deliberately: the
+     * generic window tests find the fold button by matching /^[▾▸]$/ across the
+     * head's buttons, and a back arrow drawn with a caret would be picked up as
+     * the fold. */
+    el.back = document.createElement("button");
+    el.back.className = "sso-icon sso-panel__back";
+    el.back.type = "button";
+    el.back.textContent = "‹";
+    el.back.title = "Back";
+    el.back.hidden = true;
+    el.back.addEventListener("click", goRoot);
+
     /* What is attached, in the title bar. Folded, the bar is all that is left
      * on screen, so it has to carry the one fact that decides whether the panel
      * is worth opening again. */
     el.state = document.createElement("span");
     el.state.className = "sso-panel__state";
+
+    /* Everything that is not about one subtitle. It was five sections in the
+     * column behind a "More settings" button; the sections already fold, so the
+     * button was a second fold on top of a fold. */
+    el.gear = document.createElement("button");
+    el.gear.className = "sso-icon";
+    el.gear.type = "button";
+    el.gear.textContent = "⚙";
+    el.gear.title = "Settings";
+    el.gear.addEventListener("click", () => goTo("settings"));
 
     /* Folds to the title bar, the same control the study rail has. Different
      * from closing: the panel stays where it was put and at the size it was
@@ -169,7 +194,7 @@
     close.textContent = "×";
     close.title = "Close";
     close.addEventListener("click", hide);
-    head.append(title, el.state, el.fold, close);
+    head.append(el.back, title, el.state, el.gear, el.fold, close);
 
     /* Double-click the bar to put the panel back under the CC button. A panel
      * dragged somewhere unhelpful - behind the player's own controls, half off
@@ -187,42 +212,32 @@
     const body = document.createElement("div");
     body.className = "sso-panel__body";
 
-    /* Two tiers, not seven sections.
+    /* Screens, not a column of sections.
      *
-     * Only two of these are opened while a film is playing: what is attached
-     * and how it is timed, and finding something to attach. The other five are
-     * set once - where the boxes go, how they look, study, key bindings,
-     * diagnostics - and having them all in the column made a panel taller than
-     * the video it sits on.
+     * The panel used to stack seven sections and then fold five of them behind
+     * a "More settings" button - a second fold on top of a fold, in a column
+     * that was still taller than the film it sits on. What it was really doing
+     * was mixing two kinds of thing: the subtitles you are watching, and the
+     * places you go to set something up.
      *
-     * So the rest fold away behind one control. Nothing is removed and nothing
-     * is behind a mode; the default is simply the two that get used. */
-    const more = document.createElement("div");
-    more.className = "sso-more";
-    more.append(
-      buildArrangement(),
-      buildAppearance(),
-      buildStudy(),
-      buildKeys(),
-      buildDiagnostics(),
-    );
-
-    el.moreToggle = button("More settings", {
-      onClick: () => setMoreOpen(more.dataset.open !== "true"),
-    });
-    el.moreToggle.className = "sso-more__toggle";
-    el.more = more;
-
-    const setMoreOpen = (open) => {
-      more.dataset.open = open ? "true" : "false";
-      el.moreToggle.textContent = open ? "Fewer settings" : "More settings";
-      el.moreToggle.setAttribute("aria-expanded", open ? "true" : "false");
-      chrome.storage.local.set({ [MORE_KEY]: open }).catch(() => {});
-      fitToViewport();
+     * So the root is the subtitles and nothing else, and everything else is
+     * somewhere you go and come back from. Screens are in flow - siblings in
+     * the body with all but one hidden - rather than absolutely positioned,
+     * because fitToViewport works out the furniture height by subtracting the
+     * body's height from the host's, and an out-of-flow screen would leave the
+     * body sized for whichever screen is not showing. In flow, the scroll
+     * container, its overscroll containment and the height fit all keep working
+     * untouched.
+     *
+     * All of them are built now and hidden, not built on demand: half the
+     * panel's own code reaches for el.query, and a screen that does not exist
+     * yet is a null every one of those has to learn about. */
+    el.screens = {
+      root: screen(buildTracks()),
+      find: screen(buildSearch()),
+      settings: screen(buildArrangement(), buildAppearance(), buildStudy(), buildKeys(), buildDiagnostics()),
     };
-    setMoreOpen(moreOpen);
-
-    body.append(buildTracks(), buildSearch(), el.moreToggle, more);
+    body.append(...Object.values(el.screens));
 
     panel.append(head, body, ...buildResizeGrips(body));
     shadow.append(panel);
@@ -444,10 +459,8 @@
   }
 
   const OPEN_KEY = "sso:panelOpen";
-  const MORE_KEY = "sso:panelMore";
   const SIZE_KEY = "sso:panelSize";
   const FOLD_KEY = "sso:panelFolded";
-  let moreOpen = false;
   let folded = false;
 
   /* Folded is the panel's own state rather than a setting, but it survives a
@@ -461,6 +474,12 @@
       el.fold.textContent = folded ? "▸" : "▾";
       el.fold.title = folded ? "Open the panel" : "Fold to the title bar";
     }
+    /* Folding goes back to the root. Otherwise the bar reads "SETTINGS ‹" with
+     * nothing under it, and the only way out is to unfold first - so folded is
+     * always one state rather than three. Reopening does the same, for the same
+     * reason: a panel that comes back on a screen you left is a panel you have
+     * to work out. */
+    if (folded && atScreen !== "root") goRoot();
     chrome.storage.local.set({ [FOLD_KEY]: folded }).catch(() => {});
     // Folding frees the space the body was holding; unfolding needs it back,
     // and near the bottom of the screen there may be less of it than there was.
@@ -470,9 +489,15 @@
   /* Which sections start open. The two that answer "what is on screen and how
    * do I change it" - everything else is set once and then left alone, and a
    * panel that shows all seven at full height is taller than the film. */
-  const OPEN_BY_DEFAULT = new Set(["Subtitles", "Find a subtitle"]);
+  /* Sections now live only inside Settings, where five of them share one
+   * screen. The subtitles and the search have screens of their own, and a
+   * screen with one section on it is a fold with nothing to fold against.
+   *
+   * Arrangement opens by default because it is the one a reader arrives at
+   * Settings for; the rest are set once. */
+  const OPEN_BY_DEFAULT = new Set(["Arrangement"]);
   let openSections = null; // filled from storage before the panel is built
-  const sections = new Map(); // heading -> { apply, wrap }, for opening one from elsewhere
+  const sections = new Map(); // heading -> { apply, wrap }
 
   /* Sections collapse.
    *
@@ -523,26 +548,11 @@
     return wrap;
   }
 
-  /* Opening a section from somewhere else on the panel - the empty state
-   * sending a reader to the search that fills it. Goes through the same apply
-   * and the same storage write, so a section opened this way is open in the
-   * same sense as one that was clicked. */
-  function setSectionOpen(heading, open) {
-    const found = sections.get(heading);
-    if (!found || (found.wrap.dataset.open === "true") === open) return;
-    found.apply(open);
-    if (open) openSections.add(heading);
-    else openSections.delete(heading);
-    chrome.storage.local.set({ [OPEN_KEY]: [...openSections] }).catch(() => {});
-    fitToViewport();
-  }
-
   async function loadOpenSections() {
     if (openSections) return;
     try {
-      const stored = await chrome.storage.local.get([OPEN_KEY, MORE_KEY]);
+      const stored = await chrome.storage.local.get(OPEN_KEY);
       openSections = new Set(stored[OPEN_KEY] || [...OPEN_BY_DEFAULT]);
-      moreOpen = Boolean(stored[MORE_KEY]);
     } catch {
       openSections = new Set(OPEN_BY_DEFAULT);
     }
@@ -569,7 +579,11 @@
    * and the answer should be in one place, not split across the panel by
    * control type. */
   function buildTracks() {
-    const wrap = section("Subtitles");
+    /* No heading. The screen has a title bar that says what it is, and a
+     * "SUBTITLES" header directly under "SUBTITLE OVERLAY" is the same word
+     * twice - and a fold on a screen that is the only thing there. Sections
+     * survive inside Settings, where several of them share one screen. */
+    const wrap = document.createElement("div");
 
     /* Nothing attached is the first thing most readers see, so it is a state
      * that was designed rather than the sentence that fits where the content
@@ -582,21 +596,13 @@
     el.noneTitle.className = "sso-empty__title";
     el.noneNote = document.createElement("p");
     el.noneNote.className = "sso-empty__note";
-    /* It runs the search rather than pointing at it. The field below is already
-     * filled with the page's own title, so "find a subtitle for this" is one
-     * click, not three - and the button is then the primary action honestly,
-     * instead of a second blue button whose job is to scroll the reader down to
-     * the first one. With nothing typed there is nothing to run, so it opens
-     * the section and takes the cursor there instead. */
+    /* The panel's one primary, and the only moment it has one: nothing
+     * attached is the only state here with a single obvious next action. It
+     * goes to the Find screen with the cursor in the field, which is already
+     * filled with the page's own title. */
     el.noneAction = button("Find a subtitle", {
       primary: true,
-      onClick: () => {
-        setSectionOpen("Find a subtitle", true);
-        const query = el.query.value.trim();
-        if (query) return runSearch(query);
-        el.query.focus();
-        el.query.select();
-      },
+      onClick: () => openFind(0),
     });
     el.none.append(el.noneTitle, el.noneNote, el.noneAction);
 
@@ -629,7 +635,22 @@
       button("Undo", { onClick: () => { api.undoRemove(); refresh(api.status()); } }),
     );
 
-    wrap.append(el.none, ...el.trackCards.map((card) => card.root), el.undoRow, el.adRow);
+    /* The way to a second subtitle, from the list it will join. Finding one
+     * used to be a separate section with its own heading and its own question
+     * about which slot to fill; pressing the plus on the list answers that
+     * question by being pressed. */
+    el.add = button("＋  Add a subtitle", {
+      onClick: () => openFind(api.status().tracks.findIndex((t) => !t.attached)),
+    });
+    el.add.className = "sso-add";
+
+    wrap.append(
+      el.none,
+      ...el.trackCards.map((card) => card.root),
+      el.undoRow,
+      el.add,
+      el.adRow,
+    );
     return wrap;
   }
 
@@ -805,13 +826,7 @@
         {
           label: "Replace…",
           title: "Find a different subtitle for this one",
-          onClick: () => {
-            targetSlot = slot;
-            setSectionOpen("Find a subtitle", true);
-            el.query.focus();
-            el.query.select();
-            refresh(api.status());
-          },
+          onClick: () => openFind(slot),
         },
         null,
         { label: "Remove", danger: true, onClick: () => removeTrack(slot) },
@@ -930,6 +945,64 @@
     return { root, caret, keyed, keysChip, label, shut, offsetField, more, size, width };
   }
 
+  /* --- screens ---------------------------------------------------------------
+   *
+   * One deep. There is no stack because there is nowhere to go from a screen
+   * except back, and a breadcrumb for a 340px panel would be more chrome than
+   * content.
+   */
+
+  const SCREEN_TITLES = {
+    root: "Subtitle Overlay",
+    find: "Find a subtitle",
+    settings: "Settings",
+  };
+
+  let atScreen = "root";
+
+  function screen(...parts) {
+    const node = document.createElement("div");
+    node.className = "sso-screen";
+    node.append(...parts);
+    return node;
+  }
+
+  function goTo(name) {
+    closeMenu();
+    atScreen = name;
+    for (const [key, node] of Object.entries(el.screens)) node.hidden = key !== name;
+    el.back.hidden = name === "root";
+    el.title.textContent = SCREEN_TITLES[name] || SCREEN_TITLES.root;
+    // The count belongs to the subtitles, so it goes when they are not on show.
+    el.state.hidden = name !== "root";
+    el.gear.hidden = name === "settings";
+    el.panel.scrollTop = 0;
+    refresh(api.status());
+    fitToViewport();
+  }
+
+  const goRoot = () => goTo("root");
+
+  /* Go and find one, for a named subtitle.
+   *
+   * Which subtitle a result fills is carried here rather than picked from a
+   * "Subtitle 1 / Subtitle 2" control on the search screen. You said which one
+   * by which plus you pressed, or by whose menu you opened Replace from, and a
+   * segmented control asking again - a section away from a second, identical
+   * pair of buttons meaning something else entirely - was a question with the
+   * answer already in it. */
+  function openFind(slot) {
+    /* Clamped, because the plus passes the first free slot and there is not
+     * always one - findIndex returns -1, which read as "becomes subtitle 0" on
+     * the screen and would have attached to a slot that does not exist. With
+     * both full the sensible target is the first, and the screen says it is
+     * replacing rather than filling. */
+    targetSlot = slot >= 0 && slot < api.trackCount ? slot : 0;
+    goTo("find");
+    el.query.focus();
+    el.query.select();
+  }
+
   /* A menu of verbs, anchored to the button that opened it.
    *
    * It is a child of .sso-panel rather than a second shadow host. The panel is
@@ -1040,34 +1113,18 @@
   // --- search ---------------------------------------------------------------
 
   function buildSearch() {
-    const wrap = section("Find a subtitle");
+    const wrap = document.createElement("div");
 
-    /* Which subtitle a result attaches to. Named before the search rather than
-     * per result, because it is one decision for the whole list and putting two
-     * buttons on every row would double the width of a list that already has to
-     * fit a film title, a release name and three tags. */
-    /* Said in words, because the panel has a second row of buttons reading
-     * "Subtitle 1 / Subtitle 2" - the one telling study which of the two to
-     * read from - and two identical segmented controls a section apart, each
-     * meaning something different, is a control the reader has to test to
-     * understand. */
-    const target = document.createElement("div");
-    target.className = "sso-seg sso-seg--target";
-    const targetLabel = document.createElement("span");
-    targetLabel.className = "sso-seg__lead";
-    targetLabel.textContent = "Attach to";
-    target.append(targetLabel);
-    el.targetButtons = [0, 1].map((slot) => {
-      const b = button(`Subtitle ${slot + 1}`, {
-        onClick: () => {
-          targetSlot = slot;
-          refresh(api.status());
-        },
-      });
-      b.className = "sso-seg__b";
-      target.append(b);
-      return b;
-    });
+    /* Where the result will land, said once, as a fact rather than a question.
+     *
+     * There used to be an "Attach to: Subtitle 1 / Subtitle 2" control here,
+     * which asked something the reader had already answered by which plus they
+     * pressed - and which was a section away from a second, identical pair of
+     * buttons telling study which subtitle to read from. Two identical
+     * segmented controls meaning different things is a control you have to test
+     * to understand. */
+    el.findFor = document.createElement("p");
+    el.findFor.className = "sso-note sso-find__for";
 
     const row = document.createElement("div");
     row.className = "sso-row";
@@ -1106,7 +1163,7 @@
     el.results = document.createElement("ul");
     el.results.className = "sso-results";
 
-    wrap.append(target, row, el.searchNote, el.languageFilter, el.results);
+    wrap.append(el.findFor, row, el.searchNote, el.languageFilter, el.results);
     return wrap;
   }
 
@@ -1743,9 +1800,14 @@
 
   // --- refresh --------------------------------------------------------------
 
+  /* One status round writes about forty properties across the panel, and
+   * notify() fires on every offset change - twelve times a second while a nudge
+   * button is held. Screens that are not on show are skipped: they are redrawn
+   * by goTo() on the way in, so nothing can be stale by the time it is seen. */
   function refresh(status) {
     if (!host) return;
     const settings = status.settings;
+    const showing = (name) => atScreen === name;
     /* Attaching a second subtitle adds a whole card, so the panel gets taller
      * while it is open. Re-fitting on every status round keeps it on the screen
      * without anything having to remember to ask. */
@@ -1767,6 +1829,9 @@
       ? "Search for the film or series and pick a result — it goes straight onto the video."
       : "Open something that plays, then come back.";
     el.noneAction.hidden = !status.hasVideo;
+    // Both slots full means the plus has nowhere to put anything; replacing one
+    // is what the card's own menu is for.
+    el.add.hidden = !status.attached || status.trackCount >= api.trackCount;
 
     // The one fact a folded title bar has to carry.
     el.state.textContent = status.attached
@@ -1825,13 +1890,14 @@
       ? "Ad playing — subtitles paused"
       : `Ad time removed: ${(drift / 1000).toFixed(0)}s`;
 
-    for (const [slot, b] of el.targetButtons.entries()) {
-      b.dataset.on = targetSlot === slot ? "true" : "false";
-      b.textContent = status.tracks[slot].attached ? `Subtitle ${slot + 1} ⟳` : `Subtitle ${slot + 1}`;
-      b.title = status.tracks[slot].attached
-        ? "Replace what is on this one"
-        : "Attach the next result here";
+    if (showing("find")) {
+      const filling = status.tracks[targetSlot];
+      el.findFor.textContent = filling?.attached
+        ? `Replacing subtitle ${targetSlot + 1} · ${filling.label || "attached"}`
+        : `The result you pick becomes subtitle ${targetSlot + 1}.`;
     }
+
+    if (!showing("settings")) return;
 
     el.background.input.value = String(settings.background);
     el.background.readout.textContent = String(settings.background);
@@ -1906,7 +1972,9 @@
     const status = api.status();
     targetSlot = status.tracks.findIndex((track) => !track.attached);
     if (targetSlot === -1) targetSlot = 0;
-    refresh(status);
+    // Always back at the subtitles. A panel that reopens on the screen you left
+    // it on is a panel you have to work out before you can use it.
+    goTo("root");
     /* After the position is restored and the contents are drawn, never before:
      * how much room is under the panel depends on where the panel is, and
      * build() runs while it is still in the default corner. Fitting there and
