@@ -235,6 +235,7 @@
     el.screens = {
       root: screen(buildTracks()),
       find: screen(buildSearch()),
+      style: screen(buildStyle()),
       settings: screen(buildArrangement(), buildAppearance(), buildStudy(), buildKeys(), buildDiagnostics()),
     };
     body.append(...Object.values(el.screens));
@@ -814,6 +815,11 @@
       const track = api.status().tracks[slot];
       menu(more, [
         {
+          label: "Style…",
+          title: "Colour, font, size, outline",
+          onClick: () => openStyle(slot),
+        },
+        {
           label: track.visible ? "Hide" : "Show",
           title: "Take it off the picture without losing it",
           onClick: () => api.setVisible(!track.visible, { slot }),
@@ -930,19 +936,117 @@
       nudger("Late", "»", -1, "large", `${late} A whole step. Hold to run.`),
     );
 
-    const size = slider("Size", 0.6, 2.2, 0.05, 1, (value) =>
-      api.updateTrackSettings(slot, { fontScale: value }),
-    );
-    const width = slider("Width", 20, 100, 1, 80, (value) =>
-      api.updateTrackSettings(slot, { widthPercent: value, placed: true }),
-    );
-
     const body = document.createElement("div");
     body.className = "sso-track__body";
-    body.append(offsets, size.row, width.row);
+    body.append(offsets);
 
     root.append(head, body);
-    return { root, caret, keyed, keysChip, label, shut, offsetField, more, size, width };
+    return { root, caret, keyed, keysChip, label, shut, offsetField, more };
+  }
+
+  /* --- how one subtitle looks -------------------------------------------------
+   *
+   * A screen, because it is nine controls and none of them is touched while a
+   * film plays. One screen serves both subtitles: which one it is showing comes
+   * from the menu that opened it, the same way the Find screen learns its slot.
+   */
+
+  let styleSlot = 0;
+
+  function buildStyle() {
+    const wrap = document.createElement("div");
+
+    /* Named looks first, because for most readers this is the whole screen.
+     * The two subtitles want opposite treatments and setting six controls twice
+     * per film is a chore that gets skipped - and a feature too much work to
+     * use is a feature nobody has. They are starting points, not modes:
+     * applying one writes the values and then stops having an opinion, so every
+     * control below still works afterwards. */
+    const lookNote = document.createElement("p");
+    lookNote.className = "sso-note";
+    lookNote.textContent = "Start from a look, then change anything you like.";
+
+    const looks = document.createElement("div");
+    looks.className = "sso-seg sso-seg--wrap";
+    el.lookButtons = Object.entries(api.looks).map(([name, look]) => {
+      const b = button(look.label, {
+        title: look.hint,
+        onClick: () => {
+          api.applyLook(styleSlot, name);
+          refresh(api.status());
+        },
+      });
+      b.className = "sso-seg__b";
+      looks.append(b);
+      return { name, b };
+    });
+
+    el.styleSize = slider("Size", 0.6, 2.2, 0.05, 1, (value) =>
+      api.updateTrackSettings(styleSlot, { fontScale: value }),
+    );
+    el.styleWidth = slider("Width", 20, 100, 1, 80, (value) =>
+      api.updateTrackSettings(styleSlot, { widthPercent: value, placed: true }),
+    );
+    el.styleWeight = slider("Weight", 300, 800, 100, 600, (value) =>
+      api.updateTrackSettings(styleSlot, { weight: value }),
+    );
+    /* Zero is "none", not "faint". Over a bright frame the useful setting is
+     * usually more outline rather than less, so the range runs past what the
+     * stylesheet always drew. */
+    el.styleOutline = slider("Outline", 0, 2, 0.1, 1, (value) =>
+      api.updateTrackSettings(styleSlot, { outline: value }),
+    );
+    el.styleBackdrop = slider("Backdrop", 0, 1, 0.05, 0.55, (value) =>
+      api.updateTrackSettings(styleSlot, { backdrop: value }),
+    );
+
+    /* A colour well rather than a list of named colours. What a reader wants is
+     * "the same yellow the cinema uses" or "something that is not the other
+     * subtitle", and neither is on a list of eight. */
+    const colourRow = document.createElement("label");
+    colourRow.className = "sso-label";
+    const colourName = document.createElement("span");
+    colourName.textContent = "Colour";
+    el.styleColor = document.createElement("input");
+    el.styleColor.type = "color";
+    el.styleColor.className = "sso-swatch";
+    el.styleColor.addEventListener("input", () =>
+      api.updateTrackSettings(styleSlot, { color: el.styleColor.value }),
+    );
+    colourRow.append(colourName, el.styleColor);
+
+    const fontRow = document.createElement("div");
+    fontRow.className = "sso-seg sso-seg--wrap";
+    const fontLead = document.createElement("span");
+    fontLead.className = "sso-seg__lead";
+    fontLead.textContent = "Font";
+    fontRow.append(fontLead);
+    el.fontButtons = Object.keys(api.fonts).map((name) => {
+      const b = button(name === "sans" ? "Default" : name[0].toUpperCase() + name.slice(1), {
+        onClick: () => {
+          api.updateTrackSettings(styleSlot, { font: name });
+          refresh(api.status());
+        },
+      });
+      b.className = "sso-seg__b";
+      // Each button is set in the face it selects, so the choice is the sample.
+      b.style.fontFamily = api.fonts[name];
+      fontRow.append(b);
+      return { name, b };
+    });
+
+    wrap.append(
+      lookNote,
+      looks,
+      colourRow,
+      fontRow,
+      el.styleSize.row,
+      el.styleWeight.row,
+      el.styleWidth.row,
+      el.styleOutline.row,
+      el.styleBackdrop.row,
+    );
+    return wrap;
   }
 
   /* --- screens ---------------------------------------------------------------
@@ -955,6 +1059,7 @@
   const SCREEN_TITLES = {
     root: "Subtitle Overlay",
     find: "Find a subtitle",
+    style: "Style",
     settings: "Settings",
   };
 
@@ -991,6 +1096,11 @@
    * segmented control asking again - a section away from a second, identical
    * pair of buttons meaning something else entirely - was a question with the
    * answer already in it. */
+  function openStyle(slot) {
+    styleSlot = slot >= 0 && slot < api.trackCount ? slot : 0;
+    goTo("style");
+  }
+
   function openFind(slot) {
     /* Clamped, because the plus passes the first free slot and there is not
      * always one - findIndex returns -1, which read as "becomes subtitle 0" on
@@ -1841,7 +1951,6 @@
 
     status.tracks.forEach((track, slot) => {
       const card = el.trackCards[slot];
-      const geometry = settings.tracks[slot];
       /* An empty track's card is not shown at all. A second set of controls
        * that do nothing is worse than no second set: it says the feature is
        * broken rather than unused. */
@@ -1878,10 +1987,6 @@
        * vanished from the picture with nothing in the panel saying why is the
        * kind of thing that reads as a bug. */
       card.root.dataset.hidden = track.visible ? "false" : "true";
-      card.size.input.value = String(geometry.fontScale);
-      card.size.readout.textContent = String(geometry.fontScale);
-      card.width.input.value = String(Math.round(geometry.widthPercent));
-      card.width.readout.textContent = `${Math.round(geometry.widthPercent)}%`;
     });
 
     const drift = status.adDriftMs || 0;
@@ -1895,6 +2000,37 @@
       el.findFor.textContent = filling?.attached
         ? `Replacing subtitle ${targetSlot + 1} · ${filling.label || "attached"}`
         : `The result you pick becomes subtitle ${targetSlot + 1}.`;
+    }
+
+    if (showing("style")) {
+      const look = settings.tracks[styleSlot];
+      const track = status.tracks[styleSlot];
+      el.title.textContent = `Style · subtitle ${styleSlot + 1}`;
+      el.styleSize.input.value = String(look.fontScale);
+      el.styleSize.readout.textContent = look.fontScale.toFixed(2);
+      el.styleWidth.input.value = String(Math.round(look.widthPercent));
+      el.styleWidth.readout.textContent = `${Math.round(look.widthPercent)}%`;
+      el.styleWeight.input.value = String(look.weight);
+      el.styleWeight.readout.textContent = String(look.weight);
+      el.styleOutline.input.value = String(look.outline);
+      el.styleOutline.readout.textContent = look.outline === 0 ? "none" : look.outline.toFixed(1);
+      /* null means "follow the shared backdrop", which is what every subtitle
+       * that has never been styled carries. The slider shows what is actually
+       * being drawn, so moving it takes ownership rather than jumping. */
+      const backdrop = look.backdrop == null ? settings.background : look.backdrop;
+      el.styleBackdrop.input.value = String(backdrop);
+      el.styleBackdrop.readout.textContent = `${Math.round(backdrop * 100)}%`;
+      el.styleColor.value = look.color;
+      for (const { name, b } of el.fontButtons) b.dataset.on = look.font === name ? "true" : "false";
+      /* A look is marked only while every value it sets still holds. Change one
+       * slider and no look is showing, which is true - and better than leaving
+       * a name lit against settings it no longer describes. */
+      for (const { name, b } of el.lookButtons) {
+        const wanted = api.looks[name].style;
+        b.dataset.on = Object.entries(wanted)
+          .every(([key, value]) => look[key] === value) ? "true" : "false";
+      }
+      if (!track?.attached) el.title.textContent = "Style";
     }
 
     if (!showing("settings")) return;

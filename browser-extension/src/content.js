@@ -81,7 +81,62 @@
     // False until dragged. While false a cue's own {\an8} may still move it,
     // and attaching a second subtitle may arrange both.
     placed: false,
+
+    /* How this one looks.
+     *
+     * Per track, not shared, because the whole point of two subtitles is that
+     * they are two different things: one is the language being learnt and one
+     * is the language it is being learnt from, and a reader has to be able to
+     * tell which is which without reading either. Colour does that at a glance
+     * where size alone does not.
+     *
+     * Every default below is exactly what overlay.css hard-coded before these
+     * existed, and the stylesheet still carries those same values as its
+     * var() fallbacks - so a track that has never been styled renders byte for
+     * byte as it did. */
+    color: "#ffffff",
+    font: "sans", // a key into FONTS, not a font stack: see there
+    weight: 600,
+    // 0 is no outline, 1 is what the stylesheet always drew. Not a boolean:
+    // over a bright frame the useful setting is usually "more".
+    outline: 1,
+    // Per track, so a reference subtitle can be a whisper behind the one being
+    // read. null means "use the shared backdrop", which is what every existing
+    // installation has.
+    backdrop: null,
   };
+
+  /* The font choices, as keys rather than stacks.
+   *
+   * A stored font stack is a string from a settings file reaching a style
+   * attribute, which is a place to be careful; a key that indexes a table here
+   * cannot be anything but one of these five. Each stack ends in a generic so
+   * it resolves on a machine that has none of the named faces. */
+  const FONTS = {
+    sans: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+    system: '-apple-system, "Segoe UI", Roboto, sans-serif',
+    serif: 'Georgia, "Times New Roman", serif',
+    mono: '"SF Mono", ui-monospace, Menlo, Consolas, monospace',
+    rounded: '"SF Pro Rounded", "Nunito", "Trebuchet MS", sans-serif',
+  };
+
+  /* The outline, as a strength rather than a switch.
+   *
+   * Two shadows: a soft halo that lifts the text off a busy frame, and a tight
+   * one under it that gives the letters an edge. Strength 1 reproduces exactly
+   * what the stylesheet drew before this was a setting, so a track that has not
+   * been styled is unchanged. Strength 0 is "none" and returns the keyword
+   * rather than a transparent shadow, so the browser can skip the work.
+   *
+   * The blur grows with strength and the alpha saturates: past about 1.6 more
+   * blur is just a grey box, so the halo widens instead of darkening. */
+  function outlineShadow(strength) {
+    const s = Number.isFinite(strength) ? clamp(strength, 0, 2) : 1;
+    if (s === 0) return "none";
+    const alpha = Math.min(0.9, 0.45 + 0.45 * s).toFixed(2);
+    return `0 0 ${(4 * s).toFixed(1)}px rgba(0, 0, 0, ${alpha}), ` +
+      `0 1px ${(2 * s).toFixed(1)}px rgba(0, 0, 0, ${alpha})`;
+  }
 
   /* Where the two go when a second one arrives and neither has been placed by
    * hand. Left and right halves, on the same baseline, because the eye reads
@@ -103,6 +158,40 @@
     { posX: 50, posY: 88, widthPercent: 80 },
     { posX: 50, posY: 96, widthPercent: 80 },
   ];
+
+  /* Named looks, because the two subtitles want opposite treatments and setting
+   * six controls twice per film is a chore that gets skipped - and a feature
+   * that is too much work to use is a feature nobody has.
+   *
+   * These are starting points, not modes: applying one writes the values and
+   * then stops having an opinion, exactly like the arrangement buttons. Every
+   * control stays where it was and every one of them still works afterwards.
+   *
+   * Only the appearance is set. Position, width and whether a box has been
+   * placed by hand belong to the arrangement, and a look that moved the
+   * subtitle would be answering a question nobody asked. */
+  const LOOKS = {
+    plain: {
+      label: "Plain",
+      hint: "How subtitles have always looked here",
+      style: { color: "#ffffff", font: "sans", weight: 600, outline: 1, backdrop: null, fontScale: 1 },
+    },
+    learning: {
+      label: "Learning",
+      hint: "Bigger and warm, for the language being learnt",
+      style: { color: "#fff3dc", font: "system", weight: 700, outline: 1.3, backdrop: 0.62, fontScale: 1.15 },
+    },
+    reference: {
+      label: "Reference",
+      hint: "Small and quiet, for the language you already read",
+      style: { color: "#c6cfd8", font: "system", weight: 500, outline: 0.8, backdrop: 0.35, fontScale: 0.85 },
+    },
+    clean: {
+      label: "Clean",
+      hint: "No box at all, outline only - for a dark film",
+      style: { color: "#ffffff", font: "system", weight: 700, outline: 1.8, backdrop: 0, fontScale: 1 },
+    },
+  };
 
   const DEFAULT_SETTINGS = {
     background: 0.55,
@@ -805,6 +894,14 @@
    * handling. A reader who had spent a while getting the boxes where they
    * wanted them and then rebound one key by mistake lost the lot, from a button
    * that names one thing and does everything. */
+  /** Write a named look onto one subtitle. Appearance only - see LOOKS. */
+  function applyLook(slot, name) {
+    const look = LOOKS[name];
+    if (!look) return { ok: false };
+    updateTrackSettings(slot, { ...look.style });
+    return { ok: true };
+  }
+
   function resetKeys() {
     updateSettings({
       keys: { ...DEFAULT_SETTINGS.keys },
@@ -870,9 +967,16 @@
       const { root } = view;
       const fontPx = (picture * TEXT_FRACTION_OF_PICTURE * track.fontScale) / scale;
       root.style.setProperty("--sso-font-size", `${fontPx.toFixed(2)}px`);
-      root.style.setProperty("--sso-bg", `rgba(0, 0, 0, ${background})`);
+      // A track with its own backdrop overrides the shared one; null is what
+      // every installation that predates per-track styling has.
+      const alpha = track.backdrop == null ? background : track.backdrop;
+      root.style.setProperty("--sso-bg", `rgba(0, 0, 0, ${alpha})`);
       writePosition(root, track.posX, track.posY);
       root.style.setProperty("--sso-width", `${track.widthPercent}vw`);
+      root.style.setProperty("--sso-color", track.color || DEFAULT_TRACK.color);
+      root.style.setProperty("--sso-family", FONTS[track.font] || FONTS.sans);
+      root.style.setProperty("--sso-weight", String(track.weight ?? DEFAULT_TRACK.weight));
+      root.style.setProperty("--sso-outline", outlineShadow(track.outline));
       root.dataset.dim = dimNonSpeech ? "true" : "false";
       // Once placed by hand, a cue's own {\an8} no longer moves it.
       root.dataset.placed = track.placed ? "manual" : "auto";
@@ -1898,6 +2002,9 @@
     updateTrackSettings,
     resetSettings,
     resetKeys,
+    applyLook,
+    looks: LOOKS,
+    fonts: FONTS,
     showToast,
     undoRemove,
     removedTrack,

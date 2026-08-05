@@ -57,21 +57,24 @@
   max-width: 100%;
   margin: 0;
   padding: 0.15em 0.5em;
-  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  /* Every one of these is a per-track setting now, and every fallback is the
+   * literal this rule carried before they existed - so a subtitle nobody has
+   * styled renders exactly as it always did, and the only thing that can change
+   * it is somebody changing it. That is what makes adding the settings safe to
+   * do underneath a running feature. */
+  font-family: var(--sso-family, "Helvetica Neue", Helvetica, Arial, sans-serif);
   font-size: var(--sso-font-size, 2.6vh);
-  font-weight: 600;
+  font-weight: var(--sso-weight, 600);
   font-style: normal;
   line-height: 1.32;
   letter-spacing: 0.01em;
-  color: #fff;
+  color: var(--sso-color, #fff);
   background: var(--sso-bg, rgba(0, 0, 0, 0.55));
   border-radius: 6px;
   white-space: pre-wrap;
   /* Outline as well as a background: subtitles have to stay legible over a
    * bright frame even when the background box is turned down. */
-  text-shadow:
-    0 0 4px rgba(0, 0, 0, 0.9),
-    0 1px 2px rgba(0, 0, 0, 0.9);
+  text-shadow: var(--sso-outline, 0 0 4px rgba(0, 0, 0, 0.9), 0 1px 2px rgba(0, 0, 0, 0.9));
   transition: opacity 80ms linear;
 }
 

@@ -806,6 +806,28 @@ input[type="range"] {
   accent-color: var(--sso-accent);
 }
 
+/* The colour well. A native swatch, undressed: the browser's own chrome around
+ * it is a raised grey button that reads as a control on a surface where every
+ * other control is flat. */
+input.sso-swatch {
+  width: 44px;
+  height: 24px;
+  padding: 0;
+  background: none;
+  border: 1px solid var(--sso-line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+input.sso-swatch::-webkit-color-swatch-wrapper {
+  padding: 2px;
+}
+
+input.sso-swatch::-webkit-color-swatch {
+  border: 0;
+  border-radius: 4px;
+}
+
 .sso-value {
   width: 42px;
   flex: none;

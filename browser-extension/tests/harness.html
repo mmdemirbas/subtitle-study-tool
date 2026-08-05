@@ -1103,6 +1103,111 @@
         if (root.hidden) throw new Error("back did not return to the subtitles");
       });
 
+      check("an unstyled subtitle renders exactly as it always did", async () => {
+        /* Every per-track style property has the old hard-coded literal as its
+         * var() fallback in overlay.css, which is what makes it safe to add
+         * these settings underneath a running feature: nothing changes until
+         * somebody changes it. If a fallback drifts from the value it replaced,
+         * every existing installation silently restyles itself. */
+        window.__ssoApi.updateTrackSettings(0, {
+          color: undefined, font: undefined, weight: undefined, outline: undefined, backdrop: null,
+        });
+        window.__ssoApi.applyLook(0, "plain");
+        await sleep(120);
+        const cue = shadowOf().querySelector(".sso-cue");
+        const seen = getComputedStyle(cue);
+        if (seen.color !== "rgb(255, 255, 255)") throw new Error(`colour is ${seen.color}`);
+        if (seen.fontWeight !== "600") throw new Error(`weight is ${seen.fontWeight}`);
+        if (seen.backgroundColor !== "rgba(0, 0, 0, 0.55)")
+          throw new Error(`backdrop is ${seen.backgroundColor}`);
+        if (!/0px 0px 4px/.test(seen.textShadow))
+          throw new Error(`outline is ${seen.textShadow}`);
+
+        /* And with the custom properties absent entirely, which is the state of
+         * the very first paint - before settings have loaded and applySettings
+         * has written anything. That is the only moment the var() fallbacks in
+         * overlay.css are load-bearing, so it is the only way to check they
+         * still match the literals they replaced. */
+        const root = window.__ssoApi.overlayRoots()[0];
+        const written = ["--sso-color", "--sso-weight", "--sso-outline", "--sso-family"];
+        const kept = written.map((name) => root.style.getPropertyValue(name));
+        for (const name of written) root.style.removeProperty(name);
+        const bare = getComputedStyle(cue);
+        const drift = [];
+        if (bare.color !== "rgb(255, 255, 255)") drift.push(`colour ${bare.color}`);
+        if (bare.fontWeight !== "600") drift.push(`weight ${bare.fontWeight}`);
+        if (!/0px 0px 4px/.test(bare.textShadow)) drift.push(`outline ${bare.textShadow}`);
+        if (!/Helvetica/.test(bare.fontFamily)) drift.push(`font ${bare.fontFamily}`);
+        written.forEach((name, i) => kept[i] && root.style.setProperty(name, kept[i]));
+        if (drift.length) throw new Error(`the stylesheet fallbacks drifted: ${drift.join(", ")}`);
+      });
+
+      check("a look reaches the picture, and only its own subtitle", async () => {
+        const roots = window.__ssoApi.overlayRoots();
+        const cueOf = (slot) => roots[slot].querySelector(".sso-cue");
+        window.__ssoApi.applyLook(0, "learning");
+        window.__ssoApi.applyLook(1, "reference");
+        await sleep(150);
+
+        const learnt = getComputedStyle(cueOf(0));
+        const reference = getComputedStyle(cueOf(1));
+        if (learnt.color === reference.color)
+          throw new Error(`both subtitles are ${learnt.color}`);
+        if (Number(learnt.fontWeight) <= Number(reference.fontWeight))
+          throw new Error(`the learnt one is ${learnt.fontWeight} against ${reference.fontWeight}`);
+        // The whole point: the two are told apart without reading either.
+        if (learnt.backgroundColor === reference.backgroundColor)
+          throw new Error("both backdrops are the same");
+
+        window.__ssoApi.applyLook(0, "plain");
+        window.__ssoApi.applyLook(1, "plain");
+        await sleep(120);
+      });
+
+      check("no outline means none, not a faint one", async () => {
+        window.__ssoApi.updateTrackSettings(0, { outline: 0 });
+        await sleep(120);
+        const off = getComputedStyle(shadowOf().querySelector(".sso-cue")).textShadow;
+        if (off !== "none") throw new Error(`outline 0 draws ${off}`);
+        window.__ssoApi.updateTrackSettings(0, { outline: 2 });
+        await sleep(120);
+        const most = getComputedStyle(shadowOf().querySelector(".sso-cue")).textShadow;
+        if (most === "none" || !/8px/.test(most)) throw new Error(`outline 2 draws ${most}`);
+        window.__ssoApi.applyLook(0, "plain");
+        await sleep(120);
+      });
+
+      check("the style screen follows the subtitle it was opened for", async () => {
+        /* Geometry lives in settings, which exists for both slots whether or
+         * not a subtitle is attached to them - so the two can be given
+         * different sizes without attaching anything, and this case does not
+         * disturb the arrangement the cases after it assert on. */
+        const shadow = panelShadow();
+        const was = window.__ssoApi.status().settings.tracks.map((t) => t.fontScale);
+        window.__ssoApi.updateTrackSettings(0, { fontScale: 1.15 });
+        window.__ssoApi.updateTrackSettings(1, { fontScale: 1.35 });
+        await sleep(80);
+
+        const card = [...shadow.querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        card.querySelector(".sso-track__more").click();
+        await sleep(60);
+        [...shadow.querySelectorAll(".sso-menu__item")].find((b) => b.textContent === "Style…").click();
+        await sleep(120);
+
+        const said = shadow.querySelector(".sso-win__title").textContent;
+        if (!/subtitle 1/i.test(said)) throw new Error(`the screen says "${said}"`);
+        const size = [...shadow.querySelectorAll(".sso-screen")]
+          .find((s) => !s.hidden).querySelector('input[type="range"]');
+        if (Number(size.value) !== 1.15)
+          throw new Error(`it is showing ${size.value}, which is the other subtitle's size`);
+
+        shadow.querySelector(".sso-panel__back").click();
+        await sleep(60);
+        window.__ssoApi.updateTrackSettings(0, { fontScale: was[0] });
+        window.__ssoApi.updateTrackSettings(1, { fontScale: was[1] });
+        await sleep(80);
+      });
+
       check("the way to another subtitle knows there is not always room", async () => {
         /* The plus passes the first free slot, and findIndex returns -1 when
          * there is none. That reached the screen as "The result you pick
