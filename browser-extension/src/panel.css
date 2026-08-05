@@ -581,6 +581,36 @@ button.sso-nudge {
   color: var(--sso-ink-3);
 }
 
+/* Undo the timing, beside the timing. Quiet, and only there when there is
+ * something to undo - which is also exactly when the subtitle needs no undo. */
+button.sso-sync__clear {
+  flex: none;
+  min-width: 24px;
+  padding: 5px 4px;
+  font-size: var(--sso-t-small);
+  line-height: 1;
+  color: var(--sso-ink-3);
+  background: none;
+  border: 0;
+}
+
+button.sso-sync__clear:hover:not(:disabled) {
+  color: var(--sso-ink);
+  background: var(--sso-fill-hover);
+}
+
+/* On or off the picture. Reached for mid-scene, when a subtitle covers
+ * something worth seeing, so it is a button and not two clicks into a menu. */
+button.sso-track__eye {
+  min-width: 22px;
+  height: 22px;
+  font-size: 13px;
+}
+
+button.sso-track__eye[data-on="false"] {
+  color: var(--sso-danger);
+}
+
 button.sso-nudge:hover:not(:disabled) .sso-nudge__step {
   color: var(--sso-ink);
 }

@@ -994,24 +994,57 @@
         /* Hide moved into the menu, so the control that used to carry this
          * state is not on screen. A subtitle gone from the picture with nothing
          * saying why reads as a fault rather than as something you did. */
+        /* A button on the card, not a menu item. Taking a subtitle off the
+         * picture for ten seconds because it covers something worth seeing is
+         * one of the two things done mid-scene, and two clicks deep is where
+         * the menu started feeling like a filing cabinet. */
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        card.querySelector(".sso-track__more").click();
-        await sleep(60);
-        const hide = [...panelShadow().querySelectorAll(".sso-menu__item")]
-          .find((b) => b.textContent === "Hide");
-        if (!hide) throw new Error("no way to hide it");
-        hide.click();
-        await sleep(80);
-        if (card.dataset.hidden !== "true") throw new Error("the card does not say it is hidden");
+        const eye = card.querySelector(".sso-track__eye");
+        if (!eye) throw new Error("no way to hide it");
+        const box = eye.getBoundingClientRect();
+        if (box.width < 22 || box.height < 22)
+          throw new Error(`the hide button is ${Math.round(box.width)}×${Math.round(box.height)}`);
 
-        card.querySelector(".sso-track__more").click();
-        await sleep(60);
-        const show = [...panelShadow().querySelectorAll(".sso-menu__item")]
-          .find((b) => b.textContent === "Show");
-        if (!show) throw new Error("the menu still offers to hide an already hidden subtitle");
-        show.click();
-        await sleep(80);
+        eye.click();
+        await sleep(120);
+        if (card.dataset.hidden !== "true") throw new Error("the card does not say it is hidden");
+        if (window.__ssoApi.status().tracks[0].visible)
+          throw new Error("the subtitle is still on the picture");
+        if (eye.dataset.on !== "false") throw new Error("the button does not say what it did");
+
+        eye.click();
+        await sleep(120);
         if (card.dataset.hidden !== "false") throw new Error("it would not come back");
+      });
+
+      check("undoing the timing is next to the timing", async () => {
+        /* It was a menu item: open the menu, find it, click it - three actions
+         * for the thing readers do most after over-shooting a nudge. */
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        if (card.dataset.open !== "true") card.querySelector(".sso-track__caret").click();
+        await sleep(60);
+        const clear = card.querySelector(".sso-sync__clear");
+        if (!clear) throw new Error("no way to undo the timing from the card");
+
+        window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
+        await sleep(80);
+        if (!clear.hidden) throw new Error("it offers to undo a timing that is already the file's");
+
+        window.__ssoApi.setOffset(-4250, { slot: 0, quiet: true });
+        await sleep(100);
+        if (clear.hidden) throw new Error("there is something to undo and no way to undo it");
+        if (clear.getBoundingClientRect().width < 24)
+          throw new Error(`the undo is ${Math.round(clear.getBoundingClientRect().width)}px wide`);
+
+        // It clears the stretch too: a stretched subtitle is not back to the
+        // file's own timing until the stretch goes with the offset.
+        window.__ssoApi.setRate(1.0427, { slot: 0, quiet: true });
+        await sleep(80);
+        clear.click();
+        await sleep(120);
+        const track = window.__ssoApi.status().tracks[0];
+        if (track.offsetMs !== 0) throw new Error(`offset left at ${track.offsetMs}`);
+        if (track.rate !== 1) throw new Error(`rate left at ${track.rate}`);
       });
 
       check("the big step moves further than the small one", async () => {
@@ -1812,6 +1845,38 @@
         await sleep(80);
         const after = railShadow().querySelectorAll(".sso-card").length;
         if (after !== before - 1) throw new Error(`${before} cards became ${after}`);
+      });
+
+      check("the rail's close button actually puts it away", async () => {
+        /* Reported: it simply does not respond. The setting changed and the
+         * `hidden` attribute was set, and the rail stayed exactly where it was.
+         *
+         * The host carries `all: initial !important` so the page's inherited
+         * properties cannot cross into the shadow tree - and `all` includes
+         * display, so the host has `display: inline !important` on it. The rule
+         * behind the `hidden` attribute is `[hidden] { display: none }`, which
+         * cannot beat an inline !important. The setting, the attribute and the
+         * screen disagreed, and only the screen mattered.
+         *
+         * So this measures the box, not the attribute. */
+        const host = railShadow().host;
+        const before = host.getBoundingClientRect();
+        if (before.width === 0) throw new Error("the rail was not on screen to begin with");
+
+        railShadow().querySelector(".sso-icon--close").click();
+        await sleep(200);
+        const after = host.getBoundingClientRect();
+        if (after.width > 0 || after.height > 0)
+          throw new Error(
+            `still ${Math.round(after.width)}×${Math.round(after.height)} on screen after closing`);
+        if (window.__ssoStudy.settings().showRail)
+          throw new Error("the setting did not change");
+
+        // And putting it back brings it back.
+        window.__ssoStudy.updateSettings({ showRail: true });
+        await sleep(200);
+        if (host.getBoundingClientRect().width === 0)
+          throw new Error("it would not come back");
       });
 
       check("the rail carries its own settings", async () => {

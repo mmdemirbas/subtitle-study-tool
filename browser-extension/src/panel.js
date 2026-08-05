@@ -826,11 +826,6 @@
           onClick: () => openStyle(slot),
         },
         {
-          label: track.visible ? "Hide" : "Show",
-          title: "Take it off the picture without losing it",
-          onClick: () => api.setVisible(!track.visible, { slot }),
-        },
-        {
           label: "Study this one",
           title: "Mark the rare words in this subtitle instead",
           hidden: !study?.enabled || status.trackCount < 2 || study.studySlot === slot,
@@ -850,16 +845,6 @@
           title: "Work out the gap from where the two subtitles say the same things",
           hidden: status.trackCount < 2,
           onClick: () => lineUp(slot),
-        },
-        {
-          label: "Reset timing",
-          title: "Back to the file's own timing",
-          onClick: () => {
-            // Both: a stretched subtitle is not back to the file's own timing
-            // until the stretch goes with the offset.
-            api.setRate(1, { slot, quiet: true });
-            api.setOffset(0, { slot });
-          },
         },
         {
           label: "Replace…",
@@ -888,7 +873,19 @@
       refresh(api.status());
     });
 
-    head.append(caret, label, shut, learnChip, keysChip, more);
+    /* Hide is a button, not a menu item. It is the other thing readers reach
+     * for constantly - a subtitle in the way of something on screen goes away
+     * for ten seconds and comes back - and burying a ten-second action two
+     * clicks deep is what made the menu feel like a filing cabinet. */
+    const visible = document.createElement("button");
+    visible.className = "sso-icon sso-track__eye";
+    visible.type = "button";
+    visible.addEventListener("click", (event) => {
+      event.stopPropagation();
+      api.setVisible(!api.status().tracks[slot].visible, { slot });
+    });
+
+    head.append(caret, label, shut, learnChip, keysChip, visible, more);
     head.addEventListener("click", () => toggleTrack(slot));
 
     /* One row: say what is wrong, twice as fast or twice as fine, and read what
@@ -971,11 +968,29 @@
      * A single flex row put the field between them and let it take the slack,
      * which pushed each fine chevron up against the whole step it is a smaller
      * version of and away from the reading it changes. */
+    /* Undo the timing, beside the timing.
+     *
+     * It was a menu item, which is three actions - open the menu, find it,
+     * click it - for the one thing a reader does most often after over-shooting
+     * a nudge. It shows only when there is something to undo, so it costs
+     * nothing on a subtitle that is already right, and that is also honest:
+     * nothing to reset is exactly when the subtitle needs no reset. */
+    const offsetReset = document.createElement("button");
+    offsetReset.className = "sso-sync__clear";
+    offsetReset.type = "button";
+    offsetReset.textContent = "⌫";
+    offsetReset.title = "Back to the file's own timing";
+    offsetReset.addEventListener("click", () => {
+      api.setRate(1, { slot, quiet: true });
+      api.setOffset(0, { slot });
+    });
+
     const fine = document.createElement("div");
     fine.className = "sso-sync__fine";
     fine.append(
       nudger("Early", "‹", +1, "small", `${early} A fine step. Hold to run.`),
       offsetField,
+      offsetReset,
       nudger("Late", "›", -1, "small", `${late} A fine step. Hold to run.`),
     );
 
@@ -990,7 +1005,7 @@
     body.append(offsets);
 
     root.append(head, body);
-    return { root, caret, keyed, keysChip, learnChip, label, shut, offsetField, more };
+    return { root, caret, keyed, keysChip, learnChip, label, shut, offsetField, offsetReset, visible, more };
   }
 
   /* --- how one subtitle looks -------------------------------------------------
@@ -2055,6 +2070,11 @@
        * vanished from the picture with nothing in the panel saying why is the
        * kind of thing that reads as a bug. */
       card.root.dataset.hidden = track.visible ? "false" : "true";
+      card.visible.textContent = track.visible ? "◉" : "◎";
+      card.visible.title = track.visible ? "Take it off the picture" : "Put it back on the picture";
+      card.visible.dataset.on = track.visible ? "true" : "false";
+      // Nothing to undo, no undo. Which is also when the subtitle is right.
+      card.offsetReset.hidden = !track.offsetMs && !stretched;
     });
 
     const drift = status.adDriftMs || 0;

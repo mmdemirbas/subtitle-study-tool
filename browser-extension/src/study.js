@@ -190,7 +190,7 @@
       host.style.setProperty("width", `${settings.width}px`, "important");
       // Study can be on with the rail put away; the host stays in the tree so
       // that turning it back on does not have to rebuild it.
-      host.hidden = !settings.showRail;
+      setHostVisible(host, settings.showRail);
     }
     if (railEl) {
       railEl.dataset.auto = settings.auto ? "true" : "false";
@@ -850,6 +850,23 @@
         control.readout.textContent = control.format(Number(value));
       }
     }
+  }
+
+  /* Visibility is an explicit display, not the `hidden` attribute.
+   *
+   * The host carries `all: initial !important` inline to stop the page's
+   * inherited properties crossing into the shadow tree - and `all` includes
+   * display, so the host has `display: inline !important` on it. The UA rule
+   * behind the `hidden` attribute is `[hidden] { display: none }`, an author
+   * rule of the lowest possible weight, and it cannot beat an inline
+   * !important. So `host.hidden = true` set the attribute, changed the
+   * setting, and left the rail exactly where it was: the close button did
+   * nothing at all. The panel's host learned this; this one had not.
+   *
+   * The attribute is still set, because other code and the tests ask. */
+  function setHostVisible(node, visible) {
+    node.style.setProperty("display", visible ? "block" : "none", "important");
+    node.hidden = !visible;
   }
 
   async function loadStyles() {
