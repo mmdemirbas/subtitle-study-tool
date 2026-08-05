@@ -795,6 +795,20 @@
     updateSettings(cloneSettings(DEFAULT_SETTINGS));
   }
 
+  /* Just the bindings.
+   *
+   * The panel's "Reset keys" called resetSettings(), which resets every setting
+   * there is - both subtitles' size, width and position, the backdrop, the text
+   * handling. A reader who had spent a while getting the boxes where they
+   * wanted them and then rebound one key by mistake lost the lot, from a button
+   * that names one thing and does everything. */
+  function resetKeys() {
+    updateSettings({
+      keys: { ...DEFAULT_SETTINGS.keys },
+      keysEnabled: DEFAULT_SETTINGS.keysEnabled,
+    });
+  }
+
   /* Put both boxes somewhere sensible in one action.
    *
    * An arrangement is a button, not a mode. Position stays something you set by
@@ -1793,6 +1807,7 @@
     updateSettings,
     updateTrackSettings,
     resetSettings,
+    resetKeys,
     showToast,
     /* Study mode needs to read the line under a word to save it with its
      * sentence, and the paired line in the other language, which is the whole

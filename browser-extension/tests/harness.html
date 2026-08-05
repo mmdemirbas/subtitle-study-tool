@@ -934,6 +934,37 @@
         toggle.click();
       });
 
+      check("resetting the keys resets only the keys", async () => {
+        /* It called resetSettings(), which resets every setting there is. A
+         * reader who had spent a while placing the boxes and then rebound one
+         * key by mistake lost the lot, from a button naming one thing. */
+        window.__ssoApi.updateTrackSettings(0, { fontScale: 1.6, widthPercent: 44 });
+        window.__ssoApi.updateSettings({ background: 0.2, keys: { reset: "KeyQ" } });
+        await sleep(40);
+
+        /* Through the button, not through the api. The defect was never in
+         * what resetKeys does - it was that the button was wired to the wrong
+         * function, and a test calling the api directly passes either way. */
+        const reset = [...panelShadow().querySelectorAll("button")]
+          .find((b) => b.textContent === "Reset keys");
+        if (!reset) throw new Error("no way to reset the bindings");
+        reset.click();
+        await sleep(40);
+        const after = window.__ssoApi.status().settings;
+        if (after.keys.reset !== window.__ssoApi.defaults.keys.reset)
+          throw new Error(`the binding survived as ${after.keys.reset}`);
+        if (after.tracks[0].fontScale !== 1.6)
+          throw new Error(`it also reset the size to ${after.tracks[0].fontScale}`);
+        if (after.tracks[0].widthPercent !== 44)
+          throw new Error(`it also reset the width to ${after.tracks[0].widthPercent}`);
+        if (after.background !== 0.2)
+          throw new Error(`it also reset the backdrop to ${after.background}`);
+
+        window.__ssoApi.updateTrackSettings(0, { fontScale: 1, widthPercent: 80 });
+        window.__ssoApi.updateSettings({ background: 0.55 });
+        await sleep(40);
+      });
+
       check("a Turkish Q bracket key nudges the offset", async () => {
         const before = window.__ssoApi.status().offsetMs;
         document.dispatchEvent(new KeyboardEvent("keydown",

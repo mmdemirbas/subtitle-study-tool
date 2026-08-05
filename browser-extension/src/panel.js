@@ -1379,7 +1379,10 @@
     actions.className = "sso-row";
     actions.style.marginTop = "8px";
     actions.append(
-      button("Reset keys", { onClick: () => api.resetSettings() }),
+      button("Reset keys", {
+        onClick: () => api.resetKeys(),
+        title: "Put the bindings back to their defaults",
+      }),
       button("Disable keys", {
         onClick: () => api.updateSettings({ keysEnabled: !api.status().settings.keysEnabled }),
       }),
