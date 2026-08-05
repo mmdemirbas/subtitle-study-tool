@@ -1212,6 +1212,42 @@
         if (root.hidden) throw new Error("closing it took the subtitles away too");
       });
 
+      check("the settings window goes exactly where it is dragged", async () => {
+        /* It jumped 38px on the grab and then travelled 1.087x as far as the
+         * pointer. measurePlacement solves the page's coordinate system by
+         * writing 0, writing 100 and reading back where the element landed -
+         * and this window's writer clamps its argument to the screen, so the
+         * two probes came out 92px apart and the solver called it a page
+         * scaled to 0.92. The probe is the raw writer now. */
+        const sheet = await openSettings();
+        const host = sheet.host;
+        const body = sheet.querySelector(".sso-sheet__body");
+        const pev = (type, x, y, buttons) =>
+          new PointerEvent(type,
+            { pointerId: 44, clientX: x, clientY: y, button: 0, buttons, bubbles: true });
+
+        const start = host.getBoundingClientRect();
+        body.dispatchEvent(pev("pointerdown", start.left + 30, start.top + 60, 1));
+        await sleep(20);
+        const grabbed = host.getBoundingClientRect();
+        if (Math.abs(grabbed.left - start.left) > 1 || Math.abs(grabbed.top - start.top) > 1)
+          throw new Error(
+            `taking hold of it moved it ${Math.round(grabbed.left - start.left)},` +
+            `${Math.round(grabbed.top - start.top)}`);
+
+        body.dispatchEvent(pev("pointermove", start.left + 130, start.top + 120, 1));
+        body.dispatchEvent(pev("pointerup", start.left + 130, start.top + 120, 0));
+        await sleep(60);
+        const after = host.getBoundingClientRect();
+        if (Math.abs(after.left - start.left - 100) > 1 || Math.abs(after.top - start.top - 60) > 1)
+          throw new Error(
+            `dragged 100,60 and it went ${Math.round(after.left - start.left)},` +
+            `${Math.round(after.top - start.top)}`);
+
+        sheetShadow().querySelector(".sso-icon--close").click();
+        await sleep(120);
+      });
+
       check("every setting is on screen the moment the window opens", async () => {
         /* The sections folded, from when they were a column inside the panel.
          * In a window opened to change one thing, a fold hides the thing. What
@@ -2402,6 +2438,59 @@
           head.dispatchEvent(pev("pointerdown", box.left + 40, box.top + 8, 1));
           head.dispatchEvent(pev("pointermove", 300, 150, 1));
           head.dispatchEvent(pev("pointerup", 300, 150, 0));
+          await sleep(60);
+        });
+
+        check(`the ${s.name} moves when dragged by an empty part of it`, async () => {
+          /* Only the title bar was a handle, which on a window that is mostly
+           * empty means aiming at a 22px strip to move it. Anything with no
+           * words of its own is a handle now - and anything with words is not,
+           * because a surface you can drag by its own text is a surface whose
+           * text cannot be selected, and the rail is there to be read. */
+          await openBoth();
+          const host = hostFor(s.sel);
+          const shadow = host.shadowRoot;
+          const off = "button, input, select, textarea, label, .sso-win__head, .sso-grip";
+
+          const empty = [...shadow.querySelectorAll("div")].find((n) =>
+            !n.closest(off) &&
+            [...n.childNodes].every((c) => c.nodeType !== 3 || !c.textContent.trim()) &&
+            n.getBoundingClientRect().height > 20);
+          if (!empty) throw new Error("no empty part of the window to grab");
+
+          const start = host.getBoundingClientRect();
+          empty.dispatchEvent(pev("pointerdown", start.left + 40, start.top + 60, 1));
+          empty.dispatchEvent(pev("pointermove", start.left + 140, start.top + 130, 1));
+          empty.dispatchEvent(pev("pointerup", start.left + 140, start.top + 130, 0));
+          await sleep(60);
+          const moved = host.getBoundingClientRect();
+          if (Math.abs(moved.left - start.left - 100) > 3 || Math.abs(moved.top - start.top - 70) > 3)
+            throw new Error(
+              `dragged 100,70 and it went ${Math.round(moved.left - start.left)},` +
+              `${Math.round(moved.top - start.top)}`);
+
+          // And a press on its own words is not a grab.
+          const wordy = [...shadow.querySelectorAll("*")].find((n) =>
+            !n.closest(off) &&
+            [...n.childNodes].some((c) => c.nodeType === 3 && c.textContent.trim()) &&
+            n.getBoundingClientRect().width > 10);
+          if (!wordy) throw new Error("the window says nothing at all");
+          const held = host.getBoundingClientRect();
+          wordy.dispatchEvent(pev("pointerdown", held.left + 40, held.top + 60, 1));
+          wordy.dispatchEvent(pev("pointermove", held.left + 240, held.top + 200, 1));
+          wordy.dispatchEvent(pev("pointerup", held.left + 240, held.top + 200, 0));
+          await sleep(60);
+          const after = host.getBoundingClientRect();
+          if (Math.abs(after.left - held.left) > 2 || Math.abs(after.top - held.top) > 2)
+            throw new Error(
+              `dragging "${wordy.textContent.trim().slice(0, 20)}" moved the window ` +
+              `${Math.round(after.left - held.left)},${Math.round(after.top - held.top)}`);
+
+          // Back where it started, so what follows is not testing a corner.
+          const head = shadow.querySelector(s.head);
+          head.dispatchEvent(pev("pointerdown", after.left + 40, after.top + 8, 1));
+          head.dispatchEvent(pev("pointermove", start.left + 40, start.top + 8, 1));
+          head.dispatchEvent(pev("pointerup", start.left + 40, start.top + 8, 0));
           await sleep(60);
         });
 

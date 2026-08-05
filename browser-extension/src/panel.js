@@ -240,7 +240,9 @@
 
     panel.append(head, body, ...buildResizeGrips(body));
     shadow.append(panel);
-    makeDraggable(head);
+    // The whole panel, not only its bar: an empty part of a window is a handle
+    // everywhere else, and this one is mostly empty when nothing is attached.
+    makeDraggable(panel, head);
     containGestures(panel);
     await restoreSize();
     return host;
@@ -1906,9 +1908,10 @@
    * difference. Every position afterwards is corrected by it. This is exact for
    * an offset containing block and costs one extra layout read per drag.
    */
-  function makeDraggable(handle) {
+  function makeDraggable(handle, head) {
     api.makeMovable(handle, {
       host,
+      keepOnScreen: head,
       place: (x, y) => setPosition(`${x}px`, `${y}px`),
       // Dragging down the screen leaves less room beneath.
       onMove: fitToViewport,

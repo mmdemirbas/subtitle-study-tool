@@ -527,22 +527,63 @@
    * the clamp keeps the handle on screen - the handle specifically, because it
    * is the part that drags the thing back.
    */
-  function makeMovable(handle, { host, place, onMove, onEnd }) {
+  /* What is not a handle.
+   *
+   * Controls, obviously - a press on a button is a click. Text is the less
+   * obvious half: a window you can drag by its own words is a window whose
+   * words cannot be selected, and the rail is a reading surface. So a press
+   * counts as a grab when it lands on an element that has no words of its own,
+   * which is what "an empty part of the window" means when you say it out
+   * loud. The title bar grabs whatever it is pressed on, because that is what
+   * a title bar has always been. */
+  const NOT_A_HANDLE =
+    "button, input, select, textarea, label, a, [contenteditable], .sso-grip, [data-nodrag]";
+
+  function isEmptySpace(node) {
+    if (!node || node.nodeType !== 1 || node.closest(NOT_A_HANDLE)) return false;
+    for (const child of node.childNodes) {
+      if (child.nodeType === 3 && child.textContent.trim()) return false;
+    }
+    return true;
+  }
+
+  /* `keepOnScreen` is the part that must stay reachable, which is the title bar
+   * rather than the whole window: clamping the window itself would stop a tall
+   * panel from being pushed down the screen at all, and the bar is the part
+   * that drags it back. */
+  /* `probe` is how the coordinate system gets measured, and it must be the raw
+   * writer - not a `place` that clamps. measurePlacement writes 0 and then 100
+   * and reads back where the element landed; a clamp that rounds 0 up to 8
+   * makes those two probes 92px apart, so the solver reports a page scale of
+   * 0.92 on a page doing no scaling at all. Measured on the settings window
+   * before this was split out: a grab jumped it 38px sideways and then moved
+   * it 1.087x as far as the pointer for the rest of the drag. */
+  function makeMovable(handle, { host, place, probe = place, onMove, onEnd, keepOnScreen = null }) {
     let origin = null;
 
     handle.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0 || event.target.closest("button")) return;
+      if (event.button !== 0) return;
+      const onBar = event.target.closest?.(".sso-win__head");
+      if (event.target.closest(NOT_A_HANDLE) || (!onBar && !isEmptySpace(event.target))) return;
       const box = host.getBoundingClientRect();
 
       // Solve the mapping, then put it back where the probe found it. Both
       // happen in this handler, so nothing is painted in between.
-      const map = measurePlacement(host, place);
+      const map = measurePlacement(host, probe);
       const back = map.toLocal(box.left, box.top);
       place(back.x, back.y);
 
       origin = { map, grabX: event.clientX - box.left, grabY: event.clientY - box.top };
-      handle.dataset.dragging = "true";
-      handle.setPointerCapture?.(event.pointerId);
+      // The bar carries the state, because the bar is what changes cursor.
+      (keepOnScreen || handle).dataset.dragging = "true";
+      /* Capture is how the drag keeps receiving moves once the pointer leaves
+       * the window, and it throws for a pointer id that is not live - which is
+       * what a synthetic pointerdown from the page, or from a test, produces.
+       * Losing capture costs a drag that stops at the edge; letting it throw
+       * costs the drag entirely. */
+      try {
+        handle.setPointerCapture?.(event.pointerId);
+      } catch {}
     });
 
     handle.addEventListener("pointermove", (event) => {
@@ -552,7 +593,7 @@
         return;
       }
       const box = host.getBoundingClientRect();
-      const handleHeight = handle.getBoundingClientRect().height || 34;
+      const handleHeight = (keepOnScreen || handle).getBoundingClientRect().height || 34;
       const left = clamp(
         event.clientX - origin.grabX,
         0,
@@ -571,8 +612,10 @@
     const end = (event) => {
       if (!origin) return;
       origin = null;
-      handle.dataset.dragging = "false";
-      handle.releasePointerCapture?.(event.pointerId);
+      (keepOnScreen || handle).dataset.dragging = "false";
+      try {
+        handle.releasePointerCapture?.(event.pointerId);
+      } catch {}
       onEnd?.();
     };
     handle.addEventListener("pointerup", end);
@@ -1480,10 +1523,12 @@
       chrome.storage.local.set({ [storeKey]: { ...at, ...size } }).catch(() => {});
     };
 
-    makeMovable(head, {
+    makeMovable(root, {
       host: layer.host,
       place,
+      probe: layer.place,
       onEnd: remember,
+      keepOnScreen: head,
     });
 
     for (const corner of [

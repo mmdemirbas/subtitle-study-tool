@@ -715,7 +715,10 @@
     railEl.append(head, listEl, noteEl);
     shadow.append(railEl);
 
-    makeDraggable(head);
+    /* The whole rail is a handle, not only its bar - the same as the control
+     * panel. A press on a word or a meaning still selects the text: the grab
+     * only takes elements that carry no words of their own. */
+    makeDraggable(railEl, head);
     makeResizable();
     await restorePosition();
     applySettings();
@@ -1330,9 +1333,10 @@
    * measurePlacement in content.js. A rail that slides out from under the
    * pointer is the identical bug in the identical shape, and it would have been
    * fixed in one place and not the other if this used its own arithmetic. */
-  function makeDraggable(handle) {
+  function makeDraggable(handle, head) {
     api.makeMovable(handle, {
       host,
+      keepOnScreen: head,
       place: (x, y) => setPosition(`${x}px`, `${y}px`),
       onEnd: savePosition,
     });
@@ -1340,7 +1344,9 @@
     /* Double-click the title bar to send it back to its corner, the same
      * gesture the control panel has. Somewhere to put a thing you have dragged
      * into the way, without having to aim it back. */
-    handle.addEventListener("dblclick", (event) => {
+    // On the bar only. Parking is a big move for a gesture that can happen by
+    // accident, and a double-click anywhere in a list of words is an accident.
+    head.addEventListener("dblclick", (event) => {
       if (event.target.closest("button")) return;
       park();
     });
