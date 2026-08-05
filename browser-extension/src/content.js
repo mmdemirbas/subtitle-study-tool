@@ -1819,6 +1819,8 @@
   // --- offset ---------------------------------------------------------------
 
   const offsetKey = (fileId) => `sso:offset:${fileId}`;
+  // Read by provider.js when it decides what to look for on the next film.
+  const USED_LANGUAGES_KEY = "sso:usedLanguages";
 
   /* What was last done to this file's timing.
    *
@@ -2002,6 +2004,7 @@
 
     startTicking();
     notify();
+    rememberLanguages();
     // Show the handle on attach, so it is discoverable without knowing that
     // moving the mouse summons it.
     revealHandle();
@@ -2048,6 +2051,29 @@
    * stays an undo. Past this it would be a wastebasket, which needs somewhere
    * to live and a way to empty it, and this is two subtitles, not a filesystem. */
   const UNDO_MS = 30000;
+
+  /* What you actually watch with, in the order you put it on screen.
+   *
+   * Attaching English and then Turkish is a reader saying what they want, and
+   * until now nothing listened: the next film went back to whatever the options
+   * page had been set to, and a pair had to be built by hand again. The
+   * shortcut already fills both slots - it just filled them from a list nobody
+   * had told about this evening's viewing.
+   *
+   * Slot order is the whole point, not just the set. Slot 0 is the language
+   * being learnt and slot 1 is the one it is being learnt from, and getting
+   * them the wrong way round is not a small error.
+   *
+   * Written on every attach, so the most recent pair wins, and stored rather
+   * than derived because a new video is usually a new page with no memory of
+   * the last one. The geometry needs no help: the arrangement lives in the
+   * settings and survives on its own.
+   */
+  function rememberLanguages() {
+    const used = state.tracks.map((track) => (track.cues.length > 0 ? track.language || "" : ""));
+    if (!used.some(Boolean)) return;
+    chrome.storage.local.set({ [USED_LANGUAGES_KEY]: used }).catch(() => {});
+  }
 
   /* Line one subtitle up against the other.
    *

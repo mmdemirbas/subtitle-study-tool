@@ -108,9 +108,30 @@ export async function status() {
   };
 }
 
+/* What to look for, most wanted first.
+ *
+ * The order is not a detail: the first language becomes the first subtitle and
+ * the second becomes the second, so this is also what decides which of a pair
+ * is the language being learnt.
+ *
+ * What the reader last watched with comes first, because attaching English and
+ * then Turkish is them saying what they want and it would be strange to ask
+ * again on the next film. The configured list follows, so the search still
+ * casts as wide a net as it did and a language that has never been used is
+ * still found - it just does not win the slot.
+ */
 export async function preferredLanguages() {
   const info = await status();
-  return info.default_languages?.length ? info.default_languages : DEFAULT_LANGUAGES;
+  const configured = info.default_languages?.length ? info.default_languages : DEFAULT_LANGUAGES;
+  let used = [];
+  try {
+    used = (await chrome.storage.local.get("sso:usedLanguages"))["sso:usedLanguages"] || [];
+  } catch {
+    // Nothing watched yet, or storage is unavailable. The configured list is
+    // exactly the right answer in both cases.
+  }
+  const wanted = used.filter(Boolean);
+  return [...wanted, ...configured.filter((language) => !wanted.includes(language))];
 }
 
 export async function search(args) {

@@ -2490,6 +2490,58 @@
         await sleep(150);
       });
 
+      check("what you watched with is remembered, in the order you chose it", async () => {
+        /* Reported: "if I added 2 subtitles, EN + TR, then the next video
+         * should load double subtitles in the same languages and same
+         * arrangement". The shortcut already filled both slots - it filled them
+         * from a list nobody had told about this evening's viewing.
+         *
+         * Slot order is the whole point, not just the set: slot 0 is the
+         * language being learnt and slot 1 is the one it is learnt from. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasGeometry = api.status().settings.tracks.map((t) => ({ ...t }));
+
+        await api.attach({ cues: CUES, label: "one", fileId: 8801, language: "de", slot: 0 });
+        await api.attach({ cues: CUES, label: "two", fileId: 8802, language: "fr", slot: 1 });
+        await sleep(200);
+        const stored = (await chrome.storage.local.get("sso:usedLanguages"))["sso:usedLanguages"];
+        if (!Array.isArray(stored)) throw new Error("nothing was remembered");
+        if (stored[0] !== "de" || stored[1] !== "fr")
+          throw new Error(`remembered ${JSON.stringify(stored)}, want ["de","fr"]`);
+
+        /* And the arrangement needs no help - it lives in the settings, so a
+         * new video keeps it. Worth asserting, because the thing that would
+         * break it is attach() re-arranging over a layout already chosen. */
+        api.arrange("stacked");
+        await sleep(120);
+        const arranged = api.status().settings.tracks.map((t) => ({ ...t }));
+        await api.attach({ cues: CUES, label: "next film", fileId: 8803, language: "de", slot: 0 });
+        await sleep(200);
+        const after = api.status().settings.tracks;
+        for (const slot of [0, 1]) {
+          if (after[slot].posY !== arranged[slot].posY || after[slot].widthPercent !== arranged[slot].widthPercent)
+            throw new Error(
+              `attaching moved subtitle ${slot + 1}: ` +
+              `${arranged[slot].posY}%/${arranged[slot].widthPercent}% -> ` +
+              `${after[slot].posY}%/${after[slot].widthPercent}%`);
+        }
+
+        await chrome.storage.local.remove("sso:usedLanguages");
+        for (const slot of [0, 1]) {
+          if (wasAttached[slot]) {
+            await api.attach({
+              cues: CUES, label: slot ? "second" : "first", fileId: slot + 1,
+              language: slot ? "tr" : "en", slot,
+            });
+          } else {
+            api.detach(slot);
+          }
+        }
+        api.updateSettings({ tracks: wasGeometry });
+        await sleep(150);
+      });
+
       check("a timing saved before rates existed still loads", async () => {
         /* The stored value went from a bare number to an object. Reading has to
          * accept both, or the first thing this change does to an existing
