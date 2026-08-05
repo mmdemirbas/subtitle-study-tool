@@ -391,11 +391,71 @@ button.sso-more__toggle:hover:not(:disabled) {
  * row and the readout between them is what changed as a result.
  */
 
-.sso-sync button {
+.sso-sync {
+  gap: 4px;
+  justify-content: space-between;
+}
+
+/* The reading with the two fine steps either side of it. Grouped so the row
+ * reads outward from the number: fine next to it, whole at the edges. */
+.sso-sync__fine {
+  display: flex;
   flex: 1;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
   min-width: 0;
+}
+
+/* Five things across the row and only the reading may grow. The two words are
+ * sized by their text, so the row costs the same at 340px and at 280 and the
+ * number takes the slack. */
+button.sso-nudge {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  padding: 5px 7px;
+  font-size: var(--sso-t-small);
+  font-weight: 600;
   white-space: nowrap;
 }
+
+/* The magnitude, never a direction. It sits on the outside of each pair, so
+ * the two whole steps are at the two ends of the row and the fine ones flank
+ * the number - the row reads outward from the middle in both directions. */
+.sso-nudge__step {
+  font-size: 1.1em;
+  line-height: 1;
+  color: var(--sso-ink-3);
+}
+
+button.sso-nudge:hover:not(:disabled) .sso-nudge__step {
+  color: var(--sso-ink);
+}
+
+/* The fine step is a chevron beside the number, so it needs the same target as
+ * the labelled one next to it. */
+.sso-nudge--small {
+  justify-content: center;
+  min-width: 26px;
+  padding: 5px 4px;
+}
+
+.sso-nudge__word:empty {
+  display: none;
+}
+
+/* Below 320px the words go and the chevrons carry the row. They keep their
+ * titles, and the reading is the thing that must not be squeezed. */
+/* There is no narrow variant, and the measurement is why. The row costs 232px
+ * with both words on it, against 236px usable at the 280px minimum the corner
+ * grips allow - so the words fit everywhere the panel can go. An earlier
+ * version dropped them below 320px, which would have hidden the only part of
+ * this row that says what it does, to buy space that was already there.
+ *
+ * The bound this trades against: the reading is 62px, which holds a signed
+ * value up to about ±99s. Real offsets are seconds to a minute and a half. */
 
 /* What it did, under what you told it. Two lines rather than one, because
  * three controls and a reading do not fit across the panel - the Reset was
@@ -416,11 +476,27 @@ button.sso-more__toggle:hover:not(:disabled) {
  * it wrapped onto two lines, and the Reset was pushed out of sight entirely. */
 .sso-panel input.sso-sync__field {
   flex: none;
-  width: 58px;
-  padding: 3px 6px;
-  font-size: var(--sso-t-small);
+  width: 62px;
+  padding: 4px 6px;
+  font-size: var(--sso-t-body);
   font-variant-numeric: tabular-nums;
-  text-align: right;
+  font-weight: 600;
+  text-align: center;
+  background: transparent;
+  border-color: transparent;
+}
+
+/* It reads as a number until you go near it, and as a field once you do. In
+ * the middle of a row of buttons a bordered box would read as a sixth control;
+ * it is the state those five controls change. */
+.sso-panel input.sso-sync__field:hover,
+.sso-panel input.sso-sync__field:focus {
+  background: rgba(0, 0, 0, 0.25);
+  border-color: var(--sso-line);
+}
+
+.sso-panel input.sso-sync__field[data-set="true"] {
+  color: var(--sso-accent-ink);
 }
 
 .sso-offset {

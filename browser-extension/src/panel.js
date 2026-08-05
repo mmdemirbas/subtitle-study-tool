@@ -649,15 +649,22 @@
   const FAST_AFTER_MS = 900;
   const FASTER_AFTER_MS = 2400;
 
-  function holdToRepeat(node, slot, direction) {
+  function holdToRepeat(node, slot, direction, size = "small") {
     let timer = null;
     let startedAt = 0;
     let ranOn = false;
 
+    /* Where on the ladder a button starts. The escalation was the only way to
+     * cover both a quarter-second trim and a seventeen-second correction, and
+     * it works - but it made the first press of every gesture the smallest
+     * possible one, so a reader who already knew the subtitle was seconds out
+     * had to hold a button and wait for it to agree. The large button starts a
+     * rung up and escalates from there; the small one is unchanged. */
     const stepFor = (heldMs) => {
       const { smallStepMs, largeStepMs } = api.status().settings;
-      if (heldMs < FAST_AFTER_MS) return smallStepMs;
-      if (heldMs < FASTER_AFTER_MS) return largeStepMs;
+      const base = size === "large" ? largeStepMs : smallStepMs;
+      if (heldMs < FAST_AFTER_MS) return base;
+      if (heldMs < FASTER_AFTER_MS) return size === "large" ? largeStepMs * 5 : largeStepMs;
       return largeStepMs * 5;
     };
 
@@ -767,56 +774,41 @@
     head.append(caret, label, shut, keysChip);
     head.addEventListener("click", () => toggleTrack(slot));
 
-    /* Say what is wrong, not which way to push a number.
+    /* One row: say what is wrong, twice as fast or twice as fine, and read what
+     * it did in the middle.
      *
-     * What a viewer perceives is "the text came up before they spoke". Turning
-     * that into a sign means knowing that film time is stream time minus the
-     * offset, so a larger offset shows the line later - which nobody should
-     * have to work out while a film is playing, and getting it backwards
-     * doubles the error and makes the next guess harder.
+     * Say what is wrong, not which way to push a number. What a viewer
+     * perceives is "the text came up before they spoke". Turning that into a
+     * sign means knowing that film time is stream time minus the offset, so a
+     * larger offset shows the line later - which nobody should have to work out
+     * while a film is playing, and getting it backwards doubles the error and
+     * makes the next guess harder. That is why these are words and not arrows:
+     * an arrow re-introduces exactly the question the words were invented to
+     * remove, and "◀" is doubly ambiguous - does it move the text earlier, or
+     * move it back relative to the speech? The chevron beside each word is a
+     * magnitude, never a direction, and never appears on its own.
      *
-     * So the buttons carry the complaint and the readout says what was done
-     * about it. Shift gives the coarse step, matching the bracket keys. */
+     * Two sizes because one was wrong in both directions: a quarter-second is
+     * useless when a subtitle is seventeen seconds out, and a second is too
+     * coarse for the last adjustment. Holding either still escalates.
+     *
+     * The measurement that decides the layout: usable width is the host width
+     * less 46px of borders and padding, so 294px at the default 340 and 234px
+     * at the 280 minimum. Two chevron buttons, two words, a reading and the
+     * gaps come to 208px, which fits both. Keeping the old sentences and adding
+     * a second size needs 306px and fits neither. */
     const offsets = document.createElement("div");
     offsets.className = "sso-row sso-sync";
-    const offsetValue = document.createElement("span");
-    offsetValue.className = "sso-offset";
 
-    offsets.append(
-      holdToRepeat(
-        button("Text is early", {
-          title:
-            "The line appears before it is spoken, so hold it back. " +
-            "Click to nudge, hold to run.",
-        }),
-        slot,
-        +1,
-      ),
-      holdToRepeat(
-        button("Text is late", {
-          title:
-            "The line appears after it is spoken, so bring it forward. " +
-            "Click to nudge, hold to run.",
-        }),
-        slot,
-        -1,
-      ),
-    );
-
-    /* The readout sits under the buttons rather than between them. Three
-     * controls and a reading do not fit across 340px - the Reset was rendering
-     * past the edge of the panel - and they are two different things anyway:
-     * above is what you tell it, below is what it did.
+    /* Signed seconds, and an input. Holding a button runs the offset up
+     * quickly, but somebody who already knows the answer - a subtitle timed
+     * against a release seventeen seconds out - should be able to say seventeen
+     * rather than hold a button until it arrives.
      *
-     * The reading is also an input. Holding a button runs the offset up
-     * quickly, but somebody who already knows the answer - a subtitle timed for
-     * a release seventeen seconds out - should be able to say seventeen rather
-     * than hold a button until it arrives. Signed seconds, with the words next
-     * to it saying which way that is, so the number never has to be decoded
-     * from the sign alone. */
-    const offsetState = document.createElement("div");
-    offsetState.className = "sso-row sso-sync__state";
-
+     * This is the whole readout now. There used to be a second line of prose
+     * beside it saying "held back 17s", which is the same fact in words next to
+     * the same fact in figures. The prose stays in the toast, where it is read
+     * once and gone. */
     const offsetField = document.createElement("input");
     offsetField.type = "number";
     offsetField.step = "0.25";
@@ -833,16 +825,62 @@
       if (event.key === "Enter") commitField();
     });
 
-    const unit = document.createElement("span");
-    unit.className = "sso-note";
-    unit.textContent = "s";
+    const nudger = (word, chevron, direction, size, why) => {
+      const b = button("", { title: why });
+      b.className = `sso-nudge sso-nudge--${size}`;
+      const mark = document.createElement("span");
+      mark.className = "sso-nudge__step";
+      mark.textContent = chevron;
+      /* The word is an element, not a text node, because below 320px it is the
+       * part that goes and a text node cannot be addressed by a selector. */
+      /* The word belongs to the side, not to each button. Both buttons on a
+       * side carrying it read as "« Early ‹ Early", which looks like a repeat
+       * rather than two sizes of one thing. The whole step carries the word
+       * because it is the one reached for first when something is visibly
+       * wrong, and it sits at the outer edge where it is easiest to hit; the
+       * fine step beside the number takes its meaning from the group. */
+      const said = document.createElement("span");
+      said.className = "sso-nudge__word";
+      said.textContent = size === "large" ? word : "";
+      // Chevron on the outside of the pair, so the two whole steps sit at the
+      // two ends of the row and the fine ones flank the number.
+      b.append(...(direction > 0 ? [mark, said] : [said, mark]));
+      return holdToRepeat(b, slot, direction, size);
+    };
 
-    const offsetReset = button("Reset", {
+    const early = "The line appears before it is spoken, so hold it back.";
+    const late = "The line appears after it is spoken, so bring it forward.";
+    /* The fine steps travel with the number, not with the edges of the row.
+     * A single flex row put the field between them and let it take the slack,
+     * which pushed each fine chevron up against the whole step it is a smaller
+     * version of and away from the reading it changes. */
+    const fine = document.createElement("div");
+    fine.className = "sso-sync__fine";
+    fine.append(
+      nudger("Early", "‹", +1, "small", `${early} A fine step. Hold to run.`),
+      offsetField,
+      nudger("Late", "›", -1, "small", `${late} A fine step. Hold to run.`),
+    );
+
+    offsets.append(
+      nudger("Early", "«", +1, "large", `${early} A whole step. Hold to run.`),
+      fine,
+      nudger("Late", "»", -1, "large", `${late} A whole step. Hold to run.`),
+    );
+
+    /* Only when there is something to undo. It is the third thing this row
+     * could do and the least used, so it does not get a permanent target - and
+     * a hidden control here is honest, because nothing to reset is exactly when
+     * the subtitle is already right. */
+    const offsetReset = button("Reset timing", {
       onClick: () => api.setOffset(0, { slot }),
       title: "Back to the file's own timing",
     });
     offsetReset.className = "sso-linkish";
-    offsetState.append(offsetField, unit, offsetValue, offsetReset);
+
+    const offsetState = document.createElement("div");
+    offsetState.className = "sso-row sso-sync__state";
+    offsetState.append(offsetReset);
 
     const size = slider("Size", 0.6, 2.2, 0.05, 1, (value) =>
       api.updateTrackSettings(slot, { fontScale: value }),
@@ -866,7 +904,7 @@
     body.append(offsets, offsetState, size.row, width.row, actions);
 
     root.append(head, body);
-    return { root, caret, keyed, keysChip, label, shut, offsetValue, offsetField, offsetReset, size, width, visible };
+    return { root, caret, keyed, keysChip, label, shut, offsetField, offsetReset, size, width, visible };
   }
 
   /* Taking a subtitle off is the one destructive thing this panel does, and it
@@ -1660,8 +1698,7 @@
         ? api.describeOffset(track.offsetMs)
         : `${track.cueCount} line${track.cueCount === 1 ? "" : "s"}`;
       card.shut.dataset.set = track.offsetMs ? "true" : "false";
-      card.offsetValue.textContent = api.describeOffset(track.offsetMs);
-      card.offsetValue.dataset.set = track.offsetMs ? "true" : "false";
+      card.offsetField.dataset.set = track.offsetMs ? "true" : "false";
       // Nothing to undo means no undo button, which is also the width that lets
       // the reading sit on one line.
       card.offsetReset.hidden = !track.offsetMs;
@@ -1807,7 +1844,10 @@
   document.addEventListener("keydown", onCaptureKey, true);
   window.addEventListener("resize", clampIntoView, { passive: true });
 
-  window.__ssoPanel = { show, hide, toggle, reparent, isCapturingKey, rescale };
+  /* applySize is exported for the harness, which measures the sync row at both
+   * ends of the width the corner grips allow. Driving the grips with synthetic
+   * pointer events to get there would be testing the grips, not the row. */
+  window.__ssoPanel = { show, hide, toggle, reparent, isCapturingKey, rescale, applySize };
 
   window.__ssoPanelTeardown = () => {
     document.removeEventListener("keydown", onCaptureKey, true);

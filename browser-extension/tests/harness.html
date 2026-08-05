@@ -858,21 +858,91 @@
         if (body.getBoundingClientRect().height === 0) throw new Error("it would not unfold");
       });
 
-      check("the typed-offset field leaves room for the reading beside it", async () => {
+      check("the sync row fits on one line at every width the panel allows", async () => {
+        /* Replaces an assertion that the offset field was under 80px wide -
+         * a proxy for this, from when the row overflowed and pushed Reset out
+         * of the panel. This measures the thing itself, at both ends of the
+         * range the corner grips allow. */
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
         if (card.dataset.open !== "true") card.querySelector(".sso-track__caret").click();
         await sleep(40);
-        const field = card.querySelector(".sso-sync__field");
-        const row = field.parentElement;
-        /* `input[type="number"]` and `input.sso-sync__field` are both (0,1,1),
-         * so the generic width:100% won on source order: the field filled the
-         * row, the reading wrapped onto two lines and Reset was pushed out of
-         * the panel entirely. */
-        if (field.getBoundingClientRect().width > 80)
-          throw new Error(`the field is ${Math.round(field.getBoundingClientRect().width)}px wide and eats the row`);
-        const reading = card.querySelector(".sso-offset");
-        if (reading.getBoundingClientRect().height > row.getBoundingClientRect().height)
-          throw new Error("the reading wrapped past its row");
+        const row = card.querySelector(".sso-sync");
+        const host = panelShadow().host;
+        const was = host.getBoundingClientRect().width;
+
+        for (const width of [280, 340, 640]) {
+          window.__ssoPanel.applySize(width);
+          await sleep(60);
+          if (row.scrollWidth > row.clientWidth + 1)
+            throw new Error(
+              `at ${width}px the row needs ${row.scrollWidth} and has ${row.clientWidth}`);
+          const nudges = row.querySelectorAll(".sso-nudge");
+          if (nudges.length !== 4) throw new Error(`${nudges.length} nudge buttons, want 4`);
+          for (const b of nudges) {
+            const box = b.getBoundingClientRect();
+            // 24px is the smallest comfortable pointer target.
+            if (box.width < 24 || box.height < 24)
+              throw new Error(
+                `at ${width}px a nudge button is ${Math.round(box.width)}×${Math.round(box.height)}`);
+          }
+          /* The words stay, at every width the grips allow. The row costs 232px
+           * against 236px usable at the 280px minimum, so there is no width at
+           * which hiding the only part of this row that says what it does buys
+           * anything. Measured, after an earlier version hid them below 320. */
+          // The fine steps carry an empty span by design; the whole steps are
+          // the ones that must still read as words.
+          const said = [...row.querySelectorAll(".sso-nudge__word")].filter((n) => n.textContent);
+          if (said.length !== 2) throw new Error(`${said.length} words on the row, want 2`);
+          for (const word of said) {
+            if (word.getBoundingClientRect().width === 0)
+              throw new Error(`at ${width}px the buttons lost their words`);
+          }
+          // And the reading is still readable, not squeezed to nothing by the
+          // group that takes the slack.
+          const field = row.querySelector(".sso-sync__field");
+          if (field.getBoundingClientRect().width < 50)
+            throw new Error(
+              `at ${width}px the reading is ${Math.round(field.getBoundingClientRect().width)}px`);
+        }
+
+        window.__ssoPanel.applySize(was);
+        await sleep(60);
+      });
+
+      check("the nudge buttons say what is wrong, not which way to push", async () => {
+        /* An arrow re-introduces exactly the question the words remove: film
+         * time is stream time minus the offset, so a larger offset shows the
+         * line later, and nobody should have to derive that mid-film. The
+         * chevron is a magnitude and never stands alone. */
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        const words = [...card.querySelectorAll(".sso-nudge__word")]
+          .map((n) => n.textContent).filter(Boolean);
+        // One word per side, on the whole step. Both buttons on a side carrying
+        // it reads as a repeat rather than as two sizes of one thing.
+        if (words.join(",") !== "Early,Late")
+          throw new Error(`the buttons read ${words.join(", ") || "nothing"}`);
+        for (const b of card.querySelectorAll(".sso-nudge")) {
+          if (!b.querySelector(".sso-nudge__step")) throw new Error("a nudge button has no step mark");
+          // The full sentence stays reachable even where the word is hidden.
+          if (!/spoken/.test(b.title)) throw new Error(`no plain-language title on "${b.textContent}"`);
+        }
+      });
+
+      check("the big step moves further than the small one", async () => {
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        const step = async (selector) => {
+          window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
+          await sleep(30);
+          card.querySelector(selector).click();
+          await sleep(40);
+          return Math.abs(window.__ssoApi.status().tracks[0].offsetMs);
+        };
+        const small = await step(".sso-nudge--small");
+        const large = await step(".sso-nudge--large");
+        if (!(large > small))
+          throw new Error(`a big step moved ${large}ms and a small one ${small}ms`);
+        window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
+        await sleep(30);
       });
 
       check("picking a result does not move the target out from under you", async () => {
