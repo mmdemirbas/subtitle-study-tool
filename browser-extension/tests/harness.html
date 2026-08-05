@@ -1098,6 +1098,99 @@
         if (pop && !pop.hidden) throw new Error("the answer stayed after the pointer moved off");
       });
 
+      check("a word can be collapsed and opened again", async () => {
+        // "I can expand collapsed words but cannot collapse them back."
+        // Expanding used to be done by pinning, which made "keep this" and
+        // "open this" one gesture with no way back.
+        await hover("care");
+        await hover("frankly");
+        const cards = () => [...railShadow().querySelectorAll(".sso-card")];
+        const of = (term) =>
+          cards().find((c) => c.querySelector(".sso-card__term")?.textContent === term);
+
+        const collapsed = of("care");
+        if (collapsed?.dataset.focused !== "false") throw new Error("nothing was collapsed to open");
+        collapsed.querySelector(".sso-card__head").click();
+        await sleep(80);
+        if (of("care")?.dataset.focused !== "true") throw new Error("it did not open");
+
+        of("care").querySelector(".sso-card__head").click();
+        await sleep(80);
+        if (of("care")?.dataset.focused !== "false") throw new Error("it would not close again");
+      });
+
+      check("a word held open stays open when the next one arrives", async () => {
+        // An explicit choice outranks the "newest is open" default, or the
+        // reader's decision would be undone by the next line of the film.
+        const of = (term) =>
+          [...railShadow().querySelectorAll(".sso-card")].find(
+            (c) => c.querySelector(".sso-card__term")?.textContent === term,
+          );
+        // "care" is collapsed after the test above; open it by hand.
+        of("care").querySelector(".sso-card__head").click();
+        await sleep(80);
+        if (of("care")?.dataset.focused !== "true") throw new Error("it did not open");
+
+        await hover("talking");
+        if (of("care")?.dataset.focused !== "true")
+          throw new Error("a word held open was closed by the next arrival");
+      });
+
+      check("one word can be taken off the rail", async () => {
+        const before = railShadow().querySelectorAll(".sso-card").length;
+        railShadow().querySelector(".sso-card__drop").click();
+        await sleep(80);
+        const after = railShadow().querySelectorAll(".sso-card").length;
+        if (after !== before - 1) throw new Error(`${before} cards became ${after}`);
+      });
+
+      check("the rail can be emptied", async () => {
+        const clear = [...railShadow().querySelectorAll(".sso-rail__act")].find(
+          (b) => b.textContent === "Clear",
+        );
+        if (!clear) throw new Error("no way to empty it");
+        clear.click();
+        await sleep(80);
+        const left = railShadow().querySelectorAll(".sso-card").length;
+        if (left !== 0) throw new Error(`${left} cards survived`);
+        if (!clear.hidden) throw new Error("an empty rail still offers to be emptied");
+      });
+
+      check("the rail folds to its title bar and back", async () => {
+        await hover("frankly");
+        window.__ssoStudy.updateSettings({ folded: true });
+        await sleep(120);
+        const list = railShadow().querySelector(".sso-rail__list");
+        if (getComputedStyle(list).display !== "none")
+          throw new Error("the words are still standing on the frame");
+        const head = railShadow().querySelector(".sso-rail__head");
+        if (head.getBoundingClientRect().height < 10)
+          throw new Error("folding took the title bar with it, so there is no way back");
+
+        window.__ssoStudy.updateSettings({ folded: false });
+        await sleep(120);
+        if (getComputedStyle(railShadow().querySelector(".sso-rail__list")).display === "none")
+          throw new Error("it would not unfold");
+      });
+
+      check("the background setting reaches what is painted", async () => {
+        const rail = railShadow().querySelector(".sso-rail");
+        const solid = getComputedStyle(rail).backgroundColor;
+        window.__ssoStudy.updateSettings({ opacity: 0.3 });
+        await sleep(120);
+        const sheer = getComputedStyle(rail).backgroundColor;
+        if (solid === sheer) throw new Error(`the rail stayed ${solid}`);
+
+        // The cards paint on top of it, so an opaque card would leave the
+        // setting doing visibly nothing.
+        const card = railShadow().querySelector(".sso-card");
+        const behind = card && getComputedStyle(card).backgroundColor;
+        if (behind && !/rgba\(0, 0, 0, 0\)|transparent/.test(behind))
+          throw new Error(`a card paints ${behind} over the rail`);
+        window.__ssoStudy.updateSettings({ opacity: 0.93 });
+        await sleep(120);
+      });
+
       check("the rail can be resized from any corner", async () => {
         const grips = railShadow().querySelectorAll(".sso-rail__grip");
         if (grips.length !== 4) throw new Error(`${grips.length} grips, want one per corner`);

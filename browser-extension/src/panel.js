@@ -1092,6 +1092,13 @@
       window.__ssoStudy?.updateSettings({ textPx: value }),
     );
 
+    el.studyOpacity = slider("Rail background", 20, 100, 5, 93, (value) =>
+      window.__ssoStudy?.updateSettings({ opacity: value / 100 }),
+    );
+    el.studyOpacity.row.title =
+      "How solid the rail is over the film. Lower lets the frame through; text over a " +
+      "moving picture needs some backing to stay readable.";
+
     /* The threshold is a slider because the right value is a property of the
      * reader, not of the film: rank 2000 is where a beginner stops recognising
      * words and rank 12000 is where somebody comfortable does. Nothing else can
@@ -1138,6 +1145,7 @@
       el.studyHover.row,
       el.studyFocus.row,
       el.studyText.row,
+      el.studyOpacity.row,
       el.studyPause.row,
       actions,
     );
@@ -1541,6 +1549,9 @@
     el.studyRank.readout.textContent = study.rarityRank.toLocaleString();
     el.studyText.input.value = String(study.textPx);
     el.studyText.readout.textContent = `${study.textPx}px`;
+    const opacity = Math.round(study.opacity * 100);
+    el.studyOpacity.input.value = String(opacity);
+    el.studyOpacity.readout.textContent = `${opacity}%`;
     for (const [slot, b] of el.studySlotButtons.entries()) {
       b.dataset.on = study.studySlot === slot ? "true" : "false";
     }
@@ -1556,7 +1567,7 @@
       row.dataset.off = study.enabled ? "false" : "true";
     }
     // And the two that only mean something once the rail is showing.
-    for (const row of [el.studyFocus.row, el.studyText.row]) {
+    for (const row of [el.studyFocus.row, el.studyText.row, el.studyOpacity.row]) {
       row.dataset.off = study.enabled && study.showRail ? "false" : "true";
     }
   }

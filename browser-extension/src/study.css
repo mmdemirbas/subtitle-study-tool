@@ -41,7 +41,7 @@
   letter-spacing: normal;
   text-align: left;
   color: #e8eaed;
-  background: rgba(16, 18, 22, 0.93);
+  background: rgba(16, 18, 22, var(--sso-study-alpha, 0.93));
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 10px;
   box-shadow:
@@ -119,15 +119,50 @@
   outline-offset: 1px;
 }
 
+/* Clear and fold. Quieter than the x, which is the only one of the three that
+ * takes the rail off the screen. */
+.sso-rail__act {
+  padding: 1px 6px;
+  font-family: inherit;
+  font-size: 0.68em;
+  font-weight: 600;
+  line-height: 1.5;
+  color: #9aa1ab;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
+  cursor: pointer;
+  transition: color 160ms ease, background 160ms ease;
+}
+
+.sso-rail__act:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.sso-rail__act:focus-visible {
+  outline: 2px solid #e0a458;
+  outline-offset: 1px;
+}
+
+.sso-rail__act[hidden] {
+  display: none;
+}
+
+/* Folded: the title bar and nothing else, so the frame underneath is visible
+ * without the rail being put away and having to be found again. */
+.sso-rail[data-folded="true"] > .sso-rail__list,
+.sso-rail[data-folded="true"] > .sso-rail__note {
+  display: none;
+}
+
 /* --- list ------------------------------------------------------------------ */
 
 .sso-rail__list {
   display: flex;
   flex-direction: column;
-  gap: 1px;
   overflow-y: auto;
   overscroll-behavior: contain;
-  background: rgba(255, 255, 255, 0.07); /* shows through as the card hairlines */
 }
 
 .sso-rail__list:empty {
@@ -143,21 +178,85 @@
 
 /* --- a card ---------------------------------------------------------------- */
 
+/* Transparent, deliberately: the rail is the one surface that carries the
+ * opacity setting, and a card painted at 0.98 on top of it would leave the
+ * setting doing visibly nothing. Cards are separated by a hairline of their
+ * own rather than by gaps in an opaque backing, for the same reason. */
 .sso-card {
   padding: 9px 11px 10px;
-  background: rgba(16, 18, 22, 0.98);
+  background: transparent;
 }
 
-/* Pinned means "I am reading this" - it survives the trim, so it says so. */
+.sso-card + .sso-card {
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+/* Pinned means "I am reading this" - it survives the trim, so it says so. A
+ * wash rather than a colour, so it tints whatever is behind instead of
+ * replacing it. */
 .sso-card[data-pinned="true"] {
-  background: rgba(34, 30, 22, 0.98);
+  background: rgba(224, 164, 88, 0.12);
   box-shadow: inset 2px 0 0 #e0a458;
 }
 
 .sso-card__head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 6px;
+  cursor: pointer;
+}
+
+/* Open and close. The caret is the affordance; the whole head is the target,
+ * because a 12px glyph next to a 300px row that does the same thing is a worse
+ * place to aim at. */
+.sso-card__caret {
+  flex: none;
+  width: 13px;
+  padding: 0;
+  font-family: inherit;
+  font-size: 0.8em;
+  line-height: 1;
+  text-align: left;
+  color: #9aa1ab;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+.sso-card__head:hover .sso-card__caret {
+  color: #e0a458;
+}
+
+/* One word off the rail. Held back until the card is under the pointer: it is
+ * destructive and it is next to the word it destroys. */
+.sso-card__drop {
+  flex: none;
+  padding: 0 3px;
+  font-family: inherit;
+  font-size: 1em;
+  line-height: 1;
+  color: #6d747d;
+  background: none;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 160ms ease, color 160ms ease;
+}
+
+.sso-card:hover .sso-card__drop,
+.sso-card__drop:focus-visible {
+  opacity: 1;
+}
+
+.sso-card__drop:hover {
+  color: #f0836f;
+  background: rgba(240, 131, 111, 0.14);
+}
+
+.sso-card__drop:focus-visible {
+  outline: 2px solid #e0a458;
+  outline-offset: 1px;
 }
 
 .sso-card__term {
@@ -293,8 +392,6 @@
 
 .sso-card[data-focused="false"] {
   padding: 6px 11px 7px;
-  cursor: pointer;
-  background: rgba(16, 18, 22, 0.98);
 }
 
 .sso-card[data-focused="false"] .sso-card__term {
@@ -356,7 +453,9 @@
   letter-spacing: normal;
   text-align: left;
   color: #e8eaed;
-  background: rgba(16, 18, 22, 0.96);
+  /* A floor under the setting: the popup is two lines over a moving picture
+   * and has no room to be read through. */
+  background: rgba(16, 18, 22, max(0.8, var(--sso-study-alpha, 0.96)));
   border: 1px solid rgba(224, 164, 88, 0.45);
   border-radius: 9px;
   box-shadow:
@@ -407,6 +506,9 @@
 
 @media (prefers-reduced-motion: reduce) {
   .sso-rail__x,
+  .sso-rail__act,
+  .sso-card__caret,
+  .sso-card__drop,
   .sso-card__actions button {
     transition: none;
   }

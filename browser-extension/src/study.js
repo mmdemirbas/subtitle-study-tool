@@ -95,6 +95,14 @@
      * the picture. */
     showRail: true,
     hoverCard: true,
+    /* Folded to its title bar. Different from put away: the rail is still
+     * there, still counting, and one click brings the words back - what it
+     * stops doing is standing on the picture. */
+    folded: false,
+    /* How solid the rail is over the film. Dense text over a moving picture
+     * needs a backing to be readable at all, so this stops well short of
+     * invisible; the low end is for reading the frame through it. */
+    opacity: 0.93,
   };
 
   let settings = { ...DEFAULT_SETTINGS };
@@ -105,6 +113,8 @@
   let listEl = null;
   let countEl = null;
   let noteEl = null;
+  let clearEl = null;
+  let foldEl = null;
   let sheet = null;
 
   /* Cards currently in the rail, newest first. Held here rather than read back
@@ -164,13 +174,22 @@
     }
     if (railEl) {
       railEl.dataset.auto = settings.auto ? "true" : "false";
+      railEl.dataset.folded = settings.folded ? "true" : "false";
       railEl.style.setProperty("--sso-study-text", `${settings.textPx}px`);
+      railEl.style.setProperty("--sso-study-alpha", String(settings.opacity));
       // 0 is "as tall as its contents", which is not a height any element can
       // be given - it is the absence of one.
       if (settings.height > 0) railEl.style.setProperty("--sso-study-height", `${settings.height}px`);
       else railEl.style.removeProperty("--sso-study-height");
     }
-    if (popupEl) popupEl.style.setProperty("--sso-study-text", `${settings.textPx}px`);
+    if (foldEl) {
+      foldEl.textContent = settings.folded ? "▸" : "▾";
+      foldEl.title = settings.folded ? "Show the words again" : "Fold to the title bar";
+    }
+    if (popupEl) {
+      popupEl.style.setProperty("--sso-study-text", `${settings.textPx}px`);
+      popupEl.style.setProperty("--sso-study-alpha", String(settings.opacity));
+    }
     // Marking depends on the threshold, so a changed threshold has to re-mark
     // the line that is already on screen rather than wait for the next one.
     remarkCurrent();
@@ -617,6 +636,21 @@
     title.textContent = "Study";
     countEl = document.createElement("span");
     countEl.className = "sso-rail__count";
+
+    /* Three controls, in the order they get reached for: empty it, fold it,
+     * put it away. All on the head, which is the thing they act on. */
+    clearEl = document.createElement("button");
+    clearEl.className = "sso-rail__act";
+    clearEl.type = "button";
+    clearEl.textContent = "Clear";
+    clearEl.title = "Empty the rail";
+    clearEl.addEventListener("click", clearCards);
+
+    foldEl = document.createElement("button");
+    foldEl.className = "sso-rail__act";
+    foldEl.type = "button";
+    foldEl.addEventListener("click", () => updateSettings({ folded: !settings.folded }));
+
     const close = document.createElement("button");
     close.className = "sso-rail__x";
     close.type = "button";
@@ -627,7 +661,7 @@
      * off from the control panel, where turning it back on also lives. */
     close.title = "Put the rail away — hovering a word still answers";
     close.addEventListener("click", () => updateSettings({ showRail: false }));
-    head.append(title, countEl, close);
+    head.append(title, countEl, clearEl, foldEl, close);
 
     listEl = document.createElement("div");
     listEl.className = "sso-rail__list";
@@ -790,8 +824,27 @@
     cards = keep;
   }
 
+  /* The rail fills itself, so it needs a way to be emptied. Auto mode puts
+   * words there without being asked and the reader is the only one who knows
+   * which of them were wanted - without this the only control over the contents
+   * was to wait for them to fall off the end. */
+  function removeCard(card) {
+    card.node?.remove();
+    cards = cards.filter((item) => item !== card);
+    refreshCount();
+    refocus();
+    dedupeSentences();
+  }
+
+  function clearCards() {
+    for (const card of cards) card.node?.remove();
+    cards = [];
+    refreshCount();
+  }
+
   function refreshCount() {
     if (countEl) countEl.textContent = cards.length ? String(cards.length) : "";
+    if (clearEl) clearEl.hidden = cards.length === 0;
     emptyNote();
   }
 
@@ -802,14 +855,24 @@
     return node;
   }
 
-  /* Which card is the one being looked at. Everything else in the rail is
-   * there to be recognised out of the corner of an eye, so it collapses to the
-   * word and what it means - which is what the reader would have kept anyway.
+  /* Which card is the one being looked at.
    *
-   * Pinning is how a reader says "no, that one" - so a pinned card is never
-   * collapsed, whatever has arrived since. */
+   * `card.open` is the reader's own answer and beats everything: undefined
+   * means "you decide", true and false mean they have decided. Without it,
+   * expanding was done by pinning - which made "keep this" and "open this" one
+   * gesture and left no way to close a card again.
+   *
+   * The default, when they have not said, is the newest and anything pinned.
+   * Everything else collapses to the word and what it means, which is what a
+   * reader would have kept anyway. */
   function isFocused(card) {
+    if (typeof card.open === "boolean") return card.open;
     return !settings.focus || card.pinned || cards[0] === card;
+  }
+
+  function toggleCard(card) {
+    card.open = !isFocused(card);
+    redrawCard(card);
   }
 
   function refocus() {
@@ -830,8 +893,20 @@
     node.dataset.focused = card.focused ? "true" : "false";
     node.replaceChildren();
 
+    /* The head is the card's own control strip: open or close it, and throw it
+     * away. Both act on this card, so both live on it. */
     const head = document.createElement("div");
     head.className = "sso-card__head";
+
+    const caret = document.createElement("button");
+    caret.className = "sso-card__caret";
+    caret.type = "button";
+    caret.textContent = card.focused ? "▾" : "▸";
+    caret.title = card.focused ? "Collapse" : "Expand";
+    caret.addEventListener("click", (event) => {
+      event.stopPropagation();
+      toggleCard(card);
+    });
 
     const term = document.createElement("span");
     term.className = "sso-card__term";
@@ -841,12 +916,23 @@
     meta.className = "sso-card__rank";
     meta.textContent = rankLabel(card.rank);
 
-    head.append(term, meta);
+    const drop = document.createElement("button");
+    drop.className = "sso-card__drop";
+    drop.type = "button";
+    drop.textContent = "×";
+    drop.title = "Remove this word";
+    drop.addEventListener("click", (event) => {
+      event.stopPropagation();
+      removeCard(card);
+    });
+
+    head.append(caret, term, meta, drop);
+    // The whole head toggles, not only the caret: it is a 12px target beside a
+    // 300px one that means the same thing.
+    head.addEventListener("click", () => toggleCard(card));
     node.append(head);
 
-    /* Collapsed: the word, and the one line that says what it is. Clicking it
-     * pins it, which is also what expands it - one gesture, because "keep this"
-     * and "show me more of this" are the same intention. */
+    // Collapsed: the word, and the one line that says what it is.
     if (!card.focused) {
       if (card.lookup?.translation) {
         const gloss = document.createElement("div");
@@ -854,17 +940,8 @@
         gloss.textContent = card.lookup.translation;
         node.append(gloss);
       }
-      node.title = "Click to keep this one open";
-      node.onclick = () => {
-        card.pinned = true;
-        refocus();
-        trim();
-        refreshCount();
-      };
       return;
     }
-    node.onclick = null;
-    node.title = "";
 
     if (card.lookup?.phonetic) {
       const phon = document.createElement("div");
