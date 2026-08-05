@@ -389,12 +389,24 @@
    * the corner. Kept apart from what gets applied so that moving it back up
    * restores the size rather than having silently lost it. */
   let preferredBody = 420;
+  /* Whether a corner has been dragged.
+   *
+   * Until it has, the panel is as tall as it needs to be and no taller, capped
+   * by the room under it - which is right for a surface that grows a card when
+   * a subtitle is attached. After it has, the height is the reader's answer and
+   * it is applied whether or not the contents need it, because "I could not
+   * make the panel bigger when it was already fitting" is a panel refusing an
+   * instruction on the grounds that it knows better. */
+  let sizedByHand = false;
 
-  function applySize(width, bodyHeight) {
+  function applySize(width, bodyHeight, { byHand = true } = {}) {
+    if (byHand && bodyHeight != null) sizedByHand = true;
     // Inline !important, like every other geometry property on the host: the
     // page's own rules reach the host and a plain assignment would lose to them.
     host.style.setProperty("width", `${Math.round(width)}px`, "important");
-    preferredBody = bodyHeight;
+    // A width-only call - the harness measures the sync row at several widths -
+    // must not throw the stored height away.
+    if (bodyHeight != null) preferredBody = bodyHeight;
     fitToViewport();
   }
 
@@ -415,14 +427,31 @@
     // Everything that is not the scrolling list: the title bar, borders.
     const furniture = hostBox.height - bodyBox.height;
     const available = window.innerHeight - hostBox.top - furniture - 12;
-    body.style.setProperty("max-height", `${Math.round(Math.max(MIN_BODY, Math.min(preferredBody, available)))}px`);
+    const wanted = Math.round(Math.max(MIN_BODY, Math.min(preferredBody, available)));
+    /* A cap until a corner has been dragged, a height after.
+     *
+     * max-height alone can only ever make a box shorter than its contents, so
+     * dragging a corner downwards on a panel whose contents already fitted did
+     * nothing at all - the number was stored and the panel did not move. */
+    if (sizedByHand) {
+      body.style.setProperty("height", `${wanted}px`);
+      body.style.setProperty("max-height", `${wanted}px`);
+    } else {
+      body.style.removeProperty("height");
+      body.style.setProperty("max-height", `${wanted}px`);
+    }
   }
 
   async function restoreSize() {
     try {
       const stored = await chrome.storage.local.get([SIZE_KEY, FOLD_KEY]);
       const size = stored[SIZE_KEY];
-      if (size?.width) applySize(size.width, size.body || preferredBody);
+      if (size?.width) {
+        applySize(size.width, size.body ?? null, { byHand: false });
+        // A stored body height means a corner was dragged in an earlier
+        // session, and that is still the reader's answer.
+        if (size.body) { sizedByHand = true; preferredBody = size.body; }
+      }
       setFolded(stored[FOLD_KEY] === true);
     } catch {
       // The default size is fine.

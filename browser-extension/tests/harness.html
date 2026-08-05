@@ -867,6 +867,37 @@
         if (body.getBoundingClientRect().height === 0) throw new Error("it would not unfold");
       });
 
+      check("the panel can be made bigger than its contents need", async () => {
+        /* Reported: "I cannot enlarge the panel if the content is already
+         * fitting". The height was applied as a max-height, which can only ever
+         * make a box shorter than its contents - so a corner dragged downwards
+         * on a panel that already fitted stored a number and moved nothing. */
+        const host = panelShadow().host;
+        const wasWidth = host.getBoundingClientRect().width;
+        const body = panelShadow().querySelector(".sso-panel__body");
+
+        // Small enough that the contents certainly fit inside it.
+        window.__ssoPanel.applySize(wasWidth, 200);
+        await sleep(120);
+        const small = body.getBoundingClientRect().height;
+
+        window.__ssoPanel.applySize(wasWidth, 460);
+        await sleep(150);
+        const big = body.getBoundingClientRect().height;
+        if (big <= small + 50)
+          throw new Error(`asked for 460px and the body went ${Math.round(small)} -> ${Math.round(big)}`);
+
+        // And it still cannot grow past the room under it.
+        window.__ssoPanel.applySize(wasWidth, 5000);
+        await sleep(150);
+        const panel = host.getBoundingClientRect();
+        if (panel.bottom > window.innerHeight)
+          throw new Error(`it grew past the bottom of the window: ${Math.round(panel.bottom)}`);
+
+        window.__ssoPanel.applySize(wasWidth, 420);
+        await sleep(120);
+      });
+
       check("the sync row fits on one line at every width the panel allows", async () => {
         /* Replaces an assertion that the offset field was under 80px wide -
          * a proxy for this, from when the row overflowed and pushed Reset out
