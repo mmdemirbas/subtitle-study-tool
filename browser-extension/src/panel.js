@@ -813,6 +813,12 @@
       // whether to take focus, so a mouse user is not shown a focus ring.
       more.dataset.viaKey = event.detail === 0 ? "true" : "false";
       const track = api.status().tracks[slot];
+      const status = api.status();
+      /* Read once, and safely. `__ssoStudy?.settings?.().enabled` looks guarded
+       * and is not: when study.js has not loaded, `settings?.()` is undefined
+       * and reading `.enabled` off it throws - which would take out the whole
+       * menu, on a surface that has nothing to do with study. */
+      const study = window.__ssoStudy?.settings?.() || null;
       menu(more, [
         {
           label: "Style…",
@@ -825,9 +831,24 @@
           onClick: () => api.setVisible(!track.visible, { slot }),
         },
         {
+          label: "Study this one",
+          title: "Mark the rare words in this subtitle instead",
+          hidden: !study?.enabled || status.trackCount < 2 || study.studySlot === slot,
+          onClick: () => {
+            window.__ssoStudy?.updateSettings({ studySlot: slot });
+            refresh(api.status());
+          },
+        },
+        {
+          label: "Nudge with the keys",
+          title: "Point the [ and ] keys at this subtitle",
+          hidden: status.trackCount < 2 || status.keyTrack === slot,
+          onClick: () => api.setKeyTrack(slot),
+        },
+        {
           label: "Line up with the other",
           title: "Work out the gap from where the two subtitles say the same things",
-          hidden: api.status().trackCount < 2,
+          hidden: status.trackCount < 2,
           onClick: () => lineUp(slot),
         },
         {
@@ -1151,13 +1172,28 @@
    * its own fullscreen re-parenting and its own teardown, for a list of five
    * words.
    *
-   * Only one is open at a time, and anything at all closes it: a click, the
-   * Escape key, a scroll, the panel being folded or hidden. A menu that
-   * survives the thing it was opened from is worse than no menu.
+   * Only one is open at a time, and it closes on a press outside it, on
+   * Escape, and on anything that changes screen. It does NOT close on scroll:
+   * it is a child of the scrolling container, so it moves with the row it is
+   * anchored to rather than detaching from it - and a scroll dismissal was
+   * closing menus by itself, because re-fitting the panel to the viewport can
+   * emit a scroll event that no reader caused.
    */
   let openMenu = null;
+  let menuLife = null;
 
+  /* Closing takes the dismiss listeners with it.
+   *
+   * They used to be registered `{ once: true }` and left to expire on their
+   * own, which is not the same thing: a menu closed by Escape or by picking an
+   * item leaves its listeners attached, and the next menu is then closed by the
+   * *previous* menu's scroll handler the moment anything re-fits the panel. It
+   * presented as a menu that opens and is instantly gone, only ever in the
+   * second menu of a session, which is exactly the sort of thing that survives
+   * a manual check. */
   function closeMenu() {
+    menuLife?.abort();
+    menuLife = null;
     openMenu?.remove();
     openMenu = null;
   }
@@ -1206,19 +1242,22 @@
      * press arrives with detail 0. */
     if (anchor.dataset.viaKey === "true") node.querySelector("button")?.focus();
 
-    /* Bound after this click finishes, or the click that opened it closes it. */
+    menuLife = new AbortController();
+    const { signal } = menuLife;
+    node.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeMenu();
+        anchor.focus();
+      }
+    }, { signal });
+
+    /* Bound after this click finishes, or the press that opened the menu is the
+     * one that dismisses it. */
     setTimeout(() => {
-      const away = (event) => {
+      if (signal.aborted) return;
+      shadow.addEventListener("pointerdown", (event) => {
         if (!node.contains(event.composedPath?.()[0] ?? event.target)) closeMenu();
-      };
-      node.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") {
-          closeMenu();
-          anchor.focus();
-        }
-      });
-      shadow.addEventListener("pointerdown", away, { once: true });
-      el.panel.addEventListener("scroll", closeMenu, { once: true });
+      }, { signal });
     }, 0);
     return node;
   }
@@ -1984,15 +2023,21 @@
 
       card.label.textContent = `${slot + 1}. ${track.label || "Attached"}`;
       card.keyed.checked = status.keyTrack === slot;
-      card.keysChip.dataset.on = status.keyTrack === slot ? "true" : "false";
-      // With one subtitle there is nothing for the keys to be ambiguous about.
-      card.keysChip.hidden = status.trackCount < 2;
-
-      /* Only where it is a choice: study has to be on for it to mean anything,
-       * and there has to be another subtitle for it to be a choice at all. */
+      /* A chip appears on the card the thing is true of, and nowhere else.
+       *
+       * Both chips on both cards, one lit and one dim, cost about ninety pixels
+       * of the title - and the title is the subtitle's name, which is the one
+       * thing on this card that identifies it. Showing only the live one keeps
+       * the state visible and gives the name its room back; moving it is a
+       * menu item on the card you want it moved to, which is where a reader
+       * looks for "do this to this one" now. */
       const study = window.__ssoStudy?.settings?.();
-      card.learnChip.hidden = !study?.enabled || status.trackCount < 2;
-      card.learnChip.dataset.on = study?.studySlot === slot ? "true" : "false";
+      const keyed = status.keyTrack === slot;
+      const learning = study?.studySlot === slot;
+      card.keysChip.dataset.on = keyed ? "true" : "false";
+      card.keysChip.hidden = status.trackCount < 2 || !keyed;
+      card.learnChip.dataset.on = learning ? "true" : "false";
+      card.learnChip.hidden = !study?.enabled || status.trackCount < 2 || !learning;
       card.shut.hidden = open;
       const stretched = track.rate && track.rate !== 1;
       card.shut.textContent = track.offsetMs || stretched

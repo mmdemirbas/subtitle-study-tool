@@ -963,8 +963,30 @@
         await sleep(40);
         if (panelShadow().querySelectorAll(".sso-menu").length > 1)
           throw new Error("two menus at once");
+        /* And it survives the panel scrolling under it.
+         *
+         * The menu is a child of the scrolling container, so it travels with
+         * the row it is anchored to. A scroll dismissal closed menus by itself:
+         * re-fitting the panel to the viewport emits a scroll no reader caused,
+         * and because the listener was registered `{ once: true }` and never
+         * removed, it was the *previous* menu's handler that closed the next
+         * one. Consistently the second menu of a session, which is exactly the
+         * shape of bug that survives a manual check. */
+        panelShadow().querySelector(".sso-panel").dispatchEvent(new Event("scroll"));
+        await sleep(60);
+        if (!panelShadow().querySelector(".sso-menu"))
+          throw new Error("a scroll closed the menu");
+
         panelShadow().querySelector(".sso-menu")
           ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await sleep(40);
+        // A third opening, after two dismissals, still works.
+        opener.click();
+        await sleep(60);
+        if (!panelShadow().querySelector(".sso-menu"))
+          throw new Error("a menu dismissed twice cannot be opened a third time");
+        panelShadow().querySelector(".sso-menu")
+          .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
         await sleep(40);
       });
 
@@ -1876,14 +1898,31 @@
           if (shown.length) throw new Error("it asks which to learn with one subtitle attached");
           return;
         }
-        const lit = shown.filter((c) => c.dataset.on === "true");
-        if (lit.length !== 1) throw new Error(`${lit.length} chips lit, want exactly one`);
-
+        /* Exactly one chip, on the card it is true of. Both cards carrying it -
+         * one lit, one dim - cost about ninety pixels of the subtitle's name,
+         * which is the one thing on the card that identifies it. */
+        if (shown.length !== 1) throw new Error(`${shown.length} learning chips showing, want 1`);
+        if (shown[0].dataset.on !== "true") throw new Error("the chip is on the wrong card");
         const was = window.__ssoStudy.settings().studySlot;
-        shown[was === 0 ? 1 : 0].click();
+        const other = chips.indexOf(shown[0]) === 0 ? 1 : 0;
+        if (chips[other].getBoundingClientRect().width !== 0)
+          throw new Error("the other card carries a chip for something it is not");
+
+        // Moving it is a menu item on the card you want it moved to.
+        const cards = [...panelShadow().querySelectorAll(".sso-track")].filter((c) => !c.hidden);
+        cards[other].querySelector(".sso-track__more").click();
+        await sleep(60);
+        const move = [...panelShadow().querySelectorAll(".sso-menu__item")]
+          .find((b) => b.textContent === "Study this one");
+        if (!move) {
+          const items = [...panelShadow().querySelectorAll(".sso-menu__item")]
+            .map((b) => b.textContent).join(", ") || "nothing";
+          throw new Error(`no way to move study: the menu on card ${other} holds ${items}`);
+        }
+        move.click();
         await sleep(120);
         if (window.__ssoStudy.settings().studySlot === was)
-          throw new Error("clicking the other card's chip did not move study to it");
+          throw new Error("it did not move study to the other card");
         window.__ssoStudy.updateSettings({ studySlot: was });
         await sleep(80);
       });
