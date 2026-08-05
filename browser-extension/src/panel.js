@@ -469,6 +469,7 @@
    * their tools, and having them spring open again is the thing they folded
    * them to avoid. */
   function setFolded(next) {
+    closeMenu();
     folded = Boolean(next);
     if (el.panel) el.panel.dataset.folded = folded ? "true" : "false";
     if (el.fold) {
@@ -812,7 +813,6 @@
       // A click from a key press carries detail 0. The menu uses this to decide
       // whether to take focus, so a mouse user is not shown a focus ring.
       more.dataset.viaKey = event.detail === 0 ? "true" : "false";
-      const track = api.status().tracks[slot];
       const status = api.status();
       /* Read once, and safely. `__ssoStudy?.settings?.().enabled` looks guarded
        * and is not: when study.js has not loaded, `settings?.()` is undefined
@@ -1197,15 +1197,14 @@
   let openMenu = null;
   let menuLife = null;
 
-  /* Closing takes the dismiss listeners with it.
+  /* Closing takes the dismiss listeners and the layer with it.
    *
    * They used to be registered `{ once: true }` and left to expire on their
    * own, which is not the same thing: a menu closed by Escape or by picking an
    * item leaves its listeners attached, and the next menu is then closed by the
-   * *previous* menu's scroll handler the moment anything re-fits the panel. It
-   * presented as a menu that opens and is instantly gone, only ever in the
-   * second menu of a session, which is exactly the sort of thing that survives
-   * a manual check. */
+   * *previous* menu's handler. It presented as a menu that opens and is
+   * instantly gone, only ever the second menu of a session, which is exactly
+   * the sort of thing that survives a manual check. */
   function closeMenu() {
     menuLife?.abort();
     menuLife = null;
@@ -1215,8 +1214,11 @@
 
   function menu(anchor, items) {
     closeMenu();
+    const layer = api.makeLayer({ zIndex: "2147483647" });
+    layer.shadow.adoptedStyleSheets = sheets;
+
     const node = document.createElement("div");
-    node.className = "sso-menu";
+    node.className = "sso-win sso-menu";
     node.setAttribute("role", "menu");
 
     for (const item of items) {
@@ -1239,22 +1241,24 @@
       });
       node.append(b);
     }
+    layer.shadow.append(node);
+    openMenu = layer;
 
-    /* Positioned against the panel, which is the offset parent, so the maths is
-     * two numbers and no measuring of anything that might move. Right-aligned
-     * to the anchor because the anchor is at the card's right edge and a menu
-     * hanging off to its left is the only one that fits. */
-    const panelBox = el.panel.getBoundingClientRect();
-    const anchorBox = anchor.getBoundingClientRect();
-    node.style.top = `${anchorBox.bottom - panelBox.top + el.panel.scrollTop + 4}px`;
-    node.style.right = `${panelBox.right - anchorBox.right}px`;
+    /* In viewport coordinates, hanging left from the anchor's right edge, and
+     * flipped above it when there is no room below.
+     *
+     * The layer is a host of its own rather than a child of the panel, which is
+     * the whole point: a menu opened near the bottom of the panel used to be
+     * cut off at the panel's edge. Nothing above this host can clip it. */
+    const at = anchor.getBoundingClientRect();
+    const box = node.getBoundingClientRect();
+    const below = at.bottom + 4;
+    const top = below + box.height > window.innerHeight - 8
+      ? Math.max(8, at.top - box.height - 4)
+      : below;
+    const left = clamp(at.right - box.width, 8, Math.max(8, window.innerWidth - box.width - 8));
+    layer.place(left, top);
 
-    el.panel.append(node);
-    openMenu = node;
-    /* Only when the menu was opened from the keyboard. A programmatic focus
-     * after a mouse click still paints the focus ring, which reads as "Hide is
-     * selected" on a menu the reader opened to look at. A click from a key
-     * press arrives with detail 0. */
     if (anchor.dataset.viaKey === "true") node.querySelector("button")?.focus();
 
     menuLife = new AbortController();
@@ -1267,22 +1271,27 @@
     }, { signal });
 
     /* Bound after this click finishes, or the press that opened the menu is the
-     * one that dismisses it. */
+     * one that dismisses it. Watched on the document because the menu is no
+     * longer inside the panel's shadow tree, so a press on the panel is now a
+     * press somewhere else entirely. */
     setTimeout(() => {
       if (signal.aborted) return;
-      shadow.addEventListener("pointerdown", (event) => {
-        if (!node.contains(event.composedPath?.()[0] ?? event.target)) closeMenu();
-      }, { signal });
+      const away = (event) => {
+        const path = event.composedPath?.() || [];
+        if (!path.includes(node) && !path.includes(anchor)) closeMenu();
+      };
+      document.addEventListener("pointerdown", away, { capture: true, signal });
+      window.addEventListener("resize", closeMenu, { signal });
     }, 0);
     return node;
   }
 
   /* Taking a subtitle off is the one destructive thing this panel does, and it
-   * used to be a plain button next to Hide with no way back - a
-   * mis-click cost the download, the timing and wherever the box had been
-   * dragged to. The toast carries the undo; the card list carries it too,
-   * because a toast button cannot be reached from the keyboard in fullscreen
-   * and this is the surface that owns removal. */
+   * used to be a plain button next to Hide with no way back - a mis-click cost
+   * the download, the timing and wherever the box had been dragged to. The
+   * toast carries the undo; the card list carries it too, because a toast
+   * button cannot be reached from the keyboard in fullscreen and this is the
+   * surface that owns removal. */
   function removeTrack(slot) {
     const label = api.status().tracks[slot]?.label;
     api.detach(slot);
@@ -2187,6 +2196,7 @@
   }
 
   function hide() {
+    closeMenu();
     if (host) setHostVisible(host, false);
     if (unsubscribe) {
       unsubscribe();
@@ -2221,6 +2231,9 @@
   window.__ssoPanel = { show, hide, toggle, reparent, isCapturingKey, rescale, applySize };
 
   window.__ssoPanelTeardown = () => {
+    // The menu lives on its own host outside this shadow tree, so removing the
+    // panel does not remove it.
+    closeMenu();
     document.removeEventListener("keydown", onCaptureKey, true);
     window.removeEventListener("resize", clampIntoView);
     unsubscribe?.();

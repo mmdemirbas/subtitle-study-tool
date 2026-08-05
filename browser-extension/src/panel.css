@@ -461,11 +461,11 @@ button.sso-track__learn[data-on="true"] {
  * in the same place.
  */
 
+/* On a host of its own, so nothing can clip it. The width bound is the
+ * viewport's rather than the panel's for the same reason. */
 .sso-menu {
-  position: absolute;
-  z-index: 5;
-  min-width: 148px;
-  max-width: calc(100% - 24px);
+  min-width: 152px;
+  max-width: min(280px, calc(100vw - 16px));
   padding: 4px;
   background: #20242c;
   border: 1px solid var(--sso-line);

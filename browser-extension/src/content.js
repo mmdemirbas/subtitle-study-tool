@@ -1334,6 +1334,9 @@
       document.documentElement;
     if (!parent || !host) return;
     if (host.parentElement !== parent || raise) parent.appendChild(host);
+    // Floating layers go too. Fullscreen renders only the fullscreen element's
+    // subtree, so one left behind is a menu that silently stops appearing.
+    for (const layer of layers) if (layer.parentElement !== parent) parent.appendChild(layer);
     if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(parent);
     if (window.__ssoStudy?.reparent) window.__ssoStudy.reparent(parent);
   }
@@ -1346,6 +1349,60 @@
    * showing only. And it has to stay long enough to be read and reached:
    * TOAST_MS is 1.6 seconds, which is right for a line of confirmation and far
    * too short to notice a mistake and undo it. */
+  /* A surface that floats free of whatever opened it.
+   *
+   * Everything this extension puts on screen lives in a shadow root, and that
+   * is what stops a streaming site's stylesheet from reaching in. It also means
+   * anything drawn inside a panel is clipped by that panel: a menu opened near
+   * the bottom of the control panel was cut off at its edge, which is fine for
+   * content and wrong for a menu.
+   *
+   * `position: fixed` inside the panel nearly works, and fails in exactly the
+   * case that matters least often and is hardest to notice: when the overlay is
+   * inside a scaled container, the host carries a counter-transform, that
+   * transform makes the host the containing block for fixed descendants, and
+   * the panel is then between the menu and its containing block - so the clip
+   * comes back. A separate host has no ancestor to be clipped by at all.
+   *
+   * Returns the shadow root to draw into and a `place` that positions the host
+   * in viewport coordinates. Callers must call `remove()`; nothing here reaps
+   * them, because a layer that vanishes on its own is worse than one that
+   * lingers.
+   */
+  const layers = new Set();
+
+  function makeLayer({ zIndex = "2147483646", interactive = true } = {}) {
+    const node = document.createElement("div");
+    for (const [property, value] of Object.entries({
+      all: "initial",
+      position: "fixed",
+      top: "0",
+      left: "0",
+      "z-index": zIndex,
+      // The host is a coordinate frame, not a surface: only what is drawn
+      // inside it should take a pointer.
+      "pointer-events": interactive ? "auto" : "none",
+    })) {
+      node.style.setProperty(property, value, "important");
+    }
+    const shadow = node.attachShadow({ mode: "open" });
+    (host?.parentElement || document.body).appendChild(node);
+    layers.add(node);
+
+    return {
+      host: node,
+      shadow,
+      /** Put the layer's top-left at a point in viewport coordinates. */
+      place(x, y) {
+        node.style.setProperty("transform", `translate(${Math.round(x)}px, ${Math.round(y)}px)`, "important");
+      },
+      remove() {
+        layers.delete(node);
+        node.remove();
+      },
+    };
+  }
+
   function showToast(message, { action = null } = {}) {
     ensureOverlay();
     toast.replaceChildren();
@@ -2106,6 +2163,7 @@
     // page whose coordinate system is not necessarily the viewport's.
     measurePlacement,
     makeMovable,
+    makeLayer,
     setPlacing(on) {
       state.placing = Boolean(on);
       for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
