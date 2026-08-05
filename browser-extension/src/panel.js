@@ -771,7 +771,54 @@
     const shut = document.createElement("span");
     shut.className = "sso-track__shut";
 
-    head.append(caret, label, shut, keysChip);
+    /* Everything this subtitle can have done to it, on demand.
+     *
+     * These were four permanent controls on the card - Hide, Remove, Reset
+     * timing, and two sliders - none of which is touched while a film plays.
+     * Behind one button they stop competing with the timing row, which is the
+     * only thing here that is. Remove goes last, after a rule and in the danger
+     * ink, because a menu makes it one tap with no confirmation; the undo is
+     * what makes that safe. */
+    const more = document.createElement("button");
+    more.className = "sso-icon sso-track__more";
+    more.type = "button";
+    more.textContent = "⋯";
+    more.title = "What can be done to this subtitle";
+    more.setAttribute("aria-haspopup", "menu");
+    more.addEventListener("click", (event) => {
+      event.stopPropagation();
+      // A click from a key press carries detail 0. The menu uses this to decide
+      // whether to take focus, so a mouse user is not shown a focus ring.
+      more.dataset.viaKey = event.detail === 0 ? "true" : "false";
+      const track = api.status().tracks[slot];
+      menu(more, [
+        {
+          label: track.visible ? "Hide" : "Show",
+          title: "Take it off the picture without losing it",
+          onClick: () => api.setVisible(!track.visible, { slot }),
+        },
+        {
+          label: "Reset timing",
+          title: "Back to the file's own timing",
+          onClick: () => api.setOffset(0, { slot }),
+        },
+        {
+          label: "Replace…",
+          title: "Find a different subtitle for this one",
+          onClick: () => {
+            targetSlot = slot;
+            setSectionOpen("Find a subtitle", true);
+            el.query.focus();
+            el.query.select();
+            refresh(api.status());
+          },
+        },
+        null,
+        { label: "Remove", danger: true, onClick: () => removeTrack(slot) },
+      ]);
+    });
+
+    head.append(caret, label, shut, keysChip, more);
     head.addEventListener("click", () => toggleTrack(slot));
 
     /* One row: say what is wrong, twice as fast or twice as fine, and read what
@@ -868,20 +915,6 @@
       nudger("Late", "»", -1, "large", `${late} A whole step. Hold to run.`),
     );
 
-    /* Only when there is something to undo. It is the third thing this row
-     * could do and the least used, so it does not get a permanent target - and
-     * a hidden control here is honest, because nothing to reset is exactly when
-     * the subtitle is already right. */
-    const offsetReset = button("Reset timing", {
-      onClick: () => api.setOffset(0, { slot }),
-      title: "Back to the file's own timing",
-    });
-    offsetReset.className = "sso-linkish";
-
-    const offsetState = document.createElement("div");
-    offsetState.className = "sso-row sso-sync__state";
-    offsetState.append(offsetReset);
-
     const size = slider("Size", 0.6, 2.2, 0.05, 1, (value) =>
       api.updateTrackSettings(slot, { fontScale: value }),
     );
@@ -889,22 +922,93 @@
       api.updateTrackSettings(slot, { widthPercent: value, placed: true }),
     );
 
-    const actions = document.createElement("div");
-    actions.className = "sso-row";
-    const visible = button("Hide", {
-      onClick: () => {
-        const track = api.status().tracks[slot];
-        api.setVisible(!track.visible, { slot });
-      },
-    });
-    actions.append(visible, button("Remove", { onClick: () => removeTrack(slot) }));
-
     const body = document.createElement("div");
     body.className = "sso-track__body";
-    body.append(offsets, offsetState, size.row, width.row, actions);
+    body.append(offsets, size.row, width.row);
 
     root.append(head, body);
-    return { root, caret, keyed, keysChip, label, shut, offsetField, offsetReset, size, width, visible };
+    return { root, caret, keyed, keysChip, label, shut, offsetField, more, size, width };
+  }
+
+  /* A menu of verbs, anchored to the button that opened it.
+   *
+   * It is a child of .sso-panel rather than a second shadow host. The panel is
+   * `overflow: hidden auto` - hidden across, auto down - so a menu no wider
+   * than the panel and right-aligned to its anchor is clipped on neither axis,
+   * and it scrolls with the row it belongs to, which is what a menu anchored to
+   * a row should do. A floating host would need its own stylesheet adoption,
+   * its own fullscreen re-parenting and its own teardown, for a list of five
+   * words.
+   *
+   * Only one is open at a time, and anything at all closes it: a click, the
+   * Escape key, a scroll, the panel being folded or hidden. A menu that
+   * survives the thing it was opened from is worse than no menu.
+   */
+  let openMenu = null;
+
+  function closeMenu() {
+    openMenu?.remove();
+    openMenu = null;
+  }
+
+  function menu(anchor, items) {
+    closeMenu();
+    const node = document.createElement("div");
+    node.className = "sso-menu";
+    node.setAttribute("role", "menu");
+
+    for (const item of items) {
+      if (item === null) {
+        const rule = document.createElement("div");
+        rule.className = "sso-menu__rule";
+        node.append(rule);
+        continue;
+      }
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = item.danger ? "sso-menu__item sso-menu__item--danger" : "sso-menu__item";
+      b.setAttribute("role", "menuitem");
+      b.textContent = item.label;
+      if (item.title) b.title = item.title;
+      b.addEventListener("click", () => {
+        closeMenu();
+        item.onClick();
+      });
+      node.append(b);
+    }
+
+    /* Positioned against the panel, which is the offset parent, so the maths is
+     * two numbers and no measuring of anything that might move. Right-aligned
+     * to the anchor because the anchor is at the card's right edge and a menu
+     * hanging off to its left is the only one that fits. */
+    const panelBox = el.panel.getBoundingClientRect();
+    const anchorBox = anchor.getBoundingClientRect();
+    node.style.top = `${anchorBox.bottom - panelBox.top + el.panel.scrollTop + 4}px`;
+    node.style.right = `${panelBox.right - anchorBox.right}px`;
+
+    el.panel.append(node);
+    openMenu = node;
+    /* Only when the menu was opened from the keyboard. A programmatic focus
+     * after a mouse click still paints the focus ring, which reads as "Hide is
+     * selected" on a menu the reader opened to look at. A click from a key
+     * press arrives with detail 0. */
+    if (anchor.dataset.viaKey === "true") node.querySelector("button")?.focus();
+
+    /* Bound after this click finishes, or the click that opened it closes it. */
+    setTimeout(() => {
+      const away = (event) => {
+        if (!node.contains(event.composedPath?.()[0] ?? event.target)) closeMenu();
+      };
+      node.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          closeMenu();
+          anchor.focus();
+        }
+      });
+      shadow.addEventListener("pointerdown", away, { once: true });
+      el.panel.addEventListener("scroll", closeMenu, { once: true });
+    }, 0);
+    return node;
   }
 
   /* Taking a subtitle off is the one destructive thing this panel does, and it
@@ -1699,15 +1803,16 @@
         : `${track.cueCount} line${track.cueCount === 1 ? "" : "s"}`;
       card.shut.dataset.set = track.offsetMs ? "true" : "false";
       card.offsetField.dataset.set = track.offsetMs ? "true" : "false";
-      // Nothing to undo means no undo button, which is also the width that lets
-      // the reading sit on one line.
-      card.offsetReset.hidden = !track.offsetMs;
       // Not while it is being typed into, or the value rewrites itself under
       // the cursor between keystrokes.
       if (shadow.activeElement !== card.offsetField) {
         card.offsetField.value = String(Math.round(track.offsetMs) / 1000);
       }
-      card.visible.textContent = track.visible ? "Hide" : "Show";
+      /* A hidden subtitle says so on its card. The menu item it was toggled
+       * from is not on screen to carry the state, and a subtitle that has
+       * vanished from the picture with nothing in the panel saying why is the
+       * kind of thing that reads as a bug. */
+      card.root.dataset.hidden = track.visible ? "false" : "true";
       card.size.input.value = String(geometry.fontScale);
       card.size.readout.textContent = String(geometry.fontScale);
       card.width.input.value = String(Math.round(geometry.widthPercent));

@@ -928,6 +928,69 @@
         }
       });
 
+      check("the menu of verbs opens inside the panel and closes on anything", async () => {
+        /* It is a child of .sso-panel rather than a floating host, which only
+         * works because the panel is `overflow: hidden auto` - so the thing to
+         * assert is that it is actually reachable, not merely present. */
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        const opener = card.querySelector(".sso-track__more");
+        opener.click();
+        await sleep(60);
+        const open = panelShadow().querySelector(".sso-menu");
+        if (!open) throw new Error("nothing opened");
+
+        const panelBox = panelShadow().querySelector(".sso-panel").getBoundingClientRect();
+        const menuBox = open.getBoundingClientRect();
+        if (menuBox.width === 0 || menuBox.height === 0) throw new Error("the menu has no size");
+        if (menuBox.right > panelBox.right + 1 || menuBox.left < panelBox.left - 1)
+          throw new Error(
+            `clipped: menu spans ${Math.round(menuBox.left)}-${Math.round(menuBox.right)}, ` +
+            `panel ${Math.round(panelBox.left)}-${Math.round(panelBox.right)}`);
+        // Every item must be a real target, not a 2px sliver behind an edge.
+        for (const item of open.querySelectorAll(".sso-menu__item")) {
+          const box = item.getBoundingClientRect();
+          if (box.height < 24) throw new Error(`a menu item is ${Math.round(box.height)}px tall`);
+        }
+
+        // Escape closes it, and one press of the opener does not leave two.
+        open.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await sleep(40);
+        if (panelShadow().querySelector(".sso-menu")) throw new Error("Escape did not close it");
+        opener.click();
+        await sleep(40);
+        opener.click();
+        await sleep(40);
+        if (panelShadow().querySelectorAll(".sso-menu").length > 1)
+          throw new Error("two menus at once");
+        panelShadow().querySelector(".sso-menu")
+          ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await sleep(40);
+      });
+
+      check("hiding a subtitle says so on its card", async () => {
+        /* Hide moved into the menu, so the control that used to carry this
+         * state is not on screen. A subtitle gone from the picture with nothing
+         * saying why reads as a fault rather than as something you did. */
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        card.querySelector(".sso-track__more").click();
+        await sleep(60);
+        const hide = [...panelShadow().querySelectorAll(".sso-menu__item")]
+          .find((b) => b.textContent === "Hide");
+        if (!hide) throw new Error("no way to hide it");
+        hide.click();
+        await sleep(80);
+        if (card.dataset.hidden !== "true") throw new Error("the card does not say it is hidden");
+
+        card.querySelector(".sso-track__more").click();
+        await sleep(60);
+        const show = [...panelShadow().querySelectorAll(".sso-menu__item")]
+          .find((b) => b.textContent === "Show");
+        if (!show) throw new Error("the menu still offers to hide an already hidden subtitle");
+        show.click();
+        await sleep(80);
+        if (card.dataset.hidden !== "false") throw new Error("it would not come back");
+      });
+
       check("the big step moves further than the small one", async () => {
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
         const step = async (selector) => {
@@ -1018,9 +1081,14 @@
         window.__ssoApi.updateTrackSettings(0, { fontScale: 1.45, widthPercent: 52, posY: 70 });
         await sleep(40);
 
-        const remove = [...panelShadow().querySelectorAll("button")]
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        card.querySelector(".sso-track__more").click();
+        await sleep(60);
+        const remove = [...panelShadow().querySelectorAll(".sso-menu__item")]
           .find((b) => b.textContent === "Remove");
         if (!remove) throw new Error("no way to remove a subtitle");
+        if (!remove.classList.contains("sso-menu__item--danger"))
+          throw new Error("the destructive item looks like the others");
         remove.click();
         await sleep(60);
         if (window.__ssoApi.status().tracks[0].attached)

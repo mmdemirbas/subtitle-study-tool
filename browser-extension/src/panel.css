@@ -385,6 +385,92 @@ button.sso-more__toggle:hover:not(:disabled) {
   cursor: pointer;
 }
 
+/* --- the menu of verbs ------------------------------------------------------
+ *
+ * A child of .sso-panel, not a floating host. The panel is `overflow: hidden
+ * auto`, so a menu no wider than it and right-aligned to its anchor is clipped
+ * on neither axis, and it scrolls with the row it belongs to.
+ *
+ * It is the one surface here allowed to be opaque: it sits over the cards, and
+ * a translucent menu on top of a card on top of a film is three layers of text
+ * in the same place.
+ */
+
+.sso-menu {
+  position: absolute;
+  z-index: 5;
+  min-width: 148px;
+  max-width: calc(100% - 24px);
+  padding: 4px;
+  background: #20242c;
+  border: 1px solid var(--sso-line);
+  border-radius: 9px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 10px 26px -10px rgba(0, 0, 0, 0.9);
+}
+
+button.sso-menu__item {
+  display: block;
+  width: 100%;
+  padding: 6px 9px;
+  font-size: var(--sso-t-body);
+  font-weight: 500;
+  text-align: left;
+  color: var(--sso-ink-2);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+button.sso-menu__item:hover:not(:disabled) {
+  color: var(--sso-ink);
+  background: var(--sso-fill-hover);
+}
+
+button.sso-menu__item:active:not(:disabled) {
+  transform: none;
+}
+
+/* The line that sets the destructive item apart, so it has to be seen. The
+ * shared --sso-line is a hairline for edges over a moving picture; on an
+ * opaque menu it reads as a gap, which is the one thing this must not be. */
+.sso-menu__rule {
+  height: 1px;
+  margin: 5px 2px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+/* The one item that destroys something says so before it is pressed, not
+ * after. Ink at rest so it does not shout from a closed menu's shadow; the
+ * full colour arrives under the pointer, where the decision is made. */
+button.sso-menu__item--danger {
+  color: var(--sso-danger);
+}
+
+button.sso-menu__item--danger:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(240, 131, 111, 0.35);
+}
+
+/* --- a subtitle that is off the picture -------------------------------------
+ *
+ * Hide lives in the menu now, so the control that was carrying this state is
+ * not on screen. A subtitle that has vanished with nothing saying why reads as
+ * a fault rather than as something you did.
+ */
+
+.sso-track[data-hidden="true"] .sso-track__label {
+  color: var(--sso-ink-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--sso-ink-3);
+}
+
+.sso-track[data-hidden="true"] .sso-track__body {
+  opacity: 0.5;
+}
+
 /* --- telling the subtitle to move -------------------------------------------
  *
  * The two buttons state the complaint, so they are the widest things in the
