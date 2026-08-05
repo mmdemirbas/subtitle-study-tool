@@ -152,7 +152,8 @@
 /* Folded: the title bar and nothing else, so the frame underneath is visible
  * without the rail being put away and having to be found again. */
 .sso-rail[data-folded="true"] > .sso-rail__list,
-.sso-rail[data-folded="true"] > .sso-rail__note {
+.sso-rail[data-folded="true"] > .sso-rail__note,
+.sso-rail[data-folded="true"] > .sso-rail__grip {
   display: none;
 }
 

@@ -414,6 +414,76 @@
     };
   }
 
+  /* Drag a floating thing by its handle.
+   *
+   * This is here, once, because it had been written three times - the subtitle,
+   * the control panel, the study rail - and every fix landed in some of them.
+   * The lost-release guard was in two of the three, so the rail would teleport
+   * 500px the next time the mouse moved, which is the same defect the subtitle
+   * had and was fixed for months earlier.
+   *
+   * Four things every one of them has to get right:
+   *   - a press on a button inside the handle is a click, not a drag
+   *   - the page's coordinate system is solved, not assumed (measurePlacement)
+   *   - the grab offset is held, so the thing does not jump on the first move
+   *   - a move with no button held means the release was lost: end the drag
+   *
+   * `place(x, y)` writes a position in whatever units the caller stores, and
+   * the clamp keeps the handle on screen - the handle specifically, because it
+   * is the part that drags the thing back.
+   */
+  function makeMovable(handle, { host, place, onMove, onEnd }) {
+    let origin = null;
+
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest("button")) return;
+      const box = host.getBoundingClientRect();
+
+      // Solve the mapping, then put it back where the probe found it. Both
+      // happen in this handler, so nothing is painted in between.
+      const map = measurePlacement(host, place);
+      const back = map.toLocal(box.left, box.top);
+      place(back.x, back.y);
+
+      origin = { map, grabX: event.clientX - box.left, grabY: event.clientY - box.top };
+      handle.dataset.dragging = "true";
+      handle.setPointerCapture?.(event.pointerId);
+    });
+
+    handle.addEventListener("pointermove", (event) => {
+      if (!origin) return;
+      if (event.buttons === 0) {
+        end(event);
+        return;
+      }
+      const box = host.getBoundingClientRect();
+      const handleHeight = handle.getBoundingClientRect().height || 34;
+      const left = clamp(
+        event.clientX - origin.grabX,
+        0,
+        Math.max(0, window.innerWidth - box.width),
+      );
+      const top = clamp(
+        event.clientY - origin.grabY,
+        0,
+        Math.max(0, window.innerHeight - handleHeight),
+      );
+      const local = origin.map.toLocal(left, top);
+      place(local.x, local.y);
+      onMove?.();
+    });
+
+    const end = (event) => {
+      if (!origin) return;
+      origin = null;
+      handle.dataset.dragging = "false";
+      handle.releasePointerCapture?.(event.pointerId);
+      onEnd?.();
+    };
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  }
+
   // --- diagnostics ----------------------------------------------------------
 
   /* What this frame can see, for when a page does not work and nobody can say
@@ -1696,6 +1766,7 @@
     // Shared by the panel and the study rail, which are both dragged around a
     // page whose coordinate system is not necessarily the viewport's.
     measurePlacement,
+    makeMovable,
     setPlacing(on) {
       state.placing = Boolean(on);
       for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;

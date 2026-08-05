@@ -49,6 +49,20 @@
   const SETTINGS_KEY = "sso:study";
   const POSITION_KEY = "sso:studyPosition";
 
+  /* Where the rail sits until it is dragged, in pixels rather than in vh.
+   *
+   * What it has to clear is the control panel's parked title bar, which is a
+   * fixed number of pixels tall wherever it is - so a fraction of the viewport
+   * cleared it on a tall screen and landed on it on a short one. Measured: the
+   * panel parks at 52px and its folded bar ends near 93, so this starts below
+   * that on every screen.
+   *
+   * An open panel still covers the rail, which is correct - it is above by
+   * z-index, it is opened on purpose and closed again, and both of them can be
+   * dragged anywhere and remember where that was. */
+  const PARK_TOP = 104;
+  const PARK_RIGHT = 12;
+
   const DEFAULT_SETTINGS = {
     enabled: false,
     /* The unattended half. With this on, the rare words of each line arrive in
@@ -614,8 +628,8 @@
     for (const [property, value] of Object.entries({
       all: "initial",
       position: "fixed",
-      top: "12vh",
-      right: "12px",
+      top: `${PARK_TOP}px`,
+      right: `${PARK_RIGHT}px`,
       left: "auto",
       width: `${settings.width}px`,
       "z-index": "2147483646", // just under the panel, which opens over it
@@ -1117,44 +1131,33 @@
    * pointer is the identical bug in the identical shape, and it would have been
    * fixed in one place and not the other if this used its own arithmetic. */
   function makeDraggable(handle) {
-    let origin = null;
-    const place = (x, y) => setPosition(`${x}px`, `${y}px`);
+    api.makeMovable(handle, {
+      host,
+      place: (x, y) => setPosition(`${x}px`, `${y}px`),
+      onEnd: savePosition,
+    });
 
-    handle.addEventListener("pointerdown", (event) => {
+    /* Double-click the title bar to send it back to its corner, the same
+     * gesture the control panel has. Somewhere to put a thing you have dragged
+     * into the way, without having to aim it back. */
+    handle.addEventListener("dblclick", (event) => {
       if (event.target.closest("button")) return;
-      const box = host.getBoundingClientRect();
-
-      const map = api.measurePlacement(host, place);
-      const back = map.toLocal(box.left, box.top);
-      place(back.x, back.y);
-
-      origin = { map, grabX: event.clientX - box.left, grabY: event.clientY - box.top };
-      handle.dataset.dragging = "true";
-      handle.setPointerCapture(event.pointerId);
+      park();
     });
+  }
 
-    handle.addEventListener("pointermove", (event) => {
-      if (!origin) return;
-      const box = host.getBoundingClientRect();
-      const maxLeft = Math.max(0, window.innerWidth - box.width);
-      const maxTop = Math.max(0, window.innerHeight - 60);
-      const left = Math.min(Math.max(0, event.clientX - origin.grabX), maxLeft);
-      const top = Math.min(Math.max(0, event.clientY - origin.grabY), maxTop);
-      const local = origin.map.toLocal(left, top);
-      place(local.x, local.y);
-    });
+  function park() {
+    host.style.setProperty("left", "auto", "important");
+    host.style.setProperty("right", `${PARK_RIGHT}px`, "important");
+    host.style.setProperty("top", `${PARK_TOP}px`, "important");
+    chrome.storage.local.remove(POSITION_KEY).catch(() => {});
+    api.showToast?.("Rail parked");
+  }
 
-    const end = (event) => {
-      if (!origin) return;
-      origin = null;
-      handle.dataset.dragging = "false";
-      handle.releasePointerCapture?.(event.pointerId);
-      chrome.storage.local
-        .set({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } })
-        .catch(() => {});
-    };
-    handle.addEventListener("pointerup", end);
-    handle.addEventListener("pointercancel", end);
+  function savePosition() {
+    chrome.storage.local
+      .set({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } })
+      .catch(() => {});
   }
 
   /* All four corners, like the panel and for the same reason: the rail can be
@@ -1310,44 +1313,58 @@
 
   // --- lifecycle ----------------------------------------------------------------
 
+  /* Study mode is one setting shared by every tab, because it is a way of
+   * watching rather than something done once per page. Presence is not: a rail
+   * belongs on the page being watched and nowhere else.
+   *
+   * Reported as the rail appearing on unrelated pages while a film played in
+   * another tab - which is exactly what the old code did, since it built the
+   * rail wherever the content script loaded with the setting on. The comment
+   * there already claimed "attaching a subtitle later is what makes it
+   * visible"; it just was not true.
+   *
+   * A subtitle being attached is the right test rather than a video being
+   * present. Study mode reads cues - it marks words in them, saves lines out of
+   * them, translates against the other one - so with nothing attached there is
+   * nothing for it to do, whatever else is on the page. */
+  let present = false;
+
+  function studiable() {
+    return Boolean(api.status?.().attached);
+  }
+
+  async function syncPresence() {
+    const wanted = settings.enabled && studiable();
+    if (wanted === present) return;
+    present = wanted;
+    if (wanted) await turnOn();
+    else turnOff();
+  }
+
   async function setEnabled(on) {
     updateSettings({ enabled: Boolean(on) });
-
-    if (!settings.enabled) {
-      /* Dropped, not hidden, and the reference dropped with it. Removing the
-       * element alone was not enough: content.js calls reparent() on every
-       * fullscreen change and every time the CC handle is revealed, and
-       * reparent re-appends whatever host it is holding - so the rail came
-       * back on the next mouse movement. */
-      host?.remove();
-      host = null;
-      shadow = null;
-      railEl = listEl = countEl = noteEl = null;
-      // The popup goes the same way and for the same reason: a live reference
-      // to a removed element is what brought the rail back on the next mouse
-      // movement, and a second host would do it a second time.
-      popupHost?.remove();
-      popupHost = null;
-      popupShadow = null;
-      popupEl = null;
-      popupTerm = "";
-      hoveredWord = null;
-      clearTimeout(hoverTimer);
-      cards = [];
-      // Words stay wrapped in whatever line is on screen, which is harmless -
-      // the next cue rebuilds the box - but the marks have to go.
-      for (const span of current.words) {
-        span.dataset.rare = "false";
-        span.dataset.selected = "false";
-      }
-      setStudyFlag(false);
-      api.showToast("Study mode off");
-      return;
-    }
-
     // Turning study on with the rail put away from a previous session would
     // look like nothing happened.
-    if (!settings.showRail) updateSettings({ showRail: true });
+    if (settings.enabled && !settings.showRail) updateSettings({ showRail: true });
+
+    await syncPresence();
+
+    if (!settings.enabled) {
+      api.showToast("Study mode off");
+    } else if (!studiable()) {
+      // Honest rather than silent: the switch is on and nothing appeared,
+      // and the reason is that there is no subtitle on this page yet.
+      api.showToast("Study mode on — attach a subtitle to see it");
+    } else {
+      api.showToast(
+        settings.auto
+          ? "Study mode on — rare words appear at the side"
+          : "Study mode on — hover a word to look it up",
+      );
+    }
+  }
+
+  async function turnOn() {
     if (!host) await build();
     reparent();
     setStudyFlag(true);
@@ -1356,11 +1373,36 @@
     // The line already on screen was rendered before study mode existed, so it
     // has no words in it. Force it through again.
     api.redrawCues?.();
-    api.showToast(
-      settings.auto
-        ? "Study mode on — rare words appear at the side"
-        : "Study mode on — hover a word to look it up",
-    );
+  }
+
+  function turnOff() {
+    /* Dropped, not hidden, and the reference dropped with it. Removing the
+     * element alone was not enough: content.js calls reparent() on every
+     * fullscreen change and every time the CC handle is revealed, and reparent
+     * re-appends whatever host it is holding - so the rail came back on the
+     * next mouse movement. */
+    host?.remove();
+    host = null;
+    shadow = null;
+    railEl = listEl = countEl = noteEl = clearEl = foldEl = null;
+    // The popup goes the same way and for the same reason: a live reference to
+    // a removed element is what brought the rail back on the next mouse
+    // movement, and a second host would do it a second time.
+    popupHost?.remove();
+    popupHost = null;
+    popupShadow = null;
+    popupEl = null;
+    popupTerm = "";
+    hoveredWord = null;
+    clearTimeout(hoverTimer);
+    cards = [];
+    // Words stay wrapped in whatever line is on screen, which is harmless -
+    // the next cue rebuilds the box - but the marks have to go.
+    for (const span of current.words) {
+      span.dataset.rare = "false";
+      span.dataset.selected = "false";
+    }
+    setStudyFlag(false);
   }
 
   /* Tells the overlay's stylesheet that words are targets now, which is what
@@ -1393,9 +1435,16 @@
   };
 
   loadSettings().then(() => {
-    // Study mode survives a reload, because it is a way of watching rather than
-    // a thing you do once. Attaching a subtitle later is what makes it visible.
-    if (settings.enabled) setEnabled(true);
+    /* Study mode survives a reload and reaches every tab, because it is a way
+     * of watching rather than a thing you do once. What arriving here does NOT
+     * do is put a rail on the page: that waits for a subtitle to be attached,
+     * so the setting being on in the tab playing a film does not decorate the
+     * other nine. Attaching later brings it up, which is what makes this a
+     * subscription rather than a one-off check. */
+    api.subscribe?.(() => {
+      syncPresence();
+    });
+    syncPresence();
   });
 
   window.__ssoStudyTeardown = () => {

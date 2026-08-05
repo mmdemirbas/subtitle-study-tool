@@ -1314,6 +1314,154 @@
           throw new Error("words are still marked");
       });
 
+      /* --- the controls behave like controls ---------------------------------
+       *
+       * Every floating surface should move, resize and fold the same way, and
+       * do nothing surprising at the edges. These run over both of them from
+       * one table, so a behaviour added to one and forgotten on the other is a
+       * failure rather than an inconsistency nobody notices.
+       */
+      const SURFACES = [
+        { name: "panel", sel: ".sso-panel", head: ".sso-panel__head", grip: ".sso-grip" },
+        { name: "rail", sel: ".sso-rail", head: ".sso-rail__head", grip: ".sso-rail__grip" },
+      ];
+
+      const hostFor = (sel) =>
+        [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(sel));
+
+      const openBoth = async () => {
+        await window.__ssoStudy.setEnabled(true);
+        window.__ssoStudy.updateSettings({ showRail: true, folded: false });
+        await window.__ssoPanel.show();
+        await sleep(250);
+      };
+
+      const pev = (type, x, y, buttons) =>
+        new PointerEvent(type,
+          { pointerId: 31, clientX: x, clientY: y, button: 0, buttons, bubbles: true });
+
+      for (const s of SURFACES) {
+        check(`the ${s.name} does not run away when a release goes missing`, async () => {
+          // The subtitle had this bug, then the panel was fixed, and the rail
+          // was not - it teleported 500px on the next mouse move. One shared
+          // drag now, so there is one place for the guard to live.
+          await openBoth();
+          const host = hostFor(s.sel);
+          const head = host.shadowRoot.querySelector(s.head);
+          head.setPointerCapture = () => {};
+          head.releasePointerCapture = () => {};
+
+          const from = host.getBoundingClientRect();
+          head.dispatchEvent(pev("pointerdown", from.left + 60, from.top + 10, 1));
+          head.dispatchEvent(pev("pointermove", from.left + 90, from.top + 40, 1));
+          head.dispatchEvent(pev("pointermove", 420, 480, 0)); // the release is lost
+          await sleep(40);
+          const parked = host.getBoundingClientRect();
+          head.dispatchEvent(pev("pointermove", 950, 130, 0)); // just moving the mouse
+          await sleep(60);
+          const after = host.getBoundingClientRect();
+          if (Math.abs(after.left - parked.left) > 2 || Math.abs(after.top - parked.top) > 2) {
+            throw new Error(
+              `it followed the pointer with no button held: ` +
+              `${Math.round(parked.left)},${Math.round(parked.top)} -> ` +
+              `${Math.round(after.left)},${Math.round(after.top)}`);
+          }
+        });
+
+        check(`the ${s.name} cannot be dragged out of reach`, async () => {
+          await openBoth();
+          const host = hostFor(s.sel);
+          const head = host.shadowRoot.querySelector(s.head);
+          head.setPointerCapture = () => {};
+          head.releasePointerCapture = () => {};
+          const from = host.getBoundingClientRect();
+          head.dispatchEvent(pev("pointerdown", from.left + 60, from.top + 10, 1));
+          head.dispatchEvent(pev("pointermove", 9000, 9000, 1));
+          head.dispatchEvent(pev("pointerup", 9000, 9000, 0));
+          await sleep(80);
+          const box = head.getBoundingClientRect();
+          if (box.top > window.innerHeight - 10 || box.left > window.innerWidth - 30)
+            throw new Error(`the handle ended at ${Math.round(box.left)},${Math.round(box.top)}`);
+
+          // And back, so the surface that follows is not left in the corner.
+          head.dispatchEvent(pev("pointerdown", box.left + 40, box.top + 8, 1));
+          head.dispatchEvent(pev("pointermove", 300, 150, 1));
+          head.dispatchEvent(pev("pointerup", 300, 150, 0));
+          await sleep(60);
+        });
+
+        check(`the ${s.name} folds to its title bar and unfolds again`, async () => {
+          await openBoth();
+          const host = hostFor(s.sel);
+          const shadow = host.shadowRoot;
+          const head = shadow.querySelector(s.head);
+          const fold = [...head.querySelectorAll("button")].find((b) => /^[▾▸]$/.test(b.textContent));
+          if (!fold) throw new Error("no fold control on the title bar");
+
+          const open = host.getBoundingClientRect().height;
+          fold.click();
+          await sleep(150);
+          const shut = host.getBoundingClientRect().height;
+          if (shut >= open) throw new Error(`folding changed the height ${open} -> ${shut}`);
+          if (shut < 10) throw new Error("folding took the title bar too, so there is no way back");
+
+          // Resizing something that is not on screen would apply numbers that
+          // only appear on unfolding, which is a surprise rather than a size.
+          for (const grip of shadow.querySelectorAll(s.grip)) {
+            if (getComputedStyle(grip).display !== "none")
+              throw new Error("a resize grip is still live while folded");
+          }
+
+          fold.click();
+          await sleep(150);
+          const again = host.getBoundingClientRect().height;
+          if (Math.abs(again - open) > 4) throw new Error(`unfolded to ${again}, was ${open}`);
+        });
+
+        check(`double-clicking the ${s.name}'s title bar parks it`, async () => {
+          await openBoth();
+          const host = hostFor(s.sel);
+          const head = host.shadowRoot.querySelector(s.head);
+          head.setPointerCapture = () => {};
+          head.releasePointerCapture = () => {};
+          const from = host.getBoundingClientRect();
+          head.dispatchEvent(pev("pointerdown", from.left + 60, from.top + 10, 1));
+          head.dispatchEvent(pev("pointermove", 240, 320, 1));
+          head.dispatchEvent(pev("pointerup", 240, 320, 0));
+          await sleep(80);
+          const moved = host.getBoundingClientRect();
+
+          head.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+          await sleep(150);
+          const parked = host.getBoundingClientRect();
+          if (Math.abs(parked.left - moved.left) < 20 && Math.abs(parked.top - moved.top) < 20)
+            throw new Error("it stayed where it had been dragged");
+          if (parked.right > window.innerWidth + 1 || parked.top < 0)
+            throw new Error(`parked off screen at ${Math.round(parked.left)},${Math.round(parked.top)}`);
+        });
+      }
+
+      check("the rail stays off a page with nothing attached", async () => {
+        // Reported as the rail appearing on unrelated pages while a film played
+        // in another tab: study mode is one setting for every tab, so the rail
+        // was built wherever the content script loaded with it on.
+        await openBoth();
+        if (!hostFor(".sso-rail")) throw new Error("no rail to begin with");
+
+        window.__ssoApi.detach(0);
+        window.__ssoApi.detach(1);
+        await sleep(200);
+        if (hostFor(".sso-rail"))
+          throw new Error("the rail is still there with no subtitle attached");
+        if (!window.__ssoStudy.settings().enabled)
+          throw new Error("it turned study mode off rather than leaving the page alone");
+
+        // Attaching is what brings it back, without touching the switch.
+        await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1 });
+        await sleep(250);
+        if (!hostFor(".sso-rail")) throw new Error("attaching did not bring it back");
+      });
+
       check("re-injection leaves exactly one overlay", async () => {
         window.__ssoApi.detach(1);
         const count = () => [...document.querySelectorAll("div")].filter((d) => d.shadowRoot).length;

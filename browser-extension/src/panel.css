@@ -75,7 +75,8 @@
   letter-spacing: 0.02em;
 }
 
-.sso-panel__x {
+.sso-panel__x,
+.sso-panel__fold {
   padding: 2px 7px;
   font-size: 14px;
   line-height: 1;
@@ -85,8 +86,25 @@
   cursor: pointer;
 }
 
-.sso-panel__x:hover {
+.sso-panel__x:hover,
+.sso-panel__fold:hover {
   background: #262b35;
+}
+
+.sso-panel__fold {
+  font-size: 11px;
+}
+
+/* Folded: the title bar and nothing else, so the film is visible without the
+ * panel being closed and having to be found again. The rail does the same.
+ *
+ * The grips go with the body. A folded panel is a title bar, and dragging a
+ * corner of it would be sizing something that is not on screen - the numbers
+ * would be applied to the body and only appear on unfolding, which is the
+ * definition of a surprise. */
+.sso-panel[data-folded="true"] > .sso-panel__body,
+.sso-panel[data-folded="true"] > .sso-grip {
+  display: none;
 }
 
 /* --- sections -------------------------------------------------------------- */

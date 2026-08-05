@@ -130,18 +130,27 @@
 
     const panel = document.createElement("div");
     panel.className = "sso-panel";
+    el.panel = panel;
 
     const head = document.createElement("div");
     head.className = "sso-panel__head";
     const title = document.createElement("div");
     title.className = "sso-panel__title";
     title.textContent = "Subtitle Overlay";
+    /* Folds to the title bar, the same control the study rail has. Different
+     * from closing: the panel stays where it was put and at the size it was
+     * given, so a glance at the film does not cost finding it again. */
+    el.fold = document.createElement("button");
+    el.fold.className = "sso-panel__fold";
+    el.fold.type = "button";
+    el.fold.addEventListener("click", () => setFolded(!folded));
+
     const close = document.createElement("button");
     close.className = "sso-panel__x";
     close.textContent = "×";
     close.title = "Close";
     close.addEventListener("click", hide);
-    head.append(title, close);
+    head.append(title, el.fold, close);
 
     /* Double-click the bar to put the panel back under the CC button. A panel
      * dragged somewhere unhelpful - behind the player's own controls, half off
@@ -376,9 +385,10 @@
 
   async function restoreSize() {
     try {
-      const stored = await chrome.storage.local.get(SIZE_KEY);
+      const stored = await chrome.storage.local.get([SIZE_KEY, FOLD_KEY]);
       const size = stored[SIZE_KEY];
       if (size?.width) applySize(size.width, size.body || preferredBody);
+      setFolded(stored[FOLD_KEY] === true);
     } catch {
       // The default size is fine.
     }
@@ -417,7 +427,26 @@
   const OPEN_KEY = "sso:panelOpen";
   const MORE_KEY = "sso:panelMore";
   const SIZE_KEY = "sso:panelSize";
+  const FOLD_KEY = "sso:panelFolded";
   let moreOpen = false;
+  let folded = false;
+
+  /* Folded is the panel's own state rather than a setting, but it survives a
+   * reload for the same reason the position does: it is where the reader left
+   * their tools, and having them spring open again is the thing they folded
+   * them to avoid. */
+  function setFolded(next) {
+    folded = Boolean(next);
+    if (el.panel) el.panel.dataset.folded = folded ? "true" : "false";
+    if (el.fold) {
+      el.fold.textContent = folded ? "▸" : "▾";
+      el.fold.title = folded ? "Open the panel" : "Fold to the title bar";
+    }
+    chrome.storage.local.set({ [FOLD_KEY]: folded }).catch(() => {});
+    // Folding frees the space the body was holding; unfolding needs it back,
+    // and near the bottom of the screen there may be less of it than there was.
+    fitToViewport();
+  }
 
   /* Which sections start open. The two that answer "what is on screen and how
    * do I change it" - everything else is set once and then left alone, and a
@@ -1353,67 +1382,16 @@
    * an offset containing block and costs one extra layout read per drag.
    */
   function makeDraggable(handle) {
-    let origin = null;
-
-    const place = (x, y) => setPosition(`${x}px`, `${y}px`);
-
-    handle.addEventListener("pointerdown", (event) => {
-      if (event.target.closest("button")) return;
-      const box = host.getBoundingClientRect();
-
-      // Solve the page's coordinate system, then put the panel back where the
-      // probe found it. Both happen in this handler, so nothing is painted in
-      // between and the panel does not flinch.
-      const map = api.measurePlacement(host, place);
-      const back = map.toLocal(box.left, box.top);
-      place(back.x, back.y);
-
-      origin = {
-        map,
-        // Where in the panel it was grabbed, so it does not jump on first move.
-        grabX: event.clientX - box.left,
-        grabY: event.clientY - box.top,
-      };
-      handle.dataset.dragging = "true";
-      handle.setPointerCapture(event.pointerId);
-    });
-
-    handle.addEventListener("pointermove", (event) => {
-      if (!origin) return;
-      // A live drag with nothing pressed means the release was lost. Same guard
-      // as the subtitle's, for the same reason - see onCuePointerMove.
-      if (event.buttons === 0) {
-        end(event);
-        return;
-      }
-      const box = host.getBoundingClientRect();
-      /* Clamped in viewport pixels, because the screen is what the panel must
-       * stay on. The header's height is the bound rather than a round number:
-       * it is the part that drags the panel back, so it is the part that has to
-       * remain reachable. */
-      const headerHeight = handle.getBoundingClientRect().height || 34;
-      const maxLeft = Math.max(0, window.innerWidth - box.width);
-      const maxTop = Math.max(0, window.innerHeight - headerHeight);
-      const left = Math.min(Math.max(0, event.clientX - origin.grabX), maxLeft);
-      const top = Math.min(Math.max(0, event.clientY - origin.grabY), maxTop);
-
-      const local = origin.map.toLocal(left, top);
-      place(local.x, local.y);
+    api.makeMovable(handle, {
+      host,
+      place: (x, y) => setPosition(`${x}px`, `${y}px`),
       // Dragging down the screen leaves less room beneath.
-      fitToViewport();
+      onMove: fitToViewport,
+      onEnd: () =>
+        chrome.storage.local
+          .set({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } })
+          .catch(() => {}),
     });
-
-    const end = (event) => {
-      if (!origin) return;
-      origin = null;
-      handle.dataset.dragging = "false";
-      handle.releasePointerCapture?.(event.pointerId);
-      chrome.storage.local
-        .set({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } })
-        .catch(() => {});
-    };
-    handle.addEventListener("pointerup", end);
-    handle.addEventListener("pointercancel", end);
   }
 
   /* Position stays inline-!important, matching how createHost set it. A plain
