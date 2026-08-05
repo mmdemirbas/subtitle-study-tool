@@ -675,7 +675,7 @@
       ),
     );
 
-    el.placeButton = arranger(
+    el.centreButton = arranger(
       "centre",
       "Both back to the middle of the bottom",
       () => api.resetPosition(),
@@ -703,7 +703,7 @@
     const spacer = document.createElement("span");
     spacer.className = "sso-grow";
 
-    el.quick.append(el.arrangeGroup, el.placeButton, el.moveButton, spacer, el.studyButton);
+    el.quick.append(el.arrangeGroup, el.centreButton, el.moveButton, spacer, el.studyButton);
     return el.quick;
   }
 
@@ -2040,6 +2040,9 @@
       if (!track.attached) return;
 
       card.label.textContent = `${slot + 1}. ${track.label || "Attached"}`;
+      // Release names are long and the chips beside them are not optional, so
+      // the name is often an ellipsis. Hovering it says the whole thing.
+      card.label.title = track.label || "Attached";
       card.keyed.checked = status.keyTrack === slot;
       /* A chip appears on the card the thing is true of, and nowhere else.
        *
