@@ -676,12 +676,83 @@
 
     wrap.append(
       el.none,
+      buildQuickRow(),
       ...el.trackCards.map((card) => card.root),
       el.undoRow,
       el.add,
       el.adRow,
     );
     return wrap;
+  }
+
+  /* What both subtitles share, above the two cards that do not.
+   *
+   * Where they sit and whether the words are being studied were in Settings,
+   * two windows away from the subtitles they act on, next to backdrop sliders
+   * and key bindings. They are not settings: they are things you do, several
+   * times, while a film plays - "put them side by side", "that one is in the
+   * way", "start marking the rare words". So they sit at the top of the list
+   * they act on, which is also the only place both cards can be seen at once.
+   *
+   * The three arrangement buttons are drawn rather than written. Words for them
+   * come to 157px of the 234 a 280px-wide panel has, which leaves nothing for
+   * Move and Study; the pictures are 26px each and say what they do without
+   * being read. They show only with two subtitles attached, because arranging
+   * one against nothing is not an arrangement. */
+  function buildQuickRow() {
+    el.quick = document.createElement("div");
+    el.quick.className = "sso-row sso-quick";
+
+    const arranger = (kind, title, onClick) => {
+      const b = button("", { title, onClick });
+      b.className = "sso-arr";
+      const icon = document.createElement("span");
+      icon.className = `sso-arr__i sso-arr__i--${kind}`;
+      b.append(icon);
+      return b;
+    };
+
+    el.arrangeGroup = document.createElement("div");
+    el.arrangeGroup.className = "sso-arr-group";
+    el.arrangeGroup.append(
+      arranger("side", "Side by side - one on the left half, one on the right", () =>
+        api.arrange("side"),
+      ),
+      arranger("stack", "Stacked - one above the other, along the bottom", () =>
+        api.arrange("stacked"),
+      ),
+    );
+
+    el.placeButton = arranger(
+      "centre",
+      "Both back to the middle of the bottom",
+      () => api.resetPosition(),
+    );
+
+    /* Placing is a mode, so it says so: the button reads Done while it is on
+     * and is lit, which is the only control here that changes what a click
+     * anywhere else will do. */
+    el.moveButton = button("Move", {
+      onClick: () => api.setPlacing(!api.status().placing),
+      title: "Drag the middle of a subtitle to move it, an edge to make it wider",
+    });
+    el.moveButton.className = "sso-quick__move";
+
+    /* The one control that is not about position. It is on this surface at all
+     * because the rail it belongs to does not exist until it is on - a switch
+     * you can only reach by first being in the state it turns on is not a
+     * switch - and everything else about study is on the rail's own gear. */
+    el.studyButton = button("Study", {
+      onClick: () => window.__ssoStudy?.setEnabled(!window.__ssoStudy.settings().enabled),
+      title: "Mark the words that are rare in film dialogue and show what they mean",
+    });
+    el.studyButton.className = "sso-quick__study";
+
+    const spacer = document.createElement("span");
+    spacer.className = "sso-grow";
+
+    el.quick.append(el.arrangeGroup, el.placeButton, el.moveButton, spacer, el.studyButton);
+    return el.quick;
   }
 
   /* Click to nudge, hold to run, and the longer it runs the bigger the steps.
@@ -883,9 +954,20 @@
      * for constantly - a subtitle in the way of something on screen goes away
      * for ten seconds and comes back - and burying a ten-second action two
      * clicks deep is what made the menu feel like a filing cabinet. */
+    /* Drawn, not written. It was "◉" for showing and "◎" for hidden, next to a
+     * radio drawn "◉", next to an amber dot for the subtitle being studied:
+     * three circles in a row, telling three unrelated things apart by colour
+     * alone. An eye is a shape nobody has to learn, and the bar across it is
+     * how every player on earth says "off". */
     const visible = document.createElement("button");
     visible.className = "sso-icon sso-track__eye";
     visible.type = "button";
+    const eye = document.createElement("span");
+    eye.className = "sso-eye";
+    const eyeBar = document.createElement("span");
+    eyeBar.className = "sso-eye__bar";
+    eye.append(eyeBar);
+    visible.append(eye);
     visible.addEventListener("click", (event) => {
       event.stopPropagation();
       api.setVisible(!api.status().tracks[slot].visible, { slot });
@@ -1182,9 +1264,7 @@
         accentInk: "#93b9fb",
         onClose: () => refresh(api.status()),
       });
-      settingsWindow.body.append(
-        buildArrangement(), buildAppearance(), buildStudy(), buildKeys(), buildDiagnostics(),
-      );
+      settingsWindow.body.append(buildAppearance(), buildKeys(), buildDiagnostics());
     }
     closeMenu();
     await settingsWindow.show(host);
@@ -1637,46 +1717,6 @@
     return context?.title || api.pageInfo().candidates[0]?.text || document.title;
   }
 
-  // --- arrangement ----------------------------------------------------------
-
-  /* Two buttons that put both subtitles somewhere sensible at once.
-   *
-   * They are actions, not a stored layout mode. A mode would have to either
-   * yield to the next drag - making it not a mode - or resist it, which would
-   * break dragging. So these write the two positions and then stop having an
-   * opinion, and the drag remains the only thing that owns position. */
-  function buildArrangement() {
-    const wrap = section("Arrangement");
-
-    const row = document.createElement("div");
-    row.className = "sso-row";
-    row.append(
-      button("Side by side", {
-        onClick: () => api.arrange("side"),
-        title: "One on the left half, one on the right",
-      }),
-      button("Stacked", {
-        onClick: () => api.arrange("stacked"),
-        title: "One above the other, along the bottom",
-      }),
-      button("Reset", { onClick: () => api.resetPosition(), title: "Both back to bottom centre" }),
-    );
-
-    el.positionRow = document.createElement("div");
-    el.positionRow.className = "sso-row";
-    el.position = document.createElement("span");
-    el.position.className = "sso-note";
-    el.position.style.flex = "1";
-    el.placeButton = button("Move", {
-      onClick: () => api.setPlacing(!api.status().placing),
-      title: "Show a stand-in you can drag, so you need not catch a passing line",
-    });
-    el.positionRow.append(el.position, el.placeButton);
-
-    wrap.append(row, el.positionRow);
-    return wrap;
-  }
-
   // --- appearance -----------------------------------------------------------
 
   /* What is left here is what both subtitles share. Size and width are per
@@ -1710,55 +1750,6 @@
       el.showSymbols.row,
       el.dimNonSpeech.row,
     );
-    return wrap;
-  }
-
-  // --- study ----------------------------------------------------------------
-
-  /* The controls for turning a film into vocabulary.
-   *
-   * study.js owns these settings rather than content.js, because the whole
-   * feature is optional and nothing about ordinary watching should have to know
-   * it exists. That is why this section reads through window.__ssoStudy and
-   * hides itself when that file did not load. */
-  /* Two controls, and everything else moved.
-   *
-   * This was eleven controls in a panel about subtitles, all of them describing
-   * the rail: how big its text is, how solid it is over the film, how many
-   * words it keeps, what counts as rare. Settings belong on the thing they
-   * change, so they are on the rail's own gear now.
-   *
-   * The master switch has to stay here, because the rail does not exist while
-   * study is off - a switch you can only reach by first being in the state it
-   * turns on is not a switch. "Saved words" stays for the same reason: the deck
-   * outlives any one film and has to be reachable with study off. */
-  function buildStudy() {
-    const wrap = section("Study");
-    el.studySection = wrap;
-
-    const note = document.createElement("p");
-    note.className = "sso-note";
-    note.textContent =
-      "Marks the words in each line that are rare in film dialogue, and shows what they mean at " +
-      "the side. Hover any word to look it up; shift-drag across words for a phrase.";
-
-    el.studyEnabled = toggle_("Study mode", false, (on) => window.__ssoStudy?.setEnabled(on));
-
-    el.studyWhere = document.createElement("p");
-    el.studyWhere.className = "sso-note";
-    el.studyWhere.textContent = "Everything else about study is on the rail's own \u2699.";
-
-    const actions = document.createElement("div");
-    actions.className = "sso-row";
-    actions.style.marginTop = "8px";
-    actions.append(
-      button("Saved words", {
-        onClick: () => chrome.runtime.sendMessage({ type: "sso:openOptions", hash: "#deck" }),
-        title: "Open the deck on the options page",
-      }),
-    );
-
-    wrap.append(note, el.studyEnabled.row, el.studyWhere, actions);
     return wrap;
   }
 
@@ -2050,6 +2041,22 @@
     // is what the card's own menu is for.
     el.add.hidden = !status.attached || status.trackCount >= api.trackCount;
 
+    /* The shared row. Nothing attached means nothing to arrange and nothing to
+     * study, and the empty state below owns that screen on its own. */
+    const study = window.__ssoStudy?.settings?.() || null;
+    el.quick.hidden = !status.attached;
+    el.arrangeGroup.hidden = status.trackCount < 2;
+    el.moveButton.textContent = status.placing ? "Done" : "Move";
+    el.moveButton.dataset.on = status.placing ? "true" : "false";
+    el.moveButton.title = status.placing
+      ? "Drag the stand-in to where the subtitle should be, then press Done"
+      : "Drag the middle of a subtitle to move it, an edge to make it wider";
+    // study.js is a separate content script; if it did not load there is
+    // nothing to switch on and the row should not claim otherwise.
+    el.studyButton.hidden = !study;
+    el.studyButton.dataset.on = study?.enabled ? "true" : "false";
+    el.studyButton.setAttribute("aria-pressed", study?.enabled ? "true" : "false");
+
     // The one fact a folded title bar has to carry.
     el.state.textContent = status.attached
       ? `${status.trackCount} attached`
@@ -2093,8 +2100,8 @@
        * vanished from the picture with nothing in the panel saying why is the
        * kind of thing that reads as a bug. */
       card.root.dataset.hidden = track.visible ? "false" : "true";
-      card.visible.textContent = track.visible ? "◉" : "◎";
       card.visible.title = track.visible ? "Take it off the picture" : "Put it back on the picture";
+      card.visible.setAttribute("aria-label", card.visible.title);
       card.visible.dataset.on = track.visible ? "true" : "false";
       // Nothing to undo, no undo. Which is also when the subtitle is right.
       card.offsetReset.hidden = !track.offsetMs && !stretched;
@@ -2151,34 +2158,14 @@
 
     el.background.input.value = String(settings.background);
     el.background.readout.textContent = String(settings.background);
-    el.placeButton.textContent = status.placing ? "Done" : "Move";
-    el.position.textContent = status.placing
-      ? "Drag a stand-in, then Done"
-      : "Drag the middle of a subtitle to move it, an edge to resize";
     el.rewrap.input.checked = Boolean(settings.rewrap);
     el.showSymbols.input.checked = Boolean(settings.showSymbols);
     el.dimNonSpeech.input.checked = Boolean(settings.dimNonSpeech);
-
-    refreshStudy();
 
     for (const [name] of KEY_FIELDS) {
       el.keyButtons[name].textContent = describeCode(settings.keys[name]);
     }
     el.keysToggle.textContent = settings.keysEnabled ? "Disable keys" : "Enable keys";
-  }
-
-  function refreshStudy() {
-    const study = window.__ssoStudy?.settings?.();
-    // study.js is a separate content script; if it did not load there is
-    // nothing to configure and the section should not claim otherwise.
-    el.studySection.hidden = !study;
-    if (!study) return;
-
-    el.studyEnabled.input.checked = study.enabled;
-    /* Where the rest of it went, said only while it is somewhere the reader can
-     * actually go. With study off there is no rail to carry a gear, and a note
-     * pointing at a surface that does not exist is worse than no note. */
-    el.studyWhere.hidden = !study.enabled;
   }
 
   // --- lifecycle ------------------------------------------------------------

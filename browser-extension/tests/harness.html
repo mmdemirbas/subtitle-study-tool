@@ -1982,27 +1982,74 @@
           throw new Error("closing it took the words away too");
       });
 
-      check("the panel keeps only the switch the rail cannot carry", async () => {
-        /* The rail does not exist while study is off, so a switch reachable
-         * only from the rail could never be turned back on. Everything that is
-         * not that went to the rail. */
+      check("study is a switch on the subtitles, and nothing in the settings", async () => {
+        /* The switch has to be on this surface at all because the rail it
+         * belongs to does not exist while study is off. It was a section in
+         * Settings; a switch you press several times a film does not belong in
+         * a window you open to set something up once. */
         await window.__ssoPanel.show();
         await sleep(150);
-        const sheet = await openSettings();
-        const section = [...(sheet?.querySelectorAll(".sso-sec") || [])]
-          .find((s) => s.querySelector(".sso-sec__h")?.textContent.includes("Study"));
-        if (!section) throw new Error("no study section in the panel");
-        if (section.dataset.open !== "true") section.querySelector(".sso-sec__h").click();
-        await sleep(80);
 
-        const sliders = section.querySelectorAll('input[type="range"]');
-        if (sliders.length > 0)
-          throw new Error(`${sliders.length} study sliders are still in the panel`);
-        const boxes = section.querySelectorAll('input[type="checkbox"]');
-        if (boxes.length !== 1)
-          throw new Error(`${boxes.length} study switches in the panel, want just the master`);
+        /* Everything but the key bindings, which still list the two study keys
+         * and are moved in the commit that rewrites how keys are bound. */
+        const sheet = await openSettings();
+        const rest = [...sheet.querySelectorAll(".sso-sec")]
+          .filter((s) => !s.querySelector(".sso-keys"))
+          .map((s) => s.textContent)
+          .join(" ");
+        if (/study|word|rare|deck/i.test(rest))
+          throw new Error(`study is still in the settings: ${rest.slice(0, 90)}`);
         sheetShadow().querySelector(".sso-icon--close").click();
         await sleep(120);
+
+        const study = panelShadow().querySelector(".sso-quick__study");
+        if (!study || study.hidden) throw new Error("no study switch on the subtitles");
+        const was = window.__ssoStudy.settings().enabled;
+        study.click();
+        await sleep(200);
+        if (window.__ssoStudy.settings().enabled === was)
+          throw new Error("the switch did not switch anything");
+        if (study.dataset.on !== String(!was))
+          throw new Error(`it switched and the button says ${study.dataset.on}`);
+        study.click();
+        await sleep(200);
+      });
+
+      check("where the two subtitles sit is decided on the subtitles screen", async () => {
+        /* Arranging was in Settings, two windows away from the thing being
+         * arranged, and it is done several times a film rather than once. */
+        await window.__ssoPanel.show();
+        await sleep(150);
+        const row = panelShadow().querySelector(".sso-quick");
+        if (!row || row.hidden) throw new Error("no shared row above the cards");
+
+        const cards = [...panelShadow().querySelectorAll(".sso-track")].filter((c) => !c.hidden);
+        const first = cards[0]?.getBoundingClientRect();
+        if (!first) throw new Error("nothing attached to sit above");
+        if (row.getBoundingClientRect().bottom > first.top + 1)
+          throw new Error("the row is not above the first subtitle");
+
+        const group = panelShadow().querySelector(".sso-arr-group");
+        if (window.__ssoApi.status().trackCount < 2) {
+          if (!group.hidden) throw new Error("it offers to arrange one subtitle against nothing");
+        } else {
+          if (group.hidden) throw new Error("two attached and no way to arrange them");
+          group.querySelectorAll("button")[1].click();
+          await sleep(80);
+          const tracks = window.__ssoApi.status().settings.tracks;
+          if (tracks[0].posY === tracks[1].posY)
+            throw new Error("stacked, and both are at the same height");
+        }
+
+        // Every button on the row fits on it, at the narrowest the panel goes.
+        const host = panelShadow().host;
+        const was = host.getBoundingClientRect().width;
+        window.__ssoPanel.applySize(280);
+        await sleep(80);
+        if (row.scrollWidth > row.clientWidth + 1)
+          throw new Error(`at 280px the row needs ${row.scrollWidth} and has ${row.clientWidth}`);
+        window.__ssoPanel.applySize(was);
+        await sleep(60);
       });
 
       check("the card says which subtitle is being learnt", async () => {

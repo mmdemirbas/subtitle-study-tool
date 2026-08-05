@@ -84,6 +84,10 @@
   max-height: min(70vh, 620px);
   overflow-y: auto;
   overscroll-behavior: contain;
+  /* So a card can answer to how wide the panel actually is. The panel is
+   * resized by dragging a corner, not by the window, so a media query would be
+   * measuring the wrong box entirely. */
+  container-type: inline-size;
 }
 
 /* --- screens ----------------------------------------------------------------
@@ -269,28 +273,110 @@ button.sso-sec__h:hover {
   white-space: nowrap;
 }
 
-/* --- the second tier --------------------------------------------------------
+/* --- what both subtitles share ----------------------------------------------
  *
- * Five sections that are set once and then left alone, behind one control. Full
- * width and quiet: it is a door, not an action, and it should not compete with
- * the primary button in the section above it.
+ * One row above the cards: where the two sit, and whether their words are being
+ * studied. Both were in Settings, two windows from the subtitles they act on.
+ *
+ * The three position buttons are drawn, not written. "Side by side / Stacked /
+ * Centre" is 157px of the 234 a 280px panel has to give, which leaves nothing
+ * for the other two controls; each picture is 26px and shows the answer -
+ * two boxes beside each other, two above each other, one in the middle - which
+ * is a layout, and a layout is a thing to look at rather than to read.
  */
 
-button.sso-more__toggle {
-  width: 100%;
-  margin-top: 10px;
-  color: var(--sso-ink-3);
-  background: none;
-  border: 1px dashed var(--sso-line);
+.sso-quick {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--sso-line-soft);
 }
 
-button.sso-more__toggle:hover:not(:disabled) {
-  color: var(--sso-ink);
-  background: var(--sso-fill);
+.sso-arr-group {
+  display: flex;
+  flex: none;
+  gap: 2px;
 }
 
-.sso-more[data-open="false"] {
-  display: none;
+button.sso-arr {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  padding: 5px 0;
+}
+
+/* The frame is the picture element; the bars inside are where the subtitles
+ * land. currentColor throughout, so hover lights the whole diagram at once. */
+.sso-arr__i {
+  position: relative;
+  display: block;
+  width: 18px;
+  height: 12px;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  opacity: 0.65;
+}
+
+button.sso-arr:hover .sso-arr__i {
+  opacity: 1;
+}
+
+.sso-arr__i::before,
+.sso-arr__i::after {
+  position: absolute;
+  height: 2px;
+  background: currentColor;
+  border-radius: 1px;
+  content: "";
+}
+
+.sso-arr__i--side::before {
+  bottom: 2px;
+  left: 2px;
+  width: 5px;
+}
+
+.sso-arr__i--side::after {
+  right: 2px;
+  bottom: 2px;
+  width: 5px;
+}
+
+.sso-arr__i--stack::before {
+  right: 3px;
+  bottom: 6px;
+  left: 3px;
+}
+
+.sso-arr__i--stack::after {
+  right: 3px;
+  bottom: 2px;
+  left: 3px;
+}
+
+.sso-arr__i--centre::after {
+  right: 5px;
+  bottom: 2px;
+  left: 5px;
+}
+
+/* Placing is a mode - it changes what a click on the film does - so the button
+ * that turns it on is lit while it is on, and says Done rather than Move. */
+button.sso-quick__move[data-on="true"] {
+  color: var(--sso-accent-ink);
+  background: rgba(76, 139, 245, 0.1);
+  border-color: rgba(76, 139, 245, 0.55);
+}
+
+/* Study is amber wherever it appears - the marked word on the film, the chip
+ * on the card that says which subtitle it reads, and the switch here. One
+ * feature, one colour, so the switch and its effect are recognisably the same
+ * thing rather than two blue controls that happen to be related. */
+button.sso-quick__study[data-on="true"] {
+  color: #d8a86a;
+  background: rgba(216, 168, 106, 0.1);
+  border-color: rgba(216, 168, 106, 0.5);
 }
 
 /* --- one subtitle's controls ------------------------------------------------
@@ -390,6 +476,36 @@ button.sso-track__learn {
 button.sso-track__learn:hover:not(:disabled) {
   color: var(--sso-ink);
   background: var(--sso-fill);
+}
+
+/* Narrow, the chips give their words back to the name.
+ *
+ * Both chips land on the same card whenever the keys and study point at the
+ * same subtitle, and together they are about 110px. On a 280px panel that
+ * leaves the subtitle's name eight characters - measured: "1. ..." - and the
+ * name is the one thing on the card that says which subtitle this is. The
+ * radio survives, because it is the control; the word beside it is a legend,
+ * and a legend is what you drop first. Both keep their title text. */
+@container (max-width: 310px) {
+  .sso-track__keys > span {
+    display: none;
+  }
+
+  button.sso-track__learn {
+    padding: 1px 3px;
+    font-size: 0;
+  }
+
+  /* A rounded square, not a dot: the radio beside it is round, and two round
+   * marks in a row are a pair of one control rather than two facts. */
+  button.sso-track__learn::after {
+    display: block;
+    width: 7px;
+    height: 7px;
+    background: currentColor;
+    border-radius: 2px;
+    content: "";
+  }
 }
 
 button.sso-track__learn[data-on="true"] {
@@ -555,14 +671,71 @@ button.sso-sync__clear:hover:not(:disabled) {
 
 /* On or off the picture. Reached for mid-scene, when a subtitle covers
  * something worth seeing, so it is a button and not two clicks into a menu. */
+/* An eye, drawn.
+ *
+ * It was "◉" showing and "◎" hidden - a third circle in a head that already
+ * had the keys radio and, narrow, the amber dot for the subtitle being
+ * studied. Three round marks in a row, each meaning something unrelated, told
+ * apart by colour: which is no help at all to eight per cent of men, and not
+ * much to anyone else at 13px. */
 button.sso-track__eye {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   min-width: 22px;
   height: 22px;
-  font-size: 13px;
+}
+
+.sso-eye {
+  position: relative;
+  display: block;
+  width: 16px;
+  height: 10px;
+}
+
+/* The lens: a circle squashed to a third of its height reads as an eye at this
+ * size, where an almond drawn with two arcs turns to mush. */
+.sso-eye::before {
+  position: absolute;
+  inset: 0;
+  border: 1.3px solid currentColor;
+  border-radius: 50% / 50%;
+  content: "";
+}
+
+.sso-eye::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  background: currentColor;
+  border-radius: 50%;
+  content: "";
+}
+
+/* Off is a bar across it, which is how every player says off. Its own dark
+ * edge underneath, so it reads as passing over the eye rather than joining it. */
+.sso-eye__bar {
+  position: absolute;
+  top: 50%;
+  right: -2px;
+  left: -2px;
+  height: 1.3px;
+  background: currentColor;
+  border-radius: 1px;
+  box-shadow: 0 -1.4px 0 var(--sso-surface-2);
+  opacity: 0;
+  transform: rotate(-28deg);
 }
 
 button.sso-track__eye[data-on="false"] {
   color: var(--sso-danger);
+}
+
+button.sso-track__eye[data-on="false"] .sso-eye__bar {
+  opacity: 1;
 }
 
 button.sso-nudge:hover:not(:disabled) .sso-nudge__step {
