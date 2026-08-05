@@ -1212,6 +1212,34 @@
         if (root.hidden) throw new Error("closing it took the subtitles away too");
       });
 
+      check("every setting is on screen the moment the window opens", async () => {
+        /* The sections folded, from when they were a column inside the panel.
+         * In a window opened to change one thing, a fold hides the thing. What
+         * it was really doing - separating one group from the next - is a card
+         * now, which does it without being clicked. */
+        const sheet = await openSettings();
+        const cards = [...sheet.querySelectorAll(".sso-sec")];
+        if (cards.length < 3) throw new Error(`${cards.length} settings cards`);
+
+        const body = sheet.querySelector(".sso-sheet__body");
+        for (const card of cards) {
+          const heading = card.querySelector(".sso-sec__h");
+          if (heading.tagName === "BUTTON")
+            throw new Error(`"${heading.textContent}" is still a control`);
+          const contents = [...card.children].filter((n) => n !== heading);
+          const tallest = Math.max(...contents.map((n) => n.getBoundingClientRect().height));
+          if (!(tallest > 0))
+            throw new Error(`"${heading.textContent}" shows nothing but its title`);
+          /* And each one is told from the next by its own surface, not by a
+           * hairline: a card is lighter than the window it sits on. */
+          const on = getComputedStyle(card).backgroundColor;
+          if (on === getComputedStyle(body).backgroundColor)
+            throw new Error(`"${heading.textContent}" is the same surface as the window`);
+        }
+        sheetShadow().querySelector(".sso-icon--close").click();
+        await sleep(120);
+      });
+
       check("an unstyled subtitle renders exactly as it always did", async () => {
         /* Every per-track style property has the old hard-coded literal as its
          * var() fallback in overlay.css, which is what makes it safe to add

@@ -44,8 +44,29 @@
   --sso-r-ctl: 7px;
   --sso-motion: 160ms;
 
+  /* A card inside a window: lighter than what it sits on, by an alpha rather
+   * than a flat colour, because every surface here is translucent over a film. */
+  --sso-surface-2: rgba(255, 255, 255, 0.045);
+
+  /* The type scale, on the window rather than on one of them.
+   *
+   * A ratio, not sizes picked one at a time: 10 / 11.5 / 13 / 14.5, a step of
+   * about 1.13. Tighter than the 1.22 that suits a document, because these are
+   * instruments 340px wide and a 20px heading on one is a headline on a dial.
+   *
+   * It was declared on .sso-panel, which the settings window is not - so every
+   * heading and note in that window fell back to the browser's 16px default.
+   * Measured before this moved: .sso-sec__h and .sso-note both 16px in a 382px
+   * window. The rail declares an em-based scale of its own and still wins, on
+   * source order. */
+  --sso-t-micro: 10px;
+  --sso-t-small: 11.5px;
+  --sso-t-body: 13px;
+  --sso-t-lead: 14.5px;
+
   position: relative; /* containing block for the corner grips */
   display: block;
+  font-size: var(--sso-t-body);
   font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-weight: 400;
   font-style: normal;

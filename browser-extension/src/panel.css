@@ -30,20 +30,11 @@
 .sso-panel {
   --sso-accent: #4c8bf5;
   --sso-accent-ink: #93b9fb;
-  --sso-surface-2: rgba(255, 255, 255, 0.045);
 
-  /* A ratio, not sizes picked one at a time. 10 / 11.5 / 13 / 14.5 at a step
-   * of about 1.13: tighter than the 1.22 that suits a document, because the
-   * panel is 340px wide and dense by intention, and a 20px heading in it would
-   * be a headline on an instrument. The span is therefore narrower than a
-   * reading surface should ever use, and the hierarchy leans correspondingly
-   * harder on weight, ink step and grouping - which is a deliberate trade for
-   * this surface, not an oversight to be fixed by nudging one size. */
-  --sso-t-micro: 10px;
-  --sso-t-small: 11.5px;
-  --sso-t-body: 13px;
-  --sso-t-lead: 14.5px;
-
+  /* The surface and the type scale are on .sso-win in chrome.css: they belong
+   * to every window here, and declaring them on this one left the settings
+   * window - which is a .sso-win and not a .sso-panel - rendering its headings
+   * and notes at the browser's 16px default. */
   width: 100%;
   max-height: 82vh;
   overflow: hidden auto;
@@ -130,61 +121,31 @@ button.sso-add:hover:not(:disabled) {
   color: var(--sso-ink-2);
 }
 
-.sso-sec + .sso-sec {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--sso-line-soft);
+/* A card each, and no folding.
+ *
+ * They folded while they were a column inside the panel. In a window of their
+ * own a fold hides what the window was opened for, and what the fold was
+ * really doing - separating one group of controls from the next - a card does
+ * without being clicked. The surface is the separator: the window behind is
+ * darker than the card, which is what makes a card read as one thing. */
+.sso-sec {
+  padding: 9px 10px 10px;
+  background: var(--sso-surface-2);
+  border: 1px solid var(--sso-line-soft);
+  border-radius: 9px;
 }
 
-/* The header is a button, so it is reachable by keyboard and announces its
- * state. It has to be un-styled back to a heading first: the button rule below
- * gives every button a background and a border, which on a full-width section
- * header reads as a control rather than a title. */
-button.sso-sec__h {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  margin: 0;
-  padding: 3px 0;
+.sso-sec + .sso-sec {
+  margin-top: 8px;
+}
+
+.sso-sec__h {
+  margin: 0 0 7px;
   font-size: var(--sso-t-micro);
   font-weight: 700;
-  text-transform: uppercase;
   letter-spacing: 0.08em;
-  text-align: left;
+  text-transform: uppercase;
   color: var(--sso-ink-3);
-  background: none;
-  border: 0;
-  border-radius: 4px;
-  cursor: pointer;
-}
-
-button.sso-sec__h:hover {
-  color: var(--sso-ink);
-  background: none;
-}
-
-.sso-sec__caret {
-  display: inline-block;
-  width: 8px;
-  font-size: 11px;
-  line-height: 1;
-  transition: transform var(--sso-motion) ease;
-}
-
-.sso-sec[data-open="true"] .sso-sec__caret {
-  transform: rotate(90deg);
-}
-
-/* Everything that is not the header. No wrapper element is involved, so an open
- * section lays out exactly as it did before sections could fold. */
-.sso-sec[data-open="false"] > :not(.sso-sec__h) {
-  display: none;
-}
-
-.sso-sec[data-open="true"] > .sso-sec__h {
-  margin-bottom: 6px;
-  color: var(--sso-ink-2);
 }
 
 .sso-row {
@@ -1124,7 +1085,6 @@ input.sso-swatch::-webkit-color-swatch {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sso-sec__caret,
   button {
     transition: none;
   }

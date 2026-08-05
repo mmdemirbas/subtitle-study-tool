@@ -134,7 +134,6 @@
   }
 
   async function build() {
-    await loadOpenSections();
     host = createHost();
     shadow = host.attachShadow({ mode: "open" });
     shadow.adoptedStyleSheets = await loadStyles();
@@ -487,7 +486,6 @@
     });
   }
 
-  const OPEN_KEY = "sso:panelOpen";
   const SIZE_KEY = "sso:panelSize";
   const FOLD_KEY = "sso:panelFolded";
   let folded = false;
@@ -516,77 +514,29 @@
     fitToViewport();
   }
 
-  /* Which sections start open. The two that answer "what is on screen and how
-   * do I change it" - everything else is set once and then left alone, and a
-   * panel that shows all seven at full height is taller than the film. */
-  /* Sections now live only inside Settings, where five of them share one
-   * screen. The subtitles and the search have screens of their own, and a
-   * screen with one section on it is a fold with nothing to fold against.
+  /* Each is a card, and none of them folds.
    *
-   * Arrangement opens by default because it is the one a reader arrives at
-   * Settings for; the rest are set once. */
-  const OPEN_BY_DEFAULT = new Set(["Arrangement"]);
-  let openSections = null; // filled from storage before the panel is built
-  const sections = new Map(); // heading -> { apply, wrap }
-
-  /* Sections collapse.
+   * They folded while they were a column inside the panel, five headings deep
+   * on a surface that also carried the subtitles. Settings are a window of
+   * their own now - opened to change one thing, closed again - and a fold on a
+   * window whose whole job is to show what you came for is a control that
+   * hides the answer. What the fold really did was separate one group from the
+   * next, so the separation is a card, which does that without being clicked.
    *
-   * The panel began as timing controls and has since acquired search, layout,
-   * appearance, study and diagnostics. Every one of them earns its place and
-   * all of them at once is a column taller than the video it sits on. Folding
-   * is the honest fix: nothing is removed, nothing is hidden behind a mode, and
-   * the two sections in daily use are the ones that open by default.
-   *
-   * A real <button> for the header, so it is reachable by keyboard and says
-   * what it does, rather than a div with a click handler. */
+   * A heading, not a button: a title that can be pressed is a control that
+   * does nothing. */
   function section(heading) {
     const wrap = document.createElement("div");
     wrap.className = "sso-sec";
 
-    const head = document.createElement("button");
-    head.type = "button";
+    const head = document.createElement("h2");
     head.className = "sso-sec__h";
+    head.textContent = heading;
 
-    const caret = document.createElement("span");
-    caret.className = "sso-sec__caret";
-    caret.textContent = "›"; // rotated by CSS when open
-    const label = document.createElement("span");
-    label.textContent = heading;
-    head.append(caret, label);
-
-    const apply = (open) => {
-      wrap.dataset.open = open ? "true" : "false";
-      head.setAttribute("aria-expanded", open ? "true" : "false");
-    };
-    apply(openSections?.has(heading) ?? OPEN_BY_DEFAULT.has(heading));
-
-    head.addEventListener("click", () => {
-      const open = wrap.dataset.open !== "true";
-      apply(open);
-      if (open) openSections.add(heading);
-      else openSections.delete(heading);
-      chrome.storage.local.set({ [OPEN_KEY]: [...openSections] }).catch(() => {});
-      fitToViewport();
-    });
-
-    /* No wrapper around the contents: a closed section hides everything that is
-     * not the header, with one CSS rule. That keeps every caller appending
-     * straight to the section as it always did, and means folding cannot
-     * introduce a layout box that changes how the contents lay out when open. */
     wrap.append(head);
-    sections.set(heading, { apply, wrap });
     return wrap;
   }
 
-  async function loadOpenSections() {
-    if (openSections) return;
-    try {
-      const stored = await chrome.storage.local.get(OPEN_KEY);
-      openSections = new Set(stored[OPEN_KEY] || [...OPEN_BY_DEFAULT]);
-    } catch {
-      openSections = new Set(OPEN_BY_DEFAULT);
-    }
-  }
 
   function button(label, { primary = false, onClick, title } = {}) {
     const b = document.createElement("button");
