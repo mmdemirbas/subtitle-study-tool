@@ -32,6 +32,9 @@
   const TICK_MS = 50; // ~20 Hz: below perceptible latency, negligible cost
   const MIN_VIDEO_SECONDS = 60; // ignore ad breaks, teasers, autoplay loops
   const TOAST_MS = 1600;
+  // Long enough to notice what happened and reach the button. The usual advice
+  // for an undo is five to eight seconds; 1.6 is a confirmation, not an offer.
+  const ACTION_TOAST_MS = 7000;
   /* Sentinel for "redraw whatever is current". findCueIndex returns -1 when no
    * cue is active, so using -1 to mean "invalidate" collides with it: the tick
    * compares the new index against the old, sees -1 === -1, and skips the
@@ -1227,14 +1230,43 @@
     if (window.__ssoStudy?.reparent) window.__ssoStudy.reparent(parent);
   }
 
-  function showToast(message) {
+  /* A toast can carry one action.
+   *
+   * Two things follow from that and neither is optional. It has to be
+   * clickable - the toast is pointer-events:none so that an ordinary one never
+   * eats a click meant for the film, and the button opts back in for its own
+   * showing only. And it has to stay long enough to be read and reached:
+   * TOAST_MS is 1.6 seconds, which is right for a line of confirmation and far
+   * too short to notice a mistake and undo it. */
+  function showToast(message, { action = null } = {}) {
     ensureOverlay();
-    toast.textContent = message;
+    toast.replaceChildren();
+    if (!action) {
+      toast.textContent = message;
+      toast.dataset.action = "false";
+    } else {
+      const said = document.createElement("span");
+      said.textContent = message;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "sso-toast__action";
+      button.textContent = action.label;
+      button.addEventListener("click", () => {
+        toast.dataset.visible = "false";
+        clearTimeout(toastTimer);
+        action.onClick();
+      });
+      toast.append(said, button);
+      toast.dataset.action = "true";
+    }
     toast.dataset.visible = "true";
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => {
-      toast.dataset.visible = "false";
-    }, TOAST_MS);
+    toastTimer = setTimeout(
+      () => {
+        toast.dataset.visible = "false";
+      },
+      action ? ACTION_TOAST_MS : TOAST_MS,
+    );
   }
 
   // --- cue lookup -----------------------------------------------------------
@@ -1549,6 +1581,11 @@
     const index = clamp(Number(slot) || 0, 0, TRACK_COUNT - 1);
     const track = state.tracks[index];
     const wasAlone = attachedTracks().length <= 1;
+    // Something new in this slot means the removed one is not coming back.
+    if (removed?.slot === index) {
+      removed = null;
+      clearTimeout(removedTimer);
+    }
 
     track.cues = Array.isArray(cues) ? cues : [];
     track.label = label || "";
@@ -1587,19 +1624,72 @@
     return { ok: true, cueCount: track.cues.length, slot: index };
   }
 
+  /* The last subtitle taken off, so it can be put back.
+   *
+   * One deep and not persisted. An undo that survives a reload is a wastebasket,
+   * and a wastebasket needs a place to live and a way to empty it; this is the
+   * two seconds after a click, which is when the mistake is noticed. */
+  let removed = null;
+  let removedTimer = null;
+  /* How long the way back stays offered. Longer than the toast, because the
+   * panel keeps offering it after the toast has gone; short enough that this
+   * stays an undo. Past this it would be a wastebasket, which needs somewhere
+   * to live and a way to empty it, and this is two subtitles, not a filesystem. */
+  const UNDO_MS = 30000;
+
   /** Drop one track, or every track when no slot is named. */
   function detach(slot) {
     const slots = slot == null ? state.tracks.map((_, index) => index) : [Number(slot)];
     for (const index of slots) {
       const track = state.tracks[index];
       if (!track) continue;
-      Object.assign(track, newTrack());
-      track.activeIndex = NEEDS_REDRAW;
+      /* Replace the track rather than overwriting it. It used to be
+       * `Object.assign(track, newTrack())` - the same object, emptied - so
+       * anything holding a reference in order to put it back had it wiped by
+       * the very call it was meant to survive. */
+      if (track.cues.length > 0) {
+        removed = { slot: index, track, at: Date.now() };
+        clearTimeout(removedTimer);
+        // Notifies on expiry, so the panel's row goes when the offer does
+        // rather than lingering until something else happens to redraw.
+        removedTimer = setTimeout(() => {
+          removed = null;
+          notify();
+        }, UNDO_MS);
+      }
+      state.tracks[index] = newTrack();
+      state.tracks[index].activeIndex = NEEDS_REDRAW;
       if (views[index]) views[index].cueBox.textContent = "";
     }
     notify();
     return { ok: true };
   }
+
+  /* Put the last removed subtitle back.
+   *
+   * Only the track goes in the stash. The box - position, width, size - lives
+   * in settings.tracks[slot], which detach never touches, so it is still there
+   * to come back to. The test asserts it anyway: "detach should also clear the
+   * geometry" is a tidy-looking change somebody will make one day, and this is
+   * where they find out it breaks the undo. */
+  function undoRemove() {
+    if (!removed) return { ok: false };
+    const { slot, track } = removed;
+    removed = null;
+    clearTimeout(removedTimer);
+    state.tracks[slot] = track;
+    track.activeIndex = NEEDS_REDRAW;
+    ensureOverlay();
+    syncRootVisibility();
+    startTicking();
+    notify();
+    showToast(`Subtitle ${slot + 1} back${track.label ? ` · ${track.label}` : ""}`);
+    return { ok: true, slot };
+  }
+
+  /** Whether there is something to put back, for the panel to offer it. */
+  const removedTrack = () =>
+    removed && { slot: removed.slot, label: removed.track.label, at: removed.at };
 
   function setVisible(visible, { slot = null } = {}) {
     if (slot == null) {
@@ -1809,6 +1899,8 @@
     resetSettings,
     resetKeys,
     showToast,
+    undoRemove,
+    removedTrack,
     /* Study mode needs to read the line under a word to save it with its
      * sentence, and the paired line in the other language, which is the whole
      * reason a word is worth saving at all. */

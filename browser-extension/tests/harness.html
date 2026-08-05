@@ -934,6 +934,70 @@
         toggle.click();
       });
 
+      check("removing a subtitle can be undone, box and all", async () => {
+        /* detach() used to be `Object.assign(track, newTrack())` - the same
+         * object, emptied - so anything holding a reference in order to put it
+         * back had it wiped by the very call it was meant to survive. */
+        const before = window.__ssoApi.status();
+        if (!before.tracks[0].attached) throw new Error("nothing attached to remove");
+        const label = before.tracks[0].label;
+        const cueCount = before.tracks[0].cueCount;
+
+        // Somewhere other than the default, so an undo that forgets the
+        // geometry is visible rather than a coincidence.
+        window.__ssoApi.updateTrackSettings(0, { fontScale: 1.45, widthPercent: 52, posY: 70 });
+        await sleep(40);
+
+        const remove = [...panelShadow().querySelectorAll("button")]
+          .find((b) => b.textContent === "Remove");
+        if (!remove) throw new Error("no way to remove a subtitle");
+        remove.click();
+        await sleep(60);
+        if (window.__ssoApi.status().tracks[0].attached)
+          throw new Error("Remove did not remove it");
+
+        const undoRow = panelShadow().querySelector(".sso-undo");
+        const undo = [...undoRow.querySelectorAll("button")].find((b) => b.textContent === "Undo");
+        if (!undo) throw new Error("no way back");
+        if (undoRow.hidden || undoRow.getBoundingClientRect().height === 0)
+          throw new Error("the way back is not on screen");
+        undo.click();
+        await sleep(80);
+
+        const after = window.__ssoApi.status();
+        if (!after.tracks[0].attached) throw new Error("the undo did not bring it back");
+        if (after.tracks[0].cueCount !== cueCount)
+          throw new Error(`came back with ${after.tracks[0].cueCount} lines, not ${cueCount}`);
+        if (after.tracks[0].label !== label) throw new Error("came back unnamed");
+        const box = after.settings.tracks[0];
+        if (box.fontScale !== 1.45 || box.widthPercent !== 52 || box.posY !== 70)
+          throw new Error(
+            `came back in the default box: ${box.fontScale} / ${box.widthPercent}% / ${box.posY}%`);
+
+        window.__ssoApi.updateTrackSettings(0, { fontScale: 1, widthPercent: 80, posY: 92 });
+        await sleep(40);
+      });
+
+      check("an ordinary toast still lets a click through to the film", async () => {
+        /* The toast is pointer-events:none so that it never eats a click meant
+         * for the player. Giving it a button had to open exactly one hole. */
+        const shadow = shadowOf();
+        const toast = shadow.querySelector(".sso-toast");
+        window.__ssoApi.showToast("plain");
+        await sleep(30);
+        if (getComputedStyle(toast).pointerEvents !== "none")
+          throw new Error("a plain toast is standing in front of the film");
+
+        window.__ssoApi.showToast("with a way back", { action: { label: "Undo", onClick: () => {} } });
+        await sleep(30);
+        if (getComputedStyle(toast).pointerEvents !== "auto")
+          throw new Error("the undo button cannot be clicked");
+        if (!toast.querySelector(".sso-toast__action"))
+          throw new Error("no button in an action toast");
+        window.__ssoApi.showToast("plain again");
+        await sleep(30);
+      });
+
       check("resetting the keys resets only the keys", async () => {
         /* It called resetSettings(), which resets every setting there is. A
          * reader who had spent a while placing the boxes and then rebound one

@@ -616,7 +616,20 @@
       button("Clear", { onClick: () => api.clearAdDrift(), title: "Forget measured ad time" }),
     );
 
-    wrap.append(el.none, ...el.trackCards.map((card) => card.root), el.adRow);
+    /* The same undo the toast offers, in the list the subtitle was removed
+     * from. A toast button is out of reach from the keyboard while the film is
+     * fullscreen, and it is gone in seven seconds; this row is where somebody
+     * who looked away would come looking. */
+    el.undoRow = document.createElement("div");
+    el.undoRow.className = "sso-undo";
+    el.undoLabel = document.createElement("span");
+    el.undoLabel.className = "sso-undo__label";
+    el.undoRow.append(
+      el.undoLabel,
+      button("Undo", { onClick: () => { api.undoRemove(); refresh(api.status()); } }),
+    );
+
+    wrap.append(el.none, ...el.trackCards.map((card) => card.root), el.undoRow, el.adRow);
     return wrap;
   }
 
@@ -846,7 +859,7 @@
         api.setVisible(!track.visible, { slot });
       },
     });
-    actions.append(visible, button("Detach", { onClick: () => api.detach(slot) }));
+    actions.append(visible, button("Remove", { onClick: () => removeTrack(slot) }));
 
     const body = document.createElement("div");
     body.className = "sso-track__body";
@@ -854,6 +867,21 @@
 
     root.append(head, body);
     return { root, caret, keyed, keysChip, label, shut, offsetValue, offsetField, offsetReset, size, width, visible };
+  }
+
+  /* Taking a subtitle off is the one destructive thing this panel does, and it
+   * used to be a plain button next to Hide with no way back - a
+   * mis-click cost the download, the timing and wherever the box had been
+   * dragged to. The toast carries the undo; the card list carries it too,
+   * because a toast button cannot be reached from the keyboard in fullscreen
+   * and this is the surface that owns removal. */
+  function removeTrack(slot) {
+    const label = api.status().tracks[slot]?.label;
+    api.detach(slot);
+    api.showToast(`Subtitle ${slot + 1} removed${label ? ` · ${label}` : ""}`, {
+      action: { label: "Undo", onClick: () => api.undoRemove() },
+    });
+    refresh(api.status());
   }
 
   /* Which track cards are open. `undefined` means the reader has not said, and
@@ -1581,7 +1609,17 @@
      * without anything having to remember to ask. */
     queueMicrotask(fitToViewport);
 
-    el.none.hidden = status.attached;
+    const gone = api.removedTrack?.();
+    el.undoRow.hidden = !gone;
+    if (gone) {
+      el.undoLabel.textContent = `Subtitle ${gone.slot + 1} removed${gone.label ? ` · ${gone.label}` : ""}`;
+    }
+
+    /* One statement of absence at a time. With something to put back, "no
+     * subtitle attached - go and search for one" answers a question the reader
+     * did not ask; the useful thing is the way back, and it stands down on its
+     * own after half a minute. */
+    el.none.hidden = status.attached || Boolean(gone);
     el.noneTitle.textContent = status.hasVideo ? "No subtitle attached" : "No video on this page";
     el.noneNote.textContent = status.hasVideo
       ? "Search for the film or series and pick a result — it goes straight onto the video."

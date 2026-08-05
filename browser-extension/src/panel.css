@@ -202,6 +202,33 @@ button.sso-sec__h:hover {
   color: var(--sso-ink-3);
 }
 
+/* --- what was just removed --------------------------------------------------
+ *
+ * Dashed, like the empty state and for the same reason: it marks a place where
+ * something is not, rather than a card that is. It goes when the undo is taken
+ * or something else fills the slot.
+ */
+
+.sso-undo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 7px 9px;
+  border: 1px dashed var(--sso-line);
+  border-radius: 9px;
+}
+
+.sso-undo__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* --- the second tier --------------------------------------------------------
  *
  * Five sections that are set once and then left alone, behind one control. Full
