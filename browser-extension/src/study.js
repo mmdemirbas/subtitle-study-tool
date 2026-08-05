@@ -130,10 +130,8 @@
   let clearEl = null;
   let foldEl = null;
   let gearEl = null;
-  let backEl = null;
   let titleEl = null;
   let settingsEl = null;
-  let railScreen = "words";
   let setEls = null;
   let sheets = null;
 
@@ -703,18 +701,10 @@
     gearEl.type = "button";
     gearEl.textContent = "⚙";
     gearEl.title = "How study works";
-    gearEl.addEventListener("click", () => showRailScreen("settings"));
-
-    backEl = document.createElement("button");
-    backEl.className = "sso-icon";
-    backEl.type = "button";
-    backEl.textContent = "‹";
-    backEl.title = "Back to the words";
-    backEl.hidden = true;
-    backEl.addEventListener("click", () => showRailScreen("words"));
+    gearEl.addEventListener("click", () => openRailSettings());
 
     titleEl = title;
-    head.append(backEl, title, countEl, clearEl, gearEl, foldEl, close);
+    head.append(title, countEl, clearEl, gearEl, foldEl, close);
 
     listEl = document.createElement("div");
     listEl.className = "sso-rail__list";
@@ -722,10 +712,7 @@
     noteEl = document.createElement("p");
     noteEl.className = "sso-rail__note";
 
-    settingsEl = buildRailSettings();
-    settingsEl.hidden = true;
-
-    railEl.append(head, listEl, noteEl, settingsEl);
+    railEl.append(head, listEl, noteEl);
     shadow.append(railEl);
 
     makeDraggable(head);
@@ -738,23 +725,35 @@
   /* Two sheets. chrome.css carries what makes this a window and the control
    * panel adopts the same one, which is what keeps the two floating surfaces
    * speaking one language; study.css goes second so it can override any of it. */
-  /* The rail's two faces: the words, and how they get there.
+  /* How study works, in a window of its own.
    *
-   * Two, not a stack - there is nowhere to go from the settings but back. The
-   * head's own controls come and go with it, because Clear and the count are
-   * about a list that is not on screen. */
-  function showRailScreen(name) {
-    railScreen = name;
-    const settings_ = name === "settings";
-    settingsEl.hidden = !settings_;
-    listEl.hidden = settings_;
-    backEl.hidden = !settings_;
-    gearEl.hidden = settings_;
-    countEl.hidden = settings_;
-    clearEl.hidden = settings_ || cards.length === 0;
-    titleEl.textContent = settings_ ? "How study works" : "Study";
-    if (!settings_) emptyNote();
-    else noteEl.hidden = true;
+   * It was a second face of the rail, which meant the rail's own width decided
+   * how much room eight settings had, and getting back to the words was a
+   * button rather than being done with it. The control panel's settings moved
+   * out for the same reasons; these follow.
+   *
+   * Built on first use and kept, so its size and place survive within a session
+   * as well as between them. */
+  let settingsWindow = null;
+
+  async function openRailSettings() {
+    if (!settingsWindow) {
+      settingsWindow = api.makeWindow({
+        title: "How study works",
+        sheets,
+        storeKey: "sso:studySettingsWindow",
+        width: 340,
+        height: 300,
+        // The rail's own colours: warm surface, amber accent.
+        accent: "#e0a458",
+        accentInk: "#d8a86a",
+        surface: "rgba(22, 19, 16, 0.98)",
+      });
+      settingsEl = buildRailSettings();
+      settingsWindow.body.append(settingsEl);
+    }
+    await settingsWindow.show(host);
+    refreshRailSettings();
   }
 
   /* One control per thing study does, in the order a reader meets them: what
@@ -886,7 +885,7 @@
   function emptyNote() {
     if (!noteEl) return;
     const empty = cards.length === 0;
-    noteEl.hidden = !empty || railScreen === "settings";
+    noteEl.hidden = !empty;
     noteEl.textContent = settings.auto
       ? "Rare words appear here as they are said. Hover any word to look it up; shift-drag for a phrase."
       : "Hover a word in the subtitle to look it up. Shift-drag across words for a phrase.";
@@ -1042,7 +1041,7 @@
     if (countEl) countEl.textContent = cards.length ? String(cards.length) : "";
     // The head's list controls belong to a list that is not on screen while the
     // settings are, so the screen has the last word on whether they show.
-    if (clearEl) clearEl.hidden = cards.length === 0 || railScreen === "settings";
+    if (clearEl) clearEl.hidden = cards.length === 0;
     emptyNote();
   }
 
@@ -1577,6 +1576,8 @@
   }
 
   function turnOff() {
+    settingsWindow?.destroy();
+    settingsWindow = null;
     /* Dropped, not hidden, and the reference dropped with it. Removing the
      * element alone was not enough: content.js calls reparent() on every
      * fullscreen change and every time the CC handle is revealed, and reparent

@@ -261,3 +261,29 @@
     transform: none;
   }
 }
+
+/* --- a settings window ------------------------------------------------------
+ *
+ * Its own host, its own size, its own close. The settings were a screen inside
+ * the control panel, and "clicking the settings button feels like a new
+ * window" is exactly right: you go there to change something and then you are
+ * done with it, which is what a window is for and not what a screen in a
+ * column is for. A screen also borrows the panel's width, and a grid of key
+ * bindings wants more of that than a subtitle card does.
+ */
+
+.sso-sheet {
+  display: flex;
+  flex-direction: column;
+  background: rgba(19, 21, 26, 0.98);
+}
+
+/* The scroll lives here rather than on the window, so the title bar stays put
+ * and only the settings move. `contain` for the same reason it is on every
+ * other scrolling surface here: a wheel that reaches the end must not carry on
+ * into the page, where a player has bound it to the volume. */
+.sso-sheet__body {
+  padding: 10px 12px 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}

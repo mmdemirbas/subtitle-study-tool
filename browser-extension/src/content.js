@@ -1403,6 +1403,178 @@
     };
   }
 
+  /* A window in its own right: draggable, resizable, closable, and remembered.
+   *
+   * The settings were a screen inside the control panel, and a reader said the
+   * plainest possible thing about it - "clicking the settings button feels like
+   * a new window". It does, because it is: you go there to change something and
+   * then you are done with it, which is what a window is for and not what a
+   * screen in a column is for. A screen also borrows the panel's width, and a
+   * grid of key bindings wants more of that than a subtitle card does.
+   *
+   * Both surfaces get one, so the geometry, the drag, the corners, the close
+   * and the remembering are written once here rather than a third and fourth
+   * time in panel.js and study.js.
+   */
+  const MIN_WINDOW = { width: 260, height: 160 };
+
+  function makeWindow({
+    title, sheets, storeKey, width = 340, height = 380, onClose = null,
+    /* The surface it belongs to, as tokens. Without this a settings window is
+     * cool-neutral with a blue accent whoever opened it, so study's own
+     * settings came out in the control panel's colours - which is the one thing
+     * the two-surface scheme is there to prevent. */
+    accent = null, accentInk = null, surface = null,
+  }) {
+    const layer = makeLayer({ zIndex: "2147483647" });
+    layer.shadow.adoptedStyleSheets = sheets;
+
+    const root = document.createElement("div");
+    root.className = "sso-win sso-sheet";
+    if (accent) root.style.setProperty("--sso-accent", accent);
+    if (accentInk) root.style.setProperty("--sso-accent-ink", accentInk);
+    if (surface) root.style.background = surface;
+
+    const head = document.createElement("div");
+    head.className = "sso-win__head";
+    const name = document.createElement("div");
+    name.className = "sso-win__title";
+    name.textContent = title;
+    const close = document.createElement("button");
+    close.className = "sso-icon sso-icon--close";
+    close.type = "button";
+    close.textContent = "×";
+    close.title = "Close";
+
+    const body = document.createElement("div");
+    body.className = "sso-sheet__body";
+
+    head.append(name, close);
+    root.append(head, body);
+    layer.shadow.append(root);
+
+    let at = { x: null, y: null };
+    let size = { width, height };
+    let open = false;
+
+    const place = (x, y) => {
+      /* Never off the edge. A window restored from a session on a wider screen
+       * would otherwise open where nothing can reach it, and it carries its own
+       * close button - so it would be unreachable and unclosable at once. */
+      at = {
+        x: clamp(x, 8, Math.max(8, window.innerWidth - size.width - 8)),
+        y: clamp(y, 8, Math.max(8, window.innerHeight - 60)),
+      };
+      layer.place(at.x, at.y);
+    };
+
+    const applySize = () => {
+      size.width = clamp(size.width, MIN_WINDOW.width, Math.max(MIN_WINDOW.width, window.innerWidth - 32));
+      size.height = clamp(size.height, MIN_WINDOW.height, Math.max(MIN_WINDOW.height, window.innerHeight - 32));
+      root.style.width = `${Math.round(size.width)}px`;
+      body.style.height = `${Math.round(size.height)}px`;
+    };
+
+    const remember = () => {
+      if (!storeKey) return;
+      chrome.storage.local.set({ [storeKey]: { ...at, ...size } }).catch(() => {});
+    };
+
+    makeMovable(head, {
+      host: layer.host,
+      place,
+      onEnd: remember,
+    });
+
+    for (const corner of [
+      { name: "nw", dx: -1, dy: -1, cursor: "nwse-resize" },
+      { name: "ne", dx: +1, dy: -1, cursor: "nesw-resize" },
+      { name: "sw", dx: -1, dy: +1, cursor: "nesw-resize" },
+      { name: "se", dx: +1, dy: +1, cursor: "nwse-resize" },
+    ]) {
+      const grip = document.createElement("div");
+      grip.className = `sso-grip sso-grip--${corner.name}`;
+      grip.style.cursor = corner.cursor;
+      grip.title = "Drag to resize";
+      let from = null;
+      grip.addEventListener("pointerdown", (event) => {
+        from = { x: event.clientX, y: event.clientY, ...size, left: at.x, top: at.y };
+        grip.setPointerCapture?.(event.pointerId);
+        event.stopPropagation();
+      });
+      grip.addEventListener("pointermove", (event) => {
+        if (!from) return;
+        if (event.buttons === 0) { from = null; return; }
+        size.width = from.width + corner.dx * (event.clientX - from.x);
+        size.height = from.height + corner.dy * (event.clientY - from.y);
+        applySize();
+        // Dragging a left or top corner moves the window, so the opposite
+        // corner stays where it is - which is what makes a corner a corner.
+        place(
+          corner.dx < 0 ? from.left + (from.width - size.width) : from.left,
+          corner.dy < 0 ? from.top + (from.height - size.height) : from.top,
+        );
+      });
+      const stop = () => { if (from) { from = null; remember(); } };
+      grip.addEventListener("pointerup", stop);
+      grip.addEventListener("pointercancel", stop);
+      root.append(grip);
+    }
+
+    const api_ = {
+      host: layer.host,
+      shadow: layer.shadow,
+      root,
+      body,
+      isOpen: () => open,
+      setTitle(text) { name.textContent = text; },
+      async show(near) {
+        if (!open) {
+          let stored = null;
+          try {
+            stored = storeKey ? (await chrome.storage.local.get(storeKey))[storeKey] : null;
+          } catch {
+            // Defaults are fine.
+          }
+          if (stored?.width) size = { width: stored.width, height: stored.height ?? size.height };
+          applySize();
+          if (stored?.x != null) place(stored.x, stored.y);
+          else if (near) {
+            /* Beside the window that owns it, not on top of it. `near` is that
+             * window's host rather than the button that was pressed - placing
+             * against the button put the settings squarely over the panel,
+             * because the button is near the panel's right edge and the window
+             * hangs left from it. Falls to the right when there is no room on
+             * the left. */
+            const box = near.getBoundingClientRect();
+            const left = box.left - size.width - 12;
+            place(left >= 8 ? left : box.right + 12, box.top);
+          } else {
+            place((window.innerWidth - size.width) / 2, 80);
+          }
+        }
+        open = true;
+        layer.host.style.setProperty("display", "block", "important");
+        attachToCorrectParent();
+      },
+      hide() {
+        open = false;
+        layer.host.style.setProperty("display", "none", "important");
+        onClose?.();
+      },
+      destroy() { layer.remove(); },
+    };
+
+    close.addEventListener("click", () => api_.hide());
+    root.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") api_.hide();
+      // Typing in a settings field must not reach the nudge bindings.
+      event.stopPropagation();
+    });
+    api_.hide();
+    return api_;
+  }
+
   function showToast(message, { action = null } = {}) {
     ensureOverlay();
     toast.replaceChildren();
@@ -2164,6 +2336,7 @@
     measurePlacement,
     makeMovable,
     makeLayer,
+    makeWindow,
     setPlacing(on) {
       state.placing = Boolean(on);
       for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;

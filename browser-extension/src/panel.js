@@ -178,7 +178,7 @@
     el.gear.type = "button";
     el.gear.textContent = "⚙";
     el.gear.title = "Settings";
-    el.gear.addEventListener("click", () => goTo("settings"));
+    el.gear.addEventListener("click", () => openSettings());
 
     /* Folds to the title bar, the same control the study rail has. Different
      * from closing: the panel stays where it was put and at the size it was
@@ -236,7 +236,6 @@
       root: screen(buildTracks()),
       find: screen(buildSearch()),
       style: screen(buildStyle()),
-      settings: screen(buildArrangement(), buildAppearance(), buildStudy(), buildKeys(), buildDiagnostics()),
     };
     body.append(...Object.values(el.screens));
 
@@ -1153,7 +1152,6 @@
     root: "Subtitle Overlay",
     find: "Find a subtitle",
     style: "Style",
-    settings: "Settings",
   };
 
   let atScreen = "root";
@@ -1173,13 +1171,41 @@
     el.title.textContent = SCREEN_TITLES[name] || SCREEN_TITLES.root;
     // The count belongs to the subtitles, so it goes when they are not on show.
     el.state.hidden = name !== "root";
-    el.gear.hidden = name === "settings";
     el.panel.scrollTop = 0;
     refresh(api.status());
     fitToViewport();
   }
 
   const goRoot = () => goTo("root");
+
+  /* Settings, in a window of their own.
+   *
+   * Built the first time it is asked for rather than with the panel: it holds
+   * five sections nobody opens during a film, and building them up front costs
+   * every reader who never opens it. Kept afterwards, so its size and place are
+   * where they were left within the session as well as between them. */
+  let settingsWindow = null;
+
+  async function openSettings() {
+    if (!settingsWindow) {
+      settingsWindow = api.makeWindow({
+        title: "Settings",
+        sheets,
+        storeKey: "sso:panelSettingsWindow",
+        width: 380,
+        height: 420,
+        accent: "#4c8bf5",
+        accentInk: "#93b9fb",
+        onClose: () => refresh(api.status()),
+      });
+      settingsWindow.body.append(
+        buildArrangement(), buildAppearance(), buildStudy(), buildKeys(), buildDiagnostics(),
+      );
+    }
+    closeMenu();
+    await settingsWindow.show(host);
+    refresh(api.status());
+  }
 
   /* Go and find one, for a named subtitle.
    *
@@ -2159,7 +2185,10 @@
       if (!track?.attached) el.title.textContent = "Style";
     }
 
-    if (!showing("settings")) return;
+    // The settings are their own window now, so what decides whether they are
+    // worth redrawing is whether that window is open - not which screen the
+    // panel happens to be showing.
+    if (!settingsWindow?.isOpen()) return;
 
     el.background.input.value = String(settings.background);
     el.background.readout.textContent = String(settings.background);
@@ -2226,6 +2255,7 @@
 
   function hide() {
     closeMenu();
+    settingsWindow?.hide();
     if (host) setHostVisible(host, false);
     if (unsubscribe) {
       unsubscribe();
@@ -2260,9 +2290,11 @@
   window.__ssoPanel = { show, hide, toggle, reparent, isCapturingKey, rescale, applySize };
 
   window.__ssoPanelTeardown = () => {
-    // The menu lives on its own host outside this shadow tree, so removing the
-    // panel does not remove it.
+    // Both live on hosts outside this shadow tree, so removing the panel does
+    // not remove them.
     closeMenu();
+    settingsWindow?.destroy();
+    settingsWindow = null;
     document.removeEventListener("keydown", onCaptureKey, true);
     window.removeEventListener("resize", clampIntoView);
     unsubscribe?.();

@@ -207,6 +207,17 @@
         [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(".sso-menu"))?.shadowRoot;
       const menuItems = () => [...(menuShadow()?.querySelectorAll(".sso-menu__item") || [])];
 
+      /* Settings are a window of their own now, not a screen in the panel, so
+       * they are looked for in the document too. */
+      const sheetShadow = () =>
+        [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(".sso-sheet"))?.shadowRoot;
+      const openSettings = async () => {
+        [...panelShadow().querySelectorAll(".sso-win__head button")]
+          .find((b) => b.textContent === "⚙")?.click();
+        await sleep(220);
+        return sheetShadow();
+      };
+
       check("overlay lives in a shadow root, out of reach of page CSS", () => {
         if (!shadowOf()) throw new Error("no shadow root holding .sso-root");
       });
@@ -1171,41 +1182,46 @@
         if (reachedPage > 0) throw new Error("the page saw the wheel event");
       });
 
-      check("the subtitles screen carries no settings, and settings are one click away", async () => {
-        /* Replaces a case that asserted a "More settings" fold. The sections
-         * already folded, so that button was a second fold on top of a fold;
-         * what it was really hiding is that the column mixed two kinds of thing
-         * - the subtitles you are watching, and places you go to set something
-         * up. Those are screens now. */
+      check("settings are a window of their own, closable and remembered", async () => {
+        /* Reported: "clicking the settings button feels like a new window, so
+         * make it a new window with its own size, and I can close it whenever
+         * I am done with it". It does feel like one, because it is: you go
+         * there to change something and then you are finished, which is what a
+         * window is for and not what a screen in a column is for. */
         const shadow = panelShadow();
         if (shadow.querySelector(".sso-more") || shadow.querySelector(".sso-more__toggle"))
-          throw new Error("the second tier is still there");
+          throw new Error("the old second tier is still there");
 
         const root = shadow.querySelector(".sso-screen");
         if (root.hidden) throw new Error("the panel did not open on the subtitles");
         for (const heading of ["Arrangement", "Appearance", "Keys"]) {
-          const on = [...root.querySelectorAll(".sso-sec__h")]
-            .some((h) => h.textContent.includes(heading));
-          if (on) throw new Error(`"${heading}" is on the subtitles screen`);
+          if ([...root.querySelectorAll(".sso-sec__h")].some((h) => h.textContent.includes(heading)))
+            throw new Error(`"${heading}" is on the subtitles screen`);
         }
 
-        const gear = [...shadow.querySelectorAll(".sso-win__head button")]
-          .find((b) => b.textContent === "⚙");
-        if (!gear) throw new Error("no way to reach the settings");
-        gear.click();
-        await sleep(80);
-        if (!root.hidden) throw new Error("the subtitles screen is still showing");
-        const settings = [...shadow.querySelectorAll(".sso-screen")].find((s) => !s.hidden);
-        if (!settings.querySelector(".sso-keys")) throw new Error("the settings are not on it");
-        // The back control must not be a caret, or the generic window test's
-        // /^[▾▸]$/ fold-button search picks it up instead of the fold.
-        const back = shadow.querySelector(".sso-panel__back");
-        if (back.hidden) throw new Error("no way back");
-        if (/^[▾▸]$/.test(back.textContent))
-          throw new Error(`the back control reads "${back.textContent}", which is the fold's glyph`);
-        back.click();
-        await sleep(80);
-        if (root.hidden) throw new Error("back did not return to the subtitles");
+        const sheet = await openSettings();
+        if (!sheet) throw new Error("no settings window opened");
+        if (!sheet.querySelector(".sso-keys")) throw new Error("the settings are not in it");
+        // A window, not a screen: the panel is still showing its subtitles.
+        if (root.hidden) throw new Error("opening the settings took the subtitles away");
+
+        const win = sheet.host;
+        const box = win.getBoundingClientRect();
+        if (box.width === 0) throw new Error("the settings window has no size");
+        if (box.left < 0 || box.right > window.innerWidth || box.top < 0)
+          throw new Error(
+            `it opened off screen at ${Math.round(box.left)},${Math.round(box.top)} ` +
+            `(${Math.round(box.width)}×${Math.round(box.height)})`);
+        // Resizable, which is half the reason a grid of key bindings wanted out
+        // of a 340px column in the first place.
+        if (sheet.querySelectorAll(".sso-grip").length !== 4)
+          throw new Error("it cannot be resized from every corner");
+
+        sheet.querySelector(".sso-icon--close").click();
+        await sleep(150);
+        if (win.getBoundingClientRect().width > 0)
+          throw new Error("closing the settings window left it on screen");
+        if (root.hidden) throw new Error("closing it took the subtitles away too");
       });
 
       check("an unstyled subtitle renders exactly as it always did", async () => {
@@ -1483,19 +1499,22 @@
         const shadow = panelShadow();
         const fold = [...shadow.querySelectorAll(".sso-win__head button")]
           .find((b) => /^[▾▸]$/.test(b.textContent));
-        [...shadow.querySelectorAll(".sso-win__head button")]
-          .find((b) => b.textContent === "⚙").click();
+        const card = [...shadow.querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        card?.querySelector(".sso-track__more").click();
         await sleep(60);
-        fold.click(); // fold from the settings screen
+        menuItems().find((b) => b.textContent === "Style…")?.click();
+        await sleep(80);
+        fold.click(); // fold from the style screen
         await sleep(60);
         fold.click(); // and back open
         await sleep(60);
         if (shadow.querySelector(".sso-screen").hidden)
           throw new Error("it unfolded onto the screen it was folded from");
 
-        [...shadow.querySelectorAll(".sso-win__head button")]
-          .find((b) => b.textContent === "⚙").click();
+        card?.querySelector(".sso-track__more").click();
         await sleep(60);
+        menuItems().find((b) => b.textContent === "Style…")?.click();
+        await sleep(80);
         window.__ssoPanel.hide();
         await sleep(40);
         await window.__ssoPanel.show();
@@ -1584,7 +1603,7 @@
         /* Through the button, not through the api. The defect was never in
          * what resetKeys does - it was that the button was wired to the wrong
          * function, and a test calling the api directly passes either way. */
-        const reset = [...panelShadow().querySelectorAll("button")]
+        const reset = [...((await openSettings())?.querySelectorAll("button") || [])]
           .find((b) => b.textContent === "Reset keys");
         if (!reset) throw new Error("no way to reset the bindings");
         reset.click();
@@ -1598,6 +1617,8 @@
           throw new Error(`it also reset the width to ${after.tracks[0].widthPercent}`);
         if (after.background !== 0.2)
           throw new Error(`it also reset the backdrop to ${after.background}`);
+        sheetShadow()?.querySelector(".sso-icon--close").click();
+        await sleep(100);
 
         window.__ssoApi.updateTrackSettings(0, { fontScale: 1, widthPercent: 80 });
         window.__ssoApi.updateSettings({ background: 0.55 });
@@ -1928,48 +1949,49 @@
           throw new Error("it would not come back");
       });
 
-      check("the rail carries its own settings", async () => {
-        /* They were eleven controls in a panel about subtitles, every one of
-         * them describing this surface. Settings belong on the thing they
-         * change. */
-        const shadow = railShadow();
-        const gear = [...shadow.querySelectorAll(".sso-win__head button")]
+      check("study's settings are a window of their own", async () => {
+        /* They were a second face of the rail, which meant the rail's own width
+         * decided how much room eight settings had, and getting back to the
+         * words was a button rather than being done with it. The control
+         * panel's settings moved out for the same reasons; these followed. */
+        const gear = [...railShadow().querySelectorAll(".sso-win__head button")]
           .find((b) => b.textContent === "⚙");
         if (!gear) throw new Error("no way into the rail's settings");
         gear.click();
-        await sleep(120);
+        await sleep(250);
 
-        const screen = shadow.querySelector(".sso-rail__settings");
-        if (screen.hidden || screen.getBoundingClientRect().height === 0)
-          throw new Error("the settings did not open");
-        // The words are not on screen, so neither are the controls for them.
-        if (!shadow.querySelector(".sso-rail__list").hidden)
-          throw new Error("the words are still there behind the settings");
-        const clear = [...shadow.querySelectorAll(".sso-icon--word")]
-          .find((b) => b.textContent === "Clear");
-        if (clear && !clear.hidden) throw new Error("it offers to empty a list that is not showing");
+        const sheet = [...document.querySelectorAll("div")]
+          .find((d) => d.shadowRoot?.querySelector(".sso-rail__settings"))?.shadowRoot;
+        if (!sheet) throw new Error("no settings window opened");
+        const win = sheet.host;
+        const box = win.getBoundingClientRect();
+        if (box.width === 0) throw new Error("the settings window has no size");
+        if (box.left < 0 || box.right > window.innerWidth || box.top < 0)
+          throw new Error(`it opened off screen at ${Math.round(box.left)},${Math.round(box.top)}`);
+        // The words are still there: a window, not a face of the rail.
+        if (railShadow().querySelector(".sso-rail__list").hidden)
+          throw new Error("opening the settings took the words away");
 
         // A control here reaches the setting it names.
         const before = window.__ssoStudy.settings().textPx;
-        const text = [...screen.querySelectorAll(".sso-set")]
+        const text = [...sheet.querySelectorAll(".sso-set")]
           .find((r) => r.textContent.includes("Text size"))
           .querySelector('input[type="range"]');
         text.value = String(before === 22 ? 18 : 22);
         text.dispatchEvent(new Event("input", { bubbles: true }));
-        await sleep(120);
+        await sleep(150);
         if (window.__ssoStudy.settings().textPx === before)
           throw new Error(`the text size stayed at ${before}`);
         text.value = String(before);
         text.dispatchEvent(new Event("input", { bubbles: true }));
-        await sleep(80);
+        await sleep(100);
 
-        const back = [...shadow.querySelectorAll(".sso-win__head button")]
-          .find((b) => b.textContent === "‹");
-        if (!back || back.hidden) throw new Error("no way back to the words");
-        back.click();
-        await sleep(120);
-        if (!shadow.querySelector(".sso-rail__settings").hidden)
-          throw new Error("back did not return to the words");
+        sheet.querySelector(".sso-icon--close").click();
+        await sleep(150);
+        if (win.getBoundingClientRect().width > 0)
+          throw new Error("closing it left the window on screen");
+        if (railShadow().querySelector(".sso-rail__list").hidden)
+          throw new Error("closing it took the words away too");
       });
 
       check("the panel keeps only the switch the rail cannot carry", async () => {
@@ -1978,11 +2000,8 @@
          * not that went to the rail. */
         await window.__ssoPanel.show();
         await sleep(150);
-        const gear = [...panelShadow().querySelectorAll(".sso-win__head button")]
-          .find((b) => b.textContent === "⚙");
-        gear.click();
-        await sleep(120);
-        const section = [...panelShadow().querySelectorAll(".sso-sec")]
+        const sheet = await openSettings();
+        const section = [...(sheet?.querySelectorAll(".sso-sec") || [])]
           .find((s) => s.querySelector(".sso-sec__h")?.textContent.includes("Study"));
         if (!section) throw new Error("no study section in the panel");
         if (section.dataset.open !== "true") section.querySelector(".sso-sec__h").click();
@@ -1994,8 +2013,8 @@
         const boxes = section.querySelectorAll('input[type="checkbox"]');
         if (boxes.length !== 1)
           throw new Error(`${boxes.length} study switches in the panel, want just the master`);
-        panelShadow().querySelector(".sso-panel__back").click();
-        await sleep(80);
+        sheetShadow().querySelector(".sso-icon--close").click();
+        await sleep(120);
       });
 
       check("the card says which subtitle is being learnt", async () => {
