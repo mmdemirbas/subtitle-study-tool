@@ -150,8 +150,9 @@ them are rebindable in the panel: click a binding, press the key you want. The
 
 The ⌘⇧ shortcuts are Chrome's, changed at `chrome://extensions/shortcuts`.
 
-The offset is remembered per subtitle file, so a film you come back to keeps
-the correction you already made.
+The offset is remembered per subtitle file, so a film you come back to keeps the
+correction you already made — and per **release**, so the next episode of the
+same rip starts with it already applied. See "Timing that carries over" below.
 
 ## Two subtitles at once
 
@@ -265,6 +266,39 @@ overlay is not keeping its own clock — there is nothing to drift.
 What remains is the offset baked into the subtitle file itself, from being
 timed against a different release of the film. That is a constant, you set it
 once with <kbd>G</kbd> and <kbd>H</kbd>, and it is saved.
+
+### Timing that carries over
+
+A saved offset belongs to one file, and the next episode is a different file —
+so a season watched an episode at a time asks for the same correction eight
+times over.
+
+The correction is not really a property of the file, though. It is the gap
+between how a subtitle was timed and how this copy of the video was encoded, and
+that gap belongs to the **release**: two files from the same rip, subtitled by
+the same upload, want the same number. So the correction is remembered against
+the release name with the episode marker taken out of it —
+`Battlestar.Galactica.S00E01.1080p.BluRay` and `…S00E02…` are the same release,
+and a different download has nothing in common with either. Language is part of
+that identity too, because the English and Turkish subtitles for one episode are
+different uploads timed by different people.
+
+A remembered timing is applied only when there is nothing better:
+
+1. **This file's own saved timing** wins if it has one. That includes a timing
+   you reset to zero — resetting is an answer, not an absence.
+2. **The aligner** wins next. When a second subtitle goes on beside one already
+   timed the way you want, the offset between them is measured from the two sets
+   of cue times. That is evidence about this pair of files; a memory is only
+   evidence about the last pair.
+3. **The memory**, last, and it says so: the attach toast reads "held back 1.2s
+   as last time" and carries an **Undo**. Undoing counts as an answer as well,
+   so the next episode starts clean.
+
+Only a correction you made by hand is remembered. The aligner's answer is
+re-derived from the other subtitle every time, so storing it would be
+recollection standing in for a measurement. Twelve releases are kept, most
+recent first.
 
 ## Working out what is playing
 

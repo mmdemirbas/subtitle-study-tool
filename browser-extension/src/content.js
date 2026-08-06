@@ -2031,6 +2031,8 @@
   const offsetKey = (fileId) => `sso:offset:${fileId}`;
   // Read by provider.js when it decides what to look for on the next film.
   const USED_LANGUAGES_KEY = "sso:usedLanguages";
+  // The corrections themselves, so the next episode starts where this one ended.
+  const USED_TIMING_KEY = "sso:usedTiming";
 
   /* What was last done to this file's timing.
    *
@@ -2038,18 +2040,25 @@
    * since. Reading has to accept both, or the first thing this change does to
    * an existing reader is forget every offset they have set. daemon.js writes
    * the same key - keep the two in step. */
+  /* `known` says whether this file has been timed before, which is not the same
+   * question as whether the offset is zero: a reader who put a subtitle back to
+   * the file's own timing said something, and the release memory below must not
+   * talk over it. */
   async function loadOffset(fileId) {
-    if (fileId == null) return { offsetMs: 0, rate: 1 };
+    const nothing = { offsetMs: 0, rate: 1, known: false };
+    if (fileId == null) return nothing;
     try {
       const stored = await chrome.storage.local.get(offsetKey(fileId));
       const saved = stored[offsetKey(fileId)];
-      if (typeof saved === "number") return { offsetMs: saved, rate: 1 };
+      if (typeof saved === "number") return { offsetMs: saved, rate: 1, known: true };
+      if (!saved) return nothing;
       return {
-        offsetMs: Number(saved?.offsetMs) || 0,
-        rate: Number(saved?.rate) || 1,
+        offsetMs: Number(saved.offsetMs) || 0,
+        rate: Number(saved.rate) || 1,
+        known: true,
       };
     } catch {
-      return { offsetMs: 0, rate: 1 };
+      return nothing;
     }
   }
 
@@ -2060,6 +2069,114 @@
       .catch(() => {});
   }
 
+  /* The correction, carried to the next episode.
+   *
+   * A saved offset belongs to one file, and the next episode is a different
+   * file - so a season watched an episode at a time asks for the same
+   * correction eight times over. The correction is not really a property of the
+   * file, though. It is the gap between how a subtitle was timed and how this
+   * copy of the video was encoded, and that gap belongs to the *release*: two
+   * files from the same rip, subtitled by the same upload, want the same number.
+   *
+   * So the memory hangs on the release rather than on the film or on the
+   * evening. The label already carries the release name; taking the episode
+   * marker out of it leaves the part that is the same all season, and leaves
+   * nothing whatever in common with a different download. That scoping is the
+   * whole safety argument - a timing is never carried onto something it was not
+   * measured against - and it is why this is not a global "last offset used".
+   */
+  /* Below this a key is not an identity. A local file called `tr.srt` reduces
+   * to "tr", and every other `tr.srt` on the disk would then be the same
+   * release - a collision that carries one film's correction onto another,
+   * which is the single thing this must never do. A real release name is
+   * fifteen to sixty characters; ten is well under the shortest of them and
+   * well over anything generic enough to repeat. */
+  const TIMING_FAMILY_MIN = 10;
+
+  function timingFamily(label) {
+    const family = String(label || "")
+      .toLowerCase()
+      .replace(/\bs\d{1,2}[\s._-]*e\d{1,3}\b/g, " ") // S01E02, s01.e02
+      .replace(/\b\d{1,2}x\d{1,3}\b/g, " ") // 1x02
+      .replace(/\bseason\s*\d{1,2}\b/g, " ")
+      .replace(/\bepisode\s*\d{1,3}\b/g, " ")
+      .replace(/\bpart\s*\d{1,2}\b/g, " ")
+      .replace(/\b(srt|ass|ssa|sub|vtt)\b/g, " ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim();
+    return family.length >= TIMING_FAMILY_MIN ? family : "";
+  }
+
+  /* A short list rather than a growing map, so it never needs tidying: the
+   * twelve most recent releases are kept and the rest fall off the end. Twelve
+   * is more than one evening's viewing and small enough to read in one go.
+   *
+   * Language is part of the identity, not decoration. English and Turkish
+   * subtitles for the same episode are different uploads timed by different
+   * people, and one being eight seconds out says nothing about the other. */
+  const TIMING_MEMORY_MAX = 12;
+
+  async function rememberTiming(track) {
+    const family = timingFamily(track.label);
+    if (!family) return;
+    try {
+      const stored = await chrome.storage.local.get(USED_TIMING_KEY);
+      const list = Array.isArray(stored[USED_TIMING_KEY]) ? stored[USED_TIMING_KEY] : [];
+      const mine = (entry) =>
+        entry?.family === family && (entry?.language || "") === (track.language || "");
+      /* A timing of nothing is worth storing only where it replaces something.
+       * Undoing a carried correction has to be recorded, or the next episode
+       * carries it again - but a release that has never needed a correction
+       * would otherwise take one of the twelve places and push out a release
+       * that did. */
+      if (!track.offsetMs && track.rate === 1 && !list.some(mine)) return;
+
+      const kept = list.filter((entry) => !mine(entry));
+      kept.unshift({
+        family,
+        language: track.language || "",
+        offsetMs: track.offsetMs,
+        rate: track.rate,
+      });
+      await chrome.storage.local.set({ [USED_TIMING_KEY]: kept.slice(0, TIMING_MEMORY_MAX) });
+    } catch {
+      // A timing that fails to be remembered leaves things as they were before
+      // any of this existed, which is a working extension.
+    }
+  }
+
+  /* Written once the nudging stops, not during it. Holding a nudge button fires
+   * a dozen times a second and each write here is a read and a write; what is
+   * worth remembering is where the reader stopped, not every step on the way. */
+  let rememberTimer = null;
+
+  function rememberTimingSoon(track) {
+    clearTimeout(rememberTimer);
+    rememberTimer = setTimeout(() => rememberTiming(track), 800);
+  }
+
+  async function recallTiming(track) {
+    const family = timingFamily(track.label);
+    if (!family) return null;
+    try {
+      const stored = await chrome.storage.local.get(USED_TIMING_KEY);
+      const list = Array.isArray(stored[USED_TIMING_KEY]) ? stored[USED_TIMING_KEY] : [];
+      const found = list.find(
+        (entry) =>
+          entry?.family === family && (entry?.language || "") === (track.language || ""),
+      );
+      if (!found) return null;
+      const offsetMs = Math.round(Number(found.offsetMs) || 0);
+      const rate = Number(found.rate) || 1;
+      // This release needed no correction last time, so there is nothing to
+      // apply and nothing worth a sentence in the toast.
+      if (!offsetMs && rate === 1) return null;
+      return { offsetMs, rate };
+    } catch {
+      return null;
+    }
+  }
+
   /* How fast this file's clock runs against the film's.
    *
    * A subtitle timed for 25fps against a 23.976 encode starts right and is
@@ -2067,12 +2184,19 @@
    * looks like the subtitle "drifting". Kept separate from the offset because
    * nudging still means the same thing under a rate: a constant shift in
    * display time is a constant shift whatever the stretch. */
-  function setRate(rate, { slot = state.keyTrack, quiet = false } = {}) {
+  /* `byHand` is what separates a correction the reader made from one this code
+   * worked out, and only the first is worth remembering for the next episode.
+   * The aligner's answer is re-derived from the other subtitle every time, so
+   * storing it would be recollection standing in for evidence; a carried timing
+   * is already the recollection. Not the same question as `quiet`, which is
+   * only about whether to say so. */
+  function setRate(rate, { slot = state.keyTrack, quiet = false, byHand = true } = {}) {
     const track = state.tracks[slot];
     const next = Number(rate);
     track.rate = Number.isFinite(next) && next > 0 ? next : 1;
     track.activeIndex = NEEDS_REDRAW;
     saveOffset(track);
+    if (byHand) rememberTimingSoon(track);
     notify();
     if (!quiet) {
       showToast(track.rate === 1
@@ -2081,11 +2205,12 @@
     }
   }
 
-  function setOffset(ms, { quiet = false, slot = state.keyTrack } = {}) {
+  function setOffset(ms, { quiet = false, slot = state.keyTrack, byHand = true } = {}) {
     const track = state.tracks[slot];
     track.offsetMs = Math.round(ms);
     track.activeIndex = NEEDS_REDRAW; // force a re-render at the new offset
     saveOffset(track);
+    if (byHand) rememberTimingSoon(track);
     notify();
     if (quiet) return;
     // Name the track only when there are two of them to confuse, and say what
@@ -2309,12 +2434,46 @@
      * offset is an answer they gave, and overwriting it would be this deciding
      * it knows better. */
     const aligned = track.offsetMs === 0 && track.rate === 1 ? autoAlign(index) : null;
+
+    /* Nothing measured and nothing saved, so fall back to what this release
+     * needed last time.
+     *
+     * That order matters and it is the reason this sits after the aligner
+     * rather than before it: the aligner compares this file against the one
+     * already on screen, which is evidence about this pair of files, while the
+     * memory is only evidence about the last pair. Evidence beats recollection.
+     * A file with a timing of its own is not touched by either. */
+    const carried =
+      aligned?.verdict === "apply" || timing.known ? null : await recallTiming(track);
+    if (carried) {
+      if (carried.rate !== 1) setRate(carried.rate, { slot: index, quiet: true, byHand: false });
+      setOffset(carried.offsetMs, { slot: index, quiet: true, byHand: false });
+    }
+
     const said = `Subtitle ${index + 1} on - ${track.cues.length} lines` +
       `${track.label ? ` · ${track.label}` : ""}`;
+    /* Undoing a carried timing is itself an answer - this release does not need
+     * the correction after all - so it goes back through the by-hand path and
+     * the next episode starts clean. */
+    const undo = () => {
+      setRate(1, { slot: index, quiet: true });
+      setOffset(0, { slot: index, quiet: true });
+      showToast("Subtitle back to the file's own timing");
+    };
 
     if (aligned?.verdict === "apply") {
       showToast(`${said}, lined up ${describeOffset(track.offsetMs)}`, {
         action: { label: "Undo", onClick: () => setOffset(0, { slot: index }) },
+      });
+    } else if (carried) {
+      // A carried rate with no offset has nothing for describeOffset to say -
+      // it would report "matching the file" over a subtitle that is being
+      // stretched, which is the one thing the sentence must not do.
+      const how = carried.offsetMs
+        ? describeOffset(track.offsetMs)
+        : "running at the speed you set";
+      showToast(`${said}, ${how} as last time`, {
+        action: { label: "Undo", onClick: undo },
       });
     } else {
       showToast(said);
@@ -2402,8 +2561,8 @@
     const offsetMs = Math.round(reference.offsetMs - (reference.rate * answer.shiftMs) / answer.rate);
     const proposal = { ...answer, referenceSlot, offsetMs, trackRate: rate };
     if (answer.verdict === "apply") {
-      if (rate !== 1) setRate(rate, { slot, quiet: true });
-      setOffset(offsetMs, { slot, quiet: true });
+      if (rate !== 1) setRate(rate, { slot, quiet: true, byHand: false });
+      setOffset(offsetMs, { slot, quiet: true, byHand: false });
     }
     return proposal;
   }
@@ -2805,6 +2964,7 @@
     ticker = null;
     clearTimeout(toastTimer);
     clearTimeout(handleTimer);
+    clearTimeout(rememberTimer);
     videoResize?.disconnect();
     observedVideo = null;
     document.removeEventListener("keydown", onCaptureKey, true);

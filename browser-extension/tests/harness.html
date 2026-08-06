@@ -2900,6 +2900,100 @@
         await sleep(120);
       });
 
+      check("a correction carries to the next episode of the same release", async () => {
+        /* A saved offset belongs to one file, and the next episode is a
+         * different file - so a season asks for the same correction eight times
+         * over. The correction belongs to the release, which is what the key is
+         * built from. The two negative cases matter more than the positive one:
+         * carrying a timing onto an unrelated film is the single thing this
+         * must never do. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const release = (episode, language) =>
+          `${language.toUpperCase()} · Harness.Show.S01E0${episode}.1080p.BluRay-GRP`;
+
+        await api.attach({ cues: CUES, label: release(1, "en"), fileId: 6201, language: "en", slot: 0 });
+        api.setOffset(-2500, { slot: 0 });
+        await sleep(1100); // the memory is written once the nudging stops
+
+        api.detach(0);
+        await api.attach({ cues: CUES, label: release(2, "en"), fileId: 6202, language: "en", slot: 0 });
+        await sleep(150);
+        if (api.status().tracks[0].offsetMs !== -2500)
+          throw new Error(`episode 2 started at ${api.status().tracks[0].offsetMs}ms, not -2500`);
+
+        // Same release, other language: a different upload, timed by somebody
+        // else, and one being out says nothing about the other.
+        api.detach(0);
+        await api.attach({ cues: CUES, label: release(3, "tr"), fileId: 6203, language: "tr", slot: 0 });
+        await sleep(150);
+        if (api.status().tracks[0].offsetMs !== 0)
+          throw new Error(`the Turkish subtitle inherited ${api.status().tracks[0].offsetMs}ms`);
+
+        // A different download inherits nothing at all.
+        api.detach(0);
+        await api.attach({
+          cues: CUES, label: "EN · Harness.Other.Film.2019.WEBRip-XYZ",
+          fileId: 6204, language: "en", slot: 0,
+        });
+        await sleep(150);
+        if (api.status().tracks[0].offsetMs !== 0)
+          throw new Error(`an unrelated film inherited ${api.status().tracks[0].offsetMs}ms`);
+
+        /* Undoing a carried timing is an answer too, so the episode after it
+         * starts clean. Without this the Undo button only helps once. */
+        api.detach(0);
+        await api.attach({ cues: CUES, label: release(4, "en"), fileId: 6205, language: "en", slot: 0 });
+        await sleep(150);
+        api.setOffset(0, { slot: 0, quiet: true });
+        await sleep(1100);
+        api.detach(0);
+        await api.attach({ cues: CUES, label: release(5, "en"), fileId: 6206, language: "en", slot: 0 });
+        await sleep(150);
+        if (api.status().tracks[0].offsetMs !== 0)
+          throw new Error(`after an undo, episode 5 still started at ${api.status().tracks[0].offsetMs}ms`);
+
+        await chrome.storage.local.remove("sso:usedTiming");
+        for (const fileId of [6201, 6202, 6203, 6204, 6205, 6206]) {
+          await chrome.storage.local.remove(`sso:offset:${fileId}`);
+        }
+        if (wasAttached[0]) {
+          await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+        } else {
+          api.detach(0);
+        }
+        await sleep(120);
+      });
+
+      check("a label too generic to name a release is not treated as one", async () => {
+        /* `tr.srt` reduces to "tr", and every other `tr.srt` on the disk would
+         * then be the same release. That is the collision that carries one
+         * film's correction onto another. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+
+        await api.attach({ cues: CUES, label: "tr.srt", fileId: 6301, language: "tr", slot: 0 });
+        api.setOffset(-9000, { slot: 0 });
+        await sleep(1100);
+
+        api.detach(0);
+        await api.attach({ cues: CUES, label: "tr.srt", fileId: 6302, language: "tr", slot: 0 });
+        await sleep(150);
+        if (api.status().tracks[0].offsetMs !== 0)
+          throw new Error(`a second tr.srt inherited ${api.status().tracks[0].offsetMs}ms`);
+
+        await chrome.storage.local.remove("sso:usedTiming");
+        for (const fileId of [6301, 6302]) {
+          await chrome.storage.local.remove(`sso:offset:${fileId}`);
+        }
+        if (wasAttached[0]) {
+          await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+        } else {
+          api.detach(0);
+        }
+        await sleep(120);
+      });
+
       check("attaching a second subtitle lines it up on its own", async () => {
         /* End to end, through attach: the thing the reader actually does.
          *
