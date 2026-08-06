@@ -223,10 +223,20 @@
      * for a binding on the character: measured on this machine's layout,
      * Turkish Q, the key beside P types ğ and "[" needs a modifier the handler
      * deliberately refuses. A letter is on every Latin layout unmodified. */
+    /* T and Y sit directly above G and H, which is the whole reason they were
+     * picked. The pair below moves the subtitle against the film; the pair
+     * above moves the film itself, and both keep the same left-is-back,
+     * right-is-forward sense - so there is one thing to remember rather than
+     * four. They are letters, unmodified, present on every Latin layout, and
+     * neither Netflix, Prime nor Disney+ binds them. YouTube uses T for
+     * theatre mode: these win it while the shortcuts are on, and either can be
+     * rebound. */
     keys: {
       earlier: "g",
       later: "h",
       reset: "b",
+      prevLine: "t",
+      nextLine: "y",
       togglePanel: "p",
       toggleOverlay: "v",
       toggleStudy: "s",
@@ -234,7 +244,7 @@
     },
     /* Off until asked for.
      *
-     * Seven single letters, unmodified, on a page that is somebody else's -
+     * Nine single letters, unmodified, on a page that is somebody else's -
      * players bind letters of their own, and a search box that has not taken
      * focus yet turns every one of them into a surprise. Nothing here is
      * needed to use the tool: the panel opens from the CC button and every
@@ -1784,6 +1794,103 @@
     return track.rate && track.rate !== 1 ? stream / track.rate : stream;
   }
 
+  /** The other direction: where a moment of this file lands in the stream. */
+  function streamTimeMs(track, fileMs) {
+    const scaled = track.rate && track.rate !== 1 ? fileMs * track.rate : fileMs;
+    return scaled + track.offsetMs + state.adDriftMs;
+  }
+
+  // --- moving by line ---------------------------------------------------------
+
+  /* Missing a line is the ordinary event of watching a film in a language you
+   * are learning, and the ordinary repair - drag the scrubber back, overshoot,
+   * drag forward, overshoot - costs far more attention than the line was worth,
+   * and takes your eyes off the picture to do it. The subtitle file already
+   * says where every line begins, so the repair is one keystroke.
+   *
+   * Backwards restarts the line being spoken before it goes to the one before
+   * it. That is the rule a music player uses for "previous track" and it is
+   * right here for the same reason: the first press is nearly always "say that
+   * again". Pressing twice steps back one, because the first press leaves the
+   * playhead at the line's own start and the grace period below is then behind
+   * it. */
+  const LINE_GRACE_MS = 400;
+  /* Land a little before the line rather than exactly on it. A seek settles on
+   * a keyframe, which can be after the moment asked for, and a repeat that
+   * starts one word in has not repeated the line. */
+  const LINE_PREROLL_MS = 150;
+
+  function stepLine(direction, { slot = state.keyTrack } = {}) {
+    if (!state.video) return false;
+    /* The keyed track is the one being read, so its lines are the ones worth
+     * stepping through. Falling back to whatever is attached keeps the keys
+     * working when the keyed slot happens to be the empty one. */
+    const track = state.tracks[slot]?.cues.length > 0 ? state.tracks[slot] : attachedTracks()[0];
+    if (!track) return false;
+
+    const now = filmTimeMs(track);
+    let cue = direction < 0
+      ? lastCueStartingBefore(track.cues, now - LINE_GRACE_MS)
+      : firstCueStartingAfter(track.cues, now);
+    /* Sitting in the pre-roll of a line - which is exactly where the previous
+     * press left the playhead - means that line is the one about to be read,
+     * so "next" has to mean the one after it. Without this, Again followed by
+     * Next stays where it is and the key looks broken. Backwards needs no such
+     * guard: the grace period is longer than the pre-roll, so the search is
+     * already behind the line's own start. */
+    if (direction > 0 && cue && cue.start - now <= LINE_PREROLL_MS) {
+      cue = firstCueStartingAfter(track.cues, cue.start);
+    }
+    if (!cue) {
+      // The key did its job; there was simply nowhere to go.
+      showToast(direction < 0 ? "Nothing before this" : "That was the last line");
+      return true;
+    }
+
+    state.video.currentTime = Math.max(
+      0,
+      (streamTimeMs(track, cue.start) - LINE_PREROLL_MS) / 1000,
+    );
+    /* Draw it now rather than up to a tick later. Setting currentTime moves the
+     * official playback position immediately, so the tick reads the new time
+     * even while the frames are still on their way. */
+    for (const other of state.tracks) other.activeIndex = NEEDS_REDRAW;
+    tick();
+    return true;
+  }
+
+  function lastCueStartingBefore(cues, timeMs) {
+    let found = null;
+    let low = 0;
+    let high = cues.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (cues[mid].start < timeMs) {
+        found = cues[mid];
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return found;
+  }
+
+  function firstCueStartingAfter(cues, timeMs) {
+    let found = null;
+    let low = 0;
+    let high = cues.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (cues[mid].start > timeMs) {
+        found = cues[mid];
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return found;
+  }
+
   let lastAdPoll = 0;
 
   /* Detecting the two edges of an ad break is the entire mechanism: the gap
@@ -2112,6 +2219,10 @@
       nudge(-step);
     } else if (isKey(typed, keys.later)) {
       nudge(step);
+    } else if (isKey(typed, keys.prevLine)) {
+      handled = stepLine(-1);
+    } else if (isKey(typed, keys.nextLine)) {
+      handled = stepLine(1);
     } else if (event.key === "Escape" && state.placing) {
       window.__ssoApi.setPlacing(false);
     } else if (isKey(typed, keys.reset)) {
@@ -2527,6 +2638,7 @@
     setOffset,
     setRate,
     nudge,
+    stepLine,
     formatOffset,
     describeOffset,
     // Shared by the panel and the study rail, which are both dragged around a

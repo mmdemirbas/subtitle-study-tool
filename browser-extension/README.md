@@ -110,29 +110,43 @@ whether a subtitle is attached, and the current shortcuts.
 
 ### Keys
 
+The in-page keys are **off until you turn them on**, in the panel's Keys
+section. They are nine unmodified letters on a page that belongs to somebody
+else, and a player that binds letters of its own would fight them.
+
 | Key | Effect |
 |---|---|
 | <kbd>⌘⇧S</kbd> | Find and attach subtitles |
 | <kbd>⌘⇧K</kbd> | Control panel |
 | <kbd>⌘⇧X</kbd> | Hide / show subtitles |
-| <kbd>[</kbd> / <kbd>]</kbd> | Shift subtitles 0.25s earlier / later |
-| <kbd>Shift</kbd> + <kbd>[</kbd> / <kbd>]</kbd> | Shift by 1s |
-| <kbd>\\</kbd> | Reset the offset |
+| <kbd>G</kbd> / <kbd>H</kbd> | Shift subtitles 0.25s earlier / later |
+| <kbd>Shift</kbd> + <kbd>G</kbd> / <kbd>H</kbd> | Shift by 1s |
+| <kbd>T</kbd> / <kbd>Y</kbd> | Play this line again / skip to the next line |
+| <kbd>B</kbd> | Reset the offset |
 | <kbd>P</kbd> | Control panel |
-| <kbd>O</kbd> | Hide / show subtitles |
+| <kbd>V</kbd> | Hide / show subtitles |
 | <kbd>S</kbd> | Study mode |
 | <kbd>D</kbd> | Save the word at the top of the study rail |
 
-With two subtitles attached the nudge keys move one of them, and the panel says
-which. There is one pair of bracket keys and two things they could shift, and
-working it out from where the pointer happens to be resting would make the
-answer depend on something you are not looking at.
+<kbd>T</kbd> and <kbd>Y</kbd> sit directly above <kbd>G</kbd> and <kbd>H</kbd>,
+which is why they were picked: the pair below moves the subtitle against the
+film, the pair above moves the film itself, and both keep the same left-is-back,
+right-is-forward sense. <kbd>T</kbd> starts the line being spoken over — which is
+what you want after missing one — so it takes a second press to reach the line
+before. Both are also buttons on each subtitle's card in the panel.
 
-In-page bindings match on the **physical key**, not the character it produces.
-On a Turkish Q layout the two keys right of P print ğ and ü, but they are still
-`BracketLeft` and `BracketRight` — so the defaults stay in the same physical
-place on every layout without needing an AltGr chord. All of them are
-rebindable in the panel: click a binding, press the key you want.
+With two subtitles attached the nudge and line keys act on one of them, and the
+panel says which. Working it out from where the pointer happens to be resting
+would make the answer depend on something you are not looking at.
+
+In-page bindings are stored as the **character the keyboard types**, not the
+physical key. They were codes once, which keeps a binding in the same place on
+every layout — but the place is the only thing about it you cannot see: on a
+Turkish Q layout the two keys right of P print ğ and ü, and "the shortcut is
+`BracketLeft`" tells nobody which key to press. The defaults are letters for the
+same reason, since a letter is on every Latin layout without a modifier. All of
+them are rebindable in the panel: click a binding, press the key you want. The
+⌫ beside each one switches that binding off by itself.
 
 The ⌘⇧ shortcuts are Chrome's, changed at `chrome://extensions/shortcuts`.
 
@@ -250,7 +264,7 @@ overlay is not keeping its own clock — there is nothing to drift.
 
 What remains is the offset baked into the subtitle file itself, from being
 timed against a different release of the film. That is a constant, you set it
-once with the bracket keys, and it is saved.
+once with <kbd>G</kbd> and <kbd>H</kbd>, and it is saved.
 
 ## Working out what is playing
 

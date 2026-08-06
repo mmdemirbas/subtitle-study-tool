@@ -2845,6 +2845,61 @@
         await sleep(120);
       });
 
+      check("stepping by line lands on the line, and moves every press", async () => {
+        /* Repeating a line you missed is the ordinary event of watching a film
+         * in a language you are learning, so the two keys have to be exact
+         * about where they land - and, more easily got wrong, they have to move
+         * on every press. The seek lands a little BEFORE the line, which is
+         * deliberate; the trap is that "next" then finds the line it is already
+         * sitting in front of and does nothing at all. */
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+
+        const cues = [
+          { start: 1000, end: 3000, text: "one" },
+          { start: 5000, end: 7000, text: "two" },
+          { start: 9000, end: 11000, text: "three" },
+        ];
+        await api.attach({ cues, label: "stepping", fileId: 6100, language: "en", slot: 0 });
+        api.setKeyTrack(0);
+        await sleep(120);
+
+        const at = () => Math.round(video.currentTime * 1000);
+        // Inside a line, back means that line's own start: "say that again".
+        video.currentTime = 10;
+        api.stepLine(-1);
+        const again = at();
+        if (Math.abs(again - 9000) > 300)
+          throw new Error(`going back from inside line 3 landed at ${again}ms, not on its start`);
+
+        // A second press is what reaches the line before it.
+        api.stepLine(-1);
+        const back = at();
+        if (Math.abs(back - 5000) > 300)
+          throw new Error(`a second press landed at ${back}ms, not on line 2`);
+
+        // Forward from exactly there has to move, pre-roll notwithstanding.
+        api.stepLine(1);
+        const on = at();
+        if (Math.abs(on - 9000) > 300)
+          throw new Error(`going forward from the start of line 2 landed at ${on}ms`);
+
+        // Nothing after the last line: stay put rather than seek to nowhere.
+        api.stepLine(1);
+        api.stepLine(1);
+        if (at() < 8000) throw new Error(`running off the end moved the film to ${at()}ms`);
+
+        video.currentTime = wasTime;
+        if (wasAttached[0]) {
+          await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+        } else {
+          api.detach(0);
+        }
+        await sleep(120);
+      });
+
       check("attaching a second subtitle lines it up on its own", async () => {
         /* End to end, through attach: the thing the reader actually does.
          *

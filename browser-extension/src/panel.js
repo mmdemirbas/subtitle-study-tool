@@ -38,10 +38,16 @@
   /* The two study bindings are not here. They belong to study, and study's
    * settings are on the rail's own gear - the same rule that moved everything
    * else about it off this surface. */
+  /* "Line again" rather than "previous line", because that is what the key does
+   * on the press that matters: it starts the line being spoken over, and only
+   * goes back one when it is pressed again. Naming it "previous" would describe
+   * the second press and mislead about the first. */
   const KEY_FIELDS = [
     ["earlier", "Subtitles earlier"],
     ["later", "Subtitles later"],
     ["reset", "Reset offset"],
+    ["prevLine", "Line again"],
+    ["nextLine", "Next line"],
     ["toggleOverlay", "Hide / show"],
     ["togglePanel", "This panel"],
   ];
@@ -1046,9 +1052,34 @@
       nudger("Late", "»", -1, "large", `${late} A whole step. Hold to run.`),
     );
 
+    /* Moving the film by this subtitle's lines.
+     *
+     * Not a timing control - it moves the picture, not the text - but it
+     * belongs on this card all the same, because "a line" means a line of this
+     * file, and the two subtitles are routinely timed and cut differently. It
+     * sits under the sync row and carries the same weight, which is the right
+     * order: the timing is set once when a subtitle turns out to be out of
+     * step, and this is reached for whenever a line goes past too fast.
+     *
+     * "Again" and not "Previous": the first press restarts the line being
+     * spoken, which is what it is reached for, and it takes a second press to
+     * go back one. */
+    const lines = document.createElement("div");
+    lines.className = "sso-row";
+    const stepper = (text, direction, why) => {
+      const b = button(text, { title: why });
+      b.className = "sso-line-step";
+      b.addEventListener("click", () => api.stepLine(direction, { slot }));
+      return b;
+    };
+    lines.append(
+      stepper("‹ Again", -1, "Play this line from its start. Press twice to go back one."),
+      stepper("Next ›", +1, "Skip to where the next line begins."),
+    );
+
     const body = document.createElement("div");
     body.className = "sso-track__body";
-    body.append(offsets);
+    body.append(offsets, lines);
 
     root.append(head, body);
     return { root, keyed, keysChip, learnChip, label, offsetField, offsetReset, visible, more };
