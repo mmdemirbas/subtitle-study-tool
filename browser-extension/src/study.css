@@ -265,8 +265,17 @@ button.sso-set__action:hover {
   background: transparent;
 }
 
+/* The line between two cards, and it has to be seen.
+ *
+ * At 6% white over a translucent rail three cards read as one block of rows:
+ * the only thing separating them was a hairline the eye did not register, and
+ * the difference between the card being read and the ones under it was carried
+ * entirely by type, which says "more important" without saying "a separate
+ * thing". A card cannot answer this with a surface of its own - the rail's
+ * opacity is a setting, and a card painting over it takes the setting away, so
+ * the separator is where the work has to happen. */
 .sso-card + .sso-card {
-  border-top: 1px solid var(--sso-line-soft);
+  border-top: 1px solid var(--sso-line);
 }
 
 /* Pinned means "I am reading this" - it survives the trim, so it says so. A
@@ -483,6 +492,21 @@ button.sso-set__action:hover {
   transform: translateY(1px);
 }
 
+/* Save is what a card is for; pin only keeps one on screen a while longer.
+ *
+ * They were the same button drawn twice, so the eye had to read both to find
+ * the one it wanted. Save keeps the fill and pin gives its up - a filled
+ * control beside a bare one, with no second colour spent on saying so, because
+ * the amber on this surface means "pinned" and must go on meaning only that. */
+.sso-card__pin {
+  background: transparent;
+  border-color: transparent;
+}
+
+.sso-card__pin:hover {
+  border-color: var(--sso-line);
+}
+
 /* Saved is a state, not a disabled button that failed. It stops being an action
  * and becomes a label - and a quiet one: painted in the accent it was the
  * loudest thing in a card whose subject is the word three lines above it. */
@@ -495,7 +519,8 @@ button.sso-set__action:hover {
 
 .sso-card__pin[data-on="true"] {
   color: var(--sso-accent-ink);
-  border-color: rgba(224, 164, 88, 0.35);
+  background: rgba(224, 164, 88, 0.12);
+  border-color: transparent;
 }
 
 /* --- the collapsed cards ----------------------------------------------------

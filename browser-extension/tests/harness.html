@@ -2686,6 +2686,53 @@
         if (all.length !== 1) throw new Error("no way to line all of them up at once");
       });
 
+      check("two subtitles named alike are still told apart on their cards", async () => {
+        /* A release name identifies a subtitle at its END, and an ellipsis eats
+         * the end first. Measured before the name was split in two: 397px of
+         * name in 155px of card, both cards rendering "1. Battlestar.Galactic…"
+         * and "2. Battlestar.Galactica…" - two cards with nothing to tell them
+         * apart, on the one line whose whole job is telling them apart. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const name = "Battlestar.Galactica.Miniseries.S00E01.2003.1080p.BluRay";
+        try {
+          await api.attach({ cues: CUES, label: `${name}-EN`, fileId: 7500, language: "en", slot: 0 });
+          await api.attach({ cues: CUES_TR, label: `${name}-TR`, fileId: 7501, language: "tr", slot: 1 });
+          await window.__ssoPanel.show();
+          await sleep(220);
+
+          const labels = [...panelShadow().querySelectorAll(".sso-track__label")]
+            .filter((el) => el.offsetParent !== null);
+          if (labels.length !== 2) throw new Error(`${labels.length} names on show, want 2`);
+
+          const tails = labels.map((el) => el.querySelector(".sso-track__tail")?.textContent || "");
+          if (!tails[0] || !tails[1] || tails[0] === tails[1])
+            throw new Error(`the two cards end "${tails[0]}" and "${tails[1]}"`);
+
+          for (const [index, el] of labels.entries()) {
+            const head = el.querySelector(".sso-track__name");
+            // The shared part is what gets cut, which is the point.
+            if (head.scrollWidth <= head.clientWidth)
+              throw new Error(`card ${index}'s name fits, so this proves nothing - widen the fixture`);
+            // And the part they differ by is inside the card, not past its edge.
+            const tail = el.querySelector(".sso-track__tail").getBoundingClientRect();
+            const box = el.getBoundingClientRect();
+            if (tail.right > box.right + 1 || tail.width === 0)
+              throw new Error(`card ${index}'s ending is ${Math.round(tail.right - box.right)}px past its name`);
+          }
+        } finally {
+          window.__ssoPanel.hide();
+          if (wasAttached[0]) {
+            await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+          } else {
+            api.detach(0);
+          }
+          if (wasAttached[1]) await attachSecond();
+          else api.detach(1);
+          await sleep(150);
+        }
+      });
+
       check("each card says whether it is being learnt, and switches it", async () => {
         /* It was a third "Subtitle 1 / Subtitle 2" pair, in a third place,
          * meaning a third thing. It names a subtitle, so it lives on one - and

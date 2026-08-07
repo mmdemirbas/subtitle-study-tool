@@ -855,6 +855,23 @@
     return node;
   }
 
+  /* A name, split so the end of it survives being too long for the card.
+   *
+   * The last token is what identifies a subtitle - the language, or the source
+   * a release came from - and it is the first thing an ellipsis takes. Held out
+   * of the truncation it costs a dozen pixels and the two cards stop reading
+   * the same. Only a SHORT last token: a name whose final separator is thirty
+   * characters from the end has no tail worth saving, and holding one out would
+   * leave nothing for the part that says which film this is. */
+  const TAIL_MAX = 12;
+
+  function splitName(name) {
+    let at = -1;
+    for (const mark of ["-", ".", "·", " ", "_"]) at = Math.max(at, name.lastIndexOf(mark));
+    if (at <= 0 || name.length - at > TAIL_MAX) return [name, ""];
+    return [name.slice(0, at), name.slice(at)];
+  }
+
   function buildTrackCard(slot) {
     /* The card is the selection.
      *
@@ -886,8 +903,19 @@
     const head = document.createElement("div");
     head.className = "sso-track__head";
 
+    /* The name, in two parts, because a release name identifies a subtitle at
+     * its END and an ellipsis eats the end first. Measured: two subtitles for
+     * the same episode, 397px of name in 155px of card, both rendering
+     * "1. Battlestar.Galactic..." and "2. Battlestar.Galactica..." - two cards
+     * with nothing to tell them apart, on the one line whose job is telling
+     * them apart. The last token is held out of the truncation. */
     const label = document.createElement("span");
     label.className = "sso-track__label";
+    const labelHead = document.createElement("span");
+    labelHead.className = "sso-track__name";
+    const labelTail = document.createElement("span");
+    labelTail.className = "sso-track__tail";
+    label.append(labelHead, labelTail);
 
     /* Everything this subtitle can have done to it, on demand.
      *
@@ -908,12 +936,6 @@
       // A click from a key press carries detail 0. The menu uses this to decide
       // whether to take focus, so a mouse user is not shown a focus ring.
       more.dataset.viaKey = event.detail === 0 ? "true" : "false";
-      const status = api.status();
-      /* Read once, and safely. `__ssoStudy?.settings?.().enabled` looks guarded
-       * and is not: when study.js has not loaded, `settings?.()` is undefined
-       * and reading `.enabled` off it throws - which would take out the whole
-       * menu, on a surface that has nothing to do with study. */
-      const study = window.__ssoStudy?.settings?.() || null;
       menu(more, [
         {
           label: "Style…",
@@ -1139,7 +1161,10 @@
     body.append(offsets, lines);
 
     root.append(head, body);
-    return { root, learnChip, label, offsetField, offsetReset, visible, more, lineUpButton };
+    return {
+      root, learnChip, label, labelHead, labelTail,
+      offsetField, offsetReset, visible, more, lineUpButton,
+    };
   }
 
   /* --- how one subtitle looks -------------------------------------------------
@@ -2222,7 +2247,9 @@
       card.root.hidden = !track.attached;
       if (!track.attached) return;
 
-      card.label.textContent = `${slot + 1}. ${track.label || "Attached"}`;
+      const [head, tail] = splitName(`${slot + 1}. ${track.label || "Attached"}`);
+      card.labelHead.textContent = head;
+      card.labelTail.textContent = tail;
       // Release names are long and the chips beside them are not optional, so
       // the name is often an ellipsis. Hovering it says the whole thing.
       card.label.title = track.label || "Attached";

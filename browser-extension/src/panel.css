@@ -387,16 +387,33 @@ button.sso-quick__study[data-on="true"] {
   padding: 7px 9px 5px;
 }
 
+/* Truncated in the middle, not at the end.
+ *
+ * A release name identifies a subtitle by its last token and an ellipsis eats
+ * the last token first, so two subtitles for the same episode both rendered
+ * "1. Battlestar.Galactic..." - 397px of name in 155px of card, and nothing on
+ * the line whose job is telling them apart. The head shrinks and the tail does
+ * not, which is the whole mechanism. */
 .sso-track__label {
+  display: flex;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
+  align-items: baseline;
   font-size: var(--sso-t-lead);
   font-weight: 650;
   letter-spacing: -0.01em;
   color: var(--sso-ink);
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sso-track__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sso-track__tail {
+  flex: none;
 }
 
 .sso-track__body {
