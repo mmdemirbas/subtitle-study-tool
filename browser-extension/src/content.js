@@ -30,6 +30,16 @@
 
   const VERSION = chrome.runtime.getManifest().version;
   const TICK_MS = 50; // ~20 Hz: below perceptible latency, negligible cost
+  /* The speed for having nothing to do.
+   *
+   * With nothing attached the tick's only remaining job is noticing that a
+   * player has appeared, and that does not need answering twenty times a
+   * second. It matters because this script runs in every frame of every page:
+   * measured on a page with no video at all, the idle tick ran 20 document-wide
+   * `video` queries per second for as long as the tab stayed open, in every
+   * frame. Half a second is imperceptible for spotting a player that has just
+   * loaded, and it is the difference between a cost per tab and no cost. */
+  const IDLE_TICK_MS = 500;
   const MIN_VIDEO_SECONDS = 60; // ignore ad breaks, teasers, autoplay loops
   const TOAST_MS = 1600;
   // Long enough to notice what happened and reach the button. The usual advice
@@ -367,11 +377,37 @@
   let handle = null;
   let handleTimer = null;
   let ticker = null;
+  let tickerMs = 0;
 
   // --- video selection ------------------------------------------------------
 
   /* The video the user is watching is the biggest one with a real duration.
    * Pages routinely hold several - preview loops, ad slots, hidden elements. */
+  /* The answer to "which video is this page about" for a fraction of a second.
+   *
+   * pickVideo walks every <video> on the page and measures each one, and
+   * measuring forces layout. That is fine at 20Hz from the tick; it is not fine
+   * from the pointer handler, which runs on every mouse move - and both
+   * pointermove and mousemove are listened for, because some players synthesise
+   * only one of the two, so a single physical movement asks twice. Measured on
+   * a one-video page: 2 walks and 16 forced layouts per movement, 0.14ms each,
+   * around 17ms of every second the mouse is moving - in every frame of the
+   * page, for a question whose answer cannot change that fast.
+   *
+   * 250ms is well under the time it takes to move a hand to the CC button and
+   * far longer than a mouse takes to cross the screen. */
+  const VIDEO_CACHE_MS = 250;
+  let videoGuess = { at: -Infinity, video: null };
+
+  function pickVideoCached() {
+    const now = performance.now();
+    if (now - videoGuess.at < VIDEO_CACHE_MS && videoGuess.video?.isConnected !== false) {
+      return videoGuess.video;
+    }
+    videoGuess = { at: now, video: pickVideo() };
+    return videoGuess.video;
+  }
+
   function pickVideo() {
     const candidates = Array.from(document.querySelectorAll("video")).filter((video) => {
       if (!Number.isFinite(video.duration) || video.duration < MIN_VIDEO_SECONDS) return false;
@@ -1345,11 +1381,8 @@
 
     views = Array.from({ length: TRACK_COUNT }, (_, slot) => buildView(slot));
 
-    toast = document.createElement("div");
-    toast.className = "sso-toast";
-
     handle = buildHandle();
-    shadow.append(...views.map((view) => view.root), toast, handle);
+    shadow.append(...views.map((view) => view.root), handle);
 
     applySettings();
     attachToCorrectParent();
@@ -1382,6 +1415,9 @@
       overlaySheet = new CSSStyleSheet();
       overlaySheet.replaceSync(css);
       if (shadow) shadow.adoptedStyleSheets = [overlaySheet];
+      // The toast has a root of its own and is drawn by the same sheet. It can
+      // exist before this resolves - a toast is often the first thing shown.
+      if (toastLayer) toastLayer.shadow.adoptedStyleSheets = [overlaySheet];
     } catch {
       // Without the sheet cues still render, unstyled. Better than nothing.
     }
@@ -1688,8 +1724,44 @@
     return api_;
   }
 
+  /* The toast lives in a layer of its own, and is put back on top every time it
+   * speaks.
+   *
+   * It used to sit in the overlay's shadow root, which carries the same
+   * z-index as the control panel - and a tie at the same z-index is settled by
+   * document order, which the panel wins because it is created second.
+   * Measured, with the panel at the position it opens in: the Undo offered when
+   * a second subtitle is lined up sat under the panel's left edge, and
+   * elementFromPoint at the middle of that button returned the panel. The
+   * button was drawn, described, and could not be pressed. An action that
+   * cannot be taken is worse than one never offered.
+   *
+   * Re-appending is what keeps it true. The panel, the study rail and any menu
+   * are all created after the overlay and may be re-parented at any time - so
+   * being last once is not a property that lasts, and being last at the moment
+   * of speaking is the only thing that matters.
+   *
+   * Not interactive, for the reason it never was: a toast sits over the picture
+   * and must not eat a click meant for the film. The button opts back in on its
+   * own, through the same rule in overlay.css as before. */
+  let toastLayer = null;
+
+  function ensureToast() {
+    if (toastLayer && toastLayer.host.isConnected) {
+      toastLayer.host.parentElement?.appendChild(toastLayer.host);
+      return toast;
+    }
+    toastLayer = makeLayer({ zIndex: "2147483647", interactive: false });
+    if (overlaySheet) toastLayer.shadow.adoptedStyleSheets = [overlaySheet];
+    toast = document.createElement("div");
+    toast.className = "sso-toast";
+    toastLayer.shadow.append(toast);
+    return toast;
+  }
+
   function showToast(message, { action = null } = {}) {
     ensureOverlay();
+    ensureToast();
     toast.replaceChildren();
     if (!action) {
       toast.textContent = message;
@@ -1721,20 +1793,59 @@
 
   // --- cue lookup -----------------------------------------------------------
 
+  /* How far back to look for a line that is still on screen.
+   *
+   * The search below finds the last line that had started by now; if that one
+   * has already ended, an earlier one may still be running - a sign, a song
+   * lyric or a caption held across the dialogue under it. Sixteen is far more
+   * nesting than a subtitle file ever has and bounds the walk at a constant. */
+  const CUE_LOOKBACK = 16;
+
+  /* Which line is on screen at this moment.
+   *
+   * It was a plain binary search on `start` and `end` together, which is exact
+   * for a file whose lines do not overlap and silently wrong for one whose
+   * lines do: a long cue with short ones inside it puts a start out of order
+   * with the ends, the search follows the wrong half, and the long line
+   * disappears for the part of its life the short ones do not cover. Verified
+   * on a four-cue example - a line held 1s to 20s with dialogue at 2s and 5s
+   * reported "nothing on screen" at 9s and 15s.
+   *
+   * So the search is on `start` alone, which is the field the file is sorted
+   * by and the only one a binary search can be trusted with, and the cover test
+   * happens afterwards. The last line to have started wins where two overlap,
+   * which is the readable rule: the newest thing said is the thing being said.
+   *
+   * None of this changes the answer for a file without overlaps, which is
+   * nearly all of them - the first candidate is the answer and the walk stops
+   * immediately. */
   function findCueIndex(cues, timeMs) {
     let low = 0;
     let high = cues.length - 1;
+    let latest = -1;
     while (low <= high) {
       const mid = (low + high) >> 1;
-      const cue = cues[mid];
-      if (timeMs < cue.start) high = mid - 1;
-      else if (timeMs > cue.end) low = mid + 1;
-      else return mid;
+      if (cues[mid].start <= timeMs) {
+        latest = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    const floor = Math.max(0, latest - CUE_LOOKBACK);
+    for (let index = latest; index >= floor; index--) {
+      if (timeMs <= cues[index].end) return index;
     }
     return -1;
   }
 
   function tick() {
+    // Fast while there is something to draw, slow while there is not. Decided
+    // here rather than at every call site that attaches or detaches, so it
+    // cannot be forgotten at one of them.
+    startTicking(anyAttached() ? TICK_MS : IDLE_TICK_MS);
+
     if (!state.video || !state.video.isConnected) {
       state.video = pickVideo();
       if (!state.video) return;
@@ -2022,8 +2133,12 @@
     window.__ssoStudy?.onCue?.(slot, cue, cueBox);
   }
 
-  function startTicking() {
-    if (ticker === null) ticker = setInterval(tick, TICK_MS);
+  /** Run the tick at a given rate, changing rate only when it actually changes. */
+  function startTicking(everyMs = TICK_MS) {
+    if (ticker !== null && tickerMs === everyMs) return;
+    clearInterval(ticker);
+    tickerMs = everyMs;
+    ticker = setInterval(tick, everyMs);
   }
 
   // --- offset ---------------------------------------------------------------
@@ -2461,7 +2576,14 @@
       showToast("Subtitle back to the file's own timing");
     };
 
-    if (aligned?.verdict === "apply") {
+    if (aligned?.verdict === "apply" && !track.offsetMs && track.rate === 1) {
+      /* The aligner ran, agreed with the file, and changed nothing. Saying
+       * "lined up matching the file" - which is what the sentence below prints
+       * for an offset of zero - reads as a correction that was not made, and
+       * offers an Undo for it. Observed on two subtitles cut to the same
+       * release, which is the ordinary case for a pair downloaded together. */
+      showToast(`${said}, already in step`);
+    } else if (aligned?.verdict === "apply") {
       showToast(`${said}, lined up ${describeOffset(track.offsetMs)}`, {
         action: { label: "Undo", onClick: () => setOffset(0, { slot: index }) },
       });
@@ -2893,7 +3015,7 @@
   /* The handle only appears where there is something to control, and only
    * while the mouse is moving - so it is never in the way of the film. */
   function onPointerMove() {
-    if (!isPageSubject(pickVideo())) return;
+    if (!isPageSubject(pickVideoCached())) return;
     ensureOverlay();
     revealHandle();
   }
@@ -2962,6 +3084,7 @@
   window.__ssoTeardown = () => {
     clearInterval(ticker);
     ticker = null;
+    tickerMs = 0;
     clearTimeout(toastTimer);
     clearTimeout(handleTimer);
     clearTimeout(rememberTimer);
@@ -2979,6 +3102,9 @@
     document.removeEventListener("fullscreenchange", attachToCorrectParent);
     document.removeEventListener("webkitfullscreenchange", attachToCorrectParent);
     chrome.runtime.onMessage.removeListener(onMessage);
+    toastLayer?.remove();
+    toastLayer = null;
+    toast = null;
     host?.remove();
     host = null;
     shadow = null;

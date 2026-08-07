@@ -198,6 +198,11 @@ async function mirrorFromDaemon(fileId) {
  * only part the user needs to know - and it is the honest answer to "where did
  * my disk space go".
  */
+/* The one place that still reads every subtitle's bytes, and it should: the
+ * table it builds has a size column, and the size is the length of what is
+ * stored. It is the options page, opened when somebody wants to know what is on
+ * disk - not the search path, which used to pay the same cost twice per query
+ * and now reads metadata only. */
 export async function cacheEntries() {
   const mine = await cache.listSubtitles();
   const merged = new Map();

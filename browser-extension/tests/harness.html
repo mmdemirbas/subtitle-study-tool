@@ -1640,11 +1640,18 @@
         await sleep(40);
       });
 
+      const toastEl = () =>
+        [...document.querySelectorAll("div")]
+          .find((d) => d.shadowRoot?.querySelector(".sso-toast"))
+          ?.shadowRoot.querySelector(".sso-toast");
+
       check("an ordinary toast still lets a click through to the film", async () => {
         /* The toast is pointer-events:none so that it never eats a click meant
          * for the player. Giving it a button had to open exactly one hole. */
-        const shadow = shadowOf();
-        const toast = shadow.querySelector(".sso-toast");
+        window.__ssoApi.showToast("first, so the layer exists");
+        await sleep(30);
+        const toast = toastEl();
+        if (!toast) throw new Error("no toast anywhere in the document");
         window.__ssoApi.showToast("plain");
         await sleep(30);
         if (getComputedStyle(toast).pointerEvents !== "none")
@@ -1658,6 +1665,122 @@
           throw new Error("no button in an action toast");
         window.__ssoApi.showToast("plain again");
         await sleep(30);
+      });
+
+      check("the way back offered by a toast is not buried under the panel", async () => {
+        /* The toast used to live in the overlay's shadow root, which carries the
+         * same z-index as the control panel - and a tie there is settled by
+         * document order, which the panel wins by being created second.
+         * Measured, with the panel where it opens: the Undo offered when a
+         * second subtitle is lined up sat under the panel's left edge, and
+         * elementFromPoint at the middle of that button returned the panel. The
+         * button was drawn, described, and could not be pressed.
+         *
+         * Asked of the document rather than of the button, because "what would
+         * a click at this point hit" is a question only the document answers -
+         * the button's own box reads the same either way, which is why this was
+         * invisible to every test that existed. */
+        try {
+          await window.__ssoPanel.show();
+          await sleep(200);
+
+          const panelHost = [...document.querySelectorAll("div")]
+            .find((d) => d.shadowRoot?.querySelector(".sso-panel"));
+          const toastHost = () =>
+            [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(".sso-toast"));
+
+          let taken = false;
+          window.__ssoApi.showToast(
+            "Subtitle 2 on - 1154 lines · TR · a release name long enough to reach across the picture",
+            { action: { label: "Undo", onClick: () => { taken = true; } } },
+          );
+          await sleep(80);
+
+          const button = toastEl().querySelector(".sso-toast__action");
+          const box = button.getBoundingClientRect();
+          const x = (box.left + box.right) / 2;
+          const y = (box.top + box.bottom) / 2;
+          const panel = panelHost.getBoundingClientRect();
+          const covered =
+            box.left < panel.right && box.right > panel.left &&
+            box.top < panel.bottom && box.bottom > panel.top;
+
+          const hit = document.elementFromPoint(x, y);
+          if (hit !== toastHost()) {
+            throw new Error(
+              `a click at the button lands on ${hit === panelHost ? "the panel" : hit?.tagName}` +
+              `${covered ? " (the panel is over it)" : ""}`);
+          }
+
+          // And the button still does what it says once reached.
+          button.click();
+          await sleep(60);
+          if (!taken) throw new Error("the button did not run its action");
+        } finally {
+          window.__ssoPanel.hide();
+          await sleep(120);
+        }
+      });
+
+      check("a line still on screen is found when another one starts under it", async () => {
+        /* Cue lookup was a binary search over start AND end together, which is
+         * exact only while lines do not overlap. A sign or a lyric held across
+         * the dialogue under it puts a start out of order with the ends, so the
+         * search follows the wrong half and the held line disappears for the
+         * part of its life the short ones do not cover. */
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+
+        await api.attach({
+          cues: [
+            { start: 1000, end: 20000, text: "HELD across everything" },
+            { start: 2000, end: 4000, text: "under it A" },
+            { start: 5000, end: 7000, text: "under it B" },
+            { start: 21000, end: 23000, text: "after" },
+          ],
+          label: "overlapping", fileId: 6400, language: "en", slot: 0,
+        });
+        await sleep(200);
+
+        try {
+          const showing = async (seconds) => {
+            video.currentTime = seconds;
+            await sleep(220);
+            return shadowOf().querySelector('.sso-root[data-slot="0"] .sso-cue').textContent;
+          };
+
+          // Inside the long line and nothing else: it showed nothing here.
+          for (const at of [9, 15]) {
+            const text = await showing(at);
+            if (!text.includes("HELD")) {
+              throw new Error(
+                `at ${at}s the held line read "${text}" ` +
+                `(film ${Math.round(api.filmTimeMs())}ms, showing ${JSON.stringify(api.cueAt(0))})`);
+            }
+          }
+          // Where two cover the moment, the one that started last is the one
+          // being said.
+          const both = await showing(6);
+          if (!both.includes("under it B"))
+            throw new Error(`at 6s, with two lines covering it, showed "${both}"`);
+          // And a genuine gap is still a gap.
+          const gap = await showing(20.5);
+          if (gap.trim() !== "") throw new Error(`the gap at 20.5s showed "${gap}"`);
+        } finally {
+          /* Put slot 0 back whatever happened. A test that leaves the wrong
+           * cues attached does not fail alone - everything after it that reads
+           * the line on screen fails too, and the first failure is then the
+           * only real one in a screen of them. */
+          video.currentTime = wasTime;
+          if (wasAttached[0]) {
+            await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+          } else {
+            api.detach(0);
+          }
+          await sleep(150);
+        }
       });
 
       check("resetting the keys resets only the keys", async () => {

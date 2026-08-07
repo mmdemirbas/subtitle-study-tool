@@ -354,7 +354,15 @@
       // distinguishable from "answered, and this word is not in it".
       const value = Object.prototype.hasOwnProperty.call(ranks, word) ? ranks[word] : undefined;
       if (value === undefined) continue;
-      if (rankCache.size < RANK_CACHE_LIMIT) rankCache.set(`${language}:${word}`, value);
+      /* At the limit the oldest goes, rather than the cache closing to new
+       * words. It used to stop writing once full, which turns the bound into a
+       * cliff: from that word on, every line pays a message round trip to the
+       * worker for words it has already asked about. A Map iterates in
+       * insertion order, so its first key is the least recently added. */
+      if (rankCache.size >= RANK_CACHE_LIMIT) {
+        rankCache.delete(rankCache.keys().next().value);
+      }
+      rankCache.set(`${language}:${word}`, value);
       known.set(word, value);
     }
     return known;

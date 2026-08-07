@@ -314,9 +314,21 @@ async function planAutoAttach(tab, frameId) {
   }
 
   /* The second language, if one is configured and the search turned up a good
-   * enough match for it. */
+   * enough match for it.
+   *
+   * Never the file already going into the first slot. pickBest ranks by
+   * language before anything else, so `best` is normally in the first preferred
+   * language and this looks at the rest - but when the search finds nothing at
+   * all in that language, `best` falls through to the second one, and the old
+   * code then picked the very same file again. The result was one subtitle in
+   * both boxes, on top of itself, which reads as the pair being broken rather
+   * than as one language being unavailable.
+   *
+   * So the second is chosen from the languages `best` did not take. A pair is
+   * two languages; two files in one language is not a lesser version of that,
+   * it is a different thing nobody asked for. */
   const second = languages
-    .slice(1)
+    .filter((language) => language !== best.language)
     .map((language) => pickBest(found.results.filter((r) => r.language === language), [language]))
     .find((result) => result && (result.match_score ?? 0) >= threshold);
 

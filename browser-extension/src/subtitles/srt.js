@@ -8,8 +8,14 @@ import { parse, plainText, runToJson, toVtt as markupToVtt } from "./markup.js";
 
 /* Signs a decode went wrong even though it did not fail: U+FFFD, and the C1
  * control block, which is what cp1254 bytes turn into once latin-1 mangles
- * them. */
-const MOJIBAKE = /[�-]/g;
+ * them.
+ *
+ * Written as escapes, not as the characters themselves. It held the literal
+ * U+0080 and U+009F, which are invisible in every editor and survive only as
+ * long as nothing normalises the file - and if they were ever lost, this would
+ * still be a valid regex matching almost nothing, so every mangled decode would
+ * score clean and the encoding heuristic would quietly pick the wrong one. */
+const MOJIBAKE = /[\uFFFD\u0080-\u009F]/g;
 
 /* Letters that indicate a decode went right for the languages in play: Turkish
  * c-cedilla, g-breve, dotless i, dotted I, o/u-diaeresis, s-cedilla, plus the
