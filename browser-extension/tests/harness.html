@@ -179,10 +179,26 @@
       }
     </script>
 
-    <script src="../src/align.js"></script>
-    <script src="../src/content.js"></script>
-    <script src="../src/panel.js"></script>
-    <script src="../src/study.js"></script>
+    <script>
+      /* The sources, with a cache-buster, because the browser's memory cache
+       * does not revalidate a URL it has already seen this session - and the
+       * page URL is not the script URL, so reloading the harness reloaded the
+       * page and kept the previous `content.js`.
+       *
+       * That is not a nuisance, it is a suite reporting on code that is no
+       * longer on disk. Caught by adding a counter to a function and finding it
+       * undefined while the suite ran and defined the moment it finished - the
+       * last case re-injects with its own cache-buster, so only the very end of
+       * the run was testing the current file. Everything before it had spent
+       * the whole run agreeing with the previous version.
+       *
+       * document.write rather than appended elements: these are classic scripts
+       * whose order matters, and this is the one construct that keeps a static
+       * page's parse-order guarantee. */
+      for (const src of ["align", "content", "panel", "study"]) {
+        document.write(`<script src="../src/${src}.js?t=${Date.now()}"><\/script>`);
+      }
+    </script>
 
     <script>
       // --- assertions -----------------------------------------------------
