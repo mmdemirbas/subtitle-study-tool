@@ -1680,6 +1680,30 @@
         await sleep(30);
       });
 
+      check("a long offer keeps its button inside the toast", async () => {
+        /* `flex: none` on the button is right - a way back squeezed until its
+         * label wraps is worse than one on a second line - but with only one
+         * line to sit on it meant the button left the toast instead. Measured
+         * at 360px wide before the fix, the drift offer's button sat 3px past
+         * the toast's own right edge. The shorter offers already in use have
+         * 14px to spare, which is why nothing caught it until a longer one
+         * arrived. */
+        window.__ssoApi.showToast(
+          "Subtitle running 4.3% fast — a framerate mismatch across the whole "
+            + "film, not a delay you can nudge away",
+          { action: { label: "Fix the drift", onClick: () => {} } });
+        await sleep(60);
+        const toast = toastEl();
+        const box = toast.getBoundingClientRect();
+        const button = toast.querySelector(".sso-toast__action").getBoundingClientRect();
+        const out = Math.round(Math.max(
+          button.right - box.right, box.left - button.left,
+          button.bottom - box.bottom, box.top - button.top));
+        if (out > 0) throw new Error(`the button is ${out}px outside the toast`);
+        window.__ssoApi.showToast("plain again");
+        await sleep(30);
+      });
+
       check("the way back offered by a toast is not buried under the panel", async () => {
         /* The toast used to live in the overlay's shadow root, which carries the
          * same z-index as the control panel - and a tie there is settled by
@@ -1851,6 +1875,113 @@
             api.detach(0);
           }
           await sleep(150);
+        }
+      });
+
+      /* --- drift ------------------------------------------------------------
+       *
+       * A subtitle that is late is fixed by one nudge. One that is running at
+       * the wrong speed is not, and the reader finds that out by nudging it
+       * again twenty minutes later. Those two nudges are a measurement: the
+       * slope between them is the rate.
+       *
+       * The film here is stubbed at 7200s, and currentTime is a plain variable,
+       * so a correction can be placed anywhere in it. */
+      const FRAMERATE = 25 / (24000 / 1001); // 1.042708 - PAL against NTSC film
+
+      async function correctionsAt(pairs) {
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        await api.attach({ cues: CUES, label: "drift", fileId: 7300, language: "en", slot: 0 });
+        // Clears any correction history and any offer already made, so each
+        // case starts from a subtitle nobody has touched.
+        api.setRate(1, { slot: 0, quiet: true });
+        api.setOffset(0, { slot: 0, quiet: true, byHand: false });
+        // Ad drift shifts file time by a constant, which cancels out of the
+        // slope but not out of the positions this case asserts against.
+        api.clearAdDrift();
+        api.showToast("nothing to report");
+        await sleep(40);
+
+        for (const [fileMs, offsetMs] of pairs) {
+          // filmTimeMs is currentTime less the offset, so this puts the
+          // correction at the file position the case names.
+          video.currentTime = (fileMs + offsetMs) / 1000;
+          api.setOffset(offsetMs, { slot: 0, quiet: true });
+          await sleep(40);
+        }
+        return toastEl();
+      }
+
+      async function undoDrift() {
+        const api = window.__ssoApi;
+        document.getElementById("v").currentTime = 1;
+        api.setRate(1, { slot: 0, quiet: true });
+        api.setOffset(0, { slot: 0, quiet: true, byHand: false });
+        await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+        await sleep(80);
+      }
+
+      check("a subtitle nudged twice across the film is offered the speed that explains it", async () => {
+        /* The aligner can already find a framerate mismatch, but only by
+         * comparing two subtitles - so it has nothing to say to a reader
+         * watching in one language, which is the case this covers. */
+        try {
+          // 4.27% fast: the correction needed grows with the film.
+          const toast = await correctionsAt([
+            [400000, Math.round((FRAMERATE - 1) * 400000)],
+            [2400000, Math.round((FRAMERATE - 1) * 2400000)],
+          ]);
+          const said = toast?.textContent || "";
+          if (!/framerate/i.test(said) || !/4\.3%/.test(said))
+            throw new Error(`the drift went unreported: "${said}"`);
+
+          const button = toast.querySelector(".sso-toast__action");
+          if (!button) throw new Error("the drift was named with no way to fix it");
+          button.click();
+          await sleep(60);
+
+          const track = window.__ssoApi.status().tracks[0];
+          if (Math.abs(track.rate - FRAMERATE) > 0.0005)
+            throw new Error(`it applied a rate of ${track.rate}`);
+          /* The line the reader last lined up by ear has to stay where they put
+           * it. A speed applied on its own moves every line including that one,
+           * so the button offering to help would undo the correction that
+           * summoned it. */
+          const wasAt = 2400000 + Math.round((FRAMERATE - 1) * 2400000);
+          const nowAt = track.rate * 2400000 + track.offsetMs;
+          if (Math.abs(nowAt - wasAt) > 50)
+            throw new Error(`the line the reader lined up moved by ${Math.round(nowAt - wasAt)}ms`);
+        } finally {
+          await undoDrift();
+        }
+      });
+
+      check("two nudges a few minutes apart are not a drift", async () => {
+        /* The same slope over four minutes extrapolates to nonsense by the end
+         * of the film. It is also what an ordinary reader does when they are
+         * still finding the right offset. */
+        try {
+          const toast = await correctionsAt([
+            [400000, Math.round((FRAMERATE - 1) * 400000)],
+            [640000, Math.round((FRAMERATE - 1) * 640000)],
+          ]);
+          if (/drift|framerate/i.test(toast?.textContent || ""))
+            throw new Error(`it called two close nudges a drift: "${toast.textContent}"`);
+        } finally {
+          await undoDrift();
+        }
+      });
+
+      check("two nudges that disagree by a little are not a drift", async () => {
+        /* 60ms apart over 33 minutes is 216ms across the 2-hour film - real,
+         * and under the bar for interrupting somebody watching. */
+        try {
+          const toast = await correctionsAt([[400000, 0], [2400000, 60]]);
+          if (/drift|framerate/i.test(toast?.textContent || ""))
+            throw new Error(`it called 60ms a drift: "${toast.textContent}"`);
+        } finally {
+          await undoDrift();
         }
       });
 

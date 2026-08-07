@@ -333,6 +333,10 @@
     // Which of this file's lines are on screen, in document order. Usually one;
     // several when a sign or a lyric is held across the dialogue under it.
     activeIndexes: [],
+    // Where and by how much the reader has corrected this file by hand, which
+    // is the only measurement of drift a single subtitle can produce.
+    corrections: [],
+    driftOffered: false,
     label: "",
     fileId: null,
     language: "",
@@ -2544,6 +2548,11 @@
     const next = Number(rate);
     track.rate = Number.isFinite(next) && next > 0 ? next : 1;
     track.activeIndexes = NEEDS_REDRAW;
+    /* The corrections were fitted against the old speed, so under the new one
+     * they describe a film that no longer exists. Kept and they would measure a
+     * drift that has just been taken out. */
+    track.corrections = [];
+    track.driftOffered = false;
     saveOffset(track);
     if (byHand) rememberTimingSoon(track);
     notify();
@@ -2561,15 +2570,103 @@
     saveOffset(track);
     if (byHand) rememberTimingSoon(track);
     notify();
-    if (quiet) return;
-    // Name the track only when there are two of them to confuse, and say what
-    // the correction did rather than what number it is now.
-    const which = attachedTracks().length > 1 ? `Subtitle ${slot + 1}` : "Subtitles";
-    showToast(`${which} ${describeOffset(track.offsetMs)}`);
+    if (!quiet) {
+      // Name the track only when there are two of them to confuse, and say what
+      // the correction did rather than what number it is now.
+      const which = attachedTracks().length > 1 ? `Subtitle ${slot + 1}` : "Subtitles";
+      showToast(`${which} ${describeOffset(track.offsetMs)}`);
+    }
+    /* After the toast confirming the nudge, and deliberately replacing it. One
+     * toast at a time, and of the two the reader already knows what they just
+     * pressed - the drift is the news. Before it, this was written and then
+     * immediately overwritten by the line above. */
+    if (byHand) noteCorrection(track, slot);
   }
 
   const nudge = (deltaMs, { slot = state.keyTrack } = {}) =>
     setOffset(state.tracks[slot].offsetMs + deltaMs, { slot });
+
+  /* --- drift ----------------------------------------------------------------
+   *
+   * The difference between a subtitle that is late and one that is drifting is
+   * that nudging fixes the first for good. The second the reader experiences as
+   * "I keep having to nudge it", and by then they have already done the
+   * measurement: two corrections at different points in the film give the slope
+   * between them, and the slope is the rate. Their own ears are the reference.
+   *
+   * This is the case the aligner cannot reach. It compares two subtitles
+   * against each other, so its answer is about the pair, not about either one
+   * against the film - and a reader watching in one language has no pair. It is
+   * also why the estimate here is a straight line through two points the reader
+   * placed rather than anything statistical: there is no noise to see through,
+   * only two facts.
+   *
+   * Both gates below are in milliseconds at the end of the film, because that
+   * is the unit the reader lives in. A rate is a number nobody can judge; "two
+   * seconds out by the credits" is one anybody can. */
+  const DRIFT_WORTH_SAYING_MS = 2000;
+  const DRIFT_EXPLAINED_MS = 1000;
+  // Two is all the arithmetic needs. The rest are kept so a reader who nudges
+  // several times early still has an early point to measure from.
+  const DRIFT_MAX_NOTES = 8;
+
+  function noteCorrection(track, slot) {
+    const durationMs = (state.video?.duration || 0) * 1000;
+    if (!Number.isFinite(durationMs) || durationMs <= 0) return;
+    const fileMs = filmTimeMs(track);
+    if (!Number.isFinite(fileMs)) return;
+
+    track.corrections.push({ fileMs, offsetMs: track.offsetMs });
+    if (track.corrections.length > DRIFT_MAX_NOTES) track.corrections.shift();
+    offerDrift(track, slot, durationMs);
+  }
+
+  function offerDrift(track, slot, durationMs) {
+    // Once. A reader who declines has declined; a second toast saying the same
+    // thing is the film interrupting them to repeat itself.
+    if (track.driftOffered) return;
+    const first = track.corrections[0];
+    const last = track.corrections[track.corrections.length - 1];
+    const spanMs = last.fileMs - first.fileMs;
+    /* Far enough apart to extrapolate from - the aligner's own bar, for the
+     * same reason. Two nudges a minute apart measure the reader's patience. */
+    if (!(spanMs >= (globalThis.__ssoAlign?.RATE_MIN_SPAN_MS ?? 1200000))) return;
+
+    const rate = track.rate + (last.offsetMs - first.offsetMs) / spanMs;
+    if (!(rate > 0)) return;
+    // Would leaving it alone cost anything by the end? Two nudges that happen
+    // to differ are taste, not drift.
+    if (Math.abs(rate - track.rate) * durationMs < DRIFT_WORTH_SAYING_MS) return;
+
+    /* A framerate conversion if one accounts for it, because then the number
+     * stops being a measurement and becomes a known ratio - and saying which
+     * one tells the reader this will happen to every file from that release.
+     * The bar is that the named ratio explains the drift to within a second by
+     * the end, which is inside what an offset can mop up. */
+    const named = (globalThis.__ssoAlign?.RATES || [])
+      .filter((candidate) => candidate !== 1)
+      .find((candidate) => Math.abs(rate - candidate) * durationMs <= DRIFT_EXPLAINED_MS);
+    const fixed = named ?? rate;
+
+    track.driftOffered = true;
+    const percent = Math.abs((fixed - 1) * 100).toFixed(1);
+    const way = fixed > 1 ? "fast" : "slow";
+    showToast(
+      named
+        ? `Subtitle running ${percent}% ${way} — a framerate mismatch, not a delay`
+        : `Subtitle drifting ${percent}% ${way} across the film`,
+      { action: { label: "Fix the drift", onClick: () => applyDrift(track, slot, fixed, last) } },
+    );
+  }
+
+  /* Apply the speed and keep the line the reader last lined up where they put
+   * it. Speed alone would move every line including that one, so the correction
+   * they just made by ear would be undone by the button offering to help. */
+  function applyDrift(track, slot, fixed, last) {
+    const offsetMs = last.offsetMs + (track.rate - fixed) * last.fileMs;
+    setRate(fixed, { slot });
+    setOffset(offsetMs, { slot, quiet: true, byHand: false });
+  }
 
   function formatOffset(ms) {
     const seconds = (ms / 1000).toFixed(2).replace(/\.?0+$/, "");

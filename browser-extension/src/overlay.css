@@ -320,9 +320,19 @@
  * `pointer-events: none` above is load-bearing: a toast sits over the picture
  * and an ordinary one must never eat a click meant for the film. A descendant
  * can opt back in, so the opt-in is scoped to the showing that has a button. */
+/* The button drops onto its own line rather than out of the box.
+ *
+ * `flex: none` on the button is right - a way back that has been squeezed until
+ * its label wraps is worse than one on a second line - but with a single line
+ * to sit on it means the button leaves the toast instead. Measured at 360px
+ * wide: "Subtitle running 4.3% fast - a framerate mismatch, not a delay" beside
+ * "Fix the drift" put the button's right edge 3px past the toast's own. The
+ * shorter offers already in use have 14px to spare and are untouched by this. */
 .sso-toast[data-action="true"] {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
   pointer-events: auto;
 }

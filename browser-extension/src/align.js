@@ -417,7 +417,11 @@
       .slice(0, limit);
   }
 
-  const API = { align, proposeAnchors, RATES, ACCEPT, AUTO, MAX_OFFSET_MS };
+  /* RATE_MIN_SPAN_MS is out here because the overlay measures a rate too, from
+   * the reader's own corrections rather than from a second subtitle, and "a
+   * rate measured over eight minutes extrapolates to nonsense by the end" is
+   * true of both. One number, one reason, one place to change it. */
+  const API = { align, proposeAnchors, RATES, ACCEPT, AUTO, MAX_OFFSET_MS, RATE_MIN_SPAN_MS };
 
   /* globalThis rather than `window` plus a CommonJS export.
    *
