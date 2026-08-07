@@ -1,7 +1,16 @@
 # Extension tests
 
-Two pages. Both run themselves and print PASS/FAIL. No install, no test runner,
-no dependencies.
+Two pages and one script. All three run themselves and print PASS/FAIL. No
+install, no test runner, no dependencies.
+
+```bash
+node tests/worker.mjs    # the service worker, with Chrome stubbed
+```
+
+The worker one exists because neither page loads `background.js` — one is the
+overlay in a hostile page and the other is the fetch path, and both stub the
+worker away, because that is what a content script sees. The half of the
+extension that decides what to do with a *tab* had nothing running it.
 
 ```bash
 cd browser-extension

@@ -1250,11 +1250,68 @@
           refresh(api.status());
         },
       });
-      settingsWindow.body.append(buildAppearance(), buildKeys(), buildDiagnostics());
+      settingsWindow.body.append(buildSite(), buildAppearance(), buildKeys(), buildDiagnostics());
     }
     closeMenu();
     await settingsWindow.show(host);
     refresh(api.status());
+    refreshSite();
+  }
+
+  /* What happens on this site when something starts playing.
+   *
+   * First in the window, because it is the only setting here that changes what
+   * the tool does without being asked - everything below it changes how
+   * something already asked for looks or is reached. A switch for behaviour a
+   * reader did not turn on has to be the easiest one in the window to find.
+   *
+   * The site is named rather than described, because "this site" read on an
+   * embedded player is ambiguous in exactly the case where it matters.
+   */
+  function buildSite() {
+    const wrap = section("This site");
+
+    el.autoSite = toggle_("Put subtitles on by themselves", false, async (on) => {
+      const result = await api.daemon("autoSiteSet", { enabled: on });
+      el.autoSiteWhere.textContent = describeSite(result);
+      api.showToast(
+        on
+          ? "Subtitles will come on by themselves here"
+          : "Subtitles will wait to be asked for here",
+      );
+    });
+    el.autoSite.row.title =
+      "When a new episode starts, find and attach subtitles without being asked";
+
+    el.autoSiteWhere = document.createElement("p");
+    el.autoSiteWhere.className = "sso-note";
+
+    const note = document.createElement("p");
+    note.className = "sso-note";
+    note.textContent =
+      "It switches itself on the first time you attach subtitles on a site, and never " +
+      "downloads anything that does not match what is playing.";
+
+    wrap.append(el.autoSite.row, el.autoSiteWhere, note);
+    return wrap;
+  }
+
+  const describeSite = (result) =>
+    result?.origin ? result.origin.replace(/^https?:\/\//, "") : "this page";
+
+  /* Asked for rather than pushed, because it lives in the worker and only the
+   * settings window shows it. Silent on failure: a switch that cannot read its
+   * own state should not put an error in front of somebody who came here to
+   * change the backdrop. */
+  async function refreshSite() {
+    if (!el.autoSite) return;
+    try {
+      const result = await api.daemon("autoSite", {});
+      el.autoSite.input.checked = Boolean(result?.enabled);
+      el.autoSiteWhere.textContent = describeSite(result);
+    } catch {
+      el.autoSiteWhere.textContent = "";
+    }
   }
 
   /* Go and find one, for a named subtitle.

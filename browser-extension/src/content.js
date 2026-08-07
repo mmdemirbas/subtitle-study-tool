@@ -1856,6 +1856,9 @@
      * found one" branch left the observer watching nothing on the path most
      * films actually take. It exits on an identity check when unchanged. */
     watchVideoSize();
+    /* Before the "nothing attached" exit below, because a page that has never
+     * had subtitles on it is exactly where this has something to say. */
+    noticeProgrammeChange();
     if (!state.visible || !anyAttached()) {
       // "Nothing is showing", not "redraw" - otherwise this clears the text on
       // every tick forever.
@@ -2000,6 +2003,69 @@
       }
     }
     return found;
+  }
+
+  // --- a new programme, without a page load -----------------------------------
+
+  /* Streaming sites are single pages. Starting the next episode swaps the
+   * stream and leaves the tab, the frame and usually the <video> element
+   * exactly where they were - so the subtitles for the last episode stay on
+   * screen over the new one, which is worse than having none: they are
+   * confidently wrong, and they look like a sync problem rather than the wrong
+   * file.
+   *
+   * The mark is the duration and the tab's title, and deliberately not the
+   * source URL. currentSrc changes for several things that are not a new
+   * programme - a quality switch, a stream re-negotiation, an ad break on the
+   * players that swap the element - while duration and title change when the
+   * programme does and stay put when it does not. The failure this trades for
+   * is two episodes of identical length on a site that never changes its
+   * title, where nothing happens and the reader attaches by hand as before.
+   * That is the safe direction to be wrong in. */
+  /* The title, less the parts that change without the programme changing.
+   *
+   * A leading "(2) " is an unread count - YouTube, Gmail-style tabs and several
+   * players write one - and a leading play or pause glyph is a state, not a
+   * name. Left in, either would read as a new episode and take the subtitles
+   * off the one being watched. */
+  const programmeTitle = () =>
+    document.title.replace(/^[\s(\[]*\d+[\s)\]]*/, "").replace(/^[▶►❚■•\s-]+/, "").trim();
+
+  function programmeMark() {
+    const video = state.video;
+    if (!video || !Number.isFinite(video.duration) || video.duration < MIN_VIDEO_SECONDS) {
+      return "";
+    }
+    return `${Math.round(video.duration)}|${programmeTitle()}`;
+  }
+
+  /* Long enough for a player that is still settling - the duration arrives
+   * before the title on some sites and after it on others - and short enough
+   * that the subtitles are up before the recap ends. */
+  const PROGRAMME_SETTLE_MS = 1500;
+  let programme = { mark: "", since: 0, told: "" };
+
+  function noticeProgrammeChange() {
+    // An advert is not a new programme, and on the players that swap the
+    // element for one it is exactly what this would otherwise fire on.
+    if (state.inAd) return;
+
+    const mark = programmeMark();
+    if (!mark) return;
+    if (mark !== programme.mark) {
+      programme = { mark, since: performance.now(), told: programme.told };
+      return;
+    }
+    if (programme.told === mark) return;
+    if (performance.now() - programme.since < PROGRAMME_SETTLE_MS) return;
+
+    /* Marked as told before the worker answers, not after. The tick runs
+     * twenty times a second and this is a round trip; without it, twenty
+     * requests go out before the first one is back. */
+    programme.told = mark;
+    chrome.runtime.sendMessage({ type: "sso:programme", mark }).catch(() => {
+      // No worker listening is not this frame's problem to report.
+    });
   }
 
   let lastAdPoll = 0;
@@ -2528,6 +2594,16 @@
     startTicking();
     notify();
     rememberLanguages();
+    /* The worker owns the "put subtitles on here by themselves" list, because
+     * it is the only side that can see the tab's address - this frame may be a
+     * player embedded from somewhere else, and the site a reader means is the
+     * one in the address bar. Attaching here once is the statement it records.
+     *
+     * Also marks the programme as dealt with. Without it, an attach made by
+     * hand on a page whose mark had not been reported yet would be followed by
+     * the worker attaching over the top of it a second later. */
+    programme.told = programmeMark() || programme.told;
+    chrome.runtime.sendMessage({ type: "sso:attached" }).catch(() => {});
     // Show the handle on attach, so it is discoverable without knowing that
     // moving the mouse summons it.
     revealHandle();
@@ -2558,8 +2634,7 @@
      * already on screen, which is evidence about this pair of files, while the
      * memory is only evidence about the last pair. Evidence beats recollection.
      * A file with a timing of its own is not touched by either. */
-    const carried =
-      aligned?.verdict === "apply" || timing.known ? null : await recallTiming(track);
+    const carried = aligned?.applied || timing.known ? null : await recallTiming(track);
     if (carried) {
       if (carried.rate !== 1) setRate(carried.rate, { slot: index, quiet: true, byHand: false });
       setOffset(carried.offsetMs, { slot: index, quiet: true, byHand: false });
@@ -2576,17 +2651,19 @@
       showToast("Subtitle back to the file's own timing");
     };
 
-    if (aligned?.verdict === "apply" && !track.offsetMs && track.rate === 1) {
+    if (aligned?.applied && !track.offsetMs && track.rate === 1) {
       /* The aligner ran, agreed with the file, and changed nothing. Saying
        * "lined up matching the file" - which is what the sentence below prints
        * for an offset of zero - reads as a correction that was not made, and
        * offers an Undo for it. Observed on two subtitles cut to the same
        * release, which is the ordinary case for a pair downloaded together. */
       showToast(`${said}, already in step`);
-    } else if (aligned?.verdict === "apply") {
-      showToast(`${said}, lined up ${describeOffset(track.offsetMs)}`, {
-        action: { label: "Undo", onClick: () => setOffset(0, { slot: index }) },
-      });
+    } else if (aligned?.applied) {
+      showToast(
+        `${said}, lined up with subtitle ${aligned.referenceSlot + 1} · ` +
+        `${describeOffset(track.offsetMs)}`,
+        { action: { label: "Undo", onClick: () => setOffset(0, { slot: index }) } },
+      );
     } else if (carried) {
       // A carried rate with no offset has nothing for describeOffset to say -
       // it would report "matching the file" over a subtitle that is being
@@ -2651,12 +2728,36 @@
    * panel to offer, because a subtitle silently shifted by the wrong amount is
    * harder to diagnose than one that was never touched.
    */
+  /* Only the confident verdict acts on its own, and that is a measurement, not
+   * caution.
+   *
+   * The middle verdict looks like the one to take automatically - a pair
+   * downloaded together is known to be the same film, so why ask? Modelled
+   * against this repository's own subtitles, it is the wrong band to reach for.
+   * An independently timed translation of the same film, with lines scattered
+   * by 300ms, six per cent of them badly placed and eight per cent missing,
+   * scores 733 and recovers the true shift to within 4ms. Degraded until a
+   * quarter of the lines are gone and a fifth are placed by up to six seconds,
+   * it still scores 89 - eleven times the confident threshold - and is still
+   * within 23ms.
+   *
+   * Pairs that land in the middle band are not ordinary translations; they are
+   * ones the aligner genuinely cannot read, and the number it returns there is
+   * not merely less certain, it is wrong: the two constructed cases that scored
+   * 7.49 and 4.79 recovered shifts 1.8s and 2.8s from the truth. Applying those
+   * silently would move a subtitle nearly two seconds and call it lined up.
+   *
+   * So the middle band stays one click, in the panel, where the reader can see
+   * the number before taking it. */
   function autoAlign(slot, { against = null } = {}) {
     const aligner = globalThis.__ssoAlign;
     if (!aligner) return null;
     const target = state.tracks[slot];
     if (!target || target.cues.length === 0) return null;
 
+    /* The lowest attached slot that is not this one - so with two subtitles
+     * the first is the reference and the second moves, which is the rule a
+     * reader can hold: the one already on screen is the truth. */
     const referenceSlot = against ?? state.tracks.findIndex(
       (track, index) => index !== slot && track.cues.length > 0,
     );
@@ -2681,12 +2782,16 @@
      * nothing else, which is the case worth reading. */
     const rate = reference.rate / answer.rate;
     const offsetMs = Math.round(reference.offsetMs - (reference.rate * answer.shiftMs) / answer.rate);
-    const proposal = { ...answer, referenceSlot, offsetMs, trackRate: rate };
-    if (answer.verdict === "apply") {
+    const applied = answer.verdict === "apply";
+    if (applied) {
       if (rate !== 1) setRate(rate, { slot, quiet: true, byHand: false });
       setOffset(offsetMs, { slot, quiet: true, byHand: false });
     }
-    return proposal;
+    /* `applied` rather than each caller re-deriving it from the verdict. Two of
+     * them did, and the one that decides whether to fall back to the release
+     * memory has to agree with the one that writes the toast - or the reader is
+     * told a correction was carried over and shown a different one. */
+    return { ...answer, referenceSlot, offsetMs, trackRate: rate, applied };
   }
 
   /** Drop one track, or every track when no slot is named. */

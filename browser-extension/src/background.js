@@ -70,6 +70,100 @@ chrome.runtime.onInstalled.addListener(async () => {
   );
 });
 
+// --- sites that put subtitles on by themselves ------------------------------
+
+/* Per site, not everywhere.
+ *
+ * "Everywhere" means a news clip, a product tour and an embedded trailer each
+ * spending one of ten daily downloads on subtitles nobody wanted. A site you
+ * have watched something on with subtitles is a statement about how you watch
+ * there; a site you have never used this on is not, and guessing on its behalf
+ * is the kind of help that has to be switched off.
+ *
+ * Three states, not two. Absent means never decided, and the first attach on
+ * the site decides it. `false` means the reader turned it off, and is why this
+ * stores a value rather than deleting the key - deleting would let the next
+ * manual attach turn it straight back on, which is a switch that does not work.
+ */
+const AUTO_SITES_KEY = "sso:autoSites";
+
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return "";
+  }
+}
+
+async function autoSites() {
+  const stored = await chrome.storage.local.get(AUTO_SITES_KEY);
+  const sites = stored[AUTO_SITES_KEY];
+  return sites && typeof sites === "object" ? sites : {};
+}
+
+async function autoSiteEnabled(url) {
+  const origin = originOf(url);
+  return Boolean(origin && (await autoSites())[origin] === true);
+}
+
+async function setAutoSite(url, enabled) {
+  const origin = originOf(url);
+  if (!origin) return { origin: "", enabled: false, decided: false };
+  const sites = await autoSites();
+  sites[origin] = Boolean(enabled);
+  await chrome.storage.local.set({ [AUTO_SITES_KEY]: sites });
+  return { origin, enabled: Boolean(enabled), decided: true };
+}
+
+/** The first attach on a site decides it, and says so once. */
+async function rememberSite(sender) {
+  const tab = sender?.tab;
+  const origin = originOf(tab?.url || "");
+  if (!tab?.id || !origin) return { ok: false };
+  const sites = await autoSites();
+  if (origin in sites) return { ok: true, already: true };
+
+  await setAutoSite(tab.url, true);
+  /* Announced on the page it applies to, once. A behaviour that starts
+   * happening by itself and was never mentioned reads as the tool doing
+   * something nobody asked for, which is how a good default gets switched off. */
+  const status = await tabStatus(tab.id);
+  await notify(
+    tab.id,
+    status?.frameId ?? TOP_FRAME,
+    "Subtitles will come on by themselves here - the settings window can stop that",
+  );
+  return { ok: true, already: false };
+}
+
+/* One attempt per programme per tab. Every frame of the page reports the
+ * change, and the tick that reports it runs twenty times a second. */
+const handledProgramme = new Map();
+chrome.tabs.onRemoved.addListener((tabId) => handledProgramme.delete(tabId));
+
+async function onProgrammeChange(sender, mark) {
+  const tab = sender?.tab;
+  if (!tab?.id || !tab.url || !mark) return { ok: false };
+  if (handledProgramme.get(tab.id) === mark) return { ok: false, reason: "already handled" };
+  handledProgramme.set(tab.id, mark);
+
+  if (!(await autoSiteEnabled(tab.url))) return { ok: false, reason: "not this site" };
+
+  const status = await tabStatus(tab.id);
+  if (!status?.hasVideo) return { ok: false, reason: "no video" };
+  const frameId = status.frameId ?? TOP_FRAME;
+
+  /* Whatever is on screen belongs to the programme that just ended, so it goes
+   * before the search starts rather than after it arrives. Leaving it up would
+   * put the last episode's lines over this one for however long the download
+   * takes, and lines that are confidently wrong read as a sync fault rather
+   * than as the wrong file. The panel keeps the way back for half a minute. */
+  if (status.attached) await send(tab.id, frameId, { type: "sso:detach" });
+
+  await autoAttach(tab, frameId, { ...status, attached: false });
+  return { ok: true };
+}
+
 // --- daemon proxy for panel.js and popup.js ---------------------------------
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -85,6 +179,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   /* The panel is inside a page, which cannot open an extension page itself.
    * Sending it here is the only route, and it keeps the deck one click from
    * where the words are saved rather than somewhere in the browser's menus. */
+  /* Two reports from the page, both about what is playing rather than about
+   * what the reader pressed. They are separate messages because they answer
+   * different questions: one says this site is used this way, the other says
+   * what is playing has changed. */
+  if (message?.type === "sso:attached") {
+    rememberSite(sender).then(sendResponse, () => sendResponse({ ok: false }));
+    return true;
+  }
+
+  if (message?.type === "sso:programme") {
+    onProgrammeChange(sender, message.mark).then(sendResponse, (error) =>
+      sendResponse({ ok: false, error: describe(error) }),
+    );
+    return true;
+  }
+
   if (message?.type === "sso:openReport") {
     chrome.tabs
       .create({ url: chrome.runtime.getURL("src/report.html") })
@@ -134,6 +244,20 @@ async function handleDaemonCall(op, args, sender) {
       const status = await tabStatus(tab.id);
       return pageContextForTab(tab, status?.frameId ?? TOP_FRAME);
     }
+    /* The panel's switch for this site. It asks the worker rather than reading
+     * storage itself, because the panel runs inside the page - and inside an
+     * embedded player that page is not the site the reader means. */
+    case "autoSite": {
+      const tab = await tabToDiagnose(args.tabId, sender);
+      if (!tab?.url) return { origin: "", enabled: false };
+      return { origin: originOf(tab.url), enabled: await autoSiteEnabled(tab.url) };
+    }
+    case "autoSiteSet": {
+      const tab = await tabToDiagnose(args.tabId, sender);
+      if (!tab?.url) return { origin: "", enabled: false };
+      return setAutoSite(tab.url, args.enabled);
+    }
+
     case "sync":
       return syncNow();
     case "cacheList":

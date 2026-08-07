@@ -53,12 +53,21 @@
       // --- chrome API stub ------------------------------------------------
       const store = {};
       const EXT = "../src/";
+      // Everything the page reported to the worker, in order.
+      window.__sent = [];
       window.chrome = {
         runtime: {
           getManifest: () => ({ version: "0.1.0" }),
           getURL: (p) => EXT + p.split("/").pop(),
           onMessage: { addListener() {}, removeListener() {} },
           sendMessage: async (msg) => {
+            /* The two the page sends to the worker about what is playing, kept
+             * so a test can assert what was reported and when. The worker's own
+             * half of this is not loaded here. */
+            if (msg?.type === "sso:programme" || msg?.type === "sso:attached") {
+              window.__sent.push({ ...msg, at: performance.now() });
+              return { ok: true };
+            }
             if (msg?.type !== "sso:daemon") return {};
             if (msg.op === "search") {
               return {
@@ -167,7 +176,9 @@
       ];
 
       const video = document.getElementById("v");
-      Object.defineProperty(video, "duration", { get: () => 7200 });
+      // Configurable, so a case can swap the stream for a different one - which
+      // is what starting the next episode looks like from in here.
+      Object.defineProperty(video, "duration", { get: () => 7200, configurable: true });
       Object.defineProperty(video, "paused", { get: () => false });
       let t = 1;
       Object.defineProperty(video, "currentTime", { get: () => t, set: (x) => (t = x) });
@@ -3131,6 +3142,130 @@
           api.detach(0);
         }
         await sleep(120);
+      });
+
+      check("the next episode is noticed without a page load", async () => {
+        /* Streaming sites are single pages: the next episode swaps the stream
+         * and leaves the tab, the frame and the <video> element where they
+         * were. Nothing else in the extension would ever hear about it.
+         *
+         * What is asserted is the report, not the attach - the worker's half is
+         * not loaded in this page. Three rules, and the last two are the ones
+         * worth having: it settles before speaking, it says nothing at all
+         * while an ad is playing, and it speaks once per programme however many
+         * times the tick runs. */
+        const video = document.getElementById("v");
+        const wasTitle = document.title;
+        const wasDuration = video.duration;
+        const setDuration = (seconds) =>
+          Object.defineProperty(video, "duration", { get: () => seconds, configurable: true });
+
+        try {
+          window.__sent.length = 0;
+          document.title = "Harness — S01E04";
+          setDuration(2400);
+          await sleep(400);
+          const early = window.__sent.filter((m) => m.type === "sso:programme").length;
+          if (early !== 0) throw new Error("it spoke before the player had settled");
+
+          await sleep(1800);
+          const said = window.__sent.filter((m) => m.type === "sso:programme");
+          if (said.length !== 1)
+            throw new Error(`reported ${said.length} times for one episode`);
+          if (!said[0].mark.includes("S01E04") || !said[0].mark.startsWith("2400"))
+            throw new Error(`reported the wrong programme: ${said[0].mark}`);
+
+          // The tick keeps running; the same programme must not be reported again.
+          await sleep(1200);
+          if (window.__sent.filter((m) => m.type === "sso:programme").length !== 1)
+            throw new Error("it kept reporting the same episode");
+
+          /* An unread count in front of the title is not a new episode. Several
+           * players write one, and a title is half the mark. */
+          document.title = `(2) ${wasTitle === document.title ? document.title : "Harness — S01E04"}`;
+          await sleep(2000);
+          if (window.__sent.filter((m) => m.type === "sso:programme").length !== 1)
+            throw new Error("a notification count was read as a new episode");
+
+          /* An advert is not a new programme, and on the players that swap the
+           * element for one it is exactly what this would otherwise fire on. */
+          window.__sent.length = 0;
+          const slot = document.getElementById("ad-slot");
+          slot.innerHTML = '<div class="atvwebplayersdk-ad-timer-remaining-time" ' +
+            'style="position:fixed;top:4px;left:4px;width:60px;height:20px">Ad</div>';
+          await sleep(600);
+          document.title = "Harness — S01E05";
+          setDuration(2401);
+          await sleep(2000);
+          const duringAd = window.__sent.filter((m) => m.type === "sso:programme").length;
+          slot.innerHTML = "";
+          if (duringAd !== 0) throw new Error("an ad break was reported as a new episode");
+        } finally {
+          document.title = wasTitle;
+          setDuration(wasDuration);
+          document.getElementById("ad-slot").innerHTML = "";
+          await sleep(1800);
+          window.__sent.length = 0;
+        }
+      });
+
+      check("a translation timed by somebody else still needs no click", async () => {
+        /* The reason the pair is worth anything: the second subtitle is not a
+         * copy of the first with a constant shift, it is a different person's
+         * timing of the same speech. Most lines land within a few hundred
+         * milliseconds, some are placed badly, some are missing altogether, and
+         * the whole thing sits against a different release.
+         *
+         * Asserted end to end through attach, and on the number rather than on
+         * "something happened": an alignment that fires and is a second out is
+         * worse than one that does not fire, because the reader now believes it. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasGeometry = api.status().settings.tracks.map((t) => ({ ...t }));
+
+        const starts = speech(900, 11);
+        const reference = starts.map((start) => ({ start, end: start + 1800, text: "en" }));
+
+        const SHIFT = 6500;
+        let x = 424242;
+        const next = () => (x = (x * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+        const bell = () => (next() + next() + next() + next() - 2) * 0.7;
+        const translated = starts
+          .filter(() => next() > 0.08)                       // 8% of lines missing
+          .map((start) => {
+            const jitter = Math.round(bell() * 300);          // most within ~600ms
+            const badly = next() < 0.06 ? Math.round((next() - 0.5) * 5000) : 0;
+            return { start: start + SHIFT + jitter + badly, end: start + SHIFT + 1800, text: "tr" };
+          });
+
+        try {
+          await api.attach({ cues: reference, label: "EN · reference", fileId: 6501, language: "en", slot: 0 });
+          await sleep(150);
+          await api.attach({ cues: translated, label: "TR · a different person's timing", fileId: 6502, language: "tr", slot: 1 });
+          await sleep(250);
+
+          const moved = api.status().tracks[1].offsetMs;
+          if (moved === 0) throw new Error("the second subtitle was left where it was");
+          /* The display offset is the negative of the gap between the files:
+           * a subtitle whose lines sit 6.5s later has to be brought forward. */
+          if (Math.abs(moved + SHIFT) > 120)
+            throw new Error(`lined up ${moved}ms against a real gap of ${-SHIFT}ms`);
+          if (api.status().tracks[0].offsetMs !== 0)
+            throw new Error("it moved the first subtitle, which is the reference");
+        } finally {
+          for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({
+                cues: CUES, label: slot ? "second" : "first", fileId: slot + 1,
+                language: slot ? "tr" : "en", slot,
+              });
+            } else {
+              api.detach(slot);
+            }
+          }
+          api.updateSettings({ tracks: wasGeometry });
+          await sleep(150);
+        }
       });
 
       check("attaching a second subtitle lines it up on its own", async () => {

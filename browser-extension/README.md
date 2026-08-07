@@ -91,6 +91,26 @@ whole cost of a dual-language setup and is why it only happens when the second
 language matched the film as well as the first did. One language configured, or
 nothing good in the second: one subtitle, exactly as before.
 
+**After the first time, nothing.** Attaching subtitles on a site once switches
+that site on: from then on, when a new episode starts there, they are searched
+for and put up without being asked. Watching a series is then press play and
+watch — no shortcut, no panel, no re-syncing.
+
+It is per site rather than everywhere, because everywhere means a news clip, a
+product tour and an embedded trailer each spending one of ten daily downloads on
+subtitles nobody wanted. A site you have watched something on with subtitles is
+a statement about how you watch there; a site you have never used this on is
+not. The settings window has the switch, named after the site it applies to, and
+turning it off there stays off — a later manual attach will not turn it back on.
+
+A new episode is recognised without a page load, which is what streaming sites
+do: the mark is the video's duration and the tab's title, taken together and
+only once they have both settled. It is deliberately not the stream's URL, which
+also changes for a quality switch, a re-negotiation and, on some players, every
+ad break. When a new one is recognised the previous episode's subtitles come off
+before the search starts — lines from the last episode over this one are
+confidently wrong, which reads as a sync fault rather than as the wrong file.
+
 **The control panel:** <kbd>⌘⇧K</kbd>. Search, timing, appearance and key
 bindings, in a draggable panel over the video. This is the main surface. It
 lives in the page rather than in the toolbar popup because **a popup cannot be
@@ -172,6 +192,18 @@ The offsets are separate, because they belong to the files: two subtitles for
 the same film are routinely timed against different releases, so syncing one
 says nothing about the other. Ad breaks are shared, because an ad interrupts the
 video rather than one of the files.
+
+**The second one lines itself up against the first**, so the first is the one
+you time and the rest follow. The gap between two subtitles for the same film is
+the number that keeps appearing in the differences between their cue times, and
+it is measured rather than assumed — an independently timed translation, with
+lines scattered by a few hundred milliseconds, some placed badly and some
+missing, is still recovered to within a few milliseconds. Where the two files do
+not look like the same film, nothing is applied and the panel offers the number
+for you to take or leave. That distinction is the whole of it: the aligner acts
+alone only when it is certain, because in the band where it is unsure the number
+it returns is not merely less precise, it is wrong — the two constructed cases
+that landed there were out by 1.8 and 2.8 seconds.
 
 The boxes are anchored by their **bottom** edges. That is what keeps a two-line
 cue beside a one-line cue reading as a pair, and it also stops a subtitle
