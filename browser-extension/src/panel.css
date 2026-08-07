@@ -247,9 +247,25 @@ button.sso-add:hover:not(:disabled) {
  */
 
 .sso-quick {
+  /* Wraps rather than clips. At the 280px the corner grips allow, the row is
+   * three arrangement icons, Move, Line up all and Study - about 300px of
+   * controls. Something has to give, and the choices are dropping a label,
+   * hiding a control, or a second line. A second line costs 28px at the one
+   * width where it happens and keeps every control named; the other two cost a
+   * control or its name at exactly the size where guessing is hardest. */
+  flex-wrap: wrap;
+  row-gap: 6px;
   margin-bottom: 8px;
   padding-bottom: 8px;
   border-bottom: 1px solid var(--sso-line-soft);
+}
+
+/* The spacer only earns its keep while everything is on one line; wrapped, it
+ * would push Study onto a line of its own with a gap above it. */
+@container (max-width: 330px) {
+  .sso-quick > .sso-grow {
+    display: none;
+  }
 }
 
 .sso-arr-group {
@@ -392,30 +408,37 @@ button.sso-quick__study[data-on="true"] {
  * but the card that owns it says so in words, and only that card, so the word
  * is the answer to "why is this one different" rather than a legend to read
  * twice. */
-.sso-track__keys {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 5px 1px 3px;
-  font-size: var(--sso-t-micro);
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--sso-ink-3);
-  border-radius: 5px;
-  cursor: pointer;
+/* The selected subtitle, said by the card and not by a chip inside it.
+ *
+ * A chip marked "keys" spent about ninety pixels of the title - which is the
+ * subtitle's name, the one thing on the card that identifies it - on the
+ * quietest fact there. The card is what is being chosen, so the card carries
+ * it: a left edge in the accent, and a surface a shade above its neighbour.
+ * Two signals rather than one, because a border alone at this size reads as a
+ * rendering artifact and colour alone is not available to everybody. */
+.sso-track {
+  cursor: default;
+  transition: background 140ms ease, border-color 140ms ease;
 }
 
-.sso-track__keys:hover {
+.sso-track[data-selected="true"] {
+  /* One step above its neighbour on the same field, which is what makes it
+   * read as raised rather than as a different kind of card. */
+  background: rgba(255, 255, 255, 0.075);
+  border-color: rgba(76, 139, 245, 0.55);
+  box-shadow: inset 3px 0 0 var(--sso-accent);
+}
+
+/* Only the unselected one invites a click, which is the only one where a click
+ * does anything. */
+.sso-track[data-selected="false"]:hover {
   background: var(--sso-fill);
+  border-color: rgba(255, 255, 255, 0.2);
 }
 
-/* Which one has the keys is a state, not an action, so it is said in ink and
- * not in a filled pill. A blue chip in the corner of the card was the second
- * loudest thing on the panel and it was pointing at the quietest fact. */
-.sso-track__keys[data-on="true"] {
-  color: var(--sso-accent-ink);
+.sso-track:focus-visible {
+  outline: 2px solid var(--sso-accent);
+  outline-offset: 2px;
 }
 
 /* Which subtitle study reads. Amber, because that is what a marked word is in
@@ -441,24 +464,17 @@ button.sso-track__learn:hover:not(:disabled) {
 
 /* Narrow, the chips give their words back to the name.
  *
- * Both chips land on the same card whenever the keys and study point at the
- * same subtitle, and together they are about 110px. On a 280px panel that
- * leaves the subtitle's name eight characters - measured: "1. ..." - and the
- * name is the one thing on the card that says which subtitle this is. The
- * radio survives, because it is the control; the word beside it is a legend,
- * and a legend is what you drop first. Both keep their title text. */
+ * The one chip left is the amber "learning", and at 280px even that costs the
+ * subtitle's name characters it cannot spare - the name is the one thing on
+ * the card that says which subtitle this is. So the word goes and the mark
+ * stays, with its title text. The chip that said which one the keys move is
+ * gone entirely: the card says that now, by being the selected one. */
 @container (max-width: 310px) {
-  .sso-track__keys > span {
-    display: none;
-  }
-
   button.sso-track__learn {
     padding: 1px 3px;
     font-size: 0;
   }
 
-  /* A rounded square, not a dot: the radio beside it is round, and two round
-   * marks in a row are a pair of one control rather than two facts. */
   button.sso-track__learn::after {
     display: block;
     width: 7px;
@@ -471,14 +487,6 @@ button.sso-track__learn:hover:not(:disabled) {
 
 button.sso-track__learn[data-on="true"] {
   color: #d8a86a;
-}
-
-.sso-track__keys input[type="radio"] {
-  width: 11px;
-  height: 11px;
-  margin: 0;
-  accent-color: var(--sso-accent);
-  cursor: pointer;
 }
 
 /* --- the menu of verbs ------------------------------------------------------
@@ -738,6 +746,23 @@ button.sso-line-step {
   flex: 1;
   min-width: 0;
   padding: 5px 7px;
+  font-size: var(--sso-t-small);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Lining up is the odd one out in this row: the other two move the film, this
+ * moves the subtitle. Said with the accent ink rather than a different shape,
+ * so the row stays one row. */
+button.sso-line-step--align {
+  color: var(--sso-accent-ink);
+}
+
+/* Every subtitle to agree with the first, from the row that is about all of
+ * them rather than about one. */
+button.sso-quick__align {
+  flex: none;
+  padding: 5px 9px;
   font-size: var(--sso-t-small);
   font-weight: 600;
   white-space: nowrap;

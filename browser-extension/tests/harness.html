@@ -2385,6 +2385,66 @@
         await sleep(60);
       });
 
+      check("clicking a card selects it, and the keys follow", async () => {
+        /* There was a radio in a chip marked "keys" on every card. A reader
+         * looking at a dot on a card reads it as "this is the selected one",
+         * and that reading was right - one subtitle being the one the controls
+         * act on IS selection. So the card is the control now, and the chip and
+         * the row it needed are gone. */
+        const api = window.__ssoApi;
+        await window.__ssoPanel.show();
+        await sleep(200);
+        if (api.status().trackCount < 2) return;
+
+        const cards = [...panelShadow().querySelectorAll(".sso-track")].filter((c) => !c.hidden);
+        if (panelShadow().querySelector(".sso-track__keys"))
+          throw new Error("the keys chip is still on the card");
+
+        api.setKeyTrack(0);
+        await sleep(80);
+        if (cards[0].dataset.selected !== "true" || cards[1].dataset.selected === "true")
+          throw new Error("the selected card is not the one marked");
+
+        // Through the card, not through the api: the card being the control is
+        // the whole change, and calling setKeyTrack directly tests neither.
+        cards[1].click();
+        await sleep(120);
+        if (api.status().keyTrack !== 1)
+          throw new Error(`clicking the second card selected ${api.status().keyTrack}`);
+        if (cards[1].dataset.selected !== "true" || cards[0].dataset.selected === "true")
+          throw new Error("the mark did not move with the selection");
+
+        // A control on the card does its own job and does not select.
+        api.setKeyTrack(0);
+        await sleep(80);
+        cards[1].querySelector(".sso-track__eye").click();
+        await sleep(120);
+        if (api.status().keyTrack !== 0)
+          throw new Error("pressing a button on a card selected the card as well");
+        cards[1].querySelector(".sso-track__eye").click();
+        await sleep(80);
+      });
+
+      check("lining up is a button on the card, and once for all of them", async () => {
+        /* It was a menu item - open the menu, read five entries, click one - for
+         * the thing reached for the moment a second subtitle is out of step. */
+        const api = window.__ssoApi;
+        await window.__ssoPanel.show();
+        await sleep(200);
+        const shown = (sel) =>
+          [...panelShadow().querySelectorAll(sel)].filter((b) => !b.hidden && b.offsetParent !== null);
+
+        const perCard = shown(".sso-line-step--align");
+        const all = shown(".sso-quick__align");
+        if (api.status().trackCount < 2) {
+          if (perCard.length || all.length)
+            throw new Error("it offers to line one subtitle up against nothing");
+          return;
+        }
+        if (perCard.length !== 2) throw new Error(`${perCard.length} Line up buttons, want one per card`);
+        if (all.length !== 1) throw new Error("no way to line all of them up at once");
+      });
+
       check("the card says which subtitle is being learnt", async () => {
         /* It was a third "Subtitle 1 / Subtitle 2" pair, in a third place,
          * meaning a third thing. It names a subtitle, so it lives on one. */

@@ -706,11 +706,69 @@
     });
     el.studyButton.className = "sso-quick__study";
 
+    /* The version that names no subtitle: every other one moves to agree with
+     * the first. On this row rather than on a card because it is about the set
+     * of them, and because with three or more it is the only way to say it once
+     * instead of once per card. Hidden with fewer than two, where it would be a
+     * button that cannot do anything. */
+    el.lineUpAll = button("Line up all", {
+      onClick: lineUpAll,
+      title: "Move every other subtitle to agree with the first",
+    });
+    el.lineUpAll.className = "sso-quick__align";
+
     const spacer = document.createElement("span");
     spacer.className = "sso-grow";
 
-    el.quick.append(el.arrangeGroup, el.centreButton, el.moveButton, spacer, el.studyButton);
+    el.quick.append(
+      el.arrangeGroup, el.centreButton, el.moveButton, el.lineUpAll, spacer, el.studyButton,
+    );
     return el.quick;
+  }
+
+  /* Everything to agree with the first, in one action and one sentence.
+   *
+   * The confident band applies itself, as it does everywhere else; anything
+   * less sure is named rather than applied, and the card it belongs to has the
+   * button that shows the number before taking it. Saying "two lined up, one
+   * not sure" is the honest summary of a batch where the answers differ - a
+   * single "done" would claim the uncertain one as settled. */
+  function lineUpAll() {
+    const status = api.status();
+    const first = status.tracks.findIndex((track) => track.attached);
+    if (first === -1) return;
+
+    const moved = [];
+    const unsure = [];
+    for (const [slot, track] of status.tracks.entries()) {
+      if (!track.attached || slot === first) continue;
+      const answer = api.autoAlign?.(slot, { against: first });
+      if (answer?.applied) moved.push(slot + 1);
+      else if (answer?.verdict === "offer") unsure.push(slot + 1);
+    }
+
+    const said = [
+      moved.length ? `${moved.length === 1 ? `Subtitle ${moved[0]}` : `${moved.length} subtitles`} lined up with subtitle ${first + 1}` : "",
+      unsure.length ? `subtitle ${unsure.join(" and ")} not certain - use Line up on its card` : "",
+    ].filter(Boolean);
+    api.showToast(
+      said.length ? said.join(" · ") : "Nothing needed moving",
+      moved.length
+        ? {
+            action: {
+              label: "Undo",
+              onClick: () => {
+                for (const number of moved) {
+                  api.setRate(1, { slot: number - 1, quiet: true });
+                  api.setOffset(0, { slot: number - 1, quiet: true });
+                }
+                api.showToast("Back to each file's own timing");
+              },
+            },
+          }
+        : {},
+    );
+    refresh(api.status());
   }
 
   /* Click to nudge, hold to run, and the longer it runs the bigger the steps.
@@ -798,33 +856,35 @@
   }
 
   function buildTrackCard(slot) {
+    /* The card is the selection.
+     *
+     * There was a radio in a chip marked "keys" on every card, saying which
+     * subtitle the nudge keys moved. The comment beside it admitted the
+     * problem: a reader looking at a dot on a card guesses "this is the
+     * selected one", which was said to be "a different question with a
+     * different answer". It should not have been. One subtitle being the one
+     * the controls act on IS selection, and a surface with two subtitles on it
+     * needs that idea anyway - so the card is selectable, the selected one is
+     * marked, and the chip is gone along with the row of its own it needed.
+     *
+     * Clicking anywhere on the card that is not a control selects it. */
     const root = document.createElement("div");
     root.className = "sso-track";
+    root.tabIndex = 0;
+    root.setAttribute("role", "button");
+    root.addEventListener("click", (event) => {
+      if (event.target.closest("button, input, label, .sso-nudge")) return;
+      api.setKeyTrack(slot);
+    });
+    root.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      if (event.target !== root) return;
+      event.preventDefault();
+      api.setKeyTrack(slot);
+    });
 
     const head = document.createElement("div");
     head.className = "sso-track__head";
-
-    /* The radio says which subtitle the bracket keys move. There is one pair of
-     * keys and two things they could shift, and this is the only place that
-     * answer can be given without guessing it from where the pointer is.
-     *
-     * It sits in a chip that says "keys", because a bare radio in a title row
-     * is a dot whose meaning has to be guessed - and the guess a reader makes
-     * is usually "this is the selected one", which is a different question with
-     * a different answer. */
-    const keyed = document.createElement("input");
-    keyed.type = "radio";
-    keyed.name = "sso-keytrack";
-    keyed.setAttribute("aria-label", "The nudge keys move this subtitle");
-    keyed.addEventListener("change", () => api.setKeyTrack(slot));
-
-    const keysChip = document.createElement("label");
-    keysChip.className = "sso-track__keys";
-    keysChip.title = "The [ and ] keys nudge this subtitle";
-    const keysWord = document.createElement("span");
-    keysWord.textContent = "keys";
-    keysChip.append(keyed, keysWord);
-    keysChip.addEventListener("click", (event) => event.stopPropagation());
 
     const label = document.createElement("span");
     label.className = "sso-track__label";
@@ -868,18 +928,6 @@
             window.__ssoStudy?.updateSettings({ studySlot: slot });
             refresh(api.status());
           },
-        },
-        {
-          label: "Nudge with the keys",
-          title: "Point the [ and ] keys at this subtitle",
-          hidden: status.trackCount < 2 || status.keyTrack === slot,
-          onClick: () => api.setKeyTrack(slot),
-        },
-        {
-          label: "Line up with the other",
-          title: "Work out the gap from where the two subtitles say the same things",
-          hidden: status.trackCount < 2,
-          onClick: () => lineUp(slot),
         },
         {
           label: "Replace…",
@@ -938,7 +986,7 @@
      * pixels - so folding it saves twenty-six of them and costs the timing row,
      * which is the one thing on this surface that is used while a film runs.
      * A control that hides the only thing worth showing is not worth a click. */
-    head.append(label, learnChip, keysChip, visible, more);
+    head.append(label, learnChip, visible, more);
 
     /* One row: say what is wrong, twice as fast or twice as fine, and read what
      * it did in the middle.
@@ -1072,7 +1120,23 @@
       b.addEventListener("click", () => api.stepLine(direction, { slot }));
       return b;
     };
+
+    /* Lining up was a menu item, which is three actions - open the menu, read
+     * five entries, click one - for the thing a reader reaches for the moment a
+     * second subtitle is out of step with the first. It is the same promotion
+     * the timing undo already got, for the same reason.
+     *
+     * On the card rather than in the top bar because it names a subtitle: this
+     * one moves, the other one does not. The top bar has the version that does
+     * not name one. */
+    const lineUpButton = button("Line up", {
+      title: "Work out the gap from where the two subtitles say the same things",
+      onClick: () => lineUp(slot),
+    });
+    lineUpButton.className = "sso-line-step sso-line-step--align";
+
     lines.append(
+      lineUpButton,
       stepper("‹ Again", -1, "Play this line from its start. Press twice to go back one."),
       stepper("Next ›", +1, "Skip to where the next line begins."),
     );
@@ -1082,7 +1146,7 @@
     body.append(offsets, lines);
 
     root.append(head, body);
-    return { root, keyed, keysChip, learnChip, label, offsetField, offsetReset, visible, more };
+    return { root, learnChip, label, offsetField, offsetReset, visible, more, lineUpButton };
   }
 
   /* --- how one subtitle looks -------------------------------------------------
@@ -2104,6 +2168,8 @@
     el.arrangeGroup.hidden = status.trackCount < 2;
     el.moveButton.textContent = status.placing ? "Done" : "Move";
     el.moveButton.dataset.on = status.placing ? "true" : "false";
+    // One subtitle has nothing to agree with.
+    el.lineUpAll.hidden = status.trackCount < 2;
     el.moveButton.title = status.placing
       ? "Drag the stand-in to where the subtitle should be, then press Done"
       : "Drag the middle of a subtitle to move it, an edge to make it wider";
@@ -2131,22 +2197,24 @@
       // Release names are long and the chips beside them are not optional, so
       // the name is often an ellipsis. Hovering it says the whole thing.
       card.label.title = track.label || "Attached";
-      card.keyed.checked = status.keyTrack === slot;
-      /* A chip appears on the card the thing is true of, and nowhere else.
-       *
-       * Both chips on both cards, one lit and one dim, cost about ninety pixels
-       * of the title - and the title is the subtitle's name, which is the one
-       * thing on this card that identifies it. Showing only the live one keeps
-       * the state visible and gives the name its room back; moving it is a
-       * menu item on the card you want it moved to, which is where a reader
-       * looks for "do this to this one" now. */
+      /* Selected, which is what the keys act on. Marked on the card itself
+       * rather than by a chip inside it: the whole card is the thing being
+       * chosen, and a border says so without spending any of the title's room
+       * on saying it. Only meaningful with two subtitles - with one there is
+       * nothing to choose between, and a card lit up as "the selected one"
+       * would be answering a question nobody asked. */
       const study = window.__ssoStudy?.settings?.();
-      const keyed = status.keyTrack === slot;
       const learning = study?.studySlot === slot;
-      card.keysChip.dataset.on = keyed ? "true" : "false";
-      card.keysChip.hidden = status.trackCount < 2 || !keyed;
+      card.root.dataset.selected =
+        status.trackCount > 1 && status.keyTrack === slot ? "true" : "false";
+      card.root.title =
+        status.trackCount > 1 && status.keyTrack !== slot
+          ? "Click to point the keys and the study rail at this subtitle"
+          : "";
       card.learnChip.dataset.on = learning ? "true" : "false";
       card.learnChip.hidden = !study?.enabled || status.trackCount < 2 || !learning;
+      // Nothing to line up against with one subtitle on screen.
+      card.lineUpButton.hidden = status.trackCount < 2;
       const stretched = track.rate && track.rate !== 1;
       card.offsetField.dataset.set = track.offsetMs ? "true" : "false";
       // Not while it is being typed into, or the value rewrites itself under
