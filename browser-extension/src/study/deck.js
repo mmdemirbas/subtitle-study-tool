@@ -54,10 +54,9 @@ export async function save(entry) {
     definitions: entry.definitions || [],
     phonetic: entry.phonetic || "",
     translation: entry.translation || "",
-    // The line the word was in, and the same moment in the other subtitle.
+    // The line the word was in, and the same moment in every other subtitle.
     sentence: entry.sentence || "",
-    pairedSentence: entry.pairedSentence || "",
-    pairedLanguage: entry.pairedLanguage || "",
+    paired: pairedOf(entry),
     title: entry.title || "",
     fileId: entry.fileId ?? null,
     // Position in the film, so the moment can be found again.
@@ -73,6 +72,28 @@ export async function save(entry) {
   entries.push(record);
   await write(entries);
   return { added: true, entry: record, size: entries.length };
+}
+
+/* The same moment in the other subtitles, as a list.
+ *
+ * It was one `pairedSentence` and one `pairedLanguage`, which was enough while
+ * study followed one subtitle out of two. With two being studied, or three on
+ * screen, "the other one" names nothing, so an entry carries them all.
+ *
+ * Entries saved before that keep working: a stored pair reads back as a list of
+ * one. The shim is here rather than at each reader, because a deck is a file
+ * that outlives the code that wrote it and every reader would need the same
+ * three lines. */
+export function pairedOf(entry) {
+  if (Array.isArray(entry?.paired)) {
+    return entry.paired
+      .filter((line) => line && line.text)
+      .map((line) => ({ text: String(line.text), language: line.language || "" }));
+  }
+  if (entry?.pairedSentence) {
+    return [{ text: entry.pairedSentence, language: entry.pairedLanguage || "" }];
+  }
+  return [];
 }
 
 export async function remove(id) {
@@ -103,7 +124,10 @@ const COLUMNS = [
   ["phonetic", (entry) => entry.phonetic],
   ["translation", (entry) => entry.translation],
   ["sentence", (entry) => entry.sentence],
-  ["paired_sentence", (entry) => entry.pairedSentence],
+  /* One column still, with the lines joined, because the column name is what an
+   * existing Anki note type is mapped to - a deck exported last month and one
+   * exported today have to import the same way. */
+  ["paired_sentence", (entry) => pairedOf(entry).map((line) => line.text).join(" | ")],
   ["title", (entry) => entry.title],
   ["time", (entry) => formatTime(entry.timeMs)],
   ["saved_at", (entry) => entry.savedAt],

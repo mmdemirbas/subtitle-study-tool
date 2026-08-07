@@ -485,8 +485,36 @@ button.sso-track__learn:hover:not(:disabled) {
   }
 }
 
+/* On and off, told apart by more than the colour.
+ *
+ * It used to appear only on the subtitle being studied, so its off state was
+ * "no chip at all". As a switch on every subtitle, off is a state the reader
+ * meets constantly, and colour alone would leave it to the eight per cent who
+ * cannot see this amber against that grey. On carries a filled pill; off is
+ * flat, quieter, and says what it will do in its title. */
 button.sso-track__learn[data-on="true"] {
   color: #d8a86a;
+  background: rgba(216, 168, 106, 0.14);
+}
+
+button.sso-track__learn[data-on="false"] {
+  opacity: 0.8;
+  /* Outlined rather than flat: filled pill against outlined pill is a toggle
+   * anybody recognises, and it says "press me" where bare muted text said
+   * nothing. */
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+/* Narrow, the pill is a dot: solid when studied, an empty ring when not. */
+@container (max-width: 310px) {
+  button.sso-track__learn[data-on="true"] {
+    background: none;
+  }
+
+  button.sso-track__learn[data-on="false"]::after {
+    background: none;
+    box-shadow: inset 0 0 0 1.5px currentColor;
+  }
 }
 
 /* --- the menu of verbs ------------------------------------------------------

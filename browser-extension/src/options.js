@@ -167,7 +167,11 @@ let deckEntries = [];
 
 async function renderDeck() {
   const { entries } = await call("deckList");
-  deckEntries = entries || [];
+  /* Through the deck's own reader, so an entry saved when a card carried one
+   * paired line and one saved since it carried a list both arrive here in the
+   * same shape. Done once on load rather than at each place that reads them. */
+  const { pairedOf } = await import("./study/deck.js");
+  deckEntries = (entries || []).map((entry) => ({ ...entry, paired: pairedOf(entry) }));
   drawDeck();
 }
 
@@ -175,7 +179,7 @@ function drawDeck() {
   const needle = el("deckSearch").value.trim().toLowerCase();
   const shown = needle
     ? deckEntries.filter((entry) =>
-        [entry.term, entry.sentence, entry.pairedSentence, entry.title]
+        [entry.term, entry.sentence, ...entry.paired.map((line) => line.text), entry.title]
           .join(" ")
           .toLowerCase()
           .includes(needle),
@@ -215,7 +219,7 @@ function drawDeck() {
     }
     for (const [text, kind] of [
       [entry.sentence, "line"],
-      [entry.pairedSentence, "paired"],
+      ...entry.paired.map((line) => [line.text, "paired"]),
       [[entry.title, entry.timeMs != null ? formatTime(entry.timeMs) : ""]
         .filter(Boolean)
         .join(" · "), "where"],

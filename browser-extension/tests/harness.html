@@ -2233,6 +2233,56 @@
           throw new Error('"about" (rank 90) was marked, so the threshold is not being applied');
       });
 
+      check("study can follow two subtitles at once", async () => {
+        /* Study read exactly one subtitle: one slot in the settings, one record
+         * for the line on screen, and "the other subtitle" wherever a paired
+         * line was wanted. A reader working on two languages got words marked
+         * in one of them and the other treated as furniture. */
+        const was = window.__ssoStudy.settings().studySlots;
+        try {
+          await attachSecond();
+          window.__ssoStudy.updateSettings({ studySlots: [0, 1] });
+          await window.__ssoStudy.setEnabled(true);
+          await showWordyCue();
+          await sleep(300);
+
+          // Words in both boxes, each knowing which subtitle it came out of -
+          // which is what lets two words on screen at once answer with
+          // different languages and different lines.
+          for (const slot of [0, 1]) {
+            const words = wordsIn(slot);
+            if (!words.length)
+              throw new Error(`subtitle ${slot} has no words with both being studied`);
+            const strays = words.filter((word) => word.dataset.slot !== String(slot));
+            if (strays.length)
+              throw new Error(`${strays.length} words in subtitle ${slot} claim another subtitle`);
+          }
+
+          /* A card made from the second subtitle has to quote THAT line. It
+           * used to quote whatever the one studied subtitle was showing, so a
+           * Turkish word arrived filed under an English sentence. */
+          const word = wordsIn(1).find((w) => w.dataset.w === "bilmiyorum");
+          if (!word)
+            throw new Error(`nothing to hover in subtitle 2: ${wordsIn(1).map((w) => w.dataset.w).join(", ")}`);
+          word.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
+          await sleep(450);
+
+          const card = railShadow().querySelector(".sso-card");
+          if (!card) throw new Error("hovering a word in the second subtitle made no card");
+          const line = card.querySelector(".sso-card__line")?.textContent || "";
+          const paired = [...card.querySelectorAll(".sso-card__paired")].map((e) => e.textContent);
+          if (!line.includes("bilmiyorum"))
+            throw new Error(`the card quotes "${line}" for a word from the second subtitle`);
+          // And the other subtitle's line at that moment is still on the card,
+          // which is the whole reason a word is worth keeping.
+          if (!paired.some((text) => text.includes("frankly")))
+            throw new Error(`the paired line is ${JSON.stringify(paired)}`);
+        } finally {
+          window.__ssoStudy.updateSettings({ studySlots: was });
+          await sleep(120);
+        }
+      });
+
       check("the threshold decides what counts as rare", async () => {
         window.__ssoStudy.updateSettings({ rarityRank: 20000 });
         await sleep(250);
@@ -2636,47 +2686,64 @@
         if (all.length !== 1) throw new Error("no way to line all of them up at once");
       });
 
-      check("the card says which subtitle is being learnt", async () => {
+      check("each card says whether it is being learnt, and switches it", async () => {
         /* It was a third "Subtitle 1 / Subtitle 2" pair, in a third place,
-         * meaning a third thing. It names a subtitle, so it lives on one. */
+         * meaning a third thing. It names a subtitle, so it lives on one - and
+         * it is a switch per card rather than a radio, because study can follow
+         * more than one language at once. */
         await window.__ssoPanel.show();
         await sleep(150);
         const chips = [...panelShadow().querySelectorAll(".sso-track__learn")];
         if (chips.length !== 2) throw new Error(`${chips.length} learning chips, want one per card`);
 
-        const shown = chips.filter((c) => !c.hidden);
-        const attached = window.__ssoApi.status().trackCount;
-        if (attached < 2) {
-          if (shown.length) throw new Error("it asks which to learn with one subtitle attached");
+        const shown = () => chips.filter((c) => !c.hidden);
+        if (window.__ssoApi.status().trackCount < 2) {
+          if (shown().length) throw new Error("it asks which to learn with one subtitle attached");
           return;
         }
-        /* Exactly one chip, on the card it is true of. Both cards carrying it -
-         * one lit, one dim - cost about ninety pixels of the subtitle's name,
-         * which is the one thing on the card that identifies it. */
-        if (shown.length !== 1) throw new Error(`${shown.length} learning chips showing, want 1`);
-        if (shown[0].dataset.on !== "true") throw new Error("the chip is on the wrong card");
-        const was = window.__ssoStudy.settings().studySlot;
-        const other = chips.indexOf(shown[0]) === 0 ? 1 : 0;
-        if (chips[other].getBoundingClientRect().width !== 0)
-          throw new Error("the other card carries a chip for something it is not");
 
-        // Moving it is a menu item on the card you want it moved to.
-        const cards = [...panelShadow().querySelectorAll(".sso-track")].filter((c) => !c.hidden);
-        cards[other].querySelector(".sso-track__more").click();
-        await sleep(60);
-        const move = menuItems()
-          .find((b) => b.textContent === "Study this one");
-        if (!move) {
-          const items = menuItems()
-            .map((b) => b.textContent).join(", ") || "nothing";
-          throw new Error(`no way to move study: the menu on card ${other} holds ${items}`);
+        const was = window.__ssoStudy.settings().studySlots;
+        try {
+          /* Both cards carry it now. A switch nobody can see in its off
+           * position is not a switch, and the old shape could say neither
+           * "both" nor "neither". */
+          if (shown().length !== 2)
+            throw new Error(`${shown().length} learning chips showing, want one per card`);
+          const on = chips.filter((c) => c.dataset.on === "true");
+          if (on.length !== 1) throw new Error(`${on.length} cards lit as being learnt, want 1`);
+          // Not by colour alone: the state is on the element for anything that
+          // cannot see the amber.
+          if (on[0].getAttribute("aria-pressed") !== "true")
+            throw new Error("the lit chip does not say it is pressed");
+
+          // Learning both at once.
+          const off = chips.find((c) => c.dataset.on === "false");
+          off.click();
+          await sleep(120);
+          const both = window.__ssoStudy.settings().studySlots;
+          if (both.length !== 2)
+            throw new Error(`turning the second one on gave ${JSON.stringify(both)}`);
+          if (chips.some((c) => c.dataset.on !== "true"))
+            throw new Error("a card being learnt does not say so");
+
+          /* And unmarking the last one is the switch. Study on with nothing
+           * marked is a feature that is on and visibly doing nothing. */
+          for (const chip of chips) { chip.click(); await sleep(90); }
+          const after = window.__ssoStudy.settings();
+          if (after.studySlots.length !== 0 || after.enabled)
+            throw new Error(
+              `unmarking every subtitle left study ${after.enabled ? "on" : "off"} `
+              + `with ${JSON.stringify(after.studySlots)}`);
+
+          // Switching it back on marks something, for the same reason.
+          window.__ssoStudy.updateSettings({ enabled: true });
+          await sleep(90);
+          if (window.__ssoStudy.settings().studySlots.length === 0)
+            throw new Error("study came back on with nothing to study");
+        } finally {
+          window.__ssoStudy.updateSettings({ enabled: true, studySlots: was });
+          await sleep(80);
         }
-        move.click();
-        await sleep(120);
-        if (window.__ssoStudy.settings().studySlot === was)
-          throw new Error("it did not move study to the other card");
-        window.__ssoStudy.updateSettings({ studySlot: was });
-        await sleep(80);
       });
 
       check("the rail can be emptied", async () => {

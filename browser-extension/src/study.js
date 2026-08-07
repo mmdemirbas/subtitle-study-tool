@@ -90,8 +90,15 @@
     // Shortest word worth marking, in letters. Below three it is function
     // words and interjections, which are never the problem.
     minLetters: 3,
-    // Which subtitle is the language being learnt. The other one is context.
-    studySlot: 0,
+    /* Which subtitles are the languages being learnt. Everything not in here is
+     * context: still on screen, still quoted on a saved card, just not marked
+     * and not looked up.
+     *
+     * A set rather than one slot, because a reader can be working on two
+     * languages at once. Empty is not a state it rests in - unmarking the last
+     * one turns study off, so "study nothing" and the switch cannot disagree
+     * about whether the words under the pointer are live. */
+    studySlots: [0],
     // Empty means "whatever language that subtitle is in".
     language: "",
     pauseOnPin: false,
@@ -167,17 +174,71 @@
   async function loadSettings() {
     try {
       const stored = await chrome.storage.local.get(SETTINGS_KEY);
-      settings = { ...DEFAULT_SETTINGS, ...(stored[SETTINGS_KEY] || {}) };
+      settings = { ...DEFAULT_SETTINGS, ...migrate(stored[SETTINGS_KEY] || {}) };
     } catch {
       // Defaults are fine.
     }
     applySettings();
   }
 
+  /* `studySlot` was one number until study could follow more than one subtitle.
+   * A reader who had pointed it at the second one keeps it pointed there, and
+   * the old key is dropped rather than left to be read by something later. It
+   * runs on the stored patch, not on the merged settings, because after the
+   * merge the new key is always present and the old one would never be seen. */
+  function migrate(stored) {
+    const { studySlot, ...rest } = stored;
+    if (!Array.isArray(rest.studySlots) && Number.isInteger(studySlot)) {
+      rest.studySlots = [studySlot];
+    }
+    return rest;
+  }
+
+  /* Empty and off are the same state said two ways, so neither can be reached
+   * without the other. Unmarking the last subtitle IS the switch; and switching
+   * study on with nothing marked marks the first attached subtitle, because a
+   * feature that is on and visibly doing nothing reads as broken. */
+  function emptyMeansOff(patch) {
+    const next = { ...settings, ...patch };
+    if (Array.isArray(next.studySlots) && next.studySlots.length > 0) return {};
+    if (patch.enabled) return { studySlots: [firstAttachedSlot()] };
+    return next.enabled ? { enabled: false } : {};
+  }
+
+  function firstAttachedSlot() {
+    for (let slot = 0; slot < (api.trackCount || 0); slot++) {
+      if (api.trackInfo(slot).fileId != null) return slot;
+    }
+    return 0;
+  }
+
+  /* A subtitle added to the list has a line on screen already, and a change
+   * that does nothing until the next line reads as one that did not work - the
+   * same reason turning study on redraws. The record for a subtitle no longer
+   * followed goes with it: its words are about to be replaced by a render that
+   * will not wrap them, and a stale record would keep answering for them. */
+  function followedSubtitlesChanged() {
+    for (const slot of [...lines.keys()]) if (!isStudied(slot)) lines.delete(slot);
+    if (latestSlot != null && !isStudied(latestSlot)) latestSlot = studiedSlots()[0] ?? null;
+    if (settings.enabled) api.redrawCues?.();
+  }
+
+  /* One call rather than the panel doing the array arithmetic, because "empty
+   * is off" has to hold in exactly one place. A second copy of that rule in
+   * another file is how the two come to disagree. */
+  function toggleStudySlot(slot) {
+    const next = isStudied(slot)
+      ? studiedSlots().filter((studied) => studied !== slot)
+      : [...studiedSlots(), slot].sort((a, b) => a - b);
+    return updateSettings({ studySlots: next });
+  }
+
   function updateSettings(patch) {
-    settings = { ...settings, ...patch };
+    const was = studiedSlots().join(",");
+    settings = { ...settings, ...patch, ...emptyMeansOff(patch) };
     chrome.storage.local.set({ [SETTINGS_KEY]: settings }).catch(() => {});
     applySettings();
+    if (studiedSlots().join(",") !== was) followedSubtitlesChanged();
     // The panel draws the study controls from here, and does not subscribe to
     // this file; one status round is what makes it redraw.
     api.notifyChanged?.();
@@ -239,7 +300,7 @@
    * italics that content.js built are all untouched - the words end up inside
    * those spans, which is what keeps a rare word inside a shouted line still
    * looking like part of the shouted line. */
-  function wrapWords(cueBox) {
+  function wrapWords(cueBox, slot) {
     const walker = document.createTreeWalker(cueBox, NodeFilter.SHOW_TEXT);
     const texts = [];
     while (walker.nextNode()) texts.push(walker.currentNode);
@@ -261,6 +322,12 @@
         span.className = "sso-w";
         span.textContent = match[0];
         span.dataset.w = match[0].toLowerCase();
+        /* Which subtitle it came out of, carried on the word itself. With more
+         * than one subtitle being studied, "the language of the line" and "the
+         * line to quote on the card" are different answers for two words on
+         * screen at the same time, and the word is the only thing that knows
+         * which. */
+        span.dataset.slot = String(slot);
         fragment.append(span);
         words.push(span);
         at = match.index + match[0].length;
@@ -274,32 +341,56 @@
 
   // --- the current line ---------------------------------------------------------
 
-  /* What is on screen right now, so a hover, a save or a threshold change can
-   * all answer "which line is this word in" without going back to the cue
-   * list. Replaced wholesale on every cue. */
-  let current = { slot: null, cue: null, cueBox: null, words: [], token: 0 };
+  /* What is on screen right now, one record per studied subtitle, so a hover, a
+   * save or a threshold change can all answer "which line is this word in"
+   * without going back to the cue list.
+   *
+   * A map rather than the single record this was, because the lines arrive in
+   * separate calls and neither replaces the other. Held as one, the second
+   * subtitle's cue wiped the first's words the moment it landed, and every word
+   * still on screen from the first stopped answering. */
+  const lines = new Map();
+  /* Which line a keypress belongs to: the one that arrived most recently. Only
+   * a fallback - anything holding a word asks the word, which knows. */
+  let latestSlot = null;
+  let lineSeq = 0;
+
+  const allWords = () => [...lines.values()].flatMap((line) => line.words);
+  const lineOf = (span) => lines.get(Number(span?.dataset.slot));
+  const isStudied = (slot) => (settings.studySlots || []).includes(slot);
 
   function onCue(slot, cue, cueBox) {
-    if (!settings.enabled || slot !== settings.studySlot) return;
+    if (!settings.enabled || !isStudied(slot)) return;
 
-    // The words this was anchored to are about to be replaced, so an answer
-    // left on screen would be pointing at nothing.
-    hoveredWord = null;
-    hidePopup();
+    /* The words this line was anchored to are about to be replaced, so an
+     * answer left on screen would be pointing at nothing. Scoped to this line:
+     * the other subtitle's cue ending is no reason to take down a popup opened
+     * on a word that is still there. */
+    const going = lines.get(slot);
+    if (going && hoveredWord && going.words.includes(hoveredWord)) {
+      hoveredWord = null;
+      hidePopup();
+    }
+    if (going && selection && going.words.includes(selection.anchor)) clearSelection();
 
-    current = { slot, cue, cueBox, words: [], token: current.token + 1 };
+    const line = { slot, cue, cueBox, words: [], token: ++lineSeq };
+    lines.set(slot, line);
     if (!cue) return;
 
-    current.words = wrapWords(cueBox);
-    markWords(current);
+    latestSlot = slot;
+    line.words = wrapWords(cueBox, slot);
+    markWords(line);
   }
 
   function remarkCurrent() {
-    if (settings.enabled && current.cue && current.words.length) markWords(current);
+    if (!settings.enabled) return;
+    for (const line of lines.values()) {
+      if (line.cue && line.words.length) markWords(line);
+    }
   }
 
   async function markWords(line) {
-    const language = studyLanguage();
+    const language = studyLanguage(line.slot);
     const candidates = [...new Set(line.words.map((span) => span.dataset.w))].filter(
       (word) => letterCount(word) >= settings.minLetters,
     );
@@ -308,7 +399,7 @@
     // the previous line's answers on this one's words. Study being switched off
     // in that same window is the other way this arrives too late - the words it
     // would mark have been unwrapped, and the rail it would fill is gone.
-    if (line.token !== current.token || !settings.enabled) return;
+    if (lines.get(line.slot) !== line || !settings.enabled) return;
 
     const rare = [];
     for (const span of line.words) {
@@ -338,7 +429,7 @@
      * context. */
     rare.sort((a, b) => (b.rank ?? Infinity) - (a.rank ?? Infinity));
     for (const item of rare.slice(0, settings.maxPerCue)) {
-      addCard(item.word, { rank: item.rank, language, auto: true });
+      addCard(item.word, { rank: item.rank, language, auto: true, slot: line.slot });
     }
   }
 
@@ -373,11 +464,17 @@
     return known;
   }
 
-  function studyLanguage() {
-    return (settings.language || api.trackInfo(settings.studySlot).language || "en")
+  /* The language of one studied subtitle. `settings.language` still overrides
+   * it, for the file whose own language tag is wrong or missing - it is a
+   * correction, so it applies wherever the tag would have been read. */
+  function studyLanguage(slot = latestSlot ?? studiedSlots()[0] ?? 0) {
+    return (settings.language || api.trackInfo(slot).language || "en")
       .toLowerCase()
       .slice(0, 2);
   }
+
+  /** The studied subtitles, lowest first, so anything reading "the first" agrees. */
+  const studiedSlots = () => [...(settings.studySlots || [])].sort((a, b) => a - b);
 
   // --- pointer ------------------------------------------------------------------
 
@@ -385,7 +482,7 @@
    * box will not be dragged and the click will not reach the player, so only
    * the two gestures that are unambiguously about a word are taken. */
   function claimPointerDown(slot, event) {
-    if (!settings.enabled || slot !== settings.studySlot) return false;
+    if (!settings.enabled || !isStudied(slot)) return false;
     const word = event.composedPath?.()[0];
     if (!word?.classList?.contains?.("sso-w")) return false;
 
@@ -431,10 +528,12 @@
   }
 
   function pinWord(word) {
+    const slot = Number(word.dataset.slot);
     addCard(word.dataset.w, {
       pinned: true,
       rank: rankOf(word),
-      language: studyLanguage(),
+      language: studyLanguage(slot),
+      slot,
     });
     if (settings.pauseOnPin) api.pauseVideo();
   }
@@ -462,8 +561,11 @@
         .map((span) => span.textContent)
         .join(" ")
         .trim();
+      const slot = Number(selection?.anchor?.dataset.slot);
       clearSelection();
-      if (phrase) addCard(phrase.toLowerCase(), { pinned: true, language: studyLanguage() });
+      if (phrase) {
+        addCard(phrase.toLowerCase(), { pinned: true, language: studyLanguage(slot), slot });
+      }
     };
 
     document.addEventListener("pointermove", onMove, true);
@@ -471,9 +573,11 @@
     document.addEventListener("pointercancel", onUp, true);
   }
 
+  /* Within one line. A sweep that leaves the subtitle it started in is not a
+   * phrase - two languages' words in one card would be neither. */
   function selectedWords() {
     if (!selection) return [];
-    const words = current.words;
+    const words = lineOf(selection.anchor)?.words || [];
     const from = words.indexOf(selection.anchor);
     const to = words.indexOf(selection.focus);
     if (from === -1 || to === -1) return [selection.anchor];
@@ -482,13 +586,13 @@
 
   function paintSelection() {
     const chosen = new Set(selectedWords());
-    for (const span of current.words) {
+    for (const span of allWords()) {
       span.dataset.selected = chosen.has(span) ? "true" : "false";
     }
   }
 
   function clearSelection() {
-    for (const span of current.words) span.dataset.selected = "false";
+    for (const span of allWords()) span.dataset.selected = "false";
     selection = null;
   }
 
@@ -513,11 +617,12 @@
     hoverTimer = setTimeout(() => {
       if (hoveredWord !== word || !word.isConnected) return;
       const term = word.dataset.w;
-      const language = studyLanguage();
+      const slot = Number(word.dataset.slot);
+      const language = studyLanguage(slot);
       if (settings.hoverCard) showPopup(word, term, language);
       // With the rail put away the popup is the whole answer; adding to a list
       // nobody can see would only spend lookups.
-      if (settings.showRail) addCard(term, { rank: rankOf(word), language });
+      if (settings.showRail) addCard(term, { rank: rankOf(word), language, slot });
     }, settings.dwellMs);
   }
 
@@ -555,7 +660,7 @@
     drawPopup(term, null);
     placePopup(word);
 
-    const entry = await lookUp(term, language);
+    const entry = await lookUp(term, language, Number(word.dataset.slot));
     // The pointer moved on while the lookup was in flight; answering now would
     // put this word's meaning beside a different one.
     if (popupTerm !== term || hoveredWord !== word || !word.isConnected) return;
@@ -979,7 +1084,10 @@
    * second one: the same word arriving twice in a minute is the film insisting,
    * not two things to read.
    */
-  async function addCard(term, { rank = undefined, language, pinned = false, auto = false } = {}) {
+  async function addCard(
+    term,
+    { rank = undefined, language, pinned = false, auto = false, slot = latestSlot } = {},
+  ) {
     /* Guarded on the list, which is what this actually writes into, rather than
      * on the host. They are not the same question: ranking a line is a round
      * trip to the worker, and study can be turned off while one is in flight -
@@ -994,8 +1102,8 @@
       return existing;
     }
 
-    const cue = api.cueAt(current.slot ?? settings.studySlot);
-    const paired = pairedLine();
+    const from = Number.isInteger(slot) ? slot : studiedSlots()[0] ?? 0;
+    const cue = api.cueAt(from);
     const card = {
       id: ++cardSeq,
       term,
@@ -1003,9 +1111,9 @@
       rank,
       pinned,
       auto,
+      slot: from,
       sentence: cue?.text || "",
-      pairedSentence: paired.text,
-      pairedLanguage: paired.language,
+      paired: pairedLines(from),
       timeMs: api.filmTimeMs(),
       lookup: null,
       saved: savedTerms.has(`${language}:${term}`),
@@ -1020,7 +1128,7 @@
     refocus();
     dedupeSentences();
 
-    card.lookup = await lookUp(term, language);
+    card.lookup = await lookUp(term, language, from);
     if (card.node?.isConnected) redrawCard(card);
     return card;
   }
@@ -1030,8 +1138,8 @@
    * language the reader has already chosen to read this film in. */
   const lookupCache = new Map();
 
-  async function lookUp(term, language) {
-    const target = translationTarget();
+  async function lookUp(term, language, slot) {
+    const target = translationTarget(slot);
     const key = `${language}>${target}:${term}`;
     if (lookupCache.has(key)) return lookupCache.get(key);
 
@@ -1048,18 +1156,39 @@
     return settled;
   }
 
-  function translationTarget() {
-    const other = settings.studySlot === 0 ? 1 : 0;
-    return (api.trackInfo(other).language || "").toLowerCase().slice(0, 2);
+  /* What to translate into: an attached subtitle the reader is NOT studying,
+   * because that is the language they have already chosen to read this film in.
+   *
+   * It was "slot 0 or slot 1, whichever is not the studied one", which had the
+   * right instinct and only two seats for it. With every attached subtitle
+   * being studied there is no such language, and the lookup then answers with
+   * definitions and no translation - which is honest, rather than translating a
+   * language into itself. */
+  function translationTarget(slot) {
+    for (let other = 0; other < (api.trackCount || 0); other++) {
+      if (other === slot || isStudied(other)) continue;
+      const language = (api.trackInfo(other).language || "").toLowerCase().slice(0, 2);
+      if (language) return language;
+    }
+    return "";
   }
 
-  /* The other subtitle at this exact moment. For a learner this is the single
-   * most useful thing on the screen and it costs nothing to fetch: it is the
-   * sentence, already translated by a human, already timed to the same frame. */
-  function pairedLine() {
-    const other = settings.studySlot === 0 ? 1 : 0;
-    const cue = api.cueAt(other);
-    return { text: cue?.text || "", language: api.trackInfo(other).language || "" };
+  /* Every other subtitle's line at this exact moment. For a learner this is the
+   * single most useful thing on the screen and it costs nothing to fetch: the
+   * sentence, already translated by a human, already timed to the same frame.
+   *
+   * A list rather than "the other one", because with two subtitles being
+   * studied there is no such thing as the other one. Whether a line is itself
+   * being studied does not come into it - the same moment in another language
+   * is worth keeping either way. */
+  function pairedLines(slot) {
+    const out = [];
+    for (let other = 0; other < (api.trackCount || 0); other++) {
+      if (other === slot) continue;
+      const text = api.cueAt(other)?.text;
+      if (text) out.push({ text, language: api.trackInfo(other).language || "" });
+    }
+    return out;
   }
 
   function promote(card) {
@@ -1278,8 +1407,11 @@
      * an expander. */
     if (card.sentence && !card.hideSentence) {
       node.append(sentenceLine(card.sentence, card.term, "sso-card__line", card.language));
-      if (card.pairedSentence) {
-        node.append(sentenceLine(card.pairedSentence, "", "sso-card__paired", card.pairedLanguage));
+      // Every other subtitle's line at that moment, in slot order, so a card
+      // from a three-language screen reads down the languages the same way the
+      // screen does.
+      for (const line of card.paired || []) {
+        node.append(sentenceLine(line.text, "", "sso-card__paired", line.language));
       }
     }
 
@@ -1355,7 +1487,9 @@
 
   async function saveCard(card) {
     if (!card || card.saved) return false;
-    const info = api.trackInfo(settings.studySlot);
+    // The subtitle this word came out of, not "the studied one" - with two
+    // being studied that names the wrong film file half the time.
+    const info = api.trackInfo(card.slot ?? studiedSlots()[0] ?? 0);
     const response = await api.daemon("deckSave", {
       entry: {
         term: card.term,
@@ -1365,8 +1499,7 @@
         phonetic: card.lookup?.phonetic || "",
         translation: card.lookup?.translation || "",
         sentence: card.sentence,
-        pairedSentence: card.pairedSentence,
-        pairedLanguage: card.pairedLanguage,
+        paired: card.paired || [],
         title: filmTitle(),
         fileId: info.fileId,
         timeMs: card.timeMs,
@@ -1385,7 +1518,7 @@
   }
 
   function filmTitle() {
-    const info = api.trackInfo(settings.studySlot);
+    const info = api.trackInfo(studiedSlots()[0] ?? 0);
     if (info.label) return info.label;
     return api.pageInfo().candidates[0]?.text || document.title;
   }
@@ -1698,10 +1831,12 @@
     cards = [];
     // Words stay wrapped in whatever line is on screen, which is harmless -
     // the next cue rebuilds the box - but the marks have to go.
-    for (const span of current.words) {
+    for (const span of allWords()) {
       span.dataset.rare = "false";
       span.dataset.selected = "false";
     }
+    lines.clear();
+    latestSlot = null;
     setStudyFlag(false);
   }
 
@@ -1730,6 +1865,7 @@
     saveTop,
     setEnabled,
     updateSettings,
+    toggleStudySlot,
     settings: () => ({ ...settings }),
     defaults: DEFAULT_SETTINGS,
   };

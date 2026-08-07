@@ -921,15 +921,6 @@
           onClick: () => openStyle(slot),
         },
         {
-          label: "Study this one",
-          title: "Mark the rare words in this subtitle instead",
-          hidden: !study?.enabled || status.trackCount < 2 || study.studySlot === slot,
-          onClick: () => {
-            window.__ssoStudy?.updateSettings({ studySlot: slot });
-            refresh(api.status());
-          },
-        },
-        {
           label: "Replace…",
           title: "Find a different subtitle for this one",
           onClick: () => openFind(slot),
@@ -939,20 +930,22 @@
       ]);
     });
 
-    /* Which subtitle is the language being learnt.
+    /* Whether this subtitle is one of the languages being learnt.
      *
      * It was a "Subtitle 1 / Subtitle 2" pair in the study section - a third
      * copy of that control, in a third place, meaning a third thing. It names a
      * subtitle, so it belongs on that subtitle, beside the other chip that says
-     * what this one is for. */
+     * what this one is for.
+     *
+     * And it is a switch per subtitle rather than a radio, because study can
+     * follow more than one at once. Its former shape said "move study here",
+     * which cannot express "both" and cannot express "neither". */
     const learnChip = document.createElement("button");
     learnChip.className = "sso-track__learn";
     learnChip.type = "button";
-    learnChip.textContent = "learning";
-    learnChip.title = "Study marks the rare words in this subtitle";
     learnChip.addEventListener("click", (event) => {
       event.stopPropagation();
-      window.__ssoStudy?.updateSettings({ studySlot: slot });
+      window.__ssoStudy?.toggleStudySlot(slot);
       refresh(api.status());
     });
 
@@ -2240,7 +2233,7 @@
        * nothing to choose between, and a card lit up as "the selected one"
        * would be answering a question nobody asked. */
       const study = window.__ssoStudy?.settings?.();
-      const learning = study?.studySlot === slot;
+      const learning = Boolean(study?.studySlots?.includes(slot));
       card.root.dataset.selected =
         status.trackCount > 1 && status.keyTrack === slot ? "true" : "false";
       card.root.title =
@@ -2248,7 +2241,18 @@
           ? "Click to point the keys and the study rail at this subtitle"
           : "";
       card.learnChip.dataset.on = learning ? "true" : "false";
-      card.learnChip.hidden = !study?.enabled || status.trackCount < 2 || !learning;
+      /* "learning" is a state and "learn" is an invitation. The chip carried
+       * the state's word in both positions, so an off switch read as a label
+       * saying this subtitle was being studied when it was not. */
+      card.learnChip.textContent = learning ? "learning" : "learn";
+      /* Shown on every attached subtitle now, not only on the one being
+       * studied: a switch nobody can see in its off position is not a switch.
+       * Still nothing to choose between with one subtitle on screen. */
+      card.learnChip.hidden = !study?.enabled || status.trackCount < 2;
+      card.learnChip.title = learning
+        ? "Study is marking the rare words in this subtitle — click to stop"
+        : "Click to study this subtitle too";
+      card.learnChip.setAttribute("aria-pressed", learning ? "true" : "false");
       // Nothing to line up against with one subtitle on screen.
       card.lineUpButton.hidden = status.trackCount < 2;
       const stretched = track.rate && track.rate !== 1;
