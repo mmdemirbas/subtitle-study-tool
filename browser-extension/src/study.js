@@ -196,8 +196,11 @@
       railEl.dataset.folded = settings.folded ? "true" : "false";
       railEl.style.setProperty("--sso-study-text", `${settings.textPx}px`);
       railEl.style.setProperty("--sso-study-alpha", String(settings.opacity));
-      // 0 is "as tall as its contents", which is not a height any element can
-      // be given - it is the absence of one.
+      /* 0 is "as tall as its contents", which is not a height any element can
+       * be given - it is the absence of one. Anything else came from a corner
+       * being dragged, and is applied as a real height rather than a cap: a box
+       * that springs back to its contents cannot be made bigger than them. */
+      railEl.dataset.sized = settings.height > 0 ? "true" : "false";
       if (settings.height > 0) railEl.style.setProperty("--sso-study-height", `${settings.height}px`);
       else railEl.style.removeProperty("--sso-study-height");
     }

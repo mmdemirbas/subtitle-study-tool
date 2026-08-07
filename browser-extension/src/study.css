@@ -48,15 +48,31 @@
 
   display: flex;
   flex-direction: column;
-  /* A cap, never a floor. Setting it as a height too made a rail holding one
-   * card into a tall empty rectangle standing on the film - the resize said
-   * "you may be this big", and it heard "be this big". */
+  /* Until somebody drags a corner, this is a cap and never a floor: a rail
+   * holding one card should not be a tall empty rectangle standing on the film.
+   * A drag is the other case - it is a reader saying how big this is, and a box
+   * that springs back to its contents cannot be resized at all, which is what
+   * "it still cannot be resized beyond the content" meant. So a chosen height
+   * is a height, and only a chosen one. */
   max-height: var(--sso-study-height, 60vh);
   margin: 0;
   padding: 0;
   font-size: var(--sso-study-text, 15px);
   background: rgba(22, 19, 16, var(--sso-study-alpha, 0.93));
   overflow: hidden;
+}
+
+.sso-rail[data-sized="true"] {
+  height: var(--sso-study-height);
+  max-height: none;
+}
+
+/* Folding is a height of its own and outranks a dragged one - a rail folded to
+ * its title bar that kept a 400px height would be a title bar with an empty
+ * 360px box under it. */
+.sso-rail[data-folded="true"] {
+  height: auto;
+  max-height: none;
 }
 
 /* --- head ------------------------------------------------------------------ */

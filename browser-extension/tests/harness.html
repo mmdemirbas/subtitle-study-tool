@@ -3144,6 +3144,63 @@
         await sleep(120);
       });
 
+      check("the rail can be made taller than what is in it, and still folds", async () => {
+        /* The height was applied as a cap and never a floor, so the rail sprang
+         * back to its contents and could not be made bigger than them - which
+         * is not a resize. The cap is still right for a rail nobody has dragged:
+         * one card should not be a tall empty rectangle over the film. So a
+         * height that came from a corner is a height, and only that one. */
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        const study = window.__ssoStudy;
+        const wasStudy = { ...study.settings() };
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+
+        try {
+          study.updateSettings({ auto: true, rarityRank: 1, showRail: true, folded: false, height: 0 });
+          await api.attach({
+            cues: [{ start: 0, end: 600000, text: "frankly the corvette was decommissioned" }],
+            label: "EN · study", fileId: 7100, language: "en", slot: 0,
+          });
+          video.currentTime = 5;
+          await sleep(900);
+
+          const rail = [...document.querySelectorAll("div")]
+            .find((d) => d.shadowRoot?.querySelector(".sso-rail"))
+            ?.shadowRoot.querySelector(".sso-rail");
+          if (!rail) throw new Error("no rail on screen to resize");
+          const height = () => Math.round(rail.getBoundingClientRect().height);
+
+          const content = height();
+          study.updateSettings({ height: content + 260 });
+          await sleep(250);
+          const asked = content + 260;
+          if (Math.abs(height() - asked) > 6)
+            throw new Error(`asked for ${asked}px and got ${height()}px`);
+
+          // Folded is a height of its own and has to outrank a dragged one.
+          study.updateSettings({ folded: true });
+          await sleep(250);
+          if (height() > 90) throw new Error(`folded to ${height()}px, which is not folded`);
+
+          // And back to nothing chosen is back to hugging the contents.
+          study.updateSettings({ folded: false, height: 0 });
+          await sleep(250);
+          if (Math.abs(height() - content) > 6)
+            throw new Error(`cleared the height and got ${height()}px, not ${content}px`);
+        } finally {
+          study.updateSettings(wasStudy);
+          video.currentTime = wasTime;
+          if (wasAttached[0]) {
+            await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+          } else {
+            api.detach(0);
+          }
+          await sleep(200);
+        }
+      });
+
       check("no surface is left inside an element that cannot paint it", async () => {
         /* `requestFullscreen` can be called on any element, and several players
          * - and Chrome's own "fullscreen the video" - call it on the <video>.
