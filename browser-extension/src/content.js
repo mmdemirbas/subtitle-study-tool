@@ -1473,19 +1473,82 @@
   /* Fullscreen is the detail that breaks naive overlays: the browser renders
    * only the fullscreen element's subtree, so an overlay parented to <body>
    * silently disappears. Re-parent on every change. */
+  /* Elements that cannot render a child, whatever you append to them.
+   *
+   * A replaced element draws its own content and nothing else: children are
+   * parsed, kept in the DOM, and never painted. Which matters here because
+   * `requestFullscreen` can be called on any element, and several players -
+   * and Chrome's own "fullscreen the video" - call it on the <video> itself. */
+  const CANNOT_HOLD_CHILDREN = /^(VIDEO|IMG|CANVAS|IFRAME|EMBED|OBJECT|INPUT|BR|HR)$/;
+
+  /* The top layer, which is the only place a floating surface can be seen while
+   * something else is fullscreen.
+   *
+   * Everything this extension draws used to be moved into the fullscreen
+   * element, because only that subtree is rendered. That works while the site
+   * fullscreens a container and fails completely when it fullscreens the
+   * <video>: measured on that path, the panel and the whole overlay both
+   * rendered 0x0 with `hidden` false and `display` unset. So the panel believed
+   * it was open, the CC button toggled it shut, pressing again re-opened it
+   * invisibly, and leaving fullscreen revealed a panel that had been open the
+   * whole time - which is exactly the "sometimes the button does nothing"
+   * report, plus subtitles that vanish in fullscreen for the same reason.
+   *
+   * A popover is painted in the top layer, above the fullscreen element,
+   * whatever its position in the document - so nothing needs moving at all.
+   * Ordering within that layer is by when each entry was added, which is why
+   * going fullscreen has to push these back to the front: the fullscreen
+   * element joins the layer after them and would otherwise cover them.
+   *
+   * The UA stylesheet for `[popover]` is neutralised by the `all: initial`
+   * every host already sets - it is an inline !important declaration covering
+   * every longhand, so nothing of the UA rule survives it. */
+  function toTopLayer(node, { again = false } = {}) {
+    if (!node?.isConnected || typeof node.showPopover !== "function") return false;
+    try {
+      /* Out of a replaced element first. The top layer decides where a box is
+       * painted, not whether one exists - and a child of <video> never
+       * generates a box at all, so there is nothing to promote. Measured: the
+       * panel reported `:popover-open` and still rendered 0x0 while it sat
+       * inside a fullscreen <video> that an earlier version had moved it into. */
+      const parent = node.parentElement;
+      if (parent && CANNOT_HOLD_CHILDREN.test(parent.tagName)) {
+        (document.body || document.documentElement).appendChild(node);
+      }
+      if (node.getAttribute("popover") !== "manual") node.setAttribute("popover", "manual");
+      const showing = node.matches(":popover-open");
+      if (showing && again) node.hidePopover();
+      if (!showing || again) node.showPopover();
+      return true;
+    } catch {
+      // A browser without the top layer, or a node in a state that refuses it.
+      return false;
+    }
+  }
+
   function attachToCorrectParent({ raise = false } = {}) {
+    const fullscreen = document.fullscreenElement || document.webkitFullscreenElement;
+    if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(fullscreen, { raise });
+    if (window.__ssoStudy?.reparent) window.__ssoStudy.reparent(fullscreen, { raise });
+    if (!host) return;
+
+    /* The top layer first, and nothing moves when it works. Appending into the
+     * fullscreen element is the fallback for a browser without it - and it
+     * refuses a replaced element, where appending is not merely unnecessary
+     * but is the bug: the child is never painted and the surface silently
+     * disappears. */
+    const raised = [host, ...layers].map((node) => toTopLayer(node, { again: raise }));
+    if (raised.every(Boolean)) return;
+
     const parent =
-      document.fullscreenElement ||
-      document.webkitFullscreenElement ||
+      (fullscreen && !CANNOT_HOLD_CHILDREN.test(fullscreen.tagName) ? fullscreen : null) ||
       document.body ||
       document.documentElement;
-    if (!parent || !host) return;
+    if (!parent) return;
     if (host.parentElement !== parent || raise) parent.appendChild(host);
     // Floating layers go too. Fullscreen renders only the fullscreen element's
     // subtree, so one left behind is a menu that silently stops appearing.
     for (const layer of layers) if (layer.parentElement !== parent) parent.appendChild(layer);
-    if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(parent);
-    if (window.__ssoStudy?.reparent) window.__ssoStudy.reparent(parent);
   }
 
   /* A toast can carry one action.
@@ -3033,6 +3096,9 @@
     makeMovable,
     makeLayer,
     makeWindow,
+    // Shared with the panel and the study rail, which have hosts of their own
+    // and the same fullscreen problem. See toTopLayer.
+    toTopLayer,
     setPlacing(on) {
       state.placing = Boolean(on);
       for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
@@ -3178,8 +3244,12 @@
   document.addEventListener("pointercancel", onGlobalPointerEnd, true);
   document.addEventListener("pointermove", onPointerMove, { passive: true, capture: true });
   document.addEventListener("mousemove", onPointerMove, { passive: true, capture: true });
-  document.addEventListener("fullscreenchange", attachToCorrectParent);
-  document.addEventListener("webkitfullscreenchange", attachToCorrectParent);
+  /* Forced, because entering fullscreen adds the fullscreen element to the top
+   * layer after everything already in it - so what was in front is now behind,
+   * and only re-entering puts it back. */
+  const onFullscreenChange = () => attachToCorrectParent({ raise: true });
+  document.addEventListener("fullscreenchange", onFullscreenChange);
+  document.addEventListener("webkitfullscreenchange", onFullscreenChange);
   loadOverlayStyles();
   loadSettings();
   startTicking();
@@ -3204,8 +3274,8 @@
     document.removeEventListener("pointercancel", onGlobalPointerEnd, true);
     document.removeEventListener("pointermove", onPointerMove, { capture: true });
     document.removeEventListener("mousemove", onPointerMove, { capture: true });
-    document.removeEventListener("fullscreenchange", attachToCorrectParent);
-    document.removeEventListener("webkitfullscreenchange", attachToCorrectParent);
+    document.removeEventListener("fullscreenchange", onFullscreenChange);
+    document.removeEventListener("webkitfullscreenchange", onFullscreenChange);
     chrome.runtime.onMessage.removeListener(onMessage);
     toastLayer?.remove();
     toastLayer = null;

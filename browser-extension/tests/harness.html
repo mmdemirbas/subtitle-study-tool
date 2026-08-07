@@ -3144,6 +3144,80 @@
         await sleep(120);
       });
 
+      check("no surface is left inside an element that cannot paint it", async () => {
+        /* `requestFullscreen` can be called on any element, and several players
+         * - and Chrome's own "fullscreen the video" - call it on the <video>.
+         * Everything used to be moved into the fullscreen element, because only
+         * that subtree renders. Inside a <video> nothing renders at all: a
+         * child of a replaced element never generates a box.
+         *
+         * Measured on that path before the fix: the panel and the whole overlay
+         * both rendered 0x0 while reporting themselves open, so the CC button
+         * toggled a panel nobody could see and leaving fullscreen revealed one
+         * that had been open the whole time.
+         *
+         * The 0x0 only happens in real fullscreen, which needs a user gesture
+         * this page cannot make - outside it a `position: fixed` child escapes
+         * its parent's layout and paints anyway. So what is asserted here is
+         * the invariant that keeps the bug from happening at all: asked to
+         * follow something into a <video>, a surface does not go, and it ends
+         * up in the top layer, where the question never arises. */
+        const video = document.getElementById("v");
+        const hostFor = (sel) =>
+          [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(sel));
+
+        await window.__ssoPanel.show();
+        await sleep(250);
+        const panel = hostFor(".sso-panel");
+        const overlay = hostFor(".sso-root");
+
+        try {
+          // What the old code did, done by hand: bury them in the video.
+          for (const node of [overlay, panel]) {
+            if (node.matches(":popover-open")) node.hidePopover();
+            node.removeAttribute("popover");
+            video.appendChild(node);
+          }
+          await sleep(60);
+
+          window.__ssoApi.toTopLayer(overlay, { again: true });
+          window.__ssoPanel.reparent(video, { raise: true });
+          await sleep(120);
+
+          if (panel.parentElement === video)
+            throw new Error("the panel stayed inside the video");
+          if (overlay.parentElement === video)
+            throw new Error("the overlay stayed inside the video");
+          if (!panel.matches(":popover-open"))
+            throw new Error("the panel is not in the top layer, so fullscreen will bury it");
+          if (!overlay.matches(":popover-open"))
+            throw new Error("the subtitles are not in the top layer");
+        } finally {
+          window.__ssoPanel.hide();
+          await sleep(120);
+        }
+      });
+
+      check("the floating surfaces sit in the top layer", async () => {
+        /* Which is what makes the case above a non-event rather than a fix that
+         * has to be maintained: the top layer paints above the fullscreen
+         * element wherever the host sits in the document, so nothing has to be
+         * moved and no z-index has to win. */
+        const hostFor = (sel) =>
+          [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(sel));
+        window.__ssoApi.showToast("putting the toast on screen");
+        await sleep(120);
+        window.__ssoApi.toTopLayer(hostFor(".sso-root"));
+        await sleep(60);
+
+        for (const [what, sel] of [["the overlay", ".sso-root"], ["the toast", ".sso-toast"]]) {
+          const node = hostFor(sel);
+          if (!node) throw new Error(`${what} has no host`);
+          if (!node.matches(":popover-open"))
+            throw new Error(`${what} is not in the top layer`);
+        }
+      });
+
       check("the next episode is noticed without a page load", async () => {
         /* Streaming sites are single pages: the next episode swaps the stream
          * and leaves the tab, the frame and the <video> element where they

@@ -1558,10 +1558,19 @@
 
   /* Follows the overlay into the fullscreen element, since only that subtree is
    * rendered while fullscreen is on. */
-  function reparent(parent) {
+  function reparent(parent, { raise = false } = {}) {
     if (!host) return;
+    /* The top layer sits above the fullscreen element wherever the host is, so
+     * when it works nothing moves. See toTopLayer in content.js: appending into
+     * a fullscreen <video> puts the rail inside a replaced element, where it is
+     * never painted and still reports itself open. */
+    const raiseOne = (node) => node && api.toTopLayer?.(node, { again: raise });
+    if (raiseOne(host) && (!popupHost || raiseOne(popupHost))) {
+      rescale();
+      return;
+    }
     const target =
-      parent ||
+      (parent && parent.tagName !== "VIDEO" ? parent : null) ||
       document.fullscreenElement ||
       document.webkitFullscreenElement ||
       document.body ||

@@ -2278,10 +2278,19 @@
 
   /* Follows the overlay into the fullscreen element, since only that subtree
    * is rendered while fullscreen is active. */
-  function reparent(parent) {
+  function reparent(parent, { raise = false } = {}) {
     if (!host) return;
+    /* The top layer is above the fullscreen element wherever the host sits, so
+     * when it works nothing moves. See toTopLayer in content.js for what
+     * appending costs on a site that fullscreens the <video> itself: the panel
+     * lands inside a replaced element, is never painted, and still reports
+     * itself open - so the CC button appears to do nothing. */
+    if (api.toTopLayer?.(host, { again: raise })) {
+      rescale();
+      return;
+    }
     const target =
-      parent ||
+      (parent && parent.tagName !== "VIDEO" ? parent : null) ||
       document.fullscreenElement ||
       document.webkitFullscreenElement ||
       document.body ||
