@@ -82,6 +82,15 @@
   display: none;
 }
 
+/* One line of the file per block, so two lines that genuinely cover the same
+ * moment - a sign or a lyric held across the dialogue under it - stack instead
+ * of one of them being dropped. Nothing beyond `display: block`: a box with a
+ * single line in it has to render exactly as it did before there could be two,
+ * and every inherited property is already set on .sso-cue above. */
+.sso-line {
+  display: block;
+}
+
 /* In placement mode the stand-in is always on screen, so there is something to
  * take hold of between two lines of dialogue. Dashed, so it is obviously not
  * part of the film. */

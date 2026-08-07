@@ -1796,6 +1796,64 @@
         }
       });
 
+      check("two lines covering the same moment are both shown", async () => {
+        /* Finding the held line was only half of it: the renderer still drew
+         * one line per track, so the one it did not draw was dropped from the
+         * screen anyway. A sign, a lyric or a caption held across the dialogue
+         * under it has to stay readable while the dialogue runs. */
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+
+        await api.attach({
+          cues: [
+            { start: 1000, end: 20000, text: "HELD across everything" },
+            { start: 5000, end: 7000, text: "under it B" },
+          ],
+          label: "overlapping", fileId: 6401, language: "en", slot: 0,
+        });
+        await sleep(200);
+
+        try {
+          const linesAt = async (seconds) => {
+            video.currentTime = seconds;
+            await sleep(220);
+            const box = shadowOf().querySelector('.sso-root[data-slot="0"] .sso-cue');
+            return [...box.querySelectorAll(".sso-line")].map((el) => el.textContent);
+          };
+
+          const both = await linesAt(6);
+          if (both.length !== 2)
+            throw new Error(`two lines cover 6s but ${both.length} were drawn: ${JSON.stringify(both)}`);
+          // Document order, so the held line is context above the line being
+          // said rather than jumping over it when the dialogue arrives.
+          if (!both[0].includes("HELD") || !both[1].includes("under it B"))
+            throw new Error(`drawn out of order: ${JSON.stringify(both)}`);
+
+          // One line covering the moment is still one box with one line in it.
+          const alone = await linesAt(9);
+          if (alone.length !== 1 || !alone[0].includes("HELD"))
+            throw new Error(`at 9s, with one line covering it, drew ${JSON.stringify(alone)}`);
+
+          /* The keys, the pause and the saved sentence all follow one line, and
+           * it is the one that started last - stopping at the end of a sign
+           * held over the dialogue would stop mid-sentence. */
+          video.currentTime = 6;
+          await sleep(220);
+          if (!api.cueAt(0)?.text.includes("under it B"))
+            throw new Error(`the followed line at 6s was ${JSON.stringify(api.cueAt(0))}`);
+        } finally {
+          video.currentTime = wasTime;
+          if (wasAttached[0]) {
+            await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+          } else {
+            api.detach(0);
+          }
+          await sleep(150);
+        }
+      });
+
       check("resetting the keys resets only the keys", async () => {
         /* It called resetSettings(), which resets every setting there is. A
          * reader who had spent a while placing the boxes and then rebound one

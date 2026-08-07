@@ -45,12 +45,12 @@
   // Long enough to notice what happened and reach the button. The usual advice
   // for an undo is five to eight seconds; 1.6 is a confirmation, not an offer.
   const ACTION_TOAST_MS = 7000;
-  /* Sentinel for "redraw whatever is current". findCueIndex returns -1 when no
-   * cue is active, so using -1 to mean "invalidate" collides with it: the tick
-   * compares the new index against the old, sees -1 === -1, and skips the
+  /* Sentinel for "redraw whatever is current". "Nothing is on screen" is a real
+   * answer - the empty set - so it cannot double as "invalidate": the tick
+   * compares the new set against the old, sees two empty sets, and skips the
    * render. That is invisible while a line is on screen and breaks exactly in
-   * the gap between lines. */
-  const NEEDS_REDRAW = -2;
+   * the gap between lines. null is a set no comparison can equal. */
+  const NEEDS_REDRAW = null;
   const SETTINGS_KEY = "sso:settings";
 
   /* Two subtitles at once, which is the whole point of studying with them: the
@@ -330,7 +330,9 @@
     // How fast this file's clock runs against the film's. 1 is the same speed;
     // a framerate mismatch is a fraction of a per cent either side.
     rate: 1,
-    activeIndex: -1,
+    // Which of this file's lines are on screen, in document order. Usually one;
+    // several when a sign or a lyric is held across the dialogue under it.
+    activeIndexes: [],
     label: "",
     fileId: null,
     language: "",
@@ -1142,7 +1144,7 @@
 
     // Symbols and wrapping are part of the rendered content, so a change needs
     // a redraw of whatever is currently on screen.
-    for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
+    for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;
   }
 
   // --- dragging the subtitle ------------------------------------------------
@@ -1883,13 +1885,17 @@
    *
    * So the search is on `start` alone, which is the field the file is sorted
    * by and the only one a binary search can be trusted with, and the cover test
-   * happens afterwards. The last line to have started wins where two overlap,
-   * which is the readable rule: the newest thing said is the thing being said.
+   * happens afterwards.
+   *
+   * Every line covering the moment is returned, in document order, because
+   * showing one of them and dropping the other is how a held sign or a song
+   * lyric disappears the instant somebody speaks under it. The caller that
+   * needs a single line takes the last one: the newest thing said is the thing
+   * being said.
    *
    * None of this changes the answer for a file without overlaps, which is
-   * nearly all of them - the first candidate is the answer and the walk stops
-   * immediately. */
-  function findCueIndex(cues, timeMs) {
+   * nearly all of them - the walk finds one line and the list has one entry. */
+  function findCueIndexes(cues, timeMs) {
     let low = 0;
     let high = cues.length - 1;
     let latest = -1;
@@ -1904,10 +1910,28 @@
     }
 
     const floor = Math.max(0, latest - CUE_LOOKBACK);
-    for (let index = latest; index >= floor; index--) {
-      if (timeMs <= cues[index].end) return index;
+    const found = [];
+    // Ascending, so the list reads in document order and its last entry is the
+    // line that started most recently.
+    for (let index = floor; index <= latest; index++) {
+      if (timeMs <= cues[index].end) found.push(index);
     }
-    return -1;
+    return found;
+  }
+
+  /** The line a single-line caller should follow: the last one to have started. */
+  const lastCue = (track) => {
+    const indexes = track.activeIndexes;
+    return indexes && indexes.length ? track.cues[indexes[indexes.length - 1]] : null;
+  };
+
+  /* Whether the set on screen is the set that should be. Order is part of it -
+   * two lines drawn the other way round is a different picture. A null side is
+   * NEEDS_REDRAW and never matches, which is the whole point of it. */
+  function sameIndexes(a, b) {
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
   }
 
   function tick() {
@@ -1933,8 +1957,8 @@
       // "Nothing is showing", not "redraw" - otherwise this clears the text on
       // every tick forever.
       state.tracks.forEach((track, slot) => {
-        if (track.activeIndex === -1) return;
-        track.activeIndex = -1;
+        if (track.activeIndexes?.length === 0) return;
+        track.activeIndexes = [];
         if (views[slot]) views[slot].cueBox.textContent = "";
       });
       return;
@@ -1947,17 +1971,20 @@
     state.tracks.forEach((track, slot) => {
       if (state.inAd || !track.visible || track.cues.length === 0) {
         // Film subtitles over an advert are worse than none.
-        if (track.activeIndex !== -1) {
-          track.activeIndex = -1;
-          renderCue(slot, null);
+        if (track.activeIndexes?.length !== 0) {
+          track.activeIndexes = [];
+          renderCues(slot, []);
         }
         return;
       }
 
-      const index = findCueIndex(track.cues, filmTimeMs(track));
-      if (index === track.activeIndex) return;
-      track.activeIndex = index;
-      renderCue(slot, index === -1 ? null : track.cues[index]);
+      const indexes = findCueIndexes(track.cues, filmTimeMs(track));
+      if (sameIndexes(indexes, track.activeIndexes)) return;
+      track.activeIndexes = indexes;
+      renderCues(
+        slot,
+        indexes.map((index) => track.cues[index]),
+      );
     });
   }
 
@@ -2006,8 +2033,11 @@
     if (!track) return;
 
     const now = filmTimeMs(track);
-    const index = findCueIndex(track.cues, now);
-    const cue = index === -1 ? null : track.cues[index];
+    /* The last line to have started, where several overlap. Stopping at the end
+     * of a sign held over the dialogue would stop in the middle of the sentence
+     * being spoken, which is the opposite of what this is for. */
+    const indexes = findCueIndexes(track.cues, now);
+    const cue = indexes.length ? track.cues[indexes[indexes.length - 1]] : null;
 
     // Out of the line it stopped at - a gap, the next line, or seeked back over
     // it - so that line is done and its end can stop the film again.
@@ -2083,7 +2113,7 @@
     /* Draw it now rather than up to a tick later. Setting currentTime moves the
      * official playback position immediately, so the tick reads the new time
      * even while the frames are still on their way. */
-    for (const other of state.tracks) other.activeIndex = NEEDS_REDRAW;
+    for (const other of state.tracks) other.activeIndexes = NEEDS_REDRAW;
     tick();
     return true;
   }
@@ -2210,7 +2240,7 @@
         state.adDriftMs += elapsed;
         showToast(`Ad break over — subtitles shifted ${(elapsed / 1000).toFixed(0)}s`);
       }
-      for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
+      for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;
     }
     notify();
   }
@@ -2270,11 +2300,21 @@
     });
   }
 
-  function renderCue(slot, cue) {
+  /* Every line covering this moment, stacked in one box.
+   *
+   * One background and one bottom edge however many lines are in it, so the
+   * anchoring the whole overlay is built on still holds and two subtitles side
+   * by side still share a baseline. Document order puts the held line above the
+   * dialogue that arrived under it, which is where a reader expects context to
+   * sit. */
+  function renderCues(slot, cues) {
     const { root, cueBox } = views[slot];
     cueBox.replaceChildren();
-    root.dataset.vertical = cue?.vertical || "bottom";
-    if (!cue) {
+    /* Where the box sits is one decision for the whole box and the lines in it
+     * can disagree. The last to have started decides, for the same reason it
+     * decides everywhere else: it is the thing being said. */
+    root.dataset.vertical = cues[cues.length - 1]?.vertical || "bottom";
+    if (cues.length === 0) {
       if (state.placing) cueBox.textContent = `Drag me — subtitle ${slot + 1}`;
       // Tell study mode the line ended, so a lookup does not outlive the line
       // that raised it.
@@ -2282,36 +2322,49 @@
       return;
     }
 
+    for (const cue of cues) {
+      const line = document.createElement("div");
+      line.className = "sso-line";
+      renderCueInto(line, cue);
+      cueBox.append(line);
+    }
+
+    /* Study mode gets the finished element rather than a hook inside the loop
+     * above. Splitting the line into words is its business, it only happens
+     * while study mode is on, and doing it here would put a branch in the
+     * middle of the one function that runs for every line of every film.
+     *
+     * It gets the last-started line and the element holding exactly that line's
+     * words - not the box, which may hold another line's as well. Marking and
+     * saving both would put the wrong sentence on a saved word. */
+    window.__ssoStudy?.onCue?.(slot, cues[cues.length - 1], cueBox.lastElementChild);
+  }
+
+  function renderCueInto(line, cue) {
     const rewrap = state.settings.rewrap;
 
     if (!cue.runs) {
-      cueBox.textContent = rewrap ? rewrapText(cue.text) : cue.text;
-    } else {
-      for (const run of rewrap ? rewrapRuns(cue.runs) : cue.runs) {
-        const span = document.createElement("span");
-        span.className = "sso-run";
-        if (run.kind) span.classList.add(`sso-${run.kind}`);
-        for (const style of run.styles || []) span.classList.add(`sso-${style}`);
-        // Colour is validated against an allowlist daemon-side, so it can only
-        // ever be a hex literal or a known CSS colour name.
-        if (run.color) span.style.color = run.color;
-
-        if (run.symbol && state.settings.showSymbols) {
-          const symbol = document.createElement("span");
-          symbol.className = "sso-symbol";
-          symbol.textContent = run.symbol;
-          span.append(symbol);
-        }
-        span.append(document.createTextNode(run.text));
-        cueBox.append(span);
-      }
+      line.textContent = rewrap ? rewrapText(cue.text) : cue.text;
+      return;
     }
+    for (const run of rewrap ? rewrapRuns(cue.runs) : cue.runs) {
+      const span = document.createElement("span");
+      span.className = "sso-run";
+      if (run.kind) span.classList.add(`sso-${run.kind}`);
+      for (const style of run.styles || []) span.classList.add(`sso-${style}`);
+      // Colour is validated against an allowlist daemon-side, so it can only
+      // ever be a hex literal or a known CSS colour name.
+      if (run.color) span.style.color = run.color;
 
-    /* Study mode gets the finished box rather than a hook inside the loop
-     * above. Splitting the line into words is its business, it only happens
-     * while study mode is on, and doing it here would put a branch in the
-     * middle of the one function that runs for every line of every film. */
-    window.__ssoStudy?.onCue?.(slot, cue, cueBox);
+      if (run.symbol && state.settings.showSymbols) {
+        const symbol = document.createElement("span");
+        symbol.className = "sso-symbol";
+        symbol.textContent = run.symbol;
+        span.append(symbol);
+      }
+      span.append(document.createTextNode(run.text));
+      line.append(span);
+    }
   }
 
   /** Run the tick at a given rate, changing rate only when it actually changes. */
@@ -2490,7 +2543,7 @@
     const track = state.tracks[slot];
     const next = Number(rate);
     track.rate = Number.isFinite(next) && next > 0 ? next : 1;
-    track.activeIndex = NEEDS_REDRAW;
+    track.activeIndexes = NEEDS_REDRAW;
     saveOffset(track);
     if (byHand) rememberTimingSoon(track);
     notify();
@@ -2504,7 +2557,7 @@
   function setOffset(ms, { quiet = false, slot = state.keyTrack, byHand = true } = {}) {
     const track = state.tracks[slot];
     track.offsetMs = Math.round(ms);
-    track.activeIndex = NEEDS_REDRAW; // force a re-render at the new offset
+    track.activeIndexes = NEEDS_REDRAW; // force a re-render at the new offset
     saveOffset(track);
     if (byHand) rememberTimingSoon(track);
     notify();
@@ -2688,7 +2741,7 @@
     const timing = await loadOffset(track.fileId);
     track.offsetMs = timing.offsetMs;
     track.rate = timing.rate;
-    track.activeIndex = NEEDS_REDRAW;
+    track.activeIndexes = NEEDS_REDRAW;
     track.visible = true;
     state.adDriftMs = 0;
     state.inAd = false;
@@ -2930,7 +2983,7 @@
         }, UNDO_MS);
       }
       state.tracks[index] = newTrack();
-      state.tracks[index].activeIndex = NEEDS_REDRAW;
+      state.tracks[index].activeIndexes = NEEDS_REDRAW;
       if (views[index]) views[index].cueBox.textContent = "";
     }
     notify();
@@ -2950,7 +3003,7 @@
     removed = null;
     clearTimeout(removedTimer);
     state.tracks[slot] = track;
-    track.activeIndex = NEEDS_REDRAW;
+    track.activeIndexes = NEEDS_REDRAW;
     ensureOverlay();
     syncRootVisibility();
     startTicking();
@@ -2986,7 +3039,7 @@
       const on = state.visible && state.tracks[index].visible;
       view.root.hidden = !on;
       if (!on) view.cueBox.textContent = "";
-      state.tracks[index].activeIndex = NEEDS_REDRAW;
+      state.tracks[index].activeIndexes = NEEDS_REDRAW;
     }
   }
 
@@ -3101,7 +3154,7 @@
 
       case "sso:clearAdDrift":
         state.adDriftMs = 0;
-        for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
+        for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;
         notify();
         sendResponse({ ok: true });
         return false;
@@ -3153,7 +3206,7 @@
     toTopLayer,
     setPlacing(on) {
       state.placing = Boolean(on);
-      for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
+      for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;
       for (const view of views) view.root.dataset.placing = state.placing ? "true" : "false";
       notify();
     },
@@ -3169,7 +3222,7 @@
     },
     clearAdDrift() {
       state.adDriftMs = 0;
-      for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
+      for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;
       notify();
     },
     pageInfo,
@@ -3192,9 +3245,7 @@
      * sentence, and the paired line in the other language, which is the whole
      * reason a word is worth saving at all. */
     cueAt(slot) {
-      const track = state.tracks[slot];
-      const index = track.activeIndex;
-      return index >= 0 ? track.cues[index] : null;
+      return lastCue(state.tracks[slot]);
     },
     trackInfo(slot) {
       const track = state.tracks[slot];
@@ -3210,7 +3261,7 @@
      * the next one - a subtitle can sit there for five seconds and a feature
      * that appears to do nothing for five seconds reads as broken. */
     redrawCues() {
-      for (const track of state.tracks) track.activeIndex = NEEDS_REDRAW;
+      for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;
     },
     overlayRoots() {
       return views.map((view) => view.root);
