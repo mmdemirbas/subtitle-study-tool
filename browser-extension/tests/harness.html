@@ -179,7 +179,9 @@
       // Configurable, so a case can swap the stream for a different one - which
       // is what starting the next episode looks like from in here.
       Object.defineProperty(video, "duration", { get: () => 7200, configurable: true });
-      Object.defineProperty(video, "paused", { get: () => false });
+      // Configurable, so a case can make pausing real - the overlay can stop
+      // the film now, and a stub that is always playing cannot show that.
+      Object.defineProperty(video, "paused", { get: () => false, configurable: true });
       let t = 1;
       Object.defineProperty(video, "currentTime", { get: () => t, set: (x) => (t = x) });
 
@@ -3202,6 +3204,83 @@
           api.detach(0);
         }
         await sleep(120);
+      });
+
+      check("stopping at the end of a line stops once, not for ever", async () => {
+        /* Intensive listening is hear the line, read it, say it back, go on -
+         * and "go on" is the only part that needs a hand. The whole difficulty
+         * is doing it once: a pause is a state, not a moment, so when play is
+         * pressed the playhead is still inside the same line's end, and a naive
+         * check pauses again on the very next tick and the film never moves.
+         *
+         * The other half is the Again key, which goes back over a line already
+         * stopped at - and that line's end has to stop the film a second time
+         * or repeating a line silently turns the feature off for it. */
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+        const wasPaused = Object.getOwnPropertyDescriptor(video, "paused");
+
+        let paused = false;
+        const realPause = video.pause;
+        const realPlay = video.play;
+        Object.defineProperty(video, "paused", { get: () => paused, configurable: true });
+        video.pause = () => { paused = true; };
+        video.play = () => { paused = false; };
+
+        try {
+          await api.attach({
+            cues: [
+              { start: 1000, end: 3000, text: "one" },
+              { start: 5000, end: 7000, text: "two" },
+            ],
+            label: "EN · pause", fileId: 8200, language: "en", slot: 0,
+          });
+          api.setKeyTrack(0);
+          api.updateSettings({ pauseAtLineEnd: true });
+          await sleep(250);
+
+          const at = async (seconds) => { video.currentTime = seconds; await sleep(260); };
+
+          await at(2);
+          if (paused) throw new Error("it stopped in the middle of a line");
+
+          await at(2.98);
+          if (!paused) throw new Error("the line ended and it did not stop");
+
+          video.play();
+          await sleep(320);
+          if (paused) throw new Error("pressing play stopped it again - the film cannot move");
+
+          await at(6.98);
+          if (!paused) throw new Error("the second line ended and it did not stop");
+
+          video.play();
+          await sleep(150);
+          api.stepLine(-1);
+          await sleep(260);
+          if (paused) throw new Error("going back a line left it stopped");
+          await at(6.98);
+          if (!paused) throw new Error("a repeated line does not stop at its end");
+
+          api.updateSettings({ pauseAtLineEnd: false });
+          video.play();
+          await at(2.99);
+          if (paused) throw new Error("it stopped with the setting off");
+        } finally {
+          api.updateSettings({ pauseAtLineEnd: false });
+          video.pause = realPause;
+          video.play = realPlay;
+          if (wasPaused) Object.defineProperty(video, "paused", wasPaused);
+          video.currentTime = wasTime;
+          if (wasAttached[0]) {
+            await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+          } else {
+            api.detach(0);
+          }
+          await sleep(150);
+        }
       });
 
       check("the rail can be made taller than what is in it, and still folds", async () => {

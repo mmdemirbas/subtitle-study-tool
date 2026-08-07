@@ -1314,7 +1314,9 @@
           refresh(api.status());
         },
       });
-      settingsWindow.body.append(buildSite(), buildAppearance(), buildKeys(), buildDiagnostics());
+      settingsWindow.body.append(
+        buildSite(), buildWatching(), buildAppearance(), buildKeys(), buildDiagnostics(),
+      );
     }
     closeMenu();
     await settingsWindow.show(host);
@@ -1826,6 +1828,40 @@
 
   // --- appearance -----------------------------------------------------------
 
+  /* How the film runs, rather than how it looks.
+   *
+   * One setting so far, and it is a way of watching rather than a preference:
+   * stopping at the end of every line turns a film into a deck of lines, which
+   * is what intensive listening is and is not what anybody wants by accident.
+   * It sits above Appearance because it changes what happens; everything below
+   * changes what things look like. */
+  function buildWatching() {
+    const wrap = section("While watching");
+
+    el.pauseAtLineEnd = toggle_(
+      "Stop at the end of each line",
+      api.status().settings.pauseAtLineEnd,
+      (on) => {
+        api.updateSettings({ pauseAtLineEnd: on });
+        api.showToast(
+          on
+            ? "Stopping at the end of every line - press play to go on"
+            : "Playing straight through again",
+        );
+      },
+    );
+    el.pauseAtLineEnd.row.title =
+      "Pause when a line finishes. Press play to carry on to the end of the next one.";
+
+    const note = document.createElement("p");
+    note.className = "sso-note";
+    note.textContent =
+      "Lines of the selected subtitle. With the keys on, T plays the line again and Y skips ahead.";
+
+    wrap.append(el.pauseAtLineEnd.row, note);
+    return wrap;
+  }
+
   /* What is left here is what both subtitles share. Size and width are per
    * subtitle and live on the track cards above, next to the subtitle they
    * belong to. */
@@ -2283,6 +2319,7 @@
     // panel happens to be showing.
     if (!settingsWindow?.isOpen()) return;
 
+    el.pauseAtLineEnd.input.checked = Boolean(settings.pauseAtLineEnd);
     el.background.input.value = String(settings.background);
     el.background.readout.textContent = String(settings.background);
     el.rewrap.input.checked = Boolean(settings.rewrap);

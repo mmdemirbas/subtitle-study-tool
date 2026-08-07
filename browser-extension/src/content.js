@@ -217,6 +217,13 @@
     dimNonSpeech: true,
     smallStepMs: 250,
     largeStepMs: 1000,
+    /* Stop at the end of every line and wait to be told to go on.
+     *
+     * Off, because it is a way of watching rather than a setting: it turns a
+     * film into a deck of lines, which is what intensive listening is and is
+     * not what anybody wants by accident. On, the pause happens once per line -
+     * pressing play carries on to the end of the next one. */
+    pauseAtLineEnd: false,
     /* The key the layout produces, not the key the keyboard has under it.
      *
      * These were KeyboardEvent.code - BracketLeft, KeyP - which names the
@@ -1935,6 +1942,8 @@
     ensureOverlay();
     pollAdState();
 
+    pauseAtLineEnd();
+
     state.tracks.forEach((track, slot) => {
       if (state.inAd || !track.visible || track.cues.length === 0) {
         // Film subtitles over an advert are worse than none.
@@ -1969,6 +1978,49 @@
   function filmTimeMs(track) {
     const stream = state.video.currentTime * 1000 - state.adDriftMs - track.offsetMs;
     return track.rate && track.rate !== 1 ? stream / track.rate : stream;
+  }
+
+  /* Stop when a line finishes, once per line.
+   *
+   * Intensive listening is the same loop over and over - hear the line, read
+   * it, say it back, go on - and the "go on" is the only part that needs a
+   * hand. Without this it needs three: pause, rewind, play.
+   *
+   * Once per line is the whole difficulty. A pause is not a moment, it is a
+   * state that lasts until somebody presses play, and by then the playhead is
+   * still inside the same line's end - so the next tick would pause again and
+   * the film would never move. What is remembered is which line was paused at,
+   * and it is forgotten when the playhead leaves that line, whichever way it
+   * goes: forwards to the next line, or backwards over it with the Again key,
+   * which is the case that must still stop at the end a second time.
+   *
+   * The keyed subtitle is the one that decides, which is the same rule the
+   * line keys use - the language being read is the one whose lines matter. */
+  let pausedAtCue = null;
+
+  function pauseAtLineEnd() {
+    if (!state.settings.pauseAtLineEnd || !state.video || state.inAd) return;
+    const track = state.tracks[state.keyTrack]?.cues.length
+      ? state.tracks[state.keyTrack]
+      : attachedTracks()[0];
+    if (!track) return;
+
+    const now = filmTimeMs(track);
+    const index = findCueIndex(track.cues, now);
+    const cue = index === -1 ? null : track.cues[index];
+
+    // Out of the line it stopped at - a gap, the next line, or seeked back over
+    // it - so that line is done and its end can stop the film again.
+    if (pausedAtCue && cue !== pausedAtCue) pausedAtCue = null;
+    if (!cue || cue === pausedAtCue || state.video.paused) return;
+    /* The end of the line, not a moment after it. The tick runs every 50ms, so
+     * the playhead is somewhere in the last tick's worth of the line when this
+     * fires; pausing on the way out rather than after the gap has started is
+     * what keeps the line on screen while it is being read. */
+    if (now < cue.end - TICK_MS) return;
+
+    pausedAtCue = cue;
+    state.video.pause();
   }
 
   /** The other direction: where a moment of this file lands in the stream. */
