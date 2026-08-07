@@ -150,10 +150,8 @@ export function listSubtitles() {
 
 /* The same list without the bytes, for the questions that are about metadata.
  *
- * IndexedDB has no way to read part of a record, so this keeps the metadata in
- * memory and rebuilds it from one full read when it is not there. Everything
- * that writes goes through this file, so the map cannot fall behind; a worker
- * that is shut down and restarted simply builds it again.
+ * IndexedDB has no way to read part of a record, so the metadata is held in
+ * memory and rebuilt from one full read when it does not match the store.
  *
  * Why it is worth having: `listSubtitles` loads every subtitle's bytes, and a
  * single search called it twice - once to mark which results are already held
@@ -161,11 +159,23 @@ export function listSubtitles() {
  * cached, 90KB each: 4.2ms plus 3.9ms per search, and 3.6MB read into a
  * service worker that is killed for holding memory. It grows with everything
  * ever downloaded, which is the wrong direction for a cache to scale in.
+ *
+ * Why the key check rather than trusting the writers here: the store is not
+ * private to this file. It is one IndexedDB database, reachable from every
+ * context of the extension, and the first version of this held the map until a
+ * write came through these functions - which was wrong the moment anything
+ * else touched the store. A record deleted directly went on being reported as
+ * held, so a search still promoted it and still said "already downloaded"
+ * about a file that was gone. `getAllKeys` answers "is this still the same set
+ * of records" without loading a single byte, which is the whole point.
  */
 let metaIndex = null;
 
 async function metaMap() {
-  if (metaIndex) return metaIndex;
+  const keys = (await read(SUBTITLES, (store) => store.getAllKeys())) || [];
+  if (metaIndex && metaIndex.size === keys.length && keys.every((id) => metaIndex.has(id))) {
+    return metaIndex;
+  }
   const records = await read(SUBTITLES, (store) => store.getAll());
   metaIndex = new Map((records || []).map((record) => [record.file_id, record.meta]));
   return metaIndex;

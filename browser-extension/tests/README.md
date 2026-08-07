@@ -5,10 +5,20 @@ no dependencies.
 
 ```bash
 cd browser-extension
-python3 -m http.server 8997
+python3 tests/serve.py
 # http://127.0.0.1:8997/tests/harness.html   - the overlay in a hostile page
 # http://127.0.0.1:8997/tests/fallback.html  - fetching without the daemon
 ```
+
+**Use `tests/serve.py`, not `python3 -m http.server`.** It is the same thing
+with `Cache-Control: no-store` on every reply, and that is load-bearing: the
+browser's memory cache does not revalidate a URL it has already seen this
+session, and the page URL is not the script URL. Reloading a test page reloads
+the page and keeps the *previous* `content.js`, so the suite passes while
+describing code that is no longer on disk. `harness.html` also appends a
+cache-buster to its own `<script src>` tags, but a page cannot defend what a
+module imports — `fallback.html` imports `provider.js`, which imports
+`cache.js`, and nothing in the page ever names that URL.
 
 There is a third, which lives on the daemon's side because it needs both
 languages at once: `subtitle-daemon/tests/test_js_parity.py` runs the Python
