@@ -305,8 +305,10 @@
     );
     const ranks = await ranksFor(candidates, language);
     // The line changed while the ranks were in flight; marking now would put
-    // the previous line's answers on this one's words.
-    if (line.token !== current.token) return;
+    // the previous line's answers on this one's words. Study being switched off
+    // in that same window is the other way this arrives too late - the words it
+    // would mark have been unwrapped, and the rail it would fill is gone.
+    if (line.token !== current.token || !settings.enabled) return;
 
     const rare = [];
     for (const span of line.words) {
@@ -978,7 +980,12 @@
    * not two things to read.
    */
   async function addCard(term, { rank = undefined, language, pinned = false, auto = false } = {}) {
-    if (!term || !host) return null;
+    /* Guarded on the list, which is what this actually writes into, rather than
+     * on the host. They are not the same question: ranking a line is a round
+     * trip to the worker, and study can be turned off while one is in flight -
+     * observed as `Cannot read properties of null (reading 'prepend')` from
+     * markWords, twice, while switching study off and on again. */
+    if (!term || !listEl) return null;
 
     const existing = cards.find((card) => card.term === term && card.language === language);
     if (existing) {
