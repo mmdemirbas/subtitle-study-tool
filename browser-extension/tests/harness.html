@@ -55,11 +55,22 @@
       const EXT = "../src/";
       // Everything the page reported to the worker, in order.
       window.__sent = [];
+      // The message listeners the page registered, so a test can ask them.
+      window.__listeners = [];
       window.chrome = {
         runtime: {
           getManifest: () => ({ version: "0.1.0" }),
           getURL: (p) => EXT + p.split("/").pop(),
-          onMessage: { addListener() {}, removeListener() {} },
+          /* Recorded rather than discarded. The worker's half of this is not
+             loaded here, but the page's half is the thing under test, and a
+             listener that is thrown away cannot be asked anything. */
+          onMessage: {
+            addListener(fn) { window.__listeners.push(fn); },
+            removeListener(fn) {
+              const at = window.__listeners.indexOf(fn);
+              if (at !== -1) window.__listeners.splice(at, 1);
+            },
+          },
           sendMessage: async (msg) => {
             /* The two the page sends to the worker about what is playing, kept
              * so a test can assert what was reported and when. The worker's own
@@ -3890,6 +3901,90 @@
         }
         api.updateSettings({ tracks: wasGeometry });
         await sleep(150);
+      });
+
+      /* The obstruction probe in the diagnostic report.
+       *
+       * Asked through the message the worker actually sends, so what is under
+       * test is the whole path rather than a function lifted out of it. These
+       * exist because the thing they describe cannot be seen from the harness
+       * at all: a page whose player is a cross-origin iframe covers the panel
+       * from a document this one has no equivalent of. What can be checked
+       * here is that the probe reports the surfaces truthfully - so that when
+       * it is read on such a page, the reading means something. */
+      const askDiagnose = async () => {
+        for (const listener of [...window.__listeners].reverse()) {
+          let answer = null;
+          const returned = listener({ type: "sso:diagnose" }, {}, (value) => { answer = value; });
+          if (answer) return answer;
+          if (returned && typeof returned.then === "function") await returned;
+        }
+        throw new Error("no listener answered sso:diagnose");
+      };
+
+      check("the diagnostic reports the surfaces the extension drew", async () => {
+        const report = await askDiagnose();
+        if (!Array.isArray(report.surfaces)) throw new Error("no surfaces in the report");
+        if (!report.surfaces.length) throw new Error("nothing reported, with an overlay on screen");
+        const names = report.surfaces.map((s) => s.surface).join(" ");
+        if (!/sso-/.test(names)) throw new Error(`surfaces are not ours: ${names}`);
+      });
+
+      check("it reports each surface's geometry and stacking", async () => {
+        const [first] = (await askDiagnose()).surfaces;
+        if (first.rect.length !== 4) throw new Error("no rect");
+        if (typeof first.zIndex !== "string") throw new Error("no z-index");
+        if (typeof first.pointerEvents !== "string") throw new Error("no pointer-events");
+        if (typeof first.inTopLayer !== "boolean") throw new Error("no top-layer state");
+      });
+
+      check("an unobstructed button is reported reachable, naming nothing", async () => {
+        const targets = (await askDiagnose()).surfaces.flatMap((s) => s.targets || []);
+        const drawn = targets.filter((t) => t.rendered !== false);
+        if (!drawn.length) throw new Error("no button was sampled");
+        const stuck = drawn.filter((t) => !t.reachable);
+        if (stuck.length) {
+          throw new Error(`${stuck.length} unreachable on a page with nothing over them: ` +
+            JSON.stringify(stuck[0]));
+        }
+        if (drawn.some((t) => t.coveredBy.length)) throw new Error("named an obstruction that is not there");
+      });
+
+      check("a button under something names what took the click", async () => {
+        /* The page's own overlay, at the z-index the measured ones use. It has
+         * to out-rank the top layer to cover anything, which nothing in one
+         * document can - so the surface is taken out of the top layer first,
+         * which is also the state it is in whenever promotion failed. */
+        const hosts = [...document.querySelectorAll("div")]
+          .filter((d) => (d.shadowRoot?.firstElementChild?.className || "").startsWith("sso-"));
+        // Every one of them, not the first: a surface left in the top layer
+        // stays reachable and would read as a page with nothing wrong.
+        const wereOpen = hosts.filter((h) => h.matches(":popover-open"));
+        for (const h of wereOpen) h.hidePopover();
+
+        const lid = document.createElement("div");
+        lid.id = "harness-lid";
+        for (const [p, v] of Object.entries({
+          position: "fixed", inset: "0", "z-index": "2147483647", "pointer-events": "auto",
+        })) lid.style.setProperty(p, v, "important");
+        document.documentElement.append(lid);
+
+        try {
+          const targets = (await askDiagnose()).surfaces.flatMap((s) => s.targets || []);
+          const drawn = targets.filter((t) => t.rendered !== false);
+          if (!drawn.length) throw new Error("no button was sampled");
+          const named = drawn.filter((t) => t.coveredBy.some((c) => /harness-lid/.test(c)));
+          if (!named.length) {
+            throw new Error(`the lid was not named: ${JSON.stringify(drawn.map((t) => t.coveredBy))}`);
+          }
+          if (named.some((t) => t.reachable)) throw new Error("covered and still called reachable");
+          if (!named[0].coveredBy.some((c) => /z=2147483647/.test(c))) {
+            throw new Error(`the winning z-index is missing: ${named[0].coveredBy}`);
+          }
+        } finally {
+          lid.remove();
+          for (const h of wereOpen) h.showPopover();
+        }
       });
 
       check("re-injection leaves exactly one overlay", async () => {

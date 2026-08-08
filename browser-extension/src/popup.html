@@ -30,6 +30,15 @@
         <button id="toggle" class="button button--wide" hidden>Hide subtitles</button>
       </div>
 
+      <!-- The control panel has this too, and the popup needs its own copy for
+           the case the panel cannot be clicked - which is one of the things
+           the report exists to explain. A toolbar popup is browser chrome, so
+           nothing the page draws can cover it. -->
+      <div class="actions">
+        <button id="diagnose" class="button button--wide">Diagnose this page</button>
+      </div>
+      <p id="diagnose-note" class="note note--dim" hidden></p>
+
       <p class="note note--dim">
         The control panel opens over the video, so it still works in fullscreen —
         that is where searching, timing and appearance live.

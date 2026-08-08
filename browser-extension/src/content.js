@@ -947,7 +947,97 @@
         offsetMs: track.offsetMs,
         rate: track.rate,
       })),
+
+      // Why a surface will not take a click. See describeSurfaces.
+      viewport: { width: window.innerWidth, height: window.innerHeight },
+      surfaces: describeSurfaces(),
     };
+  }
+
+  /* What is sitting on top of the extension's own surfaces.
+   *
+   * A panel that will not take a click cannot be explained from one vantage
+   * point, which is the same reason the rest of this report asks every frame.
+   * From in here we can see what covers our hosts in *this* document, by
+   * hit-testing the middle of each button the way a click does. What we cannot
+   * see is the document above: on a site whose player is a cross-origin iframe
+   * the extension draws inside that iframe, and neither z-index nor the top
+   * layer reaches past a frame boundary - the iframe is one box in its
+   * parent's paint order, and anything the parent draws over it wins.
+   *
+   * So the two findings this produces mean different things, and the report
+   * says which. A button with something over it names its own obstruction. A
+   * button that is topmost in a nested frame and still cannot be clicked is
+   * being covered from above, and the fix is not in this frame at all.
+   *
+   * Our surfaces are found by the class the shadow root's first child carries,
+   * rather than by a marker on the host: the hosts are built in three
+   * different files and a marker would have to be remembered in all of them. */
+  const MAX_SURFACES = 8;
+  const MAX_TARGETS = 6;
+
+  function describeSurfaces() {
+    const surfaces = [];
+    for (const node of document.querySelectorAll("*")) {
+      if (surfaces.length >= MAX_SURFACES) break;
+      const first = node.shadowRoot?.firstElementChild;
+      const name = typeof first?.className === "string" ? first.className : "";
+      if (!name.startsWith("sso-")) continue;
+
+      const style = getComputedStyle(node);
+      const box = node.getBoundingClientRect();
+      surfaces.push({
+        surface: name,
+        rect: [Math.round(box.x), Math.round(box.y), Math.round(box.width), Math.round(box.height)],
+        display: style.display,
+        pointerEvents: style.pointerEvents,
+        zIndex: style.zIndex,
+        inTopLayer: node.matches(":popover-open"),
+        parent: describeNode(node.parentElement),
+        targets: sampleTargets(node),
+      });
+    }
+    return surfaces;
+  }
+
+  /* One sample per button, at its middle, because that is where a click lands.
+   * Sampling the host's own middle would be worthless for the cue overlay,
+   * which is deliberately click-through everywhere except the cue itself. */
+  function sampleTargets(host) {
+    return Array.from(host.shadowRoot.querySelectorAll("button"))
+      .slice(0, MAX_TARGETS)
+      .map((button) => {
+        const label = (button.getAttribute("aria-label") || button.title || button.textContent || "")
+          .trim()
+          .slice(0, 24);
+        const box = button.getBoundingClientRect();
+        if (box.width === 0 || box.height === 0) return { label, rendered: false };
+
+        const x = box.left + box.width / 2;
+        const y = box.top + box.height / 2;
+        /* Shadow content retargets to the host, so the host is what comes back
+         * for our own surface. Topmost means nothing here is in the way. */
+        const stack = document.elementsFromPoint(x, y);
+        const depth = stack.indexOf(host);
+        return {
+          label,
+          at: [Math.round(x), Math.round(y)],
+          reachable: depth === 0,
+          // Empty with reachable false means the point does not hit us at all.
+          coveredBy: (depth === -1 ? stack.slice(0, 3) : stack.slice(0, depth)).map(describeNode),
+        };
+      });
+  }
+
+  function describeNode(node) {
+    if (!node) return "none";
+    const style = getComputedStyle(node);
+    const id = node.id ? `#${node.id}` : "";
+    const classes =
+      typeof node.className === "string" && node.className.trim()
+        ? `.${node.className.trim().split(/\s+/).slice(0, 2).join(".")}`
+        : "";
+    return `${node.tagName}${id}${classes} z=${style.zIndex} pe=${style.pointerEvents}`;
   }
 
   // --- settings -------------------------------------------------------------

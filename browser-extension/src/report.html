@@ -59,6 +59,24 @@
       </section>
 
       <section class="card">
+        <h2>What is covering the extension's own surfaces</h2>
+        <p class="note">
+          Each button the extension draws, hit-tested at its middle the way a
+          click is. A button with something listed against it names its own
+          obstruction. A button that is topmost and still cannot be clicked is
+          being covered from a frame above this one — neither z-index nor the
+          top layer reaches past a frame boundary, so no change inside that
+          frame can fix it.
+        </p>
+        <p class="status" id="surfaces-summary">—</p>
+        <div id="surfaces"></div>
+        <p class="empty" id="surfaces-empty" hidden>
+          No extension surfaces were drawn in any frame. Move the mouse over the
+          video to bring up the CC handle, then capture again.
+        </p>
+      </section>
+
+      <section class="card">
         <h2>The episode</h2>
         <p class="note">
           A subtitle for the wrong episode of the right series looks exactly like

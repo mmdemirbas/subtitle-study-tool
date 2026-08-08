@@ -39,6 +39,7 @@ function render() {
 
   renderVerdict();
   renderFrames();
+  renderSurfaces();
   renderEpisode();
   renderPlans();
   el("raw").textContent = JSON.stringify(report, null, 2);
@@ -164,6 +165,81 @@ function renderFrames() {
     );
     rows.append(row);
   }
+}
+
+// --- the surfaces -----------------------------------------------------------
+
+/* Why a surface will not take a click.
+ *
+ * Two findings, and they point at different places. Something over a button is
+ * named outright and lives in that button's own document. A button that is
+ * topmost in a frame below the top one is a different answer: the obstruction
+ * is in a document this frame cannot see or reach past, so the fix is to draw
+ * the surface somewhere else rather than to raise it. Both are stated, because
+ * mistaking the second for "nothing is wrong" is the whole trap.
+ */
+function renderSurfaces() {
+  const wrap = el("surfaces");
+  wrap.replaceChildren();
+
+  const drawn = report.frames.filter((frame) => frame.report?.surfaces?.length);
+  el("surfaces-empty").hidden = drawn.length > 0;
+  if (!drawn.length) {
+    el("surfaces-summary").textContent = "Nothing drawn.";
+    return;
+  }
+
+  let blocked = 0;
+  let nested = 0;
+
+  for (const frame of drawn) {
+    const heading = document.createElement("h3");
+    const where = frame.frameId === 0 ? "frame 0 (top)" : `frame ${frame.frameId}`;
+    heading.textContent = `${where} — ${frame.origin}`;
+    wrap.append(heading);
+
+    for (const surface of frame.report.surfaces) {
+      const block = document.createElement("div");
+
+      const title = document.createElement("p");
+      title.className = "note";
+      title.textContent =
+        `${surface.surface} · ${surface.rect[2]}x${surface.rect[3]} at ` +
+        `(${surface.rect[0]}, ${surface.rect[1]}) · z-index ${surface.zIndex} · ` +
+        `pointer-events ${surface.pointerEvents} · ` +
+        `${surface.inTopLayer ? "in the top layer" : "not in the top layer"}`;
+      block.append(title);
+
+      for (const target of surface.targets || []) {
+        const line = document.createElement("p");
+        line.className = "status";
+        if (target.rendered === false) {
+          line.textContent = `“${target.label}” — not rendered (zero size)`;
+        } else if (target.coveredBy?.length) {
+          blocked += 1;
+          line.dataset.bad = "true";
+          line.textContent = `“${target.label}” — covered by ${target.coveredBy.join(" ← ")}`;
+        } else if (frame.frameId !== 0) {
+          nested += 1;
+          line.textContent =
+            `“${target.label}” — topmost here, but this frame is not the top one. ` +
+            `Anything the page above draws over this frame covers it and cannot be seen from in here.`;
+        } else {
+          line.textContent = `“${target.label}” — reachable`;
+        }
+        block.append(line);
+      }
+
+      wrap.append(block);
+    }
+  }
+
+  el("surfaces-summary").textContent = blocked
+    ? `${blocked} button(s) have something over them. The first name on each line is what takes the click.`
+    : nested
+      ? `Nothing in these frames covers the extension's buttons, but ${nested} of them are drawn ` +
+        `below the top frame. If they still will not take a click, the obstruction is in the page above.`
+      : "Every button the extension drew is reachable where it was drawn.";
 }
 
 // --- the episode ------------------------------------------------------------

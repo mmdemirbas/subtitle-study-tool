@@ -19,6 +19,8 @@ const ui = {
   find: document.getElementById("find"),
   panel: document.getElementById("panel"),
   toggle: document.getElementById("toggle"),
+  diagnose: document.getElementById("diagnose"),
+  diagnoseNote: document.getElementById("diagnose-note"),
   shortcuts: document.getElementById("shortcuts"),
   editShortcuts: document.getElementById("edit-shortcuts"),
 };
@@ -105,6 +107,34 @@ ui.panel.addEventListener("click", async () => {
 ui.toggle.addEventListener("click", async () => {
   const result = await send({ type: "sso:toggleVisible" });
   if (result?.ok) ui.toggle.textContent = result.visible ? "Hide subtitles" : "Show subtitles";
+});
+
+/* Capture before opening the report, and stay open while it runs: the popup
+ * closing would take the capture with it. The worker opens the report tab, and
+ * that is what closes the popup. */
+ui.diagnose.addEventListener("click", async () => {
+  ui.diagnose.disabled = true;
+  ui.diagnoseNote.hidden = false;
+  ui.diagnoseNote.textContent = "Asking every frame…";
+  try {
+    const report = await chrome.runtime.sendMessage({
+      type: "sso:daemon",
+      op: "diagnose",
+      args: { tabId: session.tab.id },
+    });
+    if (!report || report.error) {
+      ui.diagnoseNote.textContent = report?.error || "Could not reach the service worker.";
+      ui.diagnose.disabled = false;
+      return;
+    }
+    ui.diagnoseNote.textContent = `Captured ${report.frames?.length ?? 0} frame(s). Opening…`;
+    // Same as the control panel's copy: the worker owns opening an extension
+    // page. Opening the report tab is what closes the popup.
+    await chrome.runtime.sendMessage({ type: "sso:openReport" });
+  } catch (error) {
+    ui.diagnoseNote.textContent = String(error?.message || error);
+    ui.diagnose.disabled = false;
+  }
 });
 
 ui.editShortcuts.addEventListener("click", () => {
