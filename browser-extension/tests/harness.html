@@ -1790,11 +1790,30 @@
         if (tiny.reason !== "too-few-cues") throw new Error(`reason was ${tiny.reason}`);
       });
 
-      check("a gap beyond the search range is declined rather than mis-fitted", async () => {
+      check("a gap past the first window is found by the second, not mis-fitted", async () => {
+        /* This used to assert that anything past MAX_OFFSET_MS was refused,
+         * which was the behaviour and was the bug: a subtitle timed for a cut
+         * carrying a recap the other file does not have lands out there, and
+         * the reader was told the two files were different programmes. Measured
+         * on the repo's own pair, a 240s gap came back refused at confidence
+         * 0.53 with a nonsense shift, and a 185s gap came back ACCEPTED with the
+         * shift 5.18s wrong.
+         *
+         * What must still hold is that nothing is mis-fitted: inside the wide
+         * window the answer is right, and past it there is no answer at all. */
         const align = window.__ssoAlign;
         const a = speech(900, 31);
-        const answer = align.align(a, a.map((t) => t + align.MAX_OFFSET_MS + 60000));
-        if (answer.ok) throw new Error(`claimed a ${answer.shiftMs}ms answer past the range`);
+        const near = align.MAX_OFFSET_MS + 60000;
+        const found = align.align(a, a.map((t) => t + near));
+        if (!found.ok) throw new Error(`a ${near}ms gap was refused (${found.confidence})`);
+        if (Math.abs(found.shiftMs - near) > 100)
+          throw new Error(`a ${near}ms gap was reported as ${found.shiftMs}ms`);
+        if (found.searchedMs <= align.MAX_OFFSET_MS)
+          throw new Error("the wide pass never ran");
+
+        const far = 4_000_000; // past the wide window too
+        const refused = align.align(a, a.map((t) => t + far));
+        if (refused.ok) throw new Error(`claimed a ${refused.shiftMs}ms answer past every range`);
       });
 
       check("bad input is refused rather than thrown or looped on", async () => {

@@ -38,6 +38,26 @@
    * confidence directly. */
   const MAX_OFFSET_MS = 180000;
 
+  /* A second, wider look, for when the first one finds nothing.
+   *
+   * Three minutes covers a distributor ident and a different pre-title
+   * sequence, which is what most release gaps are. It does not cover a subtitle
+   * timed for a broadcast cut that carries a "previously on" recap the other
+   * file has never heard of, and it does not cover a file whose clock simply
+   * starts somewhere else. Measured on this repo's own EN/TR pair, which scores
+   * 476 in agreement: shifted 175s it still scores 476 and recovers the shift
+   * exactly; shifted 185s it collapses to 4.33 with the shift 5s wrong; shifted
+   * 240s it reads 0.53 and returns a number that is nonsense. So beyond the
+   * window the answer is not "less sure", it is "not looking" - and the reader
+   * was told the two files were different films.
+   *
+   * This is only tried when the narrow pass has already failed, so nothing that
+   * works today changes. It is not a free widening either: the hypothesis count
+   * in score() is proportional to the window, so a match found out here has to
+   * clear a bar an eighth of a decade higher to report the same confidence. It
+   * pays for its own search. */
+  const WIDE_OFFSET_MS = 1500000; // 25 minutes
+
   /* Bin width for the vote. With the three-bin smoothing below this is an
    * effective window of 300ms, which covers the spread between two subtitlers
    * cueing the same line without smearing the peak into its neighbours. */
@@ -189,8 +209,8 @@
   }
 
   /** Vote on the offset between A and B under one rate hypothesis. */
-  function vote(a, b, rate) {
-    const bins = Math.round((2 * MAX_OFFSET_MS) / BIN_MS) + 1;
+  function vote(a, b, rate, maxOffsetMs) {
+    const bins = Math.round((2 * maxOffsetMs) / BIN_MS) + 1;
     const centre = bins >> 1;
     const counts = new Int32Array(bins);
 
@@ -201,9 +221,9 @@
     let hi = 0;
     for (let i = 0; i < a.length; i++) {
       const at = rate * a[i];
-      while (lo < b.length && b[lo] < at - MAX_OFFSET_MS) lo++;
+      while (lo < b.length && b[lo] < at - maxOffsetMs) lo++;
       if (hi < lo) hi = lo;
-      while (hi < b.length && b[hi] <= at + MAX_OFFSET_MS) hi++;
+      while (hi < b.length && b[hi] <= at + maxOffsetMs) hi++;
       for (let j = lo; j < hi; j++) {
         const index = Math.round((b[j] - at) / BIN_MS) + centre;
         if (index >= 0 && index < bins) counts[index]++;
@@ -273,7 +293,7 @@
    * many hypotheses were tried - because trying seven rates and three peaks
    * over a three-minute window is a lot of chances to be impressed by nothing.
    */
-  function score(a, b, rate, shift, pairs) {
+  function score(a, b, rate, shift, pairs, maxOffsetMs) {
     const inA = a.filter((t) => {
       const at = rate * t + shift;
       return at >= b[0] - TOL_MS && at <= b[b.length - 1] + TOL_MS;
@@ -294,7 +314,7 @@
     const m = pairs.length;
     if (m < MIN_PAIRS) return null;
 
-    const hypotheses = RATES.length * PEAKS * Math.round(MAX_OFFSET_MS / TOL_MS);
+    const hypotheses = RATES.length * PEAKS * Math.round(maxOffsetMs / TOL_MS);
     const lnTail = lnBinomialTail(n, p0, m);
     const confidence = -(lnTail + Math.log(hypotheses)) / Math.LN10;
 
@@ -312,9 +332,9 @@
   }
 
   /** One rate hypothesis, all the way through. */
-  function tryRate(a, b, rate) {
+  function tryRate(a, b, rate, maxOffsetMs) {
     let best = null;
-    for (const seed of vote(a, b, rate)) {
+    for (const seed of vote(a, b, rate, maxOffsetMs)) {
       let shift = seed;
       // Two polishing passes: wide first so a slightly-off seed still gathers
       // its pairs, then tight so the answer is not dragged by the stragglers.
@@ -326,7 +346,7 @@
         shift += median(pairs.map(([x, y]) => y - (rate * x + shift)));
       }
       const pairs = pairUp(a, b, rate, shift, TOL_MS);
-      const scored = score(a, b, rate, shift, pairs);
+      const scored = score(a, b, rate, shift, pairs, maxOffsetMs);
       if (!scored) continue;
       if (!best || scored.confidence > best.confidence) {
         best = { rate, shiftMs: Math.round(shift), ...scored };
@@ -342,14 +362,39 @@
    * `reason` says which way it failed, because "these are different cuts of the
    * same film" and "this is the wrong film" want different words on screen.
    */
-  function align(aTimes, bTimes) {
+  function align(aTimes, bTimes, { maxOffsetMs = MAX_OFFSET_MS, wide = true } = {}) {
     const a = trim((aTimes || []).filter(Number.isFinite).sort((x, y) => x - y));
     const b = trim((bTimes || []).filter(Number.isFinite).sort((x, y) => x - y));
     if (a.length < MIN_CUES || b.length < MIN_CUES) {
       return { ok: false, reason: "too-few-cues", confidence: -Infinity };
     }
 
-    const unity = tryRate(a, b, 1);
+    const answer = search(a, b, maxOffsetMs);
+    /* Nothing inside three minutes. Look again over twenty-five before saying
+     * these are different films, because "no gap this small fits" and "these
+     * are not the same programme" are different answers and only one of them
+     * was ever given. Costs a second pass on the searches that were going to
+     * fail anyway, and none on the ones that succeed. */
+    /* Also when the narrow answer is only an offer, because just outside the
+     * window is where the narrow pass produces its worst answers rather than
+     * its least confident ones. Measured: the same pair shifted 185s - five
+     * seconds past the edge - comes back ok, verdict "offer", confidence 4.33,
+     * and a shift 5.18 SECONDS wrong. One click from being applied. The wide
+     * pass scores 475 on it with the shift exact, and is only taken when it
+     * beats what the narrow pass found. */
+    const weak = !answer.ok || answer.verdict === "offer";
+    if (weak && wide && maxOffsetMs < WIDE_OFFSET_MS) {
+      const wider = align(aTimes, bTimes, { maxOffsetMs: WIDE_OFFSET_MS, wide: false });
+      if (wider.ok || wider.confidence > answer.confidence) {
+        return { ...wider, searchedMs: WIDE_OFFSET_MS };
+      }
+    }
+    return { ...answer, searchedMs: maxOffsetMs };
+  }
+
+  /** One complete search at a given window. */
+  function search(a, b, maxOffsetMs) {
+    const unity = tryRate(a, b, 1, maxOffsetMs);
     let best = unity;
 
     /* Only bother with the rest if no-stretch is not already overwhelming. A
@@ -358,7 +403,7 @@
     if (!unity || unity.confidence < OVERWHELMING) {
       for (const rate of RATES) {
         if (rate === 1) continue;
-        const tried = tryRate(a, b, rate);
+        const tried = tryRate(a, b, rate, maxOffsetMs);
         if (!tried) continue;
         if (!best || tried.confidence > best.confidence) best = tried;
       }

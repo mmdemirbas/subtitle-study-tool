@@ -196,3 +196,66 @@ def test_a_different_cut_is_declined(verdicts: dict[str, dict]) -> None:
             f"claimed a {answer['shiftMs']}ms answer for a different cut "
             f"(confidence {answer['confidence']})"
         )
+
+
+# Gaps bigger than the old three-minute search window. A subtitle timed for a
+# broadcast cut with a "previously on" recap the other file has never heard of
+# lands out here, and so does one whose clock simply starts somewhere else.
+WIDE_SHIFTS_MS = [181_000, 185_000, 240_000, 600_000, 1_200_000]
+
+
+@pytest.fixture(scope="module")
+def wide_verdicts() -> dict[str, dict]:
+    """One known-good pair, moved further and further apart."""
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    files = _corpus()
+    a = files.get("BSG.S00E01-EN")
+    b = files.get("BSG.S00E01-TR")
+    if not a or not b:
+        pytest.skip("the English/Turkish pair is not in the repository")
+    pairs = [(str(shift), a, [t + shift for t in b]) for shift in WIDE_SHIFTS_MS]
+    # The same pair against a different episode, moved the same way: the wider
+    # search must not start saying yes to those.
+    other = files.get("BSG.S00E02-EN")
+    if other:
+        pairs += [(f"wrong-{shift}", a, [t + shift for t in other]) for shift in WIDE_SHIFTS_MS]
+    return _run(pairs)
+
+
+def test_a_gap_wider_than_the_search_window_is_still_found(wide_verdicts: dict[str, dict]) -> None:
+    """Beyond the window the aligner was not less sure, it was not looking.
+
+    Measured before the second pass was added: the same pair shifted 240s came
+    back refused with confidence 0.53 and a nonsense shift, and the reader was
+    told the two files were different films. Worse, at 185s - five seconds past
+    the edge - it came back ACCEPTED, verdict "offer", with the shift 5.18
+    seconds wrong, which is one click from being applied.
+    """
+    for shift in WIDE_SHIFTS_MS:
+        answer = wide_verdicts[str(shift)]
+        assert answer["ok"], f"a {shift}ms gap was refused: confidence {answer['confidence']}"
+        error = abs(answer["shiftMs"] - shift)
+        # A cue is cued to the tenth of a second; anything under a bin width is
+        # the same answer.
+        assert error <= 100, f"a {shift}ms gap was reported as {answer['shiftMs']}ms"
+
+
+def test_the_wider_search_does_not_start_accepting_other_episodes(
+    wide_verdicts: dict[str, dict],
+) -> None:
+    """The cost side of the second pass, asserted rather than assumed.
+
+    Widening a search is not free: every extra second of range is another place
+    an unrelated pair can find a coincidental peak. What pays for it is the
+    hypothesis count in score(), which is proportional to the window - so a
+    match found out there has to clear a higher bar. Measured, a different
+    episode scores -0.29 through the wide pass against -0.26 through the narrow
+    one: harder to accept, not easier.
+    """
+    accepted = {
+        name: (answer["confidence"], answer.get("shiftMs"))
+        for name, answer in wide_verdicts.items()
+        if name.startswith("wrong-") and answer["ok"]
+    }
+    assert not accepted, f"a different episode was accepted by the wide search: {accepted}"
