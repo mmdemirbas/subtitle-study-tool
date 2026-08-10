@@ -1629,6 +1629,30 @@
     }
   }
 
+  /* Where a floating surface can be appended and still be painted.
+   *
+   * Two rules, and the panel and the study rail need both exactly as much as
+   * the cue overlay does. Only the fullscreen element's subtree is rendered, so
+   * a surface left on <body> vanishes the moment a player goes fullscreen. And
+   * a replaced element paints its own content and nothing else, so appending
+   * into a fullscreen <video> is worse than not moving at all: the surface is
+   * never painted and still reports itself open.
+   *
+   * Exported because this rule was written out three times and two of the
+   * copies were wrong. panel.js and study.js each tested for VIDEO, but only on
+   * the parent they were handed - and `show()` hands them nothing, so the
+   * fullscreen element they fell back to was never checked at all. */
+  function paintableParent(preferred = null) {
+    const usable = (node) => node && !CANNOT_HOLD_CHILDREN.test(node.tagName);
+    const fullscreen = document.fullscreenElement || document.webkitFullscreenElement;
+    return (
+      (usable(preferred) ? preferred : null) ||
+      (usable(fullscreen) ? fullscreen : null) ||
+      document.body ||
+      document.documentElement
+    );
+  }
+
   function attachToCorrectParent({ raise = false } = {}) {
     const fullscreen = document.fullscreenElement || document.webkitFullscreenElement;
     if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(fullscreen, { raise });
@@ -1643,10 +1667,7 @@
     const raised = [host, ...layers].map((node) => toTopLayer(node, { again: raise }));
     if (raised.every(Boolean)) return;
 
-    const parent =
-      (fullscreen && !CANNOT_HOLD_CHILDREN.test(fullscreen.tagName) ? fullscreen : null) ||
-      document.body ||
-      document.documentElement;
+    const parent = paintableParent();
     if (!parent) return;
     if (host.parentElement !== parent || raise) parent.appendChild(host);
     // Floating layers go too. Fullscreen renders only the fullscreen element's
@@ -3389,8 +3410,9 @@
     makeLayer,
     makeWindow,
     // Shared with the panel and the study rail, which have hosts of their own
-    // and the same fullscreen problem. See toTopLayer.
+    // and the same fullscreen problem. See toTopLayer and paintableParent.
     toTopLayer,
+    paintableParent,
     setPlacing(on) {
       state.placing = Boolean(on);
       for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;

@@ -246,6 +246,18 @@
 
     panel.append(head, body, ...buildResizeGrips(body));
     shadow.append(panel);
+
+    /* Into the document here, not on the first reparent.
+     *
+     * toTopLayer refuses a node that is not connected, so a host whose first
+     * meeting with the document happened inside reparent() could not be
+     * promoted on that pass and fell through to the append instead - which,
+     * while a player had fullscreened the <video>, put the panel inside a
+     * replaced element where it is never painted. The panel reported itself
+     * open, the CC button toggled it shut, and pressing again re-opened it
+     * invisibly. The second open came right, because by then it was connected
+     * and could be promoted - which is what made it "sometimes". */
+    (api.paintableParent?.() || document.body || document.documentElement).append(host);
     // The whole panel, not only its bar: an empty part of a window is a handle
     // everywhere else, and this one is mostly empty when nothing is attached.
     makeDraggable(panel, head);
@@ -2425,12 +2437,11 @@
       rescale();
       return;
     }
-    const target =
-      (parent && parent.tagName !== "VIDEO" ? parent : null) ||
-      document.fullscreenElement ||
-      document.webkitFullscreenElement ||
-      document.body ||
-      document.documentElement;
+    /* The whole replaced-element rule, not half of it. This used to test
+     * `parent.tagName !== "VIDEO"` and then fall back to
+     * `document.fullscreenElement` unchecked - and `show()` passes no parent at
+     * all, so on the path that matters the test never ran. */
+    const target = api.paintableParent?.(parent) || document.body || document.documentElement;
     if (target && host.parentElement !== target) target.appendChild(host);
     // The fullscreen element may be scaled; what we have just moved into
     // decides how big the panel renders and where a written position lands.

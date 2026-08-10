@@ -834,6 +834,14 @@
     railEl.append(head, listEl, noteEl);
     shadow.append(railEl);
 
+    /* Connected before anything tries to promote it. toTopLayer refuses a node
+     * that is not in the document, so a host that first met the document inside
+     * reparent() fell through to the append - and while a player had
+     * fullscreened the <video>, that put the rail inside a replaced element
+     * where it is never painted. Same defect the control panel had, same fix;
+     * both hosts were built the same way. */
+    (api.paintableParent?.() || document.body || document.documentElement).append(host);
+
     /* The whole rail is a handle, not only its bar - the same as the control
      * panel. A press on a word or a meaning still selects the text: the grab
      * only takes elements that carry no words of their own. */
@@ -1712,12 +1720,9 @@
       rescale();
       return;
     }
-    const target =
-      (parent && parent.tagName !== "VIDEO" ? parent : null) ||
-      document.fullscreenElement ||
-      document.webkitFullscreenElement ||
-      document.body ||
-      document.documentElement;
+    /* The whole replaced-element rule rather than a VIDEO test on the parent
+     * that callers mostly do not pass. See paintableParent in content.js. */
+    const target = api.paintableParent?.(parent) || document.body || document.documentElement;
     if (target && host.parentElement !== target) target.appendChild(host);
     // The popup is anchored to the subtitle, so it has to follow the subtitle
     // into fullscreen or it renders behind the film.
