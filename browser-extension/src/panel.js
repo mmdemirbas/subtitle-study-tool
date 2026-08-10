@@ -889,6 +889,322 @@
     return [name.slice(0, at), name.slice(at)];
   }
 
+  /* --- where this subtitle speaks ---------------------------------------------
+   *
+   * A subtitle is 900 lines and a reader syncing one by hand is working from a
+   * two-second window of them. What is missing is the shape of the whole file:
+   * where the dialogue is dense, where the long silences are, and - the part
+   * that makes syncing a matter of looking rather than guessing - whether the
+   * two files have the same shape in the same places.
+   *
+   * So each card carries a strip of the film's running time with a bar for
+   * every stretch of dialogue. Drawn against the STREAM clock, not the file's
+   * own, so every card shares one axis and two subtitles out of step read as
+   * one pattern displaced sideways from the other. The playhead is on the same
+   * axis, which is what ties the picture to what is being heard.
+   *
+   * And it is a control, not a picture: dragging the strip moves that subtitle.
+   * Holding a nudge button and watching for the moment it looks right is the
+   * gesture this replaces, and it costs a reader the whole time it takes.
+   *
+   * Two scales, and the second one is not optional.
+   *
+   * A whole film is the map the eye wants for orientation, and it is useless
+   * for the job it is here to do. Measured on a two-hour film in a 296px strip:
+   * a 4.2 second error - a big one, the kind that makes a line land on the wrong
+   * speaker - is 0.06% of the width, which is a third of one pixel. Every sync
+   * error worth fixing is invisible at this scale. So the strip zooms to a
+   * window around the playhead, where at 30 seconds across a pixel is a tenth
+   * of a second and the displacement between two cards is the thing you are
+   * looking at.
+   *
+   * Each scale is drawn the way that scale wants. Across a whole film, density
+   * into one bucket per device pixel column: a bar per line is illegible past a
+   * couple of hundred lines and would grow with the file. Inside a window,
+   * every cue as itself, found by binary search - twenty of them, in their
+   * exact places, which is what "the same line, here and there" needs.
+   */
+  const MAP_HEIGHT = 26;
+
+  /* Whole film, then a minute, then fifteen seconds. Three steps because they
+   * answer three different questions - where am I, which line is which, and is
+   * this exactly on - and because a slider would be a fourth control on a card
+   * that already has nine. */
+  const MAP_SPANS = [
+    { ms: 0, label: "film", title: "Showing the whole film. Click for a closer look." },
+    { ms: 60000, label: "60s", title: "Showing a minute around the playhead. Click to go closer." },
+    { ms: 15000, label: "15s", title: "Showing 15 seconds around the playhead. Click for the whole film." },
+  ];
+
+  function buildTimeline(slot) {
+    const root = document.createElement("div");
+    root.className = "sso-map";
+
+    /* The strip and its scale are siblings, not one on top of the other.
+     *
+     * The badge started inside the strip, in the corner, and covered the last
+     * eighth of it - which at the fifteen-second scale is nearly two seconds of
+     * film hidden behind the control that chose to show them. A label that eats
+     * the data it labels is worse than one that costs a little width. */
+    const plot = document.createElement("div");
+    plot.className = "sso-map__plot";
+    plot.title = "Where this subtitle speaks. Drag it sideways to move the timing.";
+
+    const canvas = document.createElement("canvas");
+    canvas.className = "sso-map__canvas";
+    plot.append(canvas);
+
+    /* The scale, beside the thing whose scale it is. A button rather than a
+     * setting because it is changed constantly - coarse to find the scene, fine
+     * to land the line - and a control reached for that often does not belong
+     * behind a menu. */
+    let spanStep = 0;
+    const zoom = document.createElement("button");
+    zoom.type = "button";
+    zoom.className = "sso-map__zoom";
+    zoom.addEventListener("click", (event) => {
+      event.stopPropagation();
+      spanStep = (spanStep + 1) % MAP_SPANS.length;
+      signature = ""; // the axis changed, so the picture has to be built again
+      refresh(api.status());
+    });
+    root.append(plot, zoom);
+
+    /* What the drag is doing, while it is doing it. The number is the whole
+     * point of dragging rather than nudging - the reader is aiming at a
+     * position, and the offset is the thing they will have to undo if it is
+     * wrong. */
+    const readout = document.createElement("span");
+    readout.className = "sso-map__readout";
+    readout.hidden = true;
+    plot.append(readout);
+
+    let buckets = null;
+    let signature = "";
+    let durationMs = 0;
+    let width = 0;
+    let height = 0;
+    // The stream-time window being shown, which is the whole film or a slice
+    // of it centred on the playhead.
+    let from = 0;
+    let to = 0;
+
+    const spanMs = () => MAP_SPANS[spanStep].ms;
+
+    function setWindow(status) {
+      durationMs = Number.isFinite(status.duration) ? status.duration * 1000 : 0;
+      const span = spanMs();
+      if (!span || span >= durationMs) {
+        from = 0;
+        to = durationMs;
+        return;
+      }
+      const at = Number.isFinite(status.currentTime) ? status.currentTime * 1000 : 0;
+      /* Clamped to the film rather than allowed to run off it, so the last
+       * fifteen seconds are still fifteen seconds wide. A window that shrank at
+       * the ends would change the scale exactly where a reader is checking the
+       * end credits line up. */
+      from = Math.min(Math.max(0, at - span / 2), Math.max(0, durationMs - span));
+      to = from + span;
+    }
+
+    /* The whole-film picture is recomputed only when something it depends on
+     * changes. refresh() runs on every status round - several a second while a
+     * film plays - and rebuilding a histogram of a thousand cues each time
+     * would put real work on that path for a picture that has not moved. */
+    function rebuildDensity(status) {
+      const track = status.tracks[slot];
+      const next = [
+        track.cueCount, track.fileId, track.offsetMs, track.rate,
+        Math.round(durationMs), width, status.adDriftMs,
+      ].join("|");
+      if (next === signature) return;
+      signature = next;
+
+      buckets = new Float32Array(width);
+      if (!durationMs || !track.cueCount) return;
+      let tallest = 0;
+      for (const fileMs of api.cueTimes(slot)) {
+        const at = api.toStreamMs(slot, fileMs) / durationMs;
+        /* Lines pushed outside the film are pinned to the edge they went past
+         * rather than dropped. A subtitle shifted far enough to run off the end
+         * is exactly the state the reader is trying to see, and a strip that
+         * quietly emptied itself would hide it. */
+        const bucket = Math.min(width - 1, Math.max(0, Math.round(at * (width - 1))));
+        buckets[bucket] += 1;
+        if (buckets[bucket] > tallest) tallest = buckets[bucket];
+      }
+      if (tallest > 0) for (let i = 0; i < width; i++) buckets[i] /= tallest;
+    }
+
+    const ratio = () => Math.max(1, Math.round(window.devicePixelRatio || 1));
+    const xOf = (streamMs) => ((streamMs - from) / (to - from)) * (width - 1);
+
+    function paintDensity(context) {
+      if (!buckets) return;
+      for (let i = 0; i < width; i++) {
+        const value = buckets[i];
+        if (!value) continue;
+        /* A floor, so one line in a quiet stretch is still a mark. The quiet
+         * stretches are what the eye lines up on - a run of silence is a
+         * landmark in a way that a run of dialogue is not. */
+        const bar = Math.max(2, Math.round(value * height));
+        context.globalAlpha = 0.4 + 0.6 * value;
+        context.fillRect(i, height - bar, ratio(), bar);
+      }
+      context.globalAlpha = 1;
+    }
+
+    /* Every line in the window, where it actually is.
+     *
+     * Binary search for the first cue in range rather than a scan, because this
+     * runs on the playhead tick and the file is a thousand lines. Bounded by
+     * what fits on screen: a fifteen-second window holds about six lines. */
+    function paintCues(context) {
+      const times = api.cueTimes(slot);
+      if (!times.length) return;
+      let low = 0;
+      let high = times.length - 1;
+      let first = times.length;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (api.toStreamMs(slot, times[mid]) >= from) {
+          first = mid;
+          high = mid - 1;
+        } else {
+          low = mid + 1;
+        }
+      }
+      for (let i = first; i < times.length; i++) {
+        const at = api.toStreamMs(slot, times[i]);
+        if (at > to) break;
+        context.globalAlpha = 0.9;
+        context.fillRect(Math.round(xOf(at)), 2, Math.max(2, ratio() * 2), height - 2);
+      }
+      context.globalAlpha = 1;
+    }
+
+    function paint(status) {
+      const context = canvas.getContext("2d");
+      if (!context || !width || to <= from) return;
+      context.clearRect(0, 0, width, height);
+
+      const style = getComputedStyle(plot);
+      context.fillStyle = style.getPropertyValue("--sso-map-ink").trim() || "#93b9fb";
+      if (spanMs()) paintCues(context);
+      else paintDensity(context);
+
+      const at = status.currentTime;
+      if (Number.isFinite(at)) {
+        context.fillStyle = style.getPropertyValue("--sso-map-head").trim() || "#eef0f3";
+        const x = Math.min(width - 1, Math.max(0, xOf(at * 1000)));
+        context.fillRect(Math.round(x), 0, ratio(), height);
+      }
+    }
+
+    function draw(status) {
+      const track = status.tracks[slot];
+      // Nothing to draw, and nothing honest to draw it against: a film whose
+      // duration the player has not reported yet has no axis.
+      root.hidden = !track.attached || !Number.isFinite(status.duration) || status.duration <= 0;
+      if (root.hidden) return;
+      /* Off-screen means no measurement, and no measurement means no draw. The
+       * card is in the DOM while the Find screen is showing and measures 0px
+       * wide there; rendering into that would cache a one-pixel histogram
+       * against the signature and hand it back when the screen returns. */
+      const box = plot.getBoundingClientRect();
+      if (box.width < 1) return;
+
+      const nextWidth = Math.max(1, Math.round(box.width * ratio()));
+      if (nextWidth !== width) {
+        width = nextWidth;
+        height = Math.max(1, Math.round(MAP_HEIGHT * ratio()));
+        canvas.width = width;
+        canvas.height = height;
+        signature = "";
+      }
+
+      const scale = MAP_SPANS[spanStep];
+      zoom.textContent = scale.label;
+      zoom.title = scale.title;
+      root.dataset.zoomed = scale.ms ? "true" : "false";
+
+      setWindow(status);
+      if (!scale.ms) rebuildDensity(status);
+      paint(status);
+    }
+
+    /* Drag to move the subtitle.
+     *
+     * Pointer capture, because the reader will leave the strip - the whole
+     * gesture is aiming at a position further along the film than the one under
+     * the finger - and a drag that stops working at the edge of a 300px strip
+     * would be worse than the buttons it replaces. Committed on release with
+     * one toast carrying an undo, the same shape a held nudge ends with. */
+    let drag = null;
+    plot.addEventListener("pointerdown", (event) => {
+      if (!durationMs || !width || event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation(); // the card treats a bare click as "select me"
+      drag = {
+        x: event.clientX,
+        was: timingOf(slot),
+        pixels: plot.getBoundingClientRect().width || 1,
+        /* The span at the moment the drag started, not the live one. Nudging
+         * the offset moves the playhead's line through the window, which moves
+         * the window - and a conversion that changed under the gesture would
+         * make the subtitle accelerate away from the finger. */
+        across: to - from,
+      };
+      plot.setPointerCapture(event.pointerId);
+      plot.dataset.dragging = "true";
+      readout.hidden = false;
+      readout.textContent = api.describeOffset(drag.was.offsetMs);
+    });
+
+    const movedTo = (event) => {
+      if (!drag) return null;
+      const moved = ((event.clientX - drag.x) / drag.pixels) * drag.across;
+      /* Dragging right means the lines should arrive later, which is a larger
+       * offset - the same direction the "Late" button pushes. The span is the
+       * window's, not the film's, which is what makes the fine scale worth
+       * having: 15 seconds across 296px is a tenth of a second per pixel. */
+      return Math.round(drag.was.offsetMs + moved);
+    };
+
+    plot.addEventListener("pointermove", (event) => {
+      const next = movedTo(event);
+      if (next === null) return;
+      readout.textContent = api.describeOffset(next);
+      api.setOffset(next, { slot, quiet: true });
+    });
+
+    const finish = (event) => {
+      const next = movedTo(event);
+      if (next === null) return;
+      const was = drag.was;
+      drag = null;
+      delete plot.dataset.dragging;
+      readout.hidden = true;
+      if (plot.hasPointerCapture?.(event.pointerId)) plot.releasePointerCapture(event.pointerId);
+      if (next === was.offsetMs) return;
+      api.showToast(`Moved · ${api.describeOffset(next)}`, {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            applyTiming(slot, was);
+            refresh(api.status());
+          },
+        },
+      });
+      refresh(api.status());
+    };
+    plot.addEventListener("pointerup", finish);
+    plot.addEventListener("pointercancel", finish);
+
+    return { root, draw };
+  }
+
   function buildTrackCard(slot) {
     /* The card is the selection.
      *
@@ -1173,14 +1489,18 @@
       stepper("Next ›", +1, "Skip to where the next line begins."),
     );
 
+    /* The map goes above the controls that move it, not below them: it is the
+     * reading those controls change, and it is also one of them. */
+    const timeline = buildTimeline(slot);
+
     const body = document.createElement("div");
     body.className = "sso-track__body";
-    body.append(offsets, lines);
+    body.append(timeline.root, offsets, lines);
 
     root.append(head, body);
     return {
       root, learnChip, label, labelHead, labelTail,
-      offsetField, offsetReset, visible, more, lineUpButton,
+      offsetField, offsetReset, visible, more, lineUpButton, timeline,
     };
   }
 
@@ -2341,6 +2661,7 @@
       card.visible.dataset.on = track.visible ? "true" : "false";
       // Nothing to undo, no undo. Which is also when the subtitle is right.
       card.offsetReset.hidden = !track.offsetMs && !stretched;
+      card.timeline.draw(status);
     });
 
     const drift = status.adDriftMs || 0;
@@ -2411,12 +2732,42 @@
 
   // --- lifecycle ------------------------------------------------------------
 
+  /* The playhead moves when nothing has changed.
+   *
+   * refresh() runs when the overlay notifies, which is when something has been
+   * done to a subtitle - not continuously while a film plays. So the strips get
+   * a tick of their own, and only while the panel is on screen, unfolded, and
+   * has something to draw. At 250ms the mark reads as moving and the redraw is
+   * bounded by the strip's width in pixels, which is a few hundred fillRects a
+   * quarter-second - far away from the pointermove path the overlay's own notes
+   * warn about. */
+  const PLAYHEAD_MS = 250;
+  let playhead = null;
+
+  function startPlayhead() {
+    if (playhead) return;
+    playhead = setInterval(() => {
+      if (!isPanelVisible() || folded || atScreen !== "root") return;
+      const status = api.status();
+      if (!status.attached) return;
+      for (const [slot, track] of status.tracks.entries()) {
+        if (track.attached) el.trackCards[slot].timeline.draw(status);
+      }
+    }, PLAYHEAD_MS);
+  }
+
+  function stopPlayhead() {
+    if (playhead) clearInterval(playhead);
+    playhead = null;
+  }
+
   async function show() {
     if (!host) {
       await build();
       await restorePosition();
     }
     reparent();
+    startPlayhead();
     setHostVisible(host, true);
     unsubscribe ||= api.subscribe(refresh);
     // Point the next attach at the first free subtitle, which is what somebody
@@ -2442,6 +2793,7 @@
 
   function hide() {
     closeMenu();
+    stopPlayhead();
     // A binding half-read is not a binding; the button that asked is going.
     api.cancelCapture();
     settingsWindow?.hide();
@@ -2489,6 +2841,7 @@
     // Both live on hosts outside this shadow tree, so removing the panel does
     // not remove them.
     closeMenu();
+    stopPlayhead();
     settingsWindow?.destroy();
     settingsWindow = null;
     window.removeEventListener("resize", clampIntoView);

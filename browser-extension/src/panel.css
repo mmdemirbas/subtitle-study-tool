@@ -420,6 +420,107 @@ button.sso-quick__study[data-on="true"] {
   padding: 0 9px 9px;
 }
 
+/* --- where this subtitle speaks ---------------------------------------------
+ *
+ * The film's running time, with a bar for every stretch of dialogue. Drawn on
+ * the stream clock so two cards share one axis: a subtitle that is out of step
+ * shows the same pattern as its neighbour, displaced sideways, and the amount
+ * it is displaced by is the amount it is wrong by. That is the whole reason it
+ * is here rather than in a screen of its own - it only says anything next to
+ * the other one.
+ *
+ * It is also the control. Dragging it moves the subtitle, so `touch-action`
+ * has to give up horizontal panning or a touch drag scrolls the panel body
+ * instead, and `cursor` says so before the reader tries.
+ */
+.sso-map {
+  --sso-map-ink: #93b9fb;
+  --sso-map-head: #eef0f3;
+
+  display: flex;
+  gap: 5px;
+  align-items: stretch;
+  margin: 0 0 7px;
+}
+
+.sso-map__plot {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  overflow: hidden;
+  cursor: ew-resize;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid var(--sso-line-soft);
+  border-radius: var(--sso-r-ctl);
+  touch-action: pan-y;
+}
+
+.sso-map__plot:hover {
+  border-color: var(--sso-line);
+}
+
+.sso-map__plot[data-dragging="true"] {
+  border-color: var(--sso-accent);
+}
+
+/* The canvas is sized in device pixels by the script and laid out in CSS
+ * pixels here, which is what keeps the bars from blurring on a retina panel. */
+.sso-map__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Where the drag has got to, over the strip it is dragging. On the strip
+ * rather than beside it: the number and the picture are the same statement,
+ * and a reading in the row below would be one the eye has to leave the map to
+ * find. Only while dragging, so it never covers a bar it is not explaining. */
+/* The scale, beside the strip rather than over it. Fixed width so the strip's
+ * own width does not change as the label goes from "film" to "15s" - a picture
+ * that rescaled itself when you renamed its axis would be unreadable at exactly
+ * the moment you were comparing it with the card below. Quiet until wanted:
+ * it is read far less often than the bars, and a lit control would compete
+ * with them for the one glance this strip gets. */
+.sso-map__zoom {
+  flex: none;
+  width: 34px;
+  font: inherit;
+  font-size: var(--sso-t-micro);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--sso-ink-3);
+  cursor: pointer;
+  background: var(--sso-fill);
+  border: 1px solid var(--sso-line-soft);
+  border-radius: var(--sso-r-ctl);
+}
+
+.sso-map__zoom:hover {
+  color: var(--sso-ink);
+  background: var(--sso-fill-hover);
+}
+
+.sso-map[data-zoomed="true"] .sso-map__zoom {
+  color: var(--sso-accent-ink);
+  border-color: var(--sso-line);
+}
+
+.sso-map__readout {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  padding: 2px 6px;
+  font-size: var(--sso-t-small);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--sso-ink);
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.72);
+  border-radius: var(--sso-r-ctl);
+  transform: translate(-50%, -50%);
+}
+
 /* An unlabelled radio in a title row is a dot whose meaning has to be guessed.
  * The dot is still the control - it is one of two, which is what a radio is -
  * but the card that owns it says so in words, and only that card, so the word

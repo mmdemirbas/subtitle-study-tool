@@ -3460,6 +3460,29 @@
       const track = state.tracks[slot];
       return { label: track.label, fileId: track.fileId, language: track.language };
     },
+    /* When this subtitle speaks, in the file's own clock, without the words.
+     *
+     * Two callers want exactly this and neither wants the text. The timeline
+     * strip on each card draws where the dialogue is, so two subtitles out of
+     * step read as one pattern displaced from the other. And the finder aligns
+     * a candidate against what is already attached before deciding whether to
+     * keep it, which it has to do before attaching anything.
+     *
+     * A fresh array rather than the cue list, because a caller that sorted it
+     * in place would silently reorder the track and break the binary search
+     * that findCueIndexes depends on. */
+    cueTimes(slot) {
+      return (state.tracks[slot]?.cues || []).map((cue) => cue.start);
+    },
+    /* File clock to stream clock, for a track that may not be attached yet.
+     *
+     * The strip is drawn against the video's own timeline so every track shares
+     * one axis; without this each caller would re-derive `t * rate + offset +
+     * adDrift` and one of them would forget the ad drift. */
+    toStreamMs(slot, fileMs) {
+      const track = state.tracks[slot];
+      return track ? streamTimeMs(track, fileMs) : fileMs;
+    },
     filmTimeMs() {
       return state.video ? state.video.currentTime * 1000 - state.adDriftMs : null;
     },

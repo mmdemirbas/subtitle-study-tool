@@ -1023,6 +1023,180 @@
         await sleep(60);
       });
 
+      /* --- the timeline strip --------------------------------------------------
+       *
+       * What the strip claims is that the sideways distance between two cards'
+       * patterns IS the amount they are out by. That is the whole feature, and
+       * it is measurable: render two subtitles that differ by a known amount,
+       * read the canvases back, cross-correlate them, and the lag in pixels has
+       * to convert to the offset in milliseconds.
+       */
+      const mapStrips = () => [...panelShadow().querySelectorAll(".sso-map")];
+
+      /* One column of the rendered strip, as ink. Alpha rather than colour, so
+       * the test does not break the first time the palette is changed. Rows
+       * below the top few, so the playhead - which is drawn full height - is
+       * not read as dialogue. */
+      const stripSignal = (canvas) => {
+        const pixels = canvas.getContext("2d")
+          .getImageData(0, 0, canvas.width, canvas.height).data;
+        const out = new Float64Array(canvas.width);
+        for (let x = 0; x < canvas.width; x++) {
+          let sum = 0;
+          for (let y = 4; y < canvas.height; y++) sum += pixels[(y * canvas.width + x) * 4 + 3];
+          out[x] = sum;
+        }
+        return out;
+      };
+
+      const bestLag = (a, b) => {
+        let best = 0;
+        let bestScore = -1;
+        for (let lag = -a.length + 1; lag < a.length; lag++) {
+          let score = 0;
+          for (let x = 0; x < a.length; x++) {
+            const j = x + lag;
+            if (j >= 0 && j < b.length) score += a[x] * b[j];
+          }
+          if (score > bestScore) { bestScore = score; best = lag; }
+        }
+        return best;
+      };
+
+      // Dialogue in bursts with silences between, which is what a film is and
+      // what gives the correlation something to lock onto. An even comb would
+      // correlate equally well at every multiple of its spacing.
+      const burstyCues = (shiftMs) => {
+        const cues = [];
+        let t = 40000;
+        let seed = 7;
+        const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+        while (t < 7050000) {
+          const burst = 4 + Math.floor(next() * 14);
+          for (let i = 0; i < burst && t < 7050000; i++) {
+            cues.push({ start: Math.round(t + shiftMs), end: Math.round(t + shiftMs + 1800), text: "line" });
+            t += 1800 + next() * 1600;
+          }
+          t += 8000 + next() * 70000;
+        }
+        return cues;
+      };
+
+      /* Back to the whole film. The scale is per-strip and persists, so a test
+       * that measures milliseconds per pixel has to say which scale it is on
+       * rather than assume - the first version of the drag test below read
+       * 2335ms against an expected 1120623 because the strip was still at 15s
+       * from the test before it. */
+      const zoomToFilm = async () => {
+        for (const zoom of panelShadow().querySelectorAll(".sso-map__zoom")) {
+          for (let i = 0; i < MAP_STEPS && zoom.textContent !== "film"; i++) {
+            zoom.click();
+            await sleep(40);
+          }
+        }
+        await sleep(80);
+      };
+      const MAP_STEPS = 3;
+
+      check("the strip shows nothing until there is a film to show it against", async () => {
+        await window.__ssoPanel.show();
+        await sleep(80);
+        const strips = mapStrips();
+        if (strips.length !== 2) throw new Error(`${strips.length} strips, want one per card`);
+        // The second slot is empty, and its strip has to be too - a picture of a
+        // subtitle that is not there would be a picture of nothing.
+        if (strips[1].getBoundingClientRect().height > 0)
+          throw new Error("a strip is drawn for a subtitle that is not attached");
+        if (strips[0].getBoundingClientRect().height === 0)
+          throw new Error("the attached subtitle has no strip");
+      });
+
+      check("how far the pattern moves is how far the subtitle is out", async () => {
+        /* The claim the strip makes is that the sideways distance between two
+         * patterns IS the amount they are out by. Tested on one strip at two
+         * offsets rather than two cards, because that isolates the arithmetic
+         * from anything about how the second card is laid out - and it is the
+         * same claim either way. */
+        const was = video.currentTime;
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "TR · map", fileId: 502, slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        video.currentTime = 2600;
+        await sleep(200);
+        await zoomToFilm();
+
+        const strip = mapStrips()[1];
+        const canvas = strip.querySelector(".sso-map__canvas");
+        // To the finest scale, where a sync error is worth a real number of
+        // pixels. See below for what it is worth across the whole film.
+        const zoom = strip.querySelector(".sso-map__zoom");
+        zoom.click();
+        await sleep(50);
+        zoom.click();
+        await sleep(150);
+
+        const before = stripSignal(canvas);
+        const OUT_BY = 4200;
+        window.__ssoApi.setOffset(OUT_BY, { slot: 1, quiet: true });
+        await sleep(150);
+        const after = stripSignal(canvas);
+
+        const lag = bestLag(before, after);
+        const msPerPixel = 15000 / (canvas.width - 1);
+        const seen = Math.round(lag * msPerPixel);
+        // One device pixel of tolerance, which is all the strip can express.
+        if (Math.abs(seen - OUT_BY) > Math.ceil(msPerPixel))
+          throw new Error(`the strip moved ${seen}ms for a subtitle moved ${OUT_BY}ms`);
+
+        /* And why the fine scale is not a luxury: across the whole two hours
+         * the same error is a fraction of one pixel, so every sync error worth
+         * fixing is invisible at the scale the strip opens on. */
+        const acrossFilm = OUT_BY / ((video.duration * 1000) / (canvas.width - 1));
+        if (acrossFilm > 1)
+          throw new Error(`the film scale shows ${acrossFilm.toFixed(2)}px, so the zoom is not needed`);
+
+        video.currentTime = was;
+        window.__ssoApi.detach(1);
+        await sleep(100);
+      });
+
+      check("dragging the strip moves the subtitle by what it was dragged", async () => {
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "TR · map", fileId: 503, slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        video.currentTime = 2600;
+        await sleep(150);
+        await zoomToFilm();
+
+        const plot = mapStrips()[1].querySelector(".sso-map__plot");
+        const box = plot.getBoundingClientRect();
+        const at = (x) => ({
+          pointerId: 91, button: 0, clientX: x, clientY: box.top + box.height / 2,
+          bubbles: true, cancelable: true,
+        });
+        // The whole film is on screen, so a pixel is the film over the width.
+        const msPerPixel = (video.duration * 1000) / box.width;
+        const moved = 40;
+
+        // Capture is a no-op here: the events are synthetic and there is no
+        // real pointer for the browser to hand over.
+        plot.setPointerCapture = () => {};
+        plot.releasePointerCapture = () => {};
+        plot.hasPointerCapture = () => false;
+        plot.dispatchEvent(new PointerEvent("pointerdown", at(box.left + 20)));
+        plot.dispatchEvent(new PointerEvent("pointermove", at(box.left + 20 + moved)));
+        plot.dispatchEvent(new PointerEvent("pointerup", at(box.left + 20 + moved)));
+        await sleep(100);
+
+        const got = window.__ssoApi.status().tracks[1].offsetMs;
+        const want = moved * msPerPixel;
+        // Dragging right is later, which is a larger offset - the direction the
+        // "Late" button pushes.
+        if (Math.abs(got - want) > msPerPixel)
+          throw new Error(`dragged ${moved}px and the offset moved ${got}ms, want about ${Math.round(want)}ms`);
+
+        window.__ssoApi.detach(1);
+        await sleep(100);
+      });
+
       check("the nudge buttons say what is wrong, not which way to push", async () => {
         /* An arrow re-introduces exactly the question the words remove: film
          * time is stream time minus the offset, so a larger offset shows the
