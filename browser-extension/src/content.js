@@ -2062,7 +2062,22 @@
     return toast;
   }
 
-  function showToast(message, { action = null } = {}) {
+  /* Say it where the reader is looking.
+   *
+   * A toast is drawn at the top of the picture, which is the right place for
+   * something raised by a key press while a film plays and the wrong place for
+   * the answer to a button in a panel the reader is looking straight at.
+   * Reported against Line up: "the message can be easily missed since it is
+   * printed on top of the screen, very far from the button I've clicked".
+   *
+   * The rule, in one place rather than at each call site: a message about ONE
+   * subtitle goes on that subtitle's card when the panel is open, and to the
+   * toast otherwise - which covers the keyboard nudges, where there may be no
+   * panel at all. Every caller that names a slot gets this for free, so the
+   * next one does not have to remember.
+   */
+  function showToast(message, { action = null, slot = null } = {}) {
+    if (slot != null && window.__ssoPanel?.sayOnCard?.(slot, message, { action })) return;
     ensureOverlay();
     ensureToast();
     toast.replaceChildren();
@@ -2784,9 +2799,12 @@
     if (byHand) rememberTimingSoon(track);
     notify();
     if (!quiet) {
-      showToast(track.rate === 1
-        ? "Subtitle back to the film's own speed"
-        : `Subtitle running ${((track.rate - 1) * 100).toFixed(1)}% ${track.rate > 1 ? "fast" : "slow"}`);
+      showToast(
+        track.rate === 1
+          ? "Subtitle back to the film's own speed"
+          : `Subtitle running ${((track.rate - 1) * 100).toFixed(1)}% ${track.rate > 1 ? "fast" : "slow"}`,
+        { slot },
+      );
     }
   }
 
@@ -2801,7 +2819,7 @@
       // Name the track only when there are two of them to confuse, and say what
       // the correction did rather than what number it is now.
       const which = attachedTracks().length > 1 ? `Subtitle ${slot + 1}` : "Subtitles";
-      showToast(`${which} ${describeOffset(track.offsetMs)}`);
+      showToast(`${which} ${describeOffset(track.offsetMs)}`, { slot });
     }
     /* After the toast confirming the nudge, and deliberately replacing it. One
      * toast at a time, and of the two the reader already knows what they just

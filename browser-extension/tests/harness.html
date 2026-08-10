@@ -1349,8 +1349,20 @@
          * four corners and the panel and the rail both have heads. */
         await window.__ssoPanel.show();
         await sleep(150);
+        // The settings window is a host of its own, and it is the surface the
+        // report actually named. Walking every shadow root rather than the two
+        // remembered by name is the difference between fixing this and fixing
+        // the instance of it that was reported.
+        panelShadow().querySelector(".sso-icon[title='Settings']")?.click();
+        await sleep(250);
+
         const covered = [];
-        for (const shadow of [panelShadow(), railShadow()].filter(Boolean)) {
+        const surfaces = [...document.querySelectorAll("div")]
+          .map((d) => d.shadowRoot)
+          .filter((r) => r && r.querySelector(".sso-win__head"));
+        if (surfaces.length < 2)
+          throw new Error(`only ${surfaces.length} window(s) on screen to check`);
+        for (const shadow of surfaces) {
           for (const head of shadow.querySelectorAll(".sso-win__head")) {
             for (const control of head.querySelectorAll("button")) {
               if (control.hidden || control.offsetParent === null) continue;
@@ -1367,6 +1379,14 @@
         }
         if (covered.length)
           throw new Error(`controls that cannot be clicked at their centre: ${covered.join(", ")}`);
+        /* Put the settings window away, and ONLY that: closing every window
+         * with a close button in it shut the panel too, and six checks after
+         * this one then failed for reasons that had nothing to do with it. */
+        for (const shadow of surfaces) {
+          if (shadow === panelShadow()) continue;
+          shadow.querySelector(".sso-icon--close")?.click();
+        }
+        await sleep(150);
       });
 
       check("a player that fullscreens the video is moved off it", async () => {
@@ -1405,6 +1425,41 @@
           document.dispatchEvent(new Event("fullscreenchange"));
           await sleep(150);
         }
+      });
+
+      check("an answer about one subtitle is said on that subtitle's card", async () => {
+        /* Reported against Line up: "the message can be easily missed since it
+         * is printed on top of the screen, very far from the button I've
+         * clicked." The rule is applied where every such message passes rather
+         * than at the one call site that raised the complaint - showToast puts
+         * anything that names a slot onto that slot's card when the panel is
+         * open, and keeps the toast for when it is not, which is where the
+         * keyboard nudges live. */
+        await window.__ssoApi.attach({ cues: CUES, label: "EN · said", fileId: 910, slot: 0 });
+        await window.__ssoPanel.show();
+        await sleep(200);
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        const said = card.querySelector(".sso-track__said");
+
+        window.__ssoApi.setOffset(1500, { slot: 0 });
+        await sleep(150);
+        if (said.hidden || !said.textContent.trim())
+          throw new Error("with the panel open, the answer was not put on the card");
+
+        // Shut, the same message still has to reach the reader somewhere.
+        window.__ssoPanel.hide();
+        await sleep(150);
+        window.__ssoApi.setOffset(3000, { slot: 0 });
+        await sleep(150);
+        const toast = [...document.querySelectorAll("div")]
+          .map((d) => d.shadowRoot?.querySelector(".sso-toast"))
+          .find(Boolean);
+        if (!toast || !toast.textContent.trim())
+          throw new Error("with the panel shut, the answer was not said at all");
+
+        window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
+        await window.__ssoPanel.show();
+        await sleep(150);
       });
 
       check("the nudge buttons say what is wrong, not which way to push", async () => {

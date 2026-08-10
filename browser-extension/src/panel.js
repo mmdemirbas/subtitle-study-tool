@@ -705,9 +705,18 @@
     /* Placing is a mode, so it says so: the button reads Done while it is on
      * and is lit, which is the only control here that changes what a click
      * anywhere else will do. */
-    el.moveButton = button("Move", {
+    /* "Place", not "Move".
+     *
+     * It turns on a mode in which the SUBTITLES are dragged around the picture -
+     * middle to move one, edge to make it wider - and it sat in a row of panel
+     * controls labelled with a verb that says nothing about what it acts on.
+     * Reported as "I don't understand what the Move button does". The three
+     * icons beside it are presets for the same thing; this is the free-hand
+     * version, and it is the only way to get a subtitle off something on screen
+     * worth seeing. */
+    el.moveButton = button("Place", {
       onClick: () => api.setPlacing(!api.status().placing),
-      title: "Drag the middle of a subtitle to move it, an edge to make it wider",
+      title: "Drag a subtitle around the picture: the middle moves it, an edge makes it wider",
     });
     el.moveButton.className = "sso-quick__move";
 
@@ -753,6 +762,7 @@
     const first = status.tracks.findIndex((track) => track.attached);
     if (first === -1) return;
 
+    for (const [slot] of status.tracks.entries()) clearSaid(slot);
     const moved = [];
     const unsure = [];
     /* What each one was, before the aligner is allowed to overwrite it. Undo
@@ -1233,11 +1243,12 @@
         plot.releasePointerCapture?.(event.pointerId);
       } catch {}
       if (next === was.offsetMs) return;
-      api.showToast(`Moved · ${api.describeOffset(next)}`, {
+      sayOnCard(slot, `Moved · ${api.describeOffset(next)}`, {
         action: {
           label: "Undo",
           onClick: () => {
             applyTiming(slot, was);
+            sayOnCard(slot, "Back to the timing it had");
             refresh(api.status());
           },
         },
@@ -1479,7 +1490,8 @@
     offsetReset.title = "Back to the file's own timing";
     offsetReset.addEventListener("click", () => {
       api.setRate(1, { slot, quiet: true });
-      api.setOffset(0, { slot });
+      api.setOffset(0, { slot, quiet: true });
+      sayOnCard(slot, "Back to the file's own timing");
     });
 
     const fine = document.createElement("div");
@@ -1565,30 +1577,51 @@
 
   /* Say something on one card, with at most one thing to do about it.
    *
-   * Replaces the toast for anything raised by a control on a card. Cleared by
-   * the next thing that happens to that card, so a stale answer never sits
-   * under a subtitle it is no longer about. */
+   * Returns whether it took the message, because content.js offers every
+   * slot-specific message here first and falls back to a toast when this
+   * declines - which is what happens when the panel is shut, or folded, or on
+   * another screen, and is the case the keyboard nudges live in.
+   *
+   * A message stands until something else happens to that card. `clearSaid`
+   * below is what stops a stale answer sitting under a subtitle it is no longer
+   * about. */
   function sayOnCard(slot, text, { action = null, warn = false } = {}) {
     const card = el.trackCards[slot];
-    if (!card) return;
+    if (!card) return false;
+    if (!isPanelVisible() || folded || atScreen !== "root" || card.root.hidden) return false;
     card.said.replaceChildren();
     card.said.hidden = !text;
     card.said.dataset.warn = warn ? "true" : "false";
-    if (!text) return;
+    if (!text) return true;
     const words = document.createElement("span");
     words.className = "sso-track__said-text";
     words.textContent = text;
     card.said.append(words);
-    if (!action) return;
-    const act = document.createElement("button");
-    act.type = "button";
-    act.className = "sso-track__said-do";
-    act.textContent = action.label;
-    act.addEventListener("click", (event) => {
-      event.stopPropagation();
-      action.onClick();
-    });
-    card.said.append(act);
+    if (action) {
+      const act = document.createElement("button");
+      act.type = "button";
+      act.className = "sso-track__said-do";
+      act.textContent = action.label;
+      act.addEventListener("click", (event) => {
+        event.stopPropagation();
+        action.onClick();
+      });
+      card.said.append(act);
+    }
+    return true;
+  }
+
+  /* Take a card's message away.
+   *
+   * A message is an answer to something the reader just did, so it stops being
+   * true the moment they do something else. Without this, "these look 4.2s
+   * apart - use it?" sat on a card the reader had since detached and re-filled,
+   * offering a shift measured against a subtitle that is no longer there. */
+  function clearSaid(slot) {
+    const card = el.trackCards[slot];
+    if (!card || card.said.hidden) return;
+    card.said.hidden = true;
+    card.said.replaceChildren();
   }
 
   /* --- how one subtitle looks -------------------------------------------------
@@ -1964,6 +1997,9 @@
    * surface that owns removal. */
   function removeTrack(slot) {
     const label = api.status().tracks[slot]?.label;
+    // Its own card is about to be hidden, so this one stays a toast - there is
+    // nowhere on the list for it to sit, and the undo row below carries it too.
+    clearSaid(slot);
     api.detach(slot);
     api.showToast(`Subtitle ${slot + 1} removed${label ? ` · ${label}` : ""}`, {
       action: { label: "Undo", onClick: () => api.undoRemove() },
@@ -2006,7 +2042,7 @@
     const was = timingOf(slot);
     const answer = api.autoAlign?.(slot);
     if (!answer) {
-      api.showToast("Nothing to line this up against");
+      sayOnCard(slot, "Nothing to line this up against", { warn: true });
       return;
     }
     const lined = (undoTo) => {
@@ -2847,13 +2883,13 @@
     const study = window.__ssoStudy?.settings?.() || null;
     el.quick.hidden = !status.attached;
     el.arrangeGroup.hidden = status.trackCount < 2;
-    el.moveButton.textContent = status.placing ? "Done" : "Move";
+    el.moveButton.textContent = status.placing ? "Done" : "Place";
     el.moveButton.dataset.on = status.placing ? "true" : "false";
     // One subtitle has nothing to agree with.
     el.lineUpAll.hidden = status.trackCount < 2;
     el.moveButton.title = status.placing
       ? "Drag the stand-in to where the subtitle should be, then press Done"
-      : "Drag the middle of a subtitle to move it, an edge to make it wider";
+      : "Drag a subtitle around the picture: the middle moves it, an edge makes it wider";
     // study.js is a separate content script; if it did not load there is
     // nothing to switch on and the row should not claim otherwise.
     el.studyButton.hidden = !study;
@@ -2926,6 +2962,13 @@
       card.visible.dataset.on = track.visible ? "true" : "false";
       // Nothing to undo, no undo. Which is also when the subtitle is right.
       card.offsetReset.hidden = !track.offsetMs && !stretched;
+      /* A message is an answer about the subtitle that was in this card. When a
+       * different one arrives the answer is about a file that is no longer
+       * there, so it goes rather than sitting under its replacement. */
+      if (card.saidFor !== track.fileId) {
+        if (card.saidFor !== undefined) clearSaid(slot);
+        card.saidFor = track.fileId;
+      }
       card.timeline.draw(status);
     });
 
@@ -3101,7 +3144,9 @@
   /* applySize is exported for the harness, which measures the sync row at both
    * ends of the width the corner grips allow. Driving the grips with synthetic
    * pointer events to get there would be testing the grips, not the row. */
-  window.__ssoPanel = { show, hide, toggle, reparent, rescale, applySize };
+  /* sayOnCard is exported because content.js offers every slot-specific
+   * message to it before falling back to a toast. See showToast there. */
+  window.__ssoPanel = { show, hide, toggle, reparent, rescale, applySize, sayOnCard };
 
   window.__ssoPanelTeardown = () => {
     // Both live on hosts outside this shadow tree, so removing the panel does
