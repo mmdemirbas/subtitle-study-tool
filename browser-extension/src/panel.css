@@ -436,6 +436,9 @@ button.sso-quick__study[data-on="true"] {
 .sso-map {
   --sso-map-ink: #93b9fb;
   --sso-map-head: #eef0f3;
+  /* Lines pushed off the end of the film. The danger ink, because it is not a
+   * feature of the subtitle - it is a warning that part of it is unreachable. */
+  --sso-map-spill: #f0836f;
 
   display: flex;
   gap: 5px;
@@ -796,6 +799,66 @@ button.sso-sync__clear {
 button.sso-sync__clear:hover:not(:disabled) {
   color: var(--sso-ink);
   background: var(--sso-fill-hover);
+}
+
+/* Lining up, with the other things that change this subtitle's timing.
+ *
+ * It used to sit in the row below with Again and Next, which are not timing
+ * controls at all - they move the picture. So four of the five ways to change
+ * the offset were in one row and the fifth was somewhere else. */
+button.sso-sync__align {
+  flex: none;
+  padding: 5px 9px;
+  font-size: var(--sso-t-small);
+  font-weight: 600;
+  color: var(--sso-accent-ink);
+  white-space: nowrap;
+}
+
+/* What a control on this card just did, on this card.
+ *
+ * It was a toast at the top of the screen, which is the length of the film away
+ * from the button that raised it. Worse when the answer is a question - a
+ * missed "use it?" reads as nothing having happened at all. */
+.sso-track__said {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 7px 0 0;
+  padding: 5px 7px;
+  font-size: var(--sso-t-small);
+  line-height: 1.35;
+  color: var(--sso-ink-2);
+  background: var(--sso-fill);
+  border-left: 2px solid var(--sso-accent);
+  border-radius: var(--sso-r-ctl);
+}
+
+.sso-track__said[data-warn="true"] {
+  color: var(--sso-ink-2);
+  border-left-color: var(--sso-danger);
+}
+
+.sso-track__said-text {
+  flex: 1;
+  min-width: 0;
+}
+
+button.sso-track__said-do {
+  flex: none;
+  padding: 4px 9px;
+  font-size: var(--sso-t-small);
+  font-weight: 600;
+  color: var(--sso-ink);
+  cursor: pointer;
+  background: var(--sso-fill-hover);
+  border: 1px solid var(--sso-line);
+  border-radius: var(--sso-r-ctl);
+}
+
+button.sso-track__said-do:hover {
+  background: var(--sso-accent);
+  border-color: var(--sso-accent);
 }
 
 /* On or off the picture. Reached for mid-scene, when a subtitle covers

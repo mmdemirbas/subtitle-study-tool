@@ -1175,9 +1175,12 @@
 
         const plot = mapStrips()[1].querySelector(".sso-map__plot");
         const box = plot.getBoundingClientRect();
+        /* buttons: 1 matters. A synthetic PointerEvent reports no buttons held
+         * unless told, and the drag now ends the moment it sees that - which is
+         * what stops a stale drag re-timing the subtitle on a bare mouse move. */
         const at = (x) => ({
-          pointerId: 91, button: 0, clientX: x, clientY: box.top + box.height / 2,
-          bubbles: true, cancelable: true,
+          pointerId: 91, button: 0, buttons: 1, clientX: x,
+          clientY: box.top + box.height / 2, bubbles: true, cancelable: true,
         });
         // The whole film is on screen, so a pixel is the film over the width.
         const msPerPixel = (video.duration * 1000) / box.width;
@@ -1204,9 +1207,86 @@
         await sleep(100);
       });
 
-      check("the nudge buttons say what is wrong, not which way to push", async () => {
-        /* An arrow re-introduces exactly the question the words remove: film
-         * time is stream time minus the offset, so a larger offset shows the
+      check("moving the mouse over the strip without pressing changes nothing", async () => {
+        /* Reported: "I'm not clicking and dragging over a timeline bar but it
+         * still behaves like I'm adjusting it to sync." The drag state was only
+         * cleared by a pointerup, so a press that ended somewhere this never
+         * heard about - swallowed by the page, capture lost, alt-tab - left it
+         * live, and every later mouse move over the strip re-timed the
+         * subtitle. */
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "TR · map", fileId: 504, slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        video.currentTime = 2600;
+        await sleep(150);
+
+        const plot = mapStrips()[1].querySelector(".sso-map__plot");
+        const box = plot.getBoundingClientRect();
+        const ev = (type, x, buttons) => new PointerEvent(type, {
+          pointerId: 92, button: 0, buttons, clientX: x,
+          clientY: box.top + box.height / 2, bubbles: true, cancelable: true,
+        });
+        plot.setPointerCapture = () => {};
+        plot.releasePointerCapture = () => {};
+        plot.hasPointerCapture = () => false;
+
+        // A press that starts and is then lost: the pointerup never arrives.
+        plot.dispatchEvent(ev("pointerdown", box.left + 30, 1));
+        plot.dispatchEvent(ev("pointermove", box.left + 60, 1));
+        await sleep(40);
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        await sleep(40);
+
+        // Now just move across it with nothing held down.
+        for (const x of [90, 140, 200]) plot.dispatchEvent(ev("pointermove", box.left + x, 0));
+        await sleep(60);
+        const after = window.__ssoApi.status().tracks[1].offsetMs;
+        if (after !== 0)
+          throw new Error(`a mouse move with no button down moved the subtitle to ${after}ms`);
+
+        window.__ssoApi.detach(1);
+        await sleep(100);
+      });
+
+      check("moving a subtitle a long way does not flatten its map", async () => {
+        /* Reported: "when I move the bar left or right too far, they become
+         * shorter." Lines pushed off the end of the film were being pinned into
+         * the edge column, so that column became the tallest, and every real bar
+         * was then divided by a pile of off-screen cues. The height means "how
+         * much dialogue is here" and cannot mean that if something off-screen
+         * sets the scale. */
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "TR · map", fileId: 505, slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        video.currentTime = 2600;
+        await sleep(150);
+        await zoomToFilm();
+
+        const canvas = mapStrips()[1].querySelector(".sso-map__canvas");
+        const tallest = () => {
+          const d = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+          let best = 0;
+          for (let x = 0; x < canvas.width; x++) {
+            let top = canvas.height;
+            for (let y = 0; y < canvas.height; y++) {
+              if (d[(y * canvas.width + x) * 4 + 3] > 0) { top = y; break; }
+            }
+            best = Math.max(best, canvas.height - top);
+          }
+          return best;
+        };
+
+        const before = tallest();
+        // A quarter of the film, which pushes a large share of the lines off it.
+        window.__ssoApi.setOffset(Math.round(video.duration * 1000 * 0.25), { slot: 1, quiet: true });
+        await sleep(200);
+        const after = tallest();
+        if (after < before * 0.8)
+          throw new Error(`the tallest bar went from ${before}px to ${after}px when the subtitle was moved`);
+
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        window.__ssoApi.detach(1);
+        await sleep(100);
+      });
+
       check("a click on our chrome never reaches the player behind it", async () => {
         /* Reported: "I cannot click even the close button of the settings pane.
          * It is captured by the player as pause/play event." The click was not
@@ -1256,6 +1336,9 @@
         }
       });
 
+      check("the nudge buttons say what is wrong, not which way to push", async () => {
+        /* An arrow re-introduces exactly the question the words remove: film
+         * time is stream time minus the offset, so a larger offset shows the
          * line later, and nobody should have to derive that mid-film. The
          * chevron is a magnitude and never stands alone. */
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
@@ -3044,7 +3127,7 @@
         const shown = (sel) =>
           [...panelShadow().querySelectorAll(sel)].filter((b) => !b.hidden && b.offsetParent !== null);
 
-        const perCard = shown(".sso-line-step--align");
+        const perCard = shown(".sso-sync__align");
         const all = shown(".sso-quick__align");
         if (api.status().trackCount < 2) {
           if (perCard.length || all.length)

@@ -983,6 +983,9 @@
     plot.append(readout);
 
     let buckets = null;
+    // Lines shifted off either end of the film. Counted, never binned - see
+    // rebuildDensity for what binning them cost.
+    let spilled = { before: 0, after: 0 };
     let signature = "";
     let durationMs = 0;
     let width = 0;
@@ -1025,15 +1028,25 @@
       signature = next;
 
       buckets = new Float32Array(width);
+      spilled = { before: 0, after: 0 };
       if (!durationMs || !track.cueCount) return;
       let tallest = 0;
       for (const fileMs of api.cueTimes(slot)) {
-        const at = api.toStreamMs(slot, fileMs) / durationMs;
-        /* Lines pushed outside the film are pinned to the edge they went past
-         * rather than dropped. A subtitle shifted far enough to run off the end
-         * is exactly the state the reader is trying to see, and a strip that
-         * quietly emptied itself would hide it. */
-        const bucket = Math.min(width - 1, Math.max(0, Math.round(at * (width - 1))));
+        const at = api.toStreamMs(slot, fileMs);
+        /* Lines pushed off the film are counted at the edge, NOT poured into
+         * the edge bucket.
+         *
+         * Pinning them there was a real bug and a confusing one: dragging a
+         * subtitle a long way piled hundreds of cues into one column, that
+         * column became the tallest, and every genuine bar was then divided by
+         * it - so the whole map went faint and short exactly when the reader
+         * was moving it. What the height means has to be "how much dialogue is
+         * here", and a bar cannot mean that if an off-screen pile sets the
+         * scale. The count is kept and drawn as an edge mark instead, which is
+         * the honest way to say "there is more, that way". */
+        if (at < 0) { spilled.before += 1; continue; }
+        if (at > durationMs) { spilled.after += 1; continue; }
+        const bucket = Math.min(width - 1, Math.max(0, Math.round((at / durationMs) * (width - 1))));
         buckets[bucket] += 1;
         if (buckets[bucket] > tallest) tallest = buckets[bucket];
       }
@@ -1056,6 +1069,16 @@
         context.fillRect(i, height - bar, ratio(), bar);
       }
       context.globalAlpha = 1;
+
+      /* Lines that have been pushed off the film, said at the edge they went
+       * past. Without this a subtitle dragged far enough simply thins out and
+       * the reader has no way to tell "there is no dialogue here" from "the
+       * dialogue is off the end". */
+      const edge = Math.max(2, ratio() * 2);
+      context.fillStyle =
+        getComputedStyle(plot).getPropertyValue("--sso-map-spill").trim() || "#f0836f";
+      if (spilled.before) context.fillRect(0, 0, edge, height);
+      if (spilled.after) context.fillRect(width - edge, 0, edge, height);
     }
 
     /* Every line in the window, where it actually is.
@@ -1159,7 +1182,13 @@
          * make the subtitle accelerate away from the finger. */
         across: to - from,
       };
-      plot.setPointerCapture(event.pointerId);
+      /* Capture throws for a pointer id that is not live, which is what a
+       * synthetic pointerdown produces. Losing capture costs a drag that stops
+       * at the edge of the strip; letting it throw costs the drag entirely.
+       * Same guard makeMovable uses, for the same reason. */
+      try {
+        plot.setPointerCapture?.(event.pointerId);
+      } catch {}
       plot.dataset.dragging = "true";
       readout.hidden = false;
       readout.textContent = api.describeOffset(drag.was.offsetMs);
@@ -1176,20 +1205,33 @@
     };
 
     plot.addEventListener("pointermove", (event) => {
+      if (!drag) return;
+      /* No button down means the press ended somewhere this never heard about -
+       * a pointerup swallowed by the page, a capture lost, an alt-tab. Without
+       * this the drag stayed live forever and merely moving the mouse across the
+       * strip re-timed the subtitle, which is what "I'm not clicking and
+       * dragging but it still behaves like I'm adjusting it" is. makeMovable
+       * has carried this guard all along; this did not. */
+      if (event.buttons === 0) {
+        finish(event);
+        return;
+      }
       const next = movedTo(event);
       if (next === null) return;
       readout.textContent = api.describeOffset(next);
       api.setOffset(next, { slot, quiet: true });
     });
 
-    const finish = (event) => {
+    function finish(event) {
       const next = movedTo(event);
       if (next === null) return;
       const was = drag.was;
       drag = null;
       delete plot.dataset.dragging;
       readout.hidden = true;
-      if (plot.hasPointerCapture?.(event.pointerId)) plot.releasePointerCapture(event.pointerId);
+      try {
+        plot.releasePointerCapture?.(event.pointerId);
+      } catch {}
       if (next === was.offsetMs) return;
       api.showToast(`Moved · ${api.describeOffset(next)}`, {
         action: {
@@ -1204,6 +1246,10 @@
     };
     plot.addEventListener("pointerup", finish);
     plot.addEventListener("pointercancel", finish);
+    // Capture can be taken away without a pointerup - a page that calls
+    // setPointerCapture itself, a browser gesture. Ending here as well is what
+    // stops the drag outliving the press.
+    plot.addEventListener("lostpointercapture", finish);
 
     return { root, draw };
   }
@@ -1472,25 +1518,35 @@
       return b;
     };
 
-    /* Lining up was a menu item, which is three actions - open the menu, read
-     * five entries, click one - for the thing a reader reaches for the moment a
-     * second subtitle is out of step with the first. It is the same promotion
-     * the timing undo already got, for the same reason.
+    lines.append(
+      stepper("‹ Again", -1, "Play this line from its start. Press twice to go back one."),
+      stepper("Next ›", +1, "Skip to where the next line begins."),
+    );
+
+    /* Lining up is a timing control, so it sits with the timing controls.
      *
-     * On the card rather than in the top bar because it names a subtitle: this
-     * one moves, the other one does not. The top bar has the version that does
-     * not name one. */
+     * It was in the row below, next to Again and Next - which are not timing at
+     * all, they move the picture. So the row that changes the offset held four
+     * of the five ways to change the offset, and the fifth was somewhere else
+     * with the playback buttons. Reported as exactly that. */
     const lineUpButton = button("Line up", {
       title: "Work out the gap from where the two subtitles say the same things",
       onClick: () => lineUp(slot),
     });
-    lineUpButton.className = "sso-line-step sso-line-step--align";
+    lineUpButton.className = "sso-sync__align";
+    offsets.append(lineUpButton);
 
-    lines.append(
-      lineUpButton,
-      stepper("‹ Again", -1, "Play this line from its start. Press twice to go back one."),
-      stepper("Next ›", +1, "Skip to where the next line begins."),
-    );
+    /* What lining up did, on the card that did it.
+     *
+     * It was a toast, which draws at the top of the screen - the length of the
+     * film away from the button that raised it, on a surface the reader is
+     * already looking at. Reported as "the message can be easily missed". A
+     * result belongs next to the control that produced it, and the answer here
+     * is often a question ("use it?"), which is worse than missed if it is
+     * missed: the reader concludes nothing happened. */
+    const said = document.createElement("div");
+    said.className = "sso-track__said";
+    said.hidden = true;
 
     /* The map goes above the controls that move it, not below them: it is the
      * reading those controls change, and it is also one of them. */
@@ -1498,13 +1554,41 @@
 
     const body = document.createElement("div");
     body.className = "sso-track__body";
-    body.append(timeline.root, offsets, lines);
+    body.append(timeline.root, offsets, said, lines);
 
     root.append(head, body);
     return {
       root, learnChip, label, labelHead, labelTail,
-      offsetField, offsetReset, visible, more, lineUpButton, timeline,
+      offsetField, offsetReset, visible, more, lineUpButton, timeline, said,
     };
+  }
+
+  /* Say something on one card, with at most one thing to do about it.
+   *
+   * Replaces the toast for anything raised by a control on a card. Cleared by
+   * the next thing that happens to that card, so a stale answer never sits
+   * under a subtitle it is no longer about. */
+  function sayOnCard(slot, text, { action = null, warn = false } = {}) {
+    const card = el.trackCards[slot];
+    if (!card) return;
+    card.said.replaceChildren();
+    card.said.hidden = !text;
+    card.said.dataset.warn = warn ? "true" : "false";
+    if (!text) return;
+    const words = document.createElement("span");
+    words.className = "sso-track__said-text";
+    words.textContent = text;
+    card.said.append(words);
+    if (!action) return;
+    const act = document.createElement("button");
+    act.type = "button";
+    act.className = "sso-track__said-do";
+    act.textContent = action.label;
+    act.addEventListener("click", (event) => {
+      event.stopPropagation();
+      action.onClick();
+    });
+    card.said.append(act);
   }
 
   /* --- how one subtitle looks -------------------------------------------------
@@ -1926,12 +2010,12 @@
       return;
     }
     const lined = (undoTo) => {
-      api.showToast(`Lined up · ${api.describeOffset(answer.offsetMs)}`, {
+      sayOnCard(slot, `Lined up · ${api.describeOffset(answer.offsetMs)}`, {
         action: {
           label: "Undo",
           onClick: () => {
             applyTiming(slot, undoTo);
-            api.showToast("Back to the timing it had");
+            sayOnCard(slot, "Back to the timing it had");
             refresh(api.status());
           },
         },
@@ -1940,9 +2024,9 @@
     if (answer.verdict === "apply") {
       lined(was);
     } else if (answer.verdict === "offer") {
-      api.showToast(`These look ${api.describeOffset(answer.offsetMs)} apart. Use it?`, {
+      sayOnCard(slot, `These look ${api.describeOffset(answer.offsetMs)} apart.`, {
         action: {
-          label: "Line up",
+          label: "Use it",
           onClick: () => {
             applyTiming(slot, { offsetMs: answer.offsetMs, rate: answer.trackRate });
             lined(was);
@@ -1951,10 +2035,29 @@
         },
       });
     } else {
-      /* Named, not generic. "Could not sync" sends a reader to try the same
-       * thing again; "these do not look like the same film" sends them to
-       * check which subtitle they downloaded, which is where the fault is. */
-      api.showToast("These two do not look like the same film");
+      /* Say which kind of no it is, and say the number.
+       *
+       * "These do not look like the same film" was the only answer available
+       * for two very different situations, and it was wrong about one of them.
+       * Measured on this repo's own files: shift the Turkish subtitle by 185
+       * seconds and the confidence falls from 476 to 4.33; by 240 seconds and it
+       * reads 0.53 with a nonsense shift - because the search window is three
+       * minutes wide and beyond it the aligner is not looking. A subtitle timed
+       * with a recap the other file does not have is exactly that case, and the
+       * reader was told they had downloaded the wrong programme.
+       *
+       * autoAlign now takes a second, wider look before giving up, and whatever
+       * comes back is named rather than summarised - a reader who can see 0.4
+       * knows it is hopeless, and one who can see "4m12s apart" knows it is not
+       * the wrong film, it is a different cut. */
+      const gap = Number.isFinite(answer.offsetMs)
+        ? ` The closest fit is ${api.describeOffset(answer.offsetMs)}, which is too weak to trust (${answer.confidence}).`
+        : ` (confidence ${answer.confidence})`;
+      sayOnCard(
+        slot,
+        `No timing fits both files well enough to use.${gap} Drag the map to line them up by eye.`,
+        { warn: true },
+      );
     }
     refresh(api.status());
   }
