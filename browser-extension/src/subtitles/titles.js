@@ -97,6 +97,27 @@ function stripChars(text, chars) {
   return text.slice(start, end);
 }
 
+/**
+ * Turn what the reader typed, or what the page says, into a search.
+ *
+ * Port of titles.resolve in subtitle_daemon/titles.py. One function rather than
+ * the rule written out at each search path, because it WAS written out twice
+ * and only the daemon's copy was corrected when the rule changed - so a fix
+ * that four suites agreed was complete never reached the path that runs when
+ * the daemon is down, which is the ordinary case.
+ *
+ * Markers found in the searched text win over the ones the caller passed.
+ */
+export function resolve({ title = "", query = "", year = null, season = null, episode = null } = {}) {
+  const guessed = guess(query || title);
+  return {
+    query: guessed.query || query || "",
+    year: guessed.year ?? year ?? null,
+    season: guessed.season ?? season ?? null,
+    episode: guessed.episode ?? episode ?? null,
+  };
+}
+
 /** Extract a searchable title, and season/episode/year when confident. */
 export function guess(raw) {
   let text = String(raw || "").replace(LEADING_NOISE, "").trim();

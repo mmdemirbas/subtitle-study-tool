@@ -13,7 +13,7 @@ import * as cache from "./cache.js";
 import * as matching from "./matching.js";
 import { Client, OpenSubtitlesError } from "./opensubtitles.js";
 import { decode, parseSrt, toJson, toVtt } from "./srt.js";
-import { guess } from "./titles.js";
+import { guess, resolve } from "./titles.js";
 
 export const DEFAULT_LANGUAGES = ["en"];
 
@@ -89,15 +89,22 @@ export class LocalService {
     const rawTitle = params.title || "";
     const explicit = params.query || null;
 
-    const guessed = guess(rawTitle);
-    const query = explicit || guessed.query;
-    const year = params.year ?? (explicit ? null : guessed.year);
-    let season = params.season ?? null;
-    let episode = params.episode ?? null;
-    if (season === null && episode === null && !explicit) {
-      season = guessed.season;
-      episode = guessed.episode;
-    }
+    /* Both search paths resolve the same way, through the same function. This
+     * copy is the one that matters most: it is what runs whenever the daemon is
+     * not up, which is the ordinary case.
+     *
+     * It used to hold its own copy of the rule and was fixed five days after the
+     * daemon's, which is the whole lesson - the daemon, the daemon's tests and
+     * titles.js were all corrected and the path actually serving the reader was
+     * not, so the reported bug survived a fix four suites agreed was complete. */
+    const guessed = guess(explicit || rawTitle);
+    const { query, year, season, episode } = resolve({
+      title: rawTitle,
+      query: explicit || "",
+      year: params.year ?? null,
+      season: params.season ?? null,
+      episode: params.episode ?? null,
+    });
 
     const languages = params.languages?.length ? params.languages : this.languages;
     const imdbId = params.imdb_id || null;

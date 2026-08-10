@@ -226,6 +226,45 @@
           throw new Error(`searched for ${JSON.stringify(found.used.query)}`);
       });
 
+      check("what was typed is cleaned too, not only what the page said", async () => {
+        /* The missing half of the check above, and the reason a reported search
+         * bug survived a fix. The page-title path was parsed and tested; the
+         * typed path was not parsed and not tested, so "The Americans (2013)
+         * 2013 - S02 E04" went to OpenSubtitles verbatim - scoring 0.50 against
+         * the real name - while the daemon, its tests and the shared parser all
+         * agreed the bug was fixed. This is the path that serves the reader
+         * whenever the daemon is not running, which is the ordinary case. */
+        const found = await provider.search({
+          query: "The Americans (2013) 2013 · S02 E04",
+          languages: ["en"],
+        });
+        const used = found.used;
+        if (used.query !== "The Americans")
+          throw new Error(`searched for ${JSON.stringify(used.query)}`);
+        if (used.year !== 2013) throw new Error(`year came out as ${used.year}`);
+        if (used.season !== 2 || used.episode !== 4)
+          throw new Error(`episode came out as S${used.season}E${used.episode}`);
+      });
+
+      check("a typed episode beats the one the page reported", async () => {
+        // The panel sends the playing episode with every search, so typing a
+        // different one has to win or it cannot be used to ask for another.
+        const found = await provider.search({
+          query: "The Americans S02 E04",
+          season: 1,
+          episode: 9,
+          languages: ["en"],
+        });
+        if (found.used.season !== 2 || found.used.episode !== 4)
+          throw new Error(`asked for S${found.used.season}E${found.used.episode}`);
+      });
+
+      check("a clean typed title is not damaged by being parsed", async () => {
+        const found = await provider.search({ query: "Crime 101", languages: ["en"] });
+        if (found.used.query !== "Crime 101")
+          throw new Error(`searched for ${JSON.stringify(found.used.query)}`);
+      });
+
       check("fetching a subtitle produces annotated cues", async () => {
         reset();
         const result = await provider.fetchSubtitle(11, { imdb_id: "32430579", language: "en" });

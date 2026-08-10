@@ -131,6 +131,44 @@ class TitleGuess:
         return self.season is not None and self.episode is not None
 
 
+@dataclass(frozen=True)
+class Search:
+    """What to actually ask OpenSubtitles for."""
+
+    query: str
+    year: int | None = None
+    season: int | None = None
+    episode: int | None = None
+
+
+def resolve(
+    *,
+    title: str = "",
+    query: str = "",
+    year: int | None = None,
+    season: int | None = None,
+    episode: int | None = None,
+) -> Search:
+    """Turn what the reader typed, or what the page says, into a search.
+
+    One function rather than a rule written out at each search path, because it
+    was written out twice - once in the daemon and once in the extension's
+    no-daemon copy - and only one of them was corrected when the rule changed.
+    Everything the two of them are supposed to agree about now lives here and
+    in its port, and the parity test compares them directly.
+
+    Markers found in the searched text win over the ones the caller passed:
+    somebody typing S02 E04 while episode 9 is on screen is asking for four.
+    """
+    guessed = guess(query or title)
+    return Search(
+        query=guessed.query or query or "",
+        year=guessed.year if guessed.year is not None else year,
+        season=guessed.season if guessed.season is not None else season,
+        episode=guessed.episode if guessed.episode is not None else episode,
+    )
+
+
 def guess(raw: str) -> TitleGuess:
     """Extract a searchable title, and season/episode/year when confident."""
     text = _LEADING_NOISE.sub("", raw or "").strip()

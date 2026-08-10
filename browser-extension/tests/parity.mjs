@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import { classify, speakerColor, symbolFor } from "../src/subtitles/annotations.js";
 import { score } from "../src/subtitles/matching.js";
 import { decode, parseSrt, toJson } from "../src/subtitles/srt.js";
-import { guess } from "../src/subtitles/titles.js";
+import { guess, resolve } from "../src/subtitles/titles.js";
 
 const input = JSON.parse(readFileSync(process.argv[2], "utf-8"));
 const out = {};
@@ -39,5 +39,10 @@ out.scores = (input.scores || []).map(([query, candidate, queryYear, candidateYe
 }));
 
 out.titles = (input.titles || []).map((raw) => ({ raw, ...guess(raw) }));
+
+/* The search-level resolution, not only the parser. The parser agreed across
+ * both copies while the two search paths disagreed about whether to run it at
+ * all, so comparing guess() alone reported parity that did not exist. */
+out.searches = (input.searches || []).map((params) => ({ params, ...resolve(params) }));
 
 process.stdout.write(JSON.stringify(out));

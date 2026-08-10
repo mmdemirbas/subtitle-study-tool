@@ -112,27 +112,18 @@ class Service:
         explicit = _first(params, "query")
 
         # Whatever text is being searched on gets parsed the same way, typed or
-        # taken from the page.
-        #
-        # The typed box used to bypass the guesser entirely, on the grounds that
-        # a query the reader typed is a correction and should be taken at its
-        # word. That is true of a reader who types "Crime 101". It is not true of
-        # the far more common gesture, which is to copy what the page is showing:
-        # "The Americans (2013) 2013 - S02 E04" went to OpenSubtitles verbatim and
-        # scored 0.50 against "The Americans", under the 0.75 threshold, so every
-        # result came back marked "weak match". Parsing it costs the deliberate
-        # corrector nothing, because a clean title survives the guesser unchanged
-        # - that is what _strip_repeatedly's never-empty guard is for.
+        # taken from the page. The rule and the reasoning are in titles.resolve,
+        # which the extension's no-daemon path has a port of - one place, so the
+        # two cannot drift the way they did before.
         guessed = titles.guess(explicit or raw_title)
-        query = guessed.query or explicit
-
-        # Markers found in the searched text win, because they are in the words
-        # being searched: a reader who types S02 E04 while episode 9 is on screen
-        # is asking for episode 4. What the parse did not find falls back to what
-        # the page reported.
-        year = guessed.year or _first_int(params, "year")
-        season = guessed.season if guessed.season is not None else _first_int(params, "season")
-        episode = guessed.episode if guessed.episode is not None else _first_int(params, "episode")
+        used = titles.resolve(
+            title=raw_title,
+            query=explicit or "",
+            year=_first_int(params, "year"),
+            season=_first_int(params, "season"),
+            episode=_first_int(params, "episode"),
+        )
+        query, year, season, episode = used.query, used.year, used.season, used.episode
 
         languages = _languages(params, self.config.default_languages)
         imdb_id = _first(params, "imdb_id")

@@ -61,6 +61,19 @@ TITLE_CASES = [
     "Ayla 2017",
 ]
 
+# Search resolutions, which is the level the two copies actually diverged at.
+# A typed query with markers in it is the case that was broken in the extension
+# for five days after the daemon was fixed.
+SEARCH_CASES = [
+    {"title": "", "query": "The Americans (2013) 2013 \u00b7 S02 E04"},
+    {"title": "", "query": "The Americans S02 E04", "season": 1, "episode": 9},
+    {"title": "", "query": "Crime 101"},
+    {"title": "Sicario.2015.1080p.BluRay.x264-SPARKS", "query": ""},
+    {"title": "Watch Mercy (2025) Online Free HD", "query": "", "year": 2026},
+    {"title": "Prime Video: Crime 101", "query": "", "season": 3, "episode": 2},
+    {"title": "", "query": "", "year": 2013},
+]
+
 SCORE_CASES = [
     ("Crime 101", "Crime 101", 2025, 2025),
     ("Crime 101", "Crime 101", 2025, 2026),
@@ -194,6 +207,7 @@ def js_results(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "subtitles": [str(path) for path in _srt_files() + _fixture_files(tmp)],
         "scores": [list(case) for case in SCORE_CASES],
         "titles": TITLE_CASES,
+        "searches": SEARCH_CASES,
     }
 
     input_path = tmp / "input.json"
@@ -259,6 +273,24 @@ def test_title_guesses_agree(js_results: dict) -> None:
             mismatches.append((row["raw"], (mine.query, mine.year, mine.season,
                                             mine.episode), theirs))
     assert not mismatches, _report("title guess", mismatches)
+
+
+def test_search_resolutions_agree(js_results: dict) -> None:
+    """The two search paths must ask OpenSubtitles the same question.
+
+    guess() agreeing is not enough and was not enough: both copies parsed a page
+    title identically while only one of them ran the parser over a typed query,
+    so the daemon found the programme and the extension - which is what serves
+    the reader whenever the daemon is not up - did not.
+    """
+    mismatches = []
+    for row, params in zip(js_results["searches"], SEARCH_CASES, strict=True):
+        mine = titles.resolve(**params)
+        theirs = (row["query"], row["year"], row["season"], row["episode"])
+        if (mine.query, mine.year, mine.season, mine.episode) != theirs:
+            mismatches.append((str(params), (mine.query, mine.year, mine.season,
+                                             mine.episode), theirs))
+    assert not mismatches, _report("search resolution", mismatches)
 
 
 def test_the_comparison_actually_covers_the_pipeline(js_results: dict) -> None:
