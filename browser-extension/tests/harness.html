@@ -57,6 +57,9 @@
       window.__sent = [];
       // The message listeners the page registered, so a test can ask them.
       window.__listeners = [];
+      // Per-op replacements for the daemon stub below. Null unless a test is
+      // standing something else in its place.
+      window.__stubDaemon = null;
       window.chrome = {
         runtime: {
           getManifest: () => ({ version: "0.1.0" }),
@@ -80,6 +83,10 @@
               return { ok: true };
             }
             if (msg?.type !== "sso:daemon") return {};
+            /* An override, so a test that needs several results and a different
+             * file behind each of them can say so without every other test
+             * having to know about it. Set it, use it, set it back to null. */
+            if (window.__stubDaemon?.[msg.op]) return window.__stubDaemon[msg.op](msg.args || {});
             if (msg.op === "search") {
               return {
                 used: { query: "Mercy" },
@@ -1358,6 +1365,82 @@
           throw new Error(`a big step moved ${large}ms and a small one ${small}ms`);
         window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
         await sleep(30);
+      });
+
+      /* --- letting the timing choose the subtitle -----------------------------
+       *
+       * The point of the button is that it does NOT pick by name or by rank. So
+       * the test puts the best-named, most-downloaded result first and gives it
+       * the wrong timing, and asserts that the one which actually lines up wins.
+       * A test where the right answer is also the top of the list would pass
+       * against a function that returned results[0].
+       */
+      const cuesEvery = (gapMs, shiftMs, count) =>
+        Array.from({ length: count }, (_, i) => ({
+          start: i * gapMs + shiftMs,
+          end: i * gapMs + shiftMs + 1500,
+          text: `line ${i}`,
+        }));
+
+      check("the best three are tried and the one that lines up is kept", async () => {
+        const reference = cuesEvery(9000, 0, 90);
+        await window.__ssoApi.attach({ cues: reference, label: "EN · ref", fileId: 601, slot: 0 });
+        await sleep(80);
+
+        const fetched = [];
+        window.__stubDaemon = {
+          search: () => ({
+            auto_attach_threshold: 0.75,
+            results: [
+              // First, best named, most downloaded - and timed against a
+              // different cut entirely.
+              { file_id: 11, language: "tr", movie_name: "Mercy", release: "Mercy.2026.PROPER", download_count: 9000, match_score: 1.0 },
+              // Second: the same speech, 2.5s out, which is a real release gap.
+              { file_id: 12, language: "tr", movie_name: "Mercy", release: "Mercy.2026.WEB", download_count: 40, match_score: 0.9 },
+              { file_id: 13, language: "tr", movie_name: "Mercy", release: "Mercy.2026.CAM", download_count: 5, match_score: 0.8 },
+            ],
+          }),
+          fetch: (args) => {
+            fetched.push(args.fileId);
+            if (args.fileId === 12) return { cues: cuesEvery(9000, 2500, 90) };
+            // Unrelated timing: a different gap, so no shift can line it up.
+            if (args.fileId === 11) return { cues: cuesEvery(4100, 17000, 90) };
+            return { cues: cuesEvery(6300, 51000, 90) };
+          },
+        };
+
+        const shadow = panelShadow();
+        try {
+          // In through the plus, which is what points the next result at the
+          // empty subtitle - the same route a reader takes.
+          shadow.querySelector(".sso-add").click();
+          await sleep(80);
+          [...shadow.querySelectorAll("button")].find((b) => b.textContent === "Search").click();
+          await sleep(200);
+
+          const tryBest = shadow.querySelector(".sso-try");
+          if (!tryBest || tryBest.hidden) throw new Error("nothing offered to try the best three");
+          tryBest.click();
+          // Three downloads and an align each, and it settles well before this.
+          for (let i = 0; i < 80 && window.__ssoApi.status().tracks[1].fileId !== 12; i++) {
+            await sleep(50);
+          }
+
+          /* Exactly three: the winner is attached from the cues already in
+           * hand, not asked for a second time. */
+          if (fetched.length !== 3)
+            throw new Error(`fetched ${fetched.join(", ") || "nothing"}, want three`);
+          const got = window.__ssoApi.status().tracks[1];
+          if (got.fileId !== 12)
+            throw new Error(`kept file ${got.fileId}, want 12 - the one whose timing matches`);
+        } finally {
+          window.__stubDaemon = null;
+          window.__ssoApi.detach(1);
+          window.__ssoApi.detach(0);
+          await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1, slot: 0 });
+          shadow.querySelector(".sso-panel__back")?.click();
+          await sleep(120);
+        }
       });
 
       check("picking a result does not move the target out from under you", async () => {

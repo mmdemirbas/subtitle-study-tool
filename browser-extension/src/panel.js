@@ -1997,6 +1997,23 @@
     el.searchNote = document.createElement("p");
     el.searchNote.className = "sso-note";
 
+    /* Pick for me.
+     *
+     * Reading a list of forty releases and guessing which one was cut for the
+     * file you are watching is the slow part of this screen, and it is a guess:
+     * the name says which release it was timed against, and nothing on the page
+     * says which release you have. So the honest way to choose is to fetch a
+     * few and look at their timing, which is what this does.
+     *
+     * Three, because two cannot break a tie and four is another download for a
+     * question the first three have usually settled. */
+    el.tryBest = button("Try the best 3", {
+      onClick: () => tryBest(),
+      title: "Download the top three and keep whichever lines up best. Costs three downloads.",
+    });
+    el.tryBest.className = "sso-try";
+    el.tryBest.hidden = true;
+
     /* A results list for a dual setup is mostly the wrong language: a search
      * for two languages returns both, and picking the Turkish one out of forty
      * English ones by reading tags is the slow part. The filter is built from
@@ -2009,7 +2026,7 @@
     el.results = document.createElement("ul");
     el.results.className = "sso-results";
 
-    wrap.append(el.findFor, row, el.searchNote, el.languageFilter, el.results);
+    wrap.append(el.findFor, row, el.searchNote, el.tryBest, el.languageFilter, el.results);
     return wrap;
   }
 
@@ -2048,6 +2065,7 @@
 
   async function runSearch(query) {
     el.results.replaceChildren();
+    el.tryBest.hidden = true;
     el.searchNote.className = "sso-note";
     el.searchNote.textContent = "Searching…";
 
@@ -2080,6 +2098,10 @@
 
     lastResults = response.results || [];
     lastResolved = response.resolved || null;
+    /* Nothing to choose between with one result, and nothing to choose FROM
+     * with none. Both are cases where a button offering to try three would be
+     * a button that cannot do what it says. */
+    el.tryBest.hidden = lastResults.length < 2;
     if (lastResults.length === 0) {
       el.searchNote.textContent = "Nothing found. Try a different title.";
       return;
@@ -2142,6 +2164,136 @@
     );
   }
 
+  /* --- letting the timing choose the subtitle ---------------------------------
+   *
+   * What a result's name tells you is which release it was TIMED AGAINST. What
+   * nothing on a streaming page tells you is which release you are WATCHING. So
+   * picking by reading names is guessing, and the reader finds out it was wrong
+   * by watching a scene with the lines in the wrong place and coming back.
+   *
+   * Timing is checkable, and the aligner already checks it. So: fetch the top
+   * three, and let the evidence decide.
+   *
+   * There are two kinds of evidence and they are not equally good, so the
+   * summary says which one was used. With a subtitle already attached there is
+   * a real answer - the aligner compares each candidate against it and returns
+   * a confidence, and that IS the question being asked. With nothing attached
+   * there is nothing to compare against, and the best available evidence is
+   * weaker: how much of the film a candidate covers, and whether the others
+   * agree with its timing. Two candidates agreeing puts them in the same
+   * release family, which is usually the common one; it does not prove either
+   * is right for this file.
+   *
+   * The two that lose are not wasted. The daemon caches every download, so
+   * picking one of them by hand afterwards costs nothing.
+   */
+  const AUTO_TRY = 3;
+
+  /* How much of the film a subtitle reaches. Real subtitles stop before the
+   * end - credits are not spoken - so anything from about four-fifths of the
+   * way in is a full file, and short of that it is a different cut, a sample,
+   * or the wrong episode. */
+  function spanFit(cues, durationMs) {
+    if (!durationMs || !cues.length) return 0;
+    const covered = cues[cues.length - 1].start / durationMs;
+    if (covered > 1.05) return 0.2; // runs past the end of the film
+    return Math.min(1, covered / 0.85);
+  }
+
+  async function tryBest() {
+    const shown = languageChoice
+      ? lastResults.filter((result) => (result.language || "").toLowerCase() === languageChoice)
+      : lastResults;
+    const picks = shown.slice(0, AUTO_TRY);
+    if (!picks.length) return;
+
+    const slot = targetSlot;
+    const status = api.status();
+    const durationMs = Number.isFinite(status.duration) ? status.duration * 1000 : 0;
+    /* The lowest attached slot that is not the one being filled - the same rule
+     * autoAlign uses, so what this checks against is what will line it up. */
+    const referenceSlot = status.tracks.findIndex(
+      (track, index) => index !== slot && track.attached,
+    );
+    const reference = referenceSlot >= 0 ? api.cueTimes(referenceSlot) : null;
+
+    el.tryBest.disabled = true;
+    el.searchNote.className = "sso-note";
+    const tried = [];
+    const failed = [];
+    for (const [index, result] of picks.entries()) {
+      el.searchNote.textContent =
+        `Trying ${index + 1} of ${picks.length} · ${result.release || result.movie_name || ""}`;
+      const response = await api.daemon("fetch", {
+        fileId: result.file_id,
+        context: fetchContext(result),
+      });
+      if (!response || response.error || response.transportError || !response.cues?.length) {
+        failed.push(response?.quota_exceeded ? "the daily download limit" : "a failed download");
+        // A quota wall will not heal on the next one, so stop asking.
+        if (response?.quota_exceeded) break;
+        continue;
+      }
+      tried.push({ result, cues: response.cues });
+    }
+
+    el.tryBest.disabled = false;
+    if (!tried.length) {
+      el.searchNote.className = "sso-note sso-note--warn";
+      el.searchNote.textContent = failed.length
+        ? `Could not try any of them: ${failed[0]}.`
+        : "Could not download any of them.";
+      return;
+    }
+
+    const aligner = globalThis.__ssoAlign;
+    for (const candidate of tried) {
+      candidate.starts = candidate.cues.map((cue) => cue.start);
+      candidate.fit = spanFit(candidate.cues, durationMs);
+      candidate.agree = 0;
+      if (reference && aligner) {
+        const answer = aligner.align(reference, candidate.starts);
+        candidate.confidence = answer.ok ? answer.confidence : 0;
+      }
+    }
+
+    /* Which candidates share a timing. Only worth computing with nothing to
+     * check against, where it is the only thing said about timing at all. */
+    if (!reference && aligner) {
+      for (let i = 0; i < tried.length; i++) {
+        for (let j = i + 1; j < tried.length; j++) {
+          const answer = aligner.align(tried[i].starts, tried[j].starts);
+          if (answer.ok && Math.abs(answer.shiftMs) < 1000) {
+            tried[i].agree += 1;
+            tried[j].agree += 1;
+          }
+        }
+      }
+    }
+
+    /* Order preserved on a tie, so when the evidence cannot separate two
+     * candidates the daemon's own ranking - match against the title, then
+     * downloads - breaks it, rather than whichever happened to be fetched
+     * first. */
+    const best = tried.reduce((winner, candidate) => {
+      const score = (item) =>
+        reference ? item.confidence : item.agree * 2 + item.fit;
+      return score(candidate) > score(winner) ? candidate : winner;
+    }, tried[0]);
+
+    const said = reference
+      ? best.confidence >= (aligner?.ACCEPT ?? 3.5)
+        ? `Checked against subtitle ${referenceSlot + 1}: this one matches.`
+        : `None of the three clearly matches subtitle ${referenceSlot + 1}. This is the closest — check it.`
+      : `Nothing attached to check against, so this is the one that covers the film best.`;
+
+    await attachResult(best.result, { cues: best.cues });
+    el.searchNote.className =
+      reference && best.confidence < (aligner?.ACCEPT ?? 3.5) ? "sso-note sso-note--warn" : "sso-note";
+    el.searchNote.textContent =
+      `${said}${tried.length > 1 ? ` The other ${tried.length - 1} are cached, so picking one below is free.` : ""}`;
+  }
+
   function tag(text, extra) {
     const span = document.createElement("span");
     span.className = extra ? `sso-tag ${extra}` : "sso-tag";
@@ -2149,22 +2301,29 @@
     return span;
   }
 
-  async function attachResult(result) {
+  /* Title context, so the cache can recognise this film next time and not spend
+   * another download on a different upload of it. */
+  const fetchContext = (result) => ({
+    imdb_id: lastResolved?.imdb_id || null,
+    language: result.language || null,
+    movie_name: result.movie_name || null,
+    release: result.release || null,
+  });
+
+  /* `cues` is for the caller that already has them.
+   *
+   * tryBest downloads three and then attaches one, and without this it asked
+   * for the winner a second time - four requests to try three files. The daemon
+   * caches, so the repeat was free in quota and still a round trip spent on a
+   * file already in hand. */
+  async function attachResult(result, { cues = null } = {}) {
     const slot = targetSlot;
     el.searchNote.className = "sso-note";
-    el.searchNote.textContent = result.cached ? "Loading…" : "Downloading…";
+    if (!cues) el.searchNote.textContent = result.cached ? "Loading…" : "Downloading…";
 
-    // Title context, so the cache can recognise this film next time and not
-    // spend another download on a different upload of it.
-    const response = await api.daemon("fetch", {
-      fileId: result.file_id,
-      context: {
-        imdb_id: lastResolved?.imdb_id || null,
-        language: result.language || null,
-        movie_name: result.movie_name || null,
-        release: result.release || null,
-      },
-    });
+    const response = cues
+      ? { cues }
+      : await api.daemon("fetch", { fileId: result.file_id, context: fetchContext(result) });
     if (!response || response.error || response.transportError) {
       el.searchNote.className = "sso-note sso-note--warn";
       el.searchNote.textContent =

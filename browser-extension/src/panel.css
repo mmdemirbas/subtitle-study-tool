@@ -1183,6 +1183,19 @@ input.sso-swatch::-webkit-color-swatch {
 
 /* --- results --------------------------------------------------------------- */
 
+/* Letting the timing choose instead of reading forty release names.
+ *
+ * Full width and above the list, because it is an alternative to the list
+ * rather than a control on it - the reader either works through the results or
+ * hands the question over, and the offer to hand it over has to be visible
+ * before they start scrolling. Not the accent: it spends three downloads out of
+ * a daily allowance, so it is offered rather than urged. */
+.sso-try {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+}
+
 .sso-results {
   max-height: 210px;
   margin: 8px 0 0;
