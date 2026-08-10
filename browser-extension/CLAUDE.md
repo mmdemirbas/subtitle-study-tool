@@ -53,6 +53,29 @@ inside the frame can change that.
 
 This is a known open defect — see `docs/reports/`.
 
+## The search pipeline exists twice, and the copy that runs is the quiet one
+
+`subtitle-daemon/` and `src/subtitles/` are the same pipeline in two languages.
+The daemon answers when it is running; **when it is not — which is the ordinary
+case — `src/subtitles/local.js` does, and that is the code the reader is
+actually using.** Check `lsof -i :8791` before believing a daemon-side fix
+reached anything.
+
+A change to search, title parsing, matching or ranking has **four** places to
+land: `subtitle_daemon/*.py`, its tests, `src/subtitles/*.js`, and whichever
+extension module consumes it. A fix that reached the first three and missed
+`local.js` left a reported bug alive for five days with 300+ tests green.
+
+Two guards exist now and both must be kept honest:
+
+- `test_js_parity.py` diffs the two implementations over shared input. It
+  compares `titles.resolve` (the whole search resolution), **not just
+  `titles.guess`** — the two sides agreed about parsing and disagreed about
+  whether to parse a typed query at all, which parity on `guess` could never
+  see. When you add a rule, add it to the compared surface.
+- `tests/fallback.html` exercises `local.js` end to end. If you fix something in
+  the daemon, ask what the same input does there.
+
 ## Why the surfaces are built the way they are
 
 Each of these was a reported bug. Undoing one brings the bug back.
@@ -70,19 +93,47 @@ Each of these was a reported bug. Undoing one brings the bug back.
 - **Visibility is `display` set inline, not the `hidden` attribute.** The
   host's inline `display` is `!important`, so the UA rule behind `hidden` could
   never win.
-- **Fullscreen is handled by the top layer, not by re-parenting.**
-  `toTopLayer()` in `content.js` promotes each host with
-  `popover="manual"` + `showPopover()`. Appending into the fullscreen element
-  is only the fallback, and it **must** refuse a replaced element: several
-  players (and Chrome's own "fullscreen the video") fullscreen the `<video>`
-  itself, and a child of `<video>` is never painted — the surface silently
-  renders 0x0 while reporting itself open. That is the "the button does
-  nothing" report.
+- **Fullscreen needs BOTH the top layer and the subtree. Painting and
+  hit-testing are different questions.**
+  Out of fullscreen, `toTopLayer()` promotes each host with `popover="manual"`
+  + `showPopover()`; that is what keeps a surface above player chrome appended
+  later at an equal z-index.
+  In fullscreen the top layer is **not enough**: the browser delivers pointer
+  events only inside the fullscreen element's subtree. Measured in a real
+  fullscreen session — the panel is painted correctly over the film and
+  `document.elementsFromPoint` at the centre of its own close button returns
+  `VIDEO`, then `HTML`. Playwright refuses the click with "video intercepts
+  pointer events". Out of fullscreen the same probe returns our host first.
+  So while a session is open the hosts are appended **into** the fullscreen
+  element (`fullscreenHolder()` in `content.js`), and because a `<video>`
+  cannot hold children, the session is first moved onto the nearest ancestor
+  that can — allowed without a fresh gesture while a session is already open.
+  Do not "simplify" this back to top-layer-only: that is the
+  "the fullscreen CC button does nothing" report, and the panel looks perfect
+  while it happens.
 - **Menus and popups get their own host** (`makeLayer()`), because anything
   drawn inside the panel is clipped by it.
 - **`document` listeners are capture-phase.** Players routinely
   `stopPropagation()` on pointer events inside the player, which silences any
   bubble-phase listener exactly where it is needed.
+- **Every host stops pointer events escaping in the bubble phase**
+  (`keepPointersInside()` in `content.js`). The UI is built inside the frame
+  that owns the `<video>`, so it sits inside the element the player binds
+  play/pause to: a press on our close button worked *and then* paused the film.
+  This is safe precisely because every one of our own document listeners is
+  capture-phase. Apply it to any new host — including non-interactive ones; the
+  toast is `interactive: false` and its Undo button is the thing people press.
+- **Nothing may overlap a control in a `.sso-win__head`.** The corner resize
+  grips sit above the head, so the head clears them with `--sso-grip`-derived
+  padding. Measured before that: the NE grip covered 169 of the close button's
+  576 square pixels including its centre, so the × could not be pressed at all,
+  on every window at every size. A harness check hit-tests every head control
+  on every window we draw.
+- **A drag ends on `pointerup` AND on a move with no button held.**
+  `event.buttons === 0` means the press ended somewhere we never heard about;
+  without that branch the gesture outlives it and the next move — or the next
+  click anywhere — re-times a subtitle or saves a word. It is in `makeMovable`,
+  every resize grip, the timeline strip and both study sweeps. Copy it.
 
 ## Cost to keep in mind
 
@@ -108,7 +159,19 @@ Use `tests/serve.py`, not `python3 -m http.server` — see `tests/README.md`.
 
 `harness.html` loads the real `src/` files from disk, so it tests shipped code.
 Counts go in the commit message (the convention is a trailing line like
-`151 overlay, 22 fallback, 9 worker`).
+`166 overlay, 25 fallback, 14 worker, 318 daemon`).
+
+**The daemon suite is part of this extension's net**, not a separate project:
+`subtitle-daemon/tests/test_js_parity.py` runs `src/subtitles/*.js` under node
+and diffs it against the Python, and `test_align.py` drives `src/align.js` over
+the real subtitle corpus. A change to either side needs `uv run pytest` in
+`subtitle-daemon/` as well.
+
+**A new check has to fail against the old code before you trust it.** Revert the
+fix, run it, see the reported symptom in the failure message, put the fix back.
+Three checks written this way caught real holes their authors had not thought
+of — the toast host missing a guard, the settings window being a separate
+surface, and a search fix that four green suites said was complete.
 
 **The harness cannot see the frame problem above.** It is a single-document
 page, so anything about nested frames, cross-origin players or a parent page's
