@@ -3075,20 +3075,21 @@
    * is rendered while fullscreen is active. */
   function reparent(parent, { raise = false } = {}) {
     if (!host) return;
-    /* The top layer is above the fullscreen element wherever the host sits, so
-     * when it works nothing moves. See toTopLayer in content.js for what
-     * appending costs on a site that fullscreens the <video> itself: the panel
-     * lands inside a replaced element, is never painted, and still reports
-     * itself open - so the CC button appears to do nothing. */
-    if (api.toTopLayer?.(host, { again: raise })) {
+    /* Outside fullscreen the top layer is the right answer and nothing moves:
+     * it keeps the panel above chrome a player appends to itself continuously.
+     *
+     * Inside fullscreen it is not enough. The browser hit-tests only within the
+     * fullscreen element's subtree, so a panel promoted to the top layer is
+     * painted over the film and receives none of the presses aimed at it - the
+     * player does. `parent` is the element content.js has established can hold
+     * us, having switched the fullscreen element away from the <video> if that
+     * is what the site fullscreened. See fullscreenHolder there. */
+    if (!parent && api.toTopLayer?.(host, { again: raise })) {
       rescale();
       return;
     }
-    /* The whole replaced-element rule, not half of it. This used to test
-     * `parent.tagName !== "VIDEO"` and then fall back to
-     * `document.fullscreenElement` unchecked - and `show()` passes no parent at
-     * all, so on the path that matters the test never ran. */
-    const target = api.paintableParent?.(parent) || document.body || document.documentElement;
+    api.fromTopLayer?.(host);
+    const target = parent || api.paintableParent?.() || document.body || document.documentElement;
     if (target && host.parentElement !== target) target.appendChild(host);
     // The fullscreen element may be scaled; what we have just moved into
     // decides how big the panel renders and where a written position lands.

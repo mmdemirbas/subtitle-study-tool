@@ -1659,23 +1659,88 @@
     );
   }
 
+  /** Out of the top layer, so the node can be parented somewhere and painted. */
+  function fromTopLayer(node) {
+    if (!node) return;
+    try {
+      if (node.matches(":popover-open")) node.hidePopover();
+      node.removeAttribute("popover");
+    } catch {}
+  }
+
+  /* Which element our chrome has to live inside, or null when nothing is
+   * fullscreen.
+   *
+   * While a fullscreen session is open the browser hit-tests ONLY inside the
+   * fullscreen element's subtree. Painting and hit-testing are different
+   * questions and fullscreen answers the second one by subtree, so the top
+   * layer - which settles the first - is not enough on its own. Measured in
+   * real fullscreen with the <video> fullscreened: the panel is painted above
+   * the film exactly as intended, and `document.elementsFromPoint` at the
+   * centre of its own close button returns VIDEO and then HTML. The panel is
+   * not in the hit-test at all. Out of fullscreen the same probe at the same
+   * point returns our host first. Playwright's own actionability check agrees
+   * and refuses the click with "video intercepts pointer events".
+   *
+   * That is both "the fullscreen CC button does nothing" and "I cannot click
+   * even the close button of the settings pane, the player takes it as
+   * play/pause": the press was never ours to lose.
+   *
+   * A <video> cannot hold children, which is why re-parenting was abandoned in
+   * favour of the top layer. The way out is not to give up on the subtree but
+   * to change which element owns it: requesting fullscreen for another element
+   * needs no fresh gesture while a session is already open. Measured, switching
+   * from the <video> to its parent leaves the picture filling the viewport and
+   * makes every surface hit-test first.
+   *
+   * The switch is attempted once per holder. A request that fails must not
+   * become a loop, and fullscreenchange calls straight back into here. */
+  let switchingTo = null;
+
+  function fullscreenHolder() {
+    const current = document.fullscreenElement || document.webkitFullscreenElement;
+    if (!current) {
+      switchingTo = null;
+      return null;
+    }
+    if (!CANNOT_HOLD_CHILDREN.test(current.tagName)) {
+      switchingTo = null;
+      return current;
+    }
+    const holder = current.parentElement;
+    if (!holder || switchingTo === holder) return null;
+    switchingTo = holder;
+    Promise.resolve()
+      .then(() => holder.requestFullscreen?.())
+      .then(() => attachToCorrectParent({ raise: true }))
+      .catch(() => {});
+    return null;
+  }
+
   function attachToCorrectParent({ raise = false } = {}) {
-    const fullscreen = document.fullscreenElement || document.webkitFullscreenElement;
-    if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(fullscreen, { raise });
-    if (window.__ssoStudy?.reparent) window.__ssoStudy.reparent(fullscreen, { raise });
+    const holder = fullscreenHolder();
+    if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(holder, { raise });
+    if (window.__ssoStudy?.reparent) window.__ssoStudy.reparent(holder, { raise });
     if (!host) return;
 
-    /* The top layer first, and nothing moves when it works. Appending into the
-     * fullscreen element is the fallback for a browser without it - and it
-     * refuses a replaced element, where appending is not merely unnecessary
-     * but is the bug: the child is never painted and the surface silently
-     * disappears. */
-    const raised = [host, ...layers].map((node) => toTopLayer(node, { again: raise }));
-    if (raised.every(Boolean)) return;
+    /* No fullscreen: the top layer, which is what keeps these above the chrome
+     * a player appends to itself continuously, and needs nothing moved. */
+    if (!holder) {
+      const home = paintableParent();
+      // Back out of whatever we were put inside on the way in, or a surface
+      // stays parented to a player container that may clip or transform it.
+      if (home && host.parentElement !== home) home.appendChild(host);
+      for (const layer of layers) if (home && layer.parentElement !== home) home.appendChild(layer);
+      const raised = [host, ...layers].map((node) => toTopLayer(node, { again: raise }));
+      if (raised.every(Boolean)) return;
+    }
 
-    const parent = paintableParent();
+    const parent = holder || paintableParent();
     if (!parent) return;
-    if (host.parentElement !== parent || raise) parent.appendChild(host);
+    // A popover cannot be hit-tested inside a fullscreen subtree it is not part
+    // of, and moving a showing popover closes it anyway. Leave the layer first.
+    if (holder) for (const node of [host, ...layers]) fromTopLayer(node);
+    if (host.parentElement !== parent || (raise && !holder)) parent.appendChild(host);
     // Floating layers go too. Fullscreen renders only the fullscreen element's
     // subtree, so one left behind is a menu that silently stops appearing.
     for (const layer of layers) if (layer.parentElement !== parent) parent.appendChild(layer);
@@ -3463,6 +3528,7 @@
     // Shared with the panel and the study rail, which have hosts of their own
     // and the same fullscreen problem. See toTopLayer and paintableParent.
     toTopLayer,
+    fromTopLayer,
     paintableParent,
     keepPointersInside,
     setPlacing(on) {

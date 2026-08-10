@@ -503,15 +503,29 @@
     const start = { x: down.clientX, y: down.clientY };
     let moved = false;
 
+    const detach = () => {
+      document.removeEventListener("pointermove", onMove, true);
+      document.removeEventListener("pointerup", onUp, true);
+      document.removeEventListener("pointercancel", onUp, true);
+    };
     const onMove = (event) => {
+      /* No button held means the press ended somewhere this never heard about -
+       * swallowed by the page, capture taken, alt-tab. Without this the pair of
+       * listeners outlived the gesture and the NEXT pointerup anywhere on the
+       * page pinned this word. Same shape as the stale drag on the timeline
+       * strip, and the same guard every other drag in this extension carries.
+       * Detached without pinning: a press whose end was never seen is not a
+       * completed tap. */
+      if (event.buttons === 0) {
+        detach();
+        return;
+      }
       if (Math.abs(event.clientX - start.x) > 4 || Math.abs(event.clientY - start.y) > 4) {
         moved = true;
       }
     };
     const onUp = () => {
-      document.removeEventListener("pointermove", onMove, true);
-      document.removeEventListener("pointerup", onUp, true);
-      document.removeEventListener("pointercancel", onUp, true);
+      detach();
       if (!moved) pinWord(word);
     };
 
@@ -546,7 +560,20 @@
     paintSelection();
     event.preventDefault();
 
+    const detach = () => {
+      document.removeEventListener("pointermove", onMove, true);
+      document.removeEventListener("pointerup", onUp, true);
+      document.removeEventListener("pointercancel", onUp, true);
+    };
     const onMove = (moveEvent) => {
+      /* The press ended without this hearing about it. Left attached, the sweep
+       * kept painting a selection on every mouse move and the next pointerup
+       * anywhere saved a phrase nobody asked for. See watchTap above. */
+      if (moveEvent.buttons === 0) {
+        detach();
+        clearSelection();
+        return;
+      }
       const over = moveEvent.composedPath?.()[0];
       if (over?.classList?.contains?.("sso-w")) {
         selection.focus = over;
@@ -554,9 +581,7 @@
       }
     };
     const onUp = () => {
-      document.removeEventListener("pointermove", onMove, true);
-      document.removeEventListener("pointerup", onUp, true);
-      document.removeEventListener("pointercancel", onUp, true);
+      detach();
       const phrase = selectedWords()
         .map((span) => span.textContent)
         .join(" ")
@@ -1720,14 +1745,18 @@
      * when it works nothing moves. See toTopLayer in content.js: appending into
      * a fullscreen <video> puts the rail inside a replaced element, where it is
      * never painted and still reports itself open. */
+    /* Only when nothing is fullscreen. Inside a fullscreen session the browser
+     * hit-tests within the fullscreen element's subtree alone, so a rail in the
+     * top layer is painted over the film and takes none of its own clicks. See
+     * fullscreenHolder in content.js. */
     const raiseOne = (node) => node && api.toTopLayer?.(node, { again: raise });
-    if (raiseOne(host) && (!popupHost || raiseOne(popupHost))) {
+    if (!parent && raiseOne(host) && (!popupHost || raiseOne(popupHost))) {
       rescale();
       return;
     }
-    /* The whole replaced-element rule rather than a VIDEO test on the parent
-     * that callers mostly do not pass. See paintableParent in content.js. */
-    const target = api.paintableParent?.(parent) || document.body || document.documentElement;
+    api.fromTopLayer?.(host);
+    if (popupHost) api.fromTopLayer?.(popupHost);
+    const target = parent || api.paintableParent?.() || document.body || document.documentElement;
     if (target && host.parentElement !== target) target.appendChild(host);
     // The popup is anchored to the subtitle, so it has to follow the subtitle
     // into fullscreen or it renders behind the film.

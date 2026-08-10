@@ -41,6 +41,9 @@
 
   --sso-danger: #f0836f;
   --sso-r-win: 10px;
+  /* The corner resize targets. Named because the head's padding is derived
+     from it: a head button that overlaps a grip cannot be pressed. */
+  --sso-grip: 18px;
   --sso-r-ctl: 7px;
   --sso-motion: 160ms;
 
@@ -124,7 +127,8 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 5px 5px 5px 11px;
+  /* Right padding clears the NE grip; the left is already past the NW one. */
+  padding: 5px calc(var(--sso-grip) + 2px) 5px 11px;
   border-bottom: 1px solid var(--sso-line-soft);
   cursor: grab;
   user-select: none;
@@ -255,10 +259,24 @@
  * so the window does not sprout four decorations.
  */
 
+/* The corner grips, and why the head is padded to clear them.
+ *
+ * These sit at the four corners of the window, above everything, so a corner is
+ * grabbable wherever the pointer lands on it. The top two therefore sit on top
+ * of the head - and the head's rightmost control is Close. Measured: the NE
+ * grip covered 169 of the close button's 576 square pixels INCLUDING ITS
+ * CENTRE, so `elementFromPoint` at the middle of the × returned the grip and
+ * the button could not be pressed at all. Reported as "I cannot click even the
+ * close button of the settings pane", which was read as the player stealing the
+ * click; the player never saw it.
+ *
+ * The head clears them by its own padding rather than the grips shrinking,
+ * because a resize target smaller than this is one nobody can hit either. One
+ * variable, so the two cannot drift apart. */
 .sso-grip {
   position: absolute;
-  width: 18px;
-  height: 18px;
+  width: var(--sso-grip);
+  height: var(--sso-grip);
 }
 
 .sso-grip--nw { top: 0; left: 0; }

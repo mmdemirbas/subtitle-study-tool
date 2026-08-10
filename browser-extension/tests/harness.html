@@ -1336,6 +1336,77 @@
         }
       });
 
+      check("nothing is drawn on top of a control in a window's title bar", async () => {
+        /* Reported as "I cannot click even the close button of the settings
+         * pane. It is captured by the player as pause/play event." The player
+         * never saw it. The window's own north-east resize grip sits above the
+         * head, and the head's rightmost control is Close: measured, the grip
+         * covered 169 of the button's 576 square pixels INCLUDING ITS CENTRE,
+         * so a hit test at the middle of the x returned the grip.
+         *
+         * Asserted by hit-testing every control in every head we draw, rather
+         * than by measuring the one that was reported - the grips are on all
+         * four corners and the panel and the rail both have heads. */
+        await window.__ssoPanel.show();
+        await sleep(150);
+        const covered = [];
+        for (const shadow of [panelShadow(), railShadow()].filter(Boolean)) {
+          for (const head of shadow.querySelectorAll(".sso-win__head")) {
+            for (const control of head.querySelectorAll("button")) {
+              if (control.hidden || control.offsetParent === null) continue;
+              const b = control.getBoundingClientRect();
+              if (b.width === 0) continue;
+              const at = shadow.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2);
+              // The control itself, or something inside it, must be what a
+              // click at its middle would reach.
+              if (at !== control && !control.contains(at)) {
+                covered.push(`${control.title || control.textContent} <- ${at?.className || at?.tagName}`);
+              }
+            }
+          }
+        }
+        if (covered.length)
+          throw new Error(`controls that cannot be clicked at their centre: ${covered.join(", ")}`);
+      });
+
+      check("a player that fullscreens the video is moved off it", async () => {
+        /* The harness cannot enter real fullscreen - that needs a gesture no
+         * script can make - so what is asserted here is the DECISION, and the
+         * behaviour it produces was verified by hand in a real fullscreen
+         * session with Playwright driving a real click.
+         *
+         * What was measured there: with the <video> as the fullscreen element,
+         * the browser hit-tests only inside that element's subtree, so every
+         * surface this extension draws is painted over the film and receives
+         * none of the presses aimed at it. elementsFromPoint at the centre of
+         * the panel's own close button returned VIDEO then HTML; out of
+         * fullscreen the same point returned our host first. A <video> cannot
+         * hold children, so the way back into the subtree is to move the
+         * fullscreen session onto something that can. */
+        const player = document.getElementById("player");
+        const video = document.getElementById("v");
+        let asked = null;
+        const realRequest = player.requestFullscreen;
+        const realGet = Object.getOwnPropertyDescriptor(Document.prototype, "fullscreenElement");
+        Object.defineProperty(document, "fullscreenElement", {
+          configurable: true,
+          get: () => video,
+        });
+        player.requestFullscreen = function () { asked = this; return Promise.resolve(); };
+        try {
+          document.dispatchEvent(new Event("fullscreenchange"));
+          await sleep(150);
+          if (asked !== player)
+            throw new Error("the fullscreen session was left on the <video>, where nothing can be clicked");
+        } finally {
+          player.requestFullscreen = realRequest;
+          delete document.fullscreenElement;
+          if (realGet) Object.defineProperty(Document.prototype, "fullscreenElement", realGet);
+          document.dispatchEvent(new Event("fullscreenchange"));
+          await sleep(150);
+        }
+      });
+
       check("the nudge buttons say what is wrong, not which way to push", async () => {
         /* An arrow re-introduces exactly the question the words remove: film
          * time is stream time minus the offset, so a larger offset shows the
@@ -3378,6 +3449,40 @@
           throw new Error("the word is not marked as already saved");
       });
 
+      check("a sweep whose end was never seen does not save a phrase later", async () => {
+        /* The same shape as the stale drag reported on the timeline strip. The
+         * word sweep and the tap watcher both removed their document listeners
+         * on pointerup and on nothing else, so a press that ended somewhere
+         * they never heard about - swallowed by the page, capture taken away,
+         * alt-tab - left them attached. The next pointerup ANYWHERE on the page
+         * then saved a phrase, or pinned a word, that nobody asked for. */
+        await showWordyCue();
+        await sleep(200);
+        const before = railShadow().querySelectorAll(".sso-card__term").length;
+        const from = wordEl("do");
+        const to = wordEl("care");
+        const a = from.getBoundingClientRect();
+        const b = to.getBoundingClientRect();
+
+        from.dispatchEvent(new PointerEvent("pointerdown", {
+          bubbles: true, composed: true, shiftKey: true, pointerId: 21, buttons: 1,
+          clientX: a.left + 2, clientY: a.top + 2,
+        }));
+        // The press ends without a pointerup: the next move carries no button.
+        to.dispatchEvent(new PointerEvent("pointermove", {
+          bubbles: true, composed: true, pointerId: 21, buttons: 0,
+          clientX: b.left + 2, clientY: b.top + 2,
+        }));
+        await sleep(60);
+        // An unrelated click somewhere else, later.
+        document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 22 }));
+        await sleep(300);
+
+        const after = railShadow().querySelectorAll(".sso-card__term").length;
+        if (after !== before)
+          throw new Error(`an abandoned sweep added ${after - before} card(s) on a later click`);
+      });
+
       check("shift-dragging across words keeps the phrase, not one word", async () => {
         await showWordyCue();
         await sleep(200);
@@ -3385,12 +3490,17 @@
         const to = wordEl("care");
         const a = from.getBoundingClientRect();
         const b = to.getBoundingClientRect();
+        /* buttons: 1 on the press and the move. A PointerEvent reports no
+         * button held unless told, and a mid-drag move with nothing held is a
+         * state a real drag never reaches - the sweep now reads it as "the
+         * press ended and nobody told me" and cancels, which is what stops the
+         * listeners outliving the gesture. */
         from.dispatchEvent(new PointerEvent("pointerdown", {
-          bubbles: true, composed: true, shiftKey: true, pointerId: 9,
+          bubbles: true, composed: true, shiftKey: true, pointerId: 9, buttons: 1,
           clientX: a.left + 2, clientY: a.top + 2,
         }));
         to.dispatchEvent(new PointerEvent("pointermove", {
-          bubbles: true, composed: true, pointerId: 9,
+          bubbles: true, composed: true, pointerId: 9, buttons: 1,
           clientX: b.left + 2, clientY: b.top + 2,
         }));
         document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 9 }));
