@@ -950,6 +950,7 @@
         const row = card.querySelector(".sso-sync");
         const host = panelShadow().host;
         const was = host.getBoundingClientRect().width;
+        const spans = [];
 
         for (const width of [280, 340, 640]) {
           window.__ssoPanel.applySize(width);
@@ -984,6 +985,38 @@
           if (field.getBoundingClientRect().width < 50)
             throw new Error(
               `at ${width}px the reading is ${Math.round(field.getBoundingClientRect().width)}px`);
+
+          /* How much of the row the five controls actually span. The gap
+           * between a whole step and the fine step beside it is the thing being
+           * held: they are one control at two sizes and have to read as a pair.
+           */
+          const boxes = [...nudges].map((b) => b.getBoundingClientRect());
+          spans.push({
+            width,
+            span: Math.max(...boxes.map((b) => b.right)) - Math.min(...boxes.map((b) => b.left)),
+            pair: boxes[1].left - boxes[0].right,
+          });
+        }
+
+        /* The group does not grow with the panel.
+         *
+         * It used to: `space-between` on the row with `flex: 1` on the middle
+         * group handed every spare pixel to the middle and then centred inside
+         * it, so « and ‹ drifted apart as the panel widened. Measured before
+         * the fix, the four buttons spanned 236, 296 and 596px at 280, 340 and
+         * 640 - and the gap between a whole step and its fine step went 8, 38,
+         * 188px. After, 229px and 4px at all three. 24px of drift is slack for
+         * rounding and for the reading growing by a digit. */
+        const drift = Math.max(...spans.map((s) => s.span)) - Math.min(...spans.map((s) => s.span));
+        if (drift > 24)
+          throw new Error(
+            `the sync group spreads with the panel: ${spans
+              .map((s) => `${s.width}px→${Math.round(s.span)}`)
+              .join(", ")}`);
+        for (const s of spans) {
+          if (s.pair > 16)
+            throw new Error(
+              `at ${s.width}px the whole step and the fine step are ${Math.round(s.pair)}px apart`);
         }
 
         window.__ssoPanel.applySize(was);

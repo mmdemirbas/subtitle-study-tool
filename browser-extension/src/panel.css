@@ -626,16 +626,30 @@ button.sso-menu__item--danger:hover:not(:disabled) {
  * row and the readout between them is what changed as a result.
  */
 
+/* One group in the middle of the row, not five things spread across it.
+ *
+ * This was `justify-content: space-between` with the fine steps on `flex: 1`,
+ * which handed every spare pixel to the middle group and then centred inside
+ * it - so the whole step and the fine step next to it drifted apart as the
+ * panel widened. Measured, the gap between « and ‹ was 8px at the 280px
+ * minimum, 38px at 340 and 188px at the 640px maximum. Two buttons that are
+ * the same control at two sizes have to read as a pair at every width the
+ * corner grips allow.
+ *
+ * So the row centres its contents and the slack goes to the margins, where it
+ * costs nothing. The reading still takes what it needs to show a number. */
 .sso-sync {
   gap: 4px;
-  justify-content: space-between;
+  justify-content: center;
 }
 
 /* The reading with the two fine steps either side of it. Grouped so the row
- * reads outward from the number: fine next to it, whole at the edges. */
+ * reads outward from the number: fine next to it, whole at the edges. Sized by
+ * its contents rather than by the row, capped so a long number cannot push the
+ * whole steps off the ends. */
 .sso-sync__fine {
   display: flex;
-  flex: 1;
+  flex: 0 1 auto;
   align-items: center;
   justify-content: center;
   gap: 3px;
