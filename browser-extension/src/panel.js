@@ -752,8 +752,13 @@
 
     const moved = [];
     const unsure = [];
+    /* What each one was, before the aligner is allowed to overwrite it. Undo
+     * used to set rate 1 and offset 0, which throws away a timing the reader
+     * had set by hand rather than putting it back. */
+    const before = new Map();
     for (const [slot, track] of status.tracks.entries()) {
       if (!track.attached || slot === first) continue;
+      before.set(slot, timingOf(slot));
       const answer = api.autoAlign?.(slot, { against: first });
       if (answer?.applied) moved.push(slot + 1);
       else if (answer?.verdict === "offer") unsure.push(slot + 1);
@@ -771,10 +776,10 @@
               label: "Undo",
               onClick: () => {
                 for (const number of moved) {
-                  api.setRate(1, { slot: number - 1, quiet: true });
-                  api.setOffset(0, { slot: number - 1, quiet: true });
+                  applyTiming(number - 1, before.get(number - 1) || { offsetMs: 0, rate: 1 });
                 }
-                api.showToast("Back to each file's own timing");
+                api.showToast("Back to the timing each one had");
+                refresh(api.status());
               },
             },
           }
@@ -1568,32 +1573,57 @@
    * Or not confident at all, and the honest thing is to say the two files do
    * not look like the same film rather than to shift by the best of a bad lot.
    */
+  /* A timing is two numbers, and they only mean anything together.
+   *
+   * The offset the aligner hands back is derived from the rate it was measured
+   * at - `offsetMs` at the autoAlign call site is computed from `trackRate` -
+   * so taking one without the other lines the film up at the start and lets it
+   * drift for the rest of the run. Which is exactly what the offer path did: it
+   * applied the offset and dropped the rate, so a subtitle that needed the 4%
+   * PAL stretch was announced as lined up and was seconds out by the end. */
+  const timingOf = (slot) => {
+    const track = api.status().tracks[slot];
+    return { offsetMs: track?.offsetMs ?? 0, rate: track?.rate ?? 1 };
+  };
+
+  const applyTiming = (slot, { offsetMs, rate }) => {
+    api.setRate(rate ?? 1, { slot, quiet: true });
+    api.setOffset(offsetMs ?? 0, { slot, quiet: true });
+  };
+
   function lineUp(slot) {
+    /* Read before the aligner runs, because the confident band applies itself
+     * inside autoAlign and after the call there is nothing left to remember.
+     * Undo used to put back rate 1 and offset 0, which is where a file starts
+     * out and not where the reader was if they had already timed it by hand. */
+    const was = timingOf(slot);
     const answer = api.autoAlign?.(slot);
     if (!answer) {
       api.showToast("Nothing to line this up against");
       return;
     }
-    if (answer.verdict === "apply") {
+    const lined = (undoTo) => {
       api.showToast(`Lined up · ${api.describeOffset(answer.offsetMs)}`, {
         action: {
           label: "Undo",
           onClick: () => {
-            api.setRate(1, { slot, quiet: true });
-            api.setOffset(0, { slot });
+            applyTiming(slot, undoTo);
+            api.showToast("Back to the timing it had");
+            refresh(api.status());
           },
         },
       });
+    };
+    if (answer.verdict === "apply") {
+      lined(was);
     } else if (answer.verdict === "offer") {
-      const was = api.status().tracks[slot].offsetMs;
       api.showToast(`These look ${api.describeOffset(answer.offsetMs)} apart. Use it?`, {
         action: {
           label: "Line up",
           onClick: () => {
-            api.setOffset(answer.offsetMs, { slot, quiet: true });
-            api.showToast(`Lined up · ${api.describeOffset(answer.offsetMs)}`, {
-              action: { label: "Undo", onClick: () => api.setOffset(was, { slot }) },
-            });
+            applyTiming(slot, { offsetMs: answer.offsetMs, rate: answer.trackRate });
+            lined(was);
+            refresh(api.status());
           },
         },
       });
