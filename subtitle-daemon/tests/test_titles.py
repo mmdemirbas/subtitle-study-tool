@@ -121,3 +121,56 @@ def test_title_made_only_of_noise_words_is_not_emptied() -> None:
     # silently becomes "find me anything".
     assert guess("Free").query == "Free"
     assert guess("Watch Online").query != ""
+
+
+def test_a_listing_line_pasted_into_the_search_box() -> None:
+    """What a streaming page shows, copied whole.
+
+    The page prints the year twice - once beside the title, once in the line
+    under it - and the episode as a separate marker. All four shapes below are
+    the same programme and have to parse to the same three answers, because a
+    reader pastes whichever one their site happens to render.
+    """
+    for raw in (
+        "The Americans (2013) 2013 · S02 E04",
+        "The Americans (2013) 2013 - S02 E04",
+        "The Americans 2013 S02E04",
+        "The.Americans.2013.S02E04.1080p.BluRay.x264",
+    ):
+        result = guess(raw)
+        assert result.query == "The Americans", raw
+        assert result.year == 2013, raw
+        assert (result.season, result.episode) == (2, 4), raw
+
+
+def test_release_tokens_are_read_before_the_episode_marker_is_cut() -> None:
+    # A scene release puts the marker in front of the quality tokens, so cutting
+    # at the marker first left nothing for the scene-release test to find - and
+    # the dotted-year rule, which is gated on it, stopped firing.
+    result = guess("The.Americans.2013.S02E04.1080p.BluRay.x264")
+    assert result.year == 2013
+    assert "2013" not in result.query
+
+
+def test_a_year_taken_into_its_own_field_does_not_stay_in_the_query() -> None:
+    assert guess("Sicario (2015) 2015").query == "Sicario"
+    # But a year that is part of the name survives being extracted from brackets.
+    result = guess("Blade Runner 2049 (2017)")
+    assert result.query == "Blade Runner 2049"
+    assert result.year == 2017
+
+
+def test_a_title_that_is_only_a_year_is_not_emptied() -> None:
+    result = guess("1917 (2019)")
+    assert result.query == "1917"
+    assert result.year == 2019
+
+
+def test_a_trailing_year_beside_an_episode_marker_is_a_year() -> None:
+    # "Dallas 2012" is the reboot's year plus a season, not a programme name.
+    # Without an episode marker or release tokens the number stays put - see
+    # test_bare_trailing_year_stays_in_the_query.
+    result = guess("Dallas 2012 S02E04")
+    assert result.query == "Dallas"
+    assert result.year == 2012
+    assert guess("Dallas 2012").query == "Dallas 2012"

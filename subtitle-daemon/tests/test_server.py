@@ -767,3 +767,33 @@ def test_request_without_origin_is_allowed(http) -> None:
     base, _ = http
     status, _payload = _get(base, "/health")
     assert status == 200
+
+
+def test_a_typed_query_is_parsed_the_same_way_as_a_page_title(http) -> None:
+    """The search box used to bypass the guesser entirely.
+
+    A reader who types a clean title is unaffected; a reader who pastes what the
+    page shows them was sending the year twice and the episode marker as query
+    text, which scored 0.50 against the real name and marked every result weak.
+    """
+    base, _stub = http
+    status, payload = _get(base, "/search?query=The+Americans+(2013)+2013+-+S02+E04")
+    assert status == 200
+    assert payload["used"]["query"] == "The Americans"
+    assert payload["used"]["year"] == 2013
+    assert payload["used"]["season"] == 2
+    assert payload["used"]["episode"] == 4
+
+
+def test_a_typed_episode_marker_beats_the_one_the_page_reported(http) -> None:
+    # The panel sends the playing episode with every search. Typing a different
+    # one is the reader asking for that one.
+    base, _stub = http
+    _status, payload = _get(base, "/search?query=The+Americans+S02+E04&season=1&episode=9")
+    assert (payload["used"]["season"], payload["used"]["episode"]) == (2, 4)
+
+
+def test_a_clean_typed_title_survives_the_guesser_untouched(http) -> None:
+    base, _stub = http
+    _status, payload = _get(base, "/search?query=Crime+101")
+    assert payload["used"]["query"] == "Crime 101"

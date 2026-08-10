@@ -110,6 +110,14 @@ export function guess(raw) {
   text = stripRepeatedly(text, SITE_SUFFIX);
   text = stripRepeatedly(text, WATCH_PREFIX, 1);
 
+  /* Looked for BEFORE the episode marker is cut away, not after.
+   *
+   * A scene release puts the marker in front of the quality tokens -
+   * "The.Americans.2013.S02E04.1080p.BluRay.x264" - so cutting at the marker
+   * first removed every token this test looks for, and the string stopped
+   * counting as a scene release exactly when it most obviously was one. */
+  const sceneRelease = RELEASE_TOKENS.test(text);
+
   let season = null;
   let episode = null;
   for (const pattern of EPISODE_PATTERNS) {
@@ -124,7 +132,6 @@ export function guess(raw) {
   }
 
   let year = null;
-  const sceneRelease = RELEASE_TOKENS.test(text);
 
   // Cut at the first release-scene token; the title precedes it.
   const release = RELEASE_TOKENS.exec(text);
@@ -152,8 +159,11 @@ export function guess(raw) {
   text = text.replace(/\s{2,}/g, " ");
   text = stripChars(text, " -|–—·•:,.");
 
-  // A trailing bare year on a scene release is still metadata.
-  if (year === null && sceneRelease) {
+  /* A trailing bare year is still metadata when something else in the string
+   * has already said this is a listing rather than a title: release tokens, or
+   * an episode marker. "Dallas 2012 S02E04" is the reboot's year and a season,
+   * not a programme called "Dallas 2012". */
+  if (year === null && (sceneRelease || season !== null)) {
     const trailing = TRAILING_YEAR.exec(text);
     if (trailing && text.slice(0, trailing.index).trim()) {
       year = Number(trailing[1]);
@@ -161,5 +171,25 @@ export function guess(raw) {
     }
   }
 
+  /* The same year twice. Streaming pages print it once beside the title and
+   * again in the listing line under it: "The Americans (2013) 2013 - S02 E04"
+   * is what one of them actually shows. */
+  if (year !== null) text = dropNumber(text, year);
+
   return { query: text, year, season, episode };
+}
+
+/**
+ * Remove a standalone number, unless it was the whole title.
+ *
+ * Guarded on both sides so a year inside a longer run of digits survives, and
+ * guarded on the result so "1917" does not become an empty query for a film
+ * whose title is its year.
+ */
+function dropNumber(text, number) {
+  const without = stripChars(
+    text.replace(new RegExp(`(?<!\\d)${number}(?!\\d)`, "g"), " ").replace(/\s{2,}/g, " "),
+    " -|–—·•:,.",
+  );
+  return without || text;
 }

@@ -48,6 +48,17 @@ TITLE_CASES = [
     "Mr. Robot",
     "Kurtlar Vadisi 1080p Türkçe Dublaj izle",
     "Season 2 Episode 10 of Something",
+    # A listing line copied out of a streaming page, in the four shapes sites
+    # render it. These were added after a change to the year and release-token
+    # rules was made in Python only: every case above still agreed, so the two
+    # copies diverged and this test stayed green.
+    "The Americans (2013) 2013 · S02 E04",
+    "The Americans 2013 S02E04",
+    "The.Americans.2013.S02E04.1080p.BluRay.x264",
+    "Blade Runner 2049 (2017)",
+    "1917 (2019)",
+    "Dallas 2012 S02E04",
+    "Ayla 2017",
 ]
 
 SCORE_CASES = [

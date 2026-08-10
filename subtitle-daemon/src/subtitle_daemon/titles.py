@@ -114,6 +114,8 @@ _YEAR_RANGE = r"(?:19[0-9]{2}|20[0-4][0-9])"
 _YEAR_BRACKETED = re.compile(rf"[(\[]\s*(?P<year>{_YEAR_RANGE})\s*[)\]]")
 _YEAR_DOTTED = re.compile(rf"(?<=\.)(?P<year>{_YEAR_RANGE})(?=\.)")
 
+_SPACE_RUN = re.compile(r"\s{2,}")
+
 
 @dataclass(frozen=True)
 class TitleGuess:
@@ -142,6 +144,16 @@ def guess(raw: str) -> TitleGuess:
     text = _strip_repeatedly(text, _SITE_SUFFIX)
     text = _strip_repeatedly(text, _WATCH_PREFIX, limit=1)
 
+    # Looked for BEFORE the episode marker is cut away, not after.
+    #
+    # A scene release puts the episode marker in front of the quality tokens -
+    # "The.Americans.2013.S02E04.1080p.BluRay.x264" - so cutting at the marker
+    # first removed every token this test is looking for, and the string stopped
+    # counting as a scene release exactly when it most obviously was one. The
+    # cost was the dotted-year rule, which is gated on this: the year came back
+    # as None and "2013" stayed in the query.
+    scene_release = bool(_RELEASE_TOKENS.search(text))
+
     season = episode = None
     for pattern in _EPISODE_PATTERNS:
         match = pattern.search(text)
@@ -153,7 +165,6 @@ def guess(raw: str) -> TitleGuess:
             break
 
     year = None
-    scene_release = bool(_RELEASE_TOKENS.search(text))
 
     # Cut at the first release-scene token; the title precedes it.
     release = _RELEASE_TOKENS.search(text)
@@ -179,14 +190,41 @@ def guess(raw: str) -> TitleGuess:
     text = re.sub(r"\s{2,}", " ", text)
     text = text.strip(" -|–—·•:,.")
 
-    # A trailing bare year on a scene release is still metadata.
-    if year is None and scene_release:
+    # A trailing bare year is still metadata when something else in the string
+    # has already said this is a listing rather than a title: release tokens, or
+    # an episode marker. "Dallas 2012 S02E04" is the reboot's year and a season,
+    # not a programme called "Dallas 2012" - and the year is more use to
+    # OpenSubtitles as its own field than as two words in the query.
+    if year is None and (scene_release or season is not None):
         trailing = re.search(rf"\s(?P<year>{_YEAR_RANGE})$", text)
         if trailing and text[: trailing.start()].strip():
             year = int(trailing.group("year"))
             text = text[: trailing.start()].strip()
 
+    # The same year twice.
+    #
+    # Streaming pages print it once beside the title and again in the listing
+    # line under it: "The Americans (2013) 2013 - S02 E04" is what one of them
+    # actually shows. The bracketed one was taken as the year and the bare one
+    # was left in the query, which then searched for "The Americans 2013" and
+    # scored 0.50 against "The Americans" - under the 0.75 auto-attach
+    # threshold, so every result came back tagged as a weak match.
+    if year is not None:
+        text = _drop_number(text, year)
+
     return TitleGuess(query=text, year=year, season=season, episode=episode)
+
+
+def _drop_number(text: str, number: int) -> str:
+    """Remove a standalone number, unless it was the whole title.
+
+    Guarded on both sides so a year inside a longer run of digits survives, and
+    guarded on the result so "1917" does not become an empty query for a film
+    whose title is its year.
+    """
+    without = re.sub(rf"(?<!\d){number}(?!\d)", " ", text)
+    without = _SPACE_RUN.sub(" ", without).strip(" -|–—·•:,.")
+    return without or text
 
 
 def _strip_repeatedly(text: str, pattern: re.Pattern[str], limit: int = 3) -> str:

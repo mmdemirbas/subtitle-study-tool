@@ -111,13 +111,28 @@ class Service:
         raw_title = _first(params, "title") or ""
         explicit = _first(params, "query")
 
-        guessed = titles.guess(raw_title)
-        query = explicit or guessed.query
-        year = _first_int(params, "year") or (None if explicit else guessed.year)
-        season = _first_int(params, "season")
-        episode = _first_int(params, "episode")
-        if season is None and episode is None and not explicit:
-            season, episode = guessed.season, guessed.episode
+        # Whatever text is being searched on gets parsed the same way, typed or
+        # taken from the page.
+        #
+        # The typed box used to bypass the guesser entirely, on the grounds that
+        # a query the reader typed is a correction and should be taken at its
+        # word. That is true of a reader who types "Crime 101". It is not true of
+        # the far more common gesture, which is to copy what the page is showing:
+        # "The Americans (2013) 2013 - S02 E04" went to OpenSubtitles verbatim and
+        # scored 0.50 against "The Americans", under the 0.75 threshold, so every
+        # result came back marked "weak match". Parsing it costs the deliberate
+        # corrector nothing, because a clean title survives the guesser unchanged
+        # - that is what _strip_repeatedly's never-empty guard is for.
+        guessed = titles.guess(explicit or raw_title)
+        query = guessed.query or explicit
+
+        # Markers found in the searched text win, because they are in the words
+        # being searched: a reader who types S02 E04 while episode 9 is on screen
+        # is asking for episode 4. What the parse did not find falls back to what
+        # the page reported.
+        year = guessed.year or _first_int(params, "year")
+        season = guessed.season if guessed.season is not None else _first_int(params, "season")
+        episode = guessed.episode if guessed.episode is not None else _first_int(params, "episode")
 
         languages = _languages(params, self.config.default_languages)
         imdb_id = _first(params, "imdb_id")
