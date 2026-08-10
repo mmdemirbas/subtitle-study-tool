@@ -11,6 +11,7 @@ import {
   attachToTab,
   pageContextForTab,
   pickBest,
+  pickSecondLanguage,
   subtitleContext,
   tabStatus,
 } from "./daemon.js";
@@ -451,12 +452,19 @@ async function planAutoAttach(tab, frameId) {
    * So the second is chosen from the languages `best` did not take. A pair is
    * two languages; two files in one language is not a lesser version of that,
    * it is a different thing nobody asked for. */
-  const second = languages
-    .filter((language) => language !== best.language)
-    .map((language) => pickBest(found.results.filter((r) => r.language === language), [language]))
-    .find((result) => result && (result.match_score ?? 0) >= threshold);
+  /* The second language, and why there is not one. The rule lives beside
+   * pickBest in daemon.js, where it can be tested without a browser. */
+  const { result: second, reason: secondReason } = pickSecondLanguage({
+    results: found.results,
+    languages,
+    taken: best.language,
+    used: found.used,
+    resolved: Boolean(found.resolved?.imdb_id),
+    threshold,
+    query,
+  });
 
-  return { ...plan, second, decision: "attach", reason: "" };
+  return { ...plan, second, secondReason, decision: "attach", reason: "" };
 }
 
 async function autoAttach(tab, frameId, status) {
@@ -482,7 +490,7 @@ async function autoAttach(tab, frameId, status) {
       return;
     }
 
-    const { best, second, found } = plan;
+    const { best, second, found, secondReason } = plan;
 
     if (!(await attachOne(tab, frameId, best, found, 0))) return;
 
@@ -490,10 +498,18 @@ async function autoAttach(tab, frameId, status) {
      *
      * This is where dual subtitles stop being a thing you assemble by hand: the
      * languages are already in preferences, best-first, and the search already
-     * asked for all of them. Silence is the right answer when there is no
-     * second language configured or nothing in it matched - the first subtitle
-     * is on screen either way, which is what the shortcut promised. */
-    if (second) await attachOne(tab, frameId, second, found, 1);
+     * asked for all of them.
+     *
+     * Silence was the wrong answer when it does not arrive. Reported: "either
+     * TR or both TR+EN are not loaded, I need to add manually each time" - and
+     * with nothing said, a pair that came back as one subtitle is
+     * indistinguishable from the feature being broken. It says which language
+     * it could not fill and why, so the next move is obvious. */
+    if (second) {
+      await attachOne(tab, frameId, second, found, 1);
+    } else if (secondReason) {
+      await notify(tab.id, frameId, `Only ${best.language?.toUpperCase() || "one"}: ${secondReason}`);
+    }
   } catch (error) {
     await notify(tab.id, frameId, describe(error));
   }

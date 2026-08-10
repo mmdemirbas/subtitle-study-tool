@@ -122,6 +122,39 @@ const read = await ask({ type: "sso:daemon", op: "autoSite", args: {} }, sender)
 t("the panel can read it back", read?.enabled === true && read?.origin === "https://example.tv",
   JSON.stringify(read));
 
+// 7. The second language of a pair, which is what "either TR or both are not
+//    loaded, I need to add manually each time" was about.
+const { pickSecondLanguage } = await import("../src/daemon.js");
+
+const EN = { language: "en", match_score: 1.0, season: 2, episode: 4 };
+const TR_BADLY_NAMED = { language: "tr", match_score: 0.31, season: 2, episode: 4 };
+const TR_WRONG_EP = { language: "tr", match_score: 0.98, season: 2, episode: 9 };
+const askSecond = (results, extra = {}) => pickSecondLanguage({
+  results, languages: ["en", "tr"], taken: "en",
+  used: { season: 2, episode: 4 }, threshold: 0.75, query: "The Americans",
+  resolved: true, ...extra,
+});
+
+let got = askSecond([EN, TR_BADLY_NAMED]);
+t("a Turkish subtitle named in Turkish is still the pair's other half",
+  got.result === TR_BADLY_NAMED, JSON.stringify(got));
+
+got = askSecond([EN, TR_WRONG_EP]);
+t("a subtitle for another episode is not taken to fill the pair",
+  got.result === null && /another episode/.test(got.reason), JSON.stringify(got));
+
+got = askSecond([EN, TR_BADLY_NAMED], { resolved: false });
+t("without a resolved title the name score is still the only guard",
+  got.result === null && /well enough/.test(got.reason), JSON.stringify(got));
+
+got = askSecond([EN]);
+t("a language with nothing in it says so rather than nothing",
+  got.result === null && got.reason.length > 0, JSON.stringify(got));
+
+got = pickSecondLanguage({ results: [EN], languages: ["en"], taken: "en", used: {}, threshold: 0.75 });
+t("one configured language is not a missing pair", got.result === null && got.reason === "",
+  JSON.stringify(got));
+
 for (const r of results) console.log(r.ok ? "PASS" : "FAIL", "-", r.name, r.ok ? "" : `→ ${r.detail}`);
 console.log(`\n${results.filter((r) => r.ok).length}/${results.length} passed`);
 process.exit(results.every((r) => r.ok) ? 0 : 1);

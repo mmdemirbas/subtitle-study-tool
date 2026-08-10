@@ -307,3 +307,61 @@ export function pickBest(results, languages) {
     return Number(Boolean(b.cached)) - Number(Boolean(a.cached));
   })[0];
 }
+
+/**
+ * The second language of a pair, and why there is not one.
+ *
+ * Reported: "I am using EN+TR subtitle pair but next time either TR or both are
+ * not loaded. I need to add manually each time."
+ *
+ * `match_score` compares the query against the uploader's own movie_name and
+ * release string. That is the right guard for the FIRST subtitle, where it is
+ * all that stands between a fuzzy search and an unrelated film. It is close to
+ * meaningless for the second: once the search has resolved to an imdb id every
+ * result in the response is already this title, and what the score then
+ * measures is how a Turkish uploader chose to name their file. A Turkish
+ * release named in Turkish scores badly against an English query and was
+ * dropped - silently, which was the other half of the report.
+ *
+ * So with a resolved title the second language is judged on the thing the name
+ * score cannot see and that actually matters: whether it is the episode being
+ * watched. pickBest ranks by language and score and does NOT require episode
+ * agreement, so the filter happens before it rather than being trusted to it.
+ * Without a resolved title there is no such guarantee and the score is still
+ * the only guard there is.
+ *
+ * Returns `{ result, reason }`. `reason` is empty when a subtitle was found and
+ * otherwise says what to do about it, because silence here reads as the pair
+ * being broken rather than as one language being unavailable.
+ */
+export function pickSecondLanguage({ results, languages, taken, used, resolved, threshold, query }) {
+  const others = (languages || []).filter((language) => language !== taken);
+  if (!others.length) return { result: null, reason: "" };
+
+  const wantsEpisode = used?.season != null || used?.episode != null;
+  const rightEpisode = (item) => {
+    if (!wantsEpisode) return true;
+    // A result that does not say which episode it is cannot be ruled out by it.
+    if (item.season == null && item.episode == null) return true;
+    return (
+      (used.season == null || item.season === used.season) &&
+      (used.episode == null || item.episode === used.episode)
+    );
+  };
+
+  let reason = `no ${others.join(" or ").toUpperCase()} subtitle came back for this`;
+  for (const language of others) {
+    const inLanguage = (results || []).filter((r) => r.language === language);
+    if (!inLanguage.length) continue;
+    const usable = inLanguage.filter(rightEpisode);
+    if (!usable.length) {
+      reason = `every ${language.toUpperCase()} subtitle found is for another episode`;
+      continue;
+    }
+    const pick = pickBest(usable, [language]);
+    if (!pick) continue;
+    if (resolved || (pick.match_score ?? 0) >= threshold) return { result: pick, reason: "" };
+    reason = `no ${language.toUpperCase()} subtitle matched ${JSON.stringify(query)} well enough`;
+  }
+  return { result: null, reason };
+}
