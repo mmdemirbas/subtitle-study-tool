@@ -631,6 +631,8 @@
   async function buildPopup() {
     if (popupHost) return;
     popupHost = document.createElement("div");
+    // The word popup is chrome as well; a click in it must not reach the player.
+    api.keepPointersInside?.(popupHost);
     for (const [property, value] of Object.entries({
       all: "initial",
       position: "fixed",
@@ -750,6 +752,9 @@
    * not subject to the page's style-src. */
   async function build() {
     host = document.createElement("div");
+    /* A press on the rail is not a press on the film - the rail is built
+     * inside the player's own element. See keepPointersInside in content.js. */
+    api.keepPointersInside?.(host);
     for (const [property, value] of Object.entries({
       all: "initial",
       position: "fixed",

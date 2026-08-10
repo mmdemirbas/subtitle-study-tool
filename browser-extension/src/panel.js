@@ -92,6 +92,9 @@
    * to left/top, because after that the user's placement is the intent. */
   function createHost() {
     const node = document.createElement("div");
+    /* A press on this window is not a press on the film. See
+     * keepPointersInside in content.js for what it cost not to do this. */
+    api.keepPointersInside?.(node);
     for (const [property, value] of Object.entries({
       all: "initial",
       position: "fixed",

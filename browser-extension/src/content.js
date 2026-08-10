@@ -1478,6 +1478,12 @@
     })) {
       host.style.setProperty(property, value, "important");
     }
+    /* The host takes no pointer at all, so this only ever fires for the handle
+     * and for subtitle text that study mode has opted back in - which is exactly
+     * what must not reach the player behind it. A press on the CC button was
+     * being handled AND then passed on, so the film played or paused under the
+     * panel that had just opened. */
+    keepPointersInside(host);
 
     shadow = host.attachShadow({ mode: "open" });
     if (overlaySheet) shadow.adoptedStyleSheets = [overlaySheet];
@@ -1705,6 +1711,41 @@
    */
   const layers = new Set();
 
+  /* A click on our chrome is not a click on the film.
+   *
+   * Everything this extension draws is built inside the frame that owns the
+   * <video>, which on most players is inside the very element the player has
+   * bound its play/pause handler to. So a press on the settings window's close
+   * button reached that handler by bubbling, and the film paused instead of the
+   * window closing. Reported as "I cannot click even the close button of the
+   * settings pane, it is captured by the player as pause/play". The click was
+   * not being stolen before it arrived - it arrived, did its job, and then kept
+   * going.
+   *
+   * Stopped at the host and in the BUBBLE phase only. Every document listener
+   * this extension has is capture-phase already - players routinely
+   * stopPropagation inside the player surface, so bubble was never an option
+   * here - which means the panel's dismiss-on-outside-click, the key capture and
+   * the handle reveal all still see everything. Checked before this was added,
+   * because stopping the wrong phase would break the menus instead.
+   *
+   * dblclick is in the list for the same reason as click: several players
+   * fullscreen on it, and a double click on a window's title bar - which is how
+   * this extension's own "put the panel back in the corner" works - was doing
+   * both. What this cannot defend against is a page listening in the capture
+   * phase itself, which nothing can from inside the subtree. */
+  const ESCAPING_EVENTS = [
+    "pointerdown", "pointerup", "click", "dblclick",
+    "mousedown", "mouseup", "contextmenu",
+  ];
+
+  function keepPointersInside(node) {
+    for (const type of ESCAPING_EVENTS) {
+      node.addEventListener(type, (event) => event.stopPropagation());
+    }
+    return node;
+  }
+
   function makeLayer({ zIndex = "2147483646", interactive = true } = {}) {
     const node = document.createElement("div");
     for (const [property, value] of Object.entries({
@@ -1720,6 +1761,16 @@
       node.style.setProperty(property, value, "important");
     }
     const shadow = node.attachShadow({ mode: "open" });
+    /* Every layer, including the ones that take no pointer themselves.
+     *
+     * A toast is built with `interactive: false` so an ordinary one never eats
+     * a click meant for the film - and then its Undo button opts back in, which
+     * is the whole reason a toast can carry an action. Skipping the guard for
+     * "non-interactive" layers therefore missed the one control on them that a
+     * reader actually presses, and pressing Undo would have paused the film as
+     * well as undoing. Found by the check that walks every host rather than the
+     * ones I remembered. */
+    keepPointersInside(node);
     (host?.parentElement || document.body).appendChild(node);
     layers.add(node);
 
@@ -3413,6 +3464,7 @@
     // and the same fullscreen problem. See toTopLayer and paintableParent.
     toTopLayer,
     paintableParent,
+    keepPointersInside,
     setPlacing(on) {
       state.placing = Boolean(on);
       for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;

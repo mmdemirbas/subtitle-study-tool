@@ -1207,6 +1207,55 @@
       check("the nudge buttons say what is wrong, not which way to push", async () => {
         /* An arrow re-introduces exactly the question the words remove: film
          * time is stream time minus the offset, so a larger offset shows the
+      check("a click on our chrome never reaches the player behind it", async () => {
+        /* Reported: "I cannot click even the close button of the settings pane.
+         * It is captured by the player as pause/play event." The click was not
+         * being stolen before it arrived - it arrived, did its job, and then
+         * kept bubbling into the element a player binds play/pause to, which is
+         * an ancestor of everything this extension draws, because the UI is
+         * built in the frame that owns the <video>.
+         *
+         * Asserted on every shadow host the extension has put in the document
+         * rather than on the one control that was reported. The guard belongs to
+         * the host, so this fails the moment a new floating surface is added
+         * without it - which is the way this class of bug comes back.
+         *
+         * Dispatched on the hosts themselves, not on the controls inside them:
+         * pressing real buttons here leaves the panel mid-drag, and six checks
+         * after this one then failed for reasons that had nothing to do with
+         * what it is testing. */
+        await window.__ssoPanel.show();
+        await sleep(120);
+
+        const heard = [];
+        const listener = (event) => heard.push(event.type);
+        const types = ["pointerdown", "pointerup", "click", "dblclick", "mousedown", "mouseup"];
+        for (const type of types) document.addEventListener(type, listener);
+        try {
+          const hosts = [...document.querySelectorAll("div")].filter((d) => d.shadowRoot);
+          if (hosts.length < 2)
+            throw new Error(`only ${hosts.length} of our surfaces are in the document`);
+          // Named, so the failure says which surface is missing the guard
+          // rather than only that one of them is.
+          const leaked = [];
+          for (const host of hosts) {
+            const before = heard.length;
+            for (const type of types) {
+              host.dispatchEvent(new PointerEvent(type, {
+                pointerId: 77, button: 0, buttons: 0, bubbles: true, cancelable: true,
+              }));
+            }
+            if (heard.length > before) {
+              leaked.push(host.shadowRoot.firstElementChild?.className || "(empty host)");
+            }
+          }
+          if (leaked.length)
+            throw new Error(`these surfaces let a click through to the page: ${leaked.join(" | ")}`);
+        } finally {
+          for (const type of types) document.removeEventListener(type, listener);
+        }
+      });
+
          * line later, and nobody should have to derive that mid-film. The
          * chevron is a magnitude and never stands alone. */
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
