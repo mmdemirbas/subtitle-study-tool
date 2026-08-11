@@ -201,7 +201,16 @@
       // the film now, and a stub that is always playing cannot show that.
       Object.defineProperty(video, "paused", { get: () => false, configurable: true });
       let t = 1;
-      Object.defineProperty(video, "currentTime", { get: () => t, set: (x) => (t = x) });
+      /* Configurable, so a case can put a clock that really RUNS in its place.
+       * A plain variable is right for every case that wants the playhead at a
+       * known moment, and blind to everything about how the film moves between
+       * ticks - which is the whole of what "stop at the end of each line" and
+       * playback rate are about. */
+      Object.defineProperty(video, "currentTime", {
+        get: () => t,
+        set: (x) => (t = x),
+        configurable: true,
+      });
 
       // Players own pointer events inside the player surface.
       for (const type of ["pointermove", "mousemove"]) {
@@ -405,10 +414,26 @@
           throw new Error("player chrome is after the overlay in document order");
       });
 
+      /* Poll to a deadline, never a fixed sleep.
+       *
+       * Anything that builds a surface fetches two stylesheets first, so how
+       * long it takes is a property of the machine rather than of the code. A
+       * fixed wait passes on a quiet one and fails on a loaded one, which is a
+       * flaky case rather than a slow one: this suite failed "CC handle opens
+       * the panel" intermittently, and the panel was fine every time. */
+      const until = async (what, describe, ms = 4000) => {
+        const deadline = performance.now() + ms;
+        for (;;) {
+          const value = what();
+          if (value) return value;
+          if (performance.now() > deadline) throw new Error(describe);
+          await sleep(25);
+        }
+      };
+
       check("CC handle opens the panel", async () => {
         shadowOf().querySelector(".sso-handle").click();
-        await sleep(250);
-        if (!panelShadow()) throw new Error("panel did not open");
+        await until(panelShadow, "panel did not open");
       });
 
       /* Prime stitches ads into the same stream, so currentTime keeps running
@@ -4268,6 +4293,104 @@
           video.pause = realPause;
           video.play = realPlay;
           if (wasPaused) Object.defineProperty(video, "paused", wasPaused);
+          video.currentTime = wasTime;
+          if (wasAttached[0]) {
+            await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+          } else {
+            api.detach(0);
+          }
+          await sleep(150);
+        }
+      });
+
+      /* The same feature, against a clock that really runs, at the speeds a
+       * learner uses.
+       *
+       * The case above teleports the playhead to 2.98s, which lands inside the
+       * stop window by construction - which is why it passed while the feature
+       * was broken above 1x. The window is one tick of FILM wide, and film
+       * advances at the playback rate, so a single tick steps over it: at 2x a
+       * tick is 100ms of film, at 4x 200ms. Measured before the fix, over four
+       * lines: 1x stopped at all four, 2x at one, 4x at none. Nothing recovers
+       * a missed stop, so from the reader's side the mode had switched itself
+       * off.
+       *
+       * A clock local to this case, so the other cases keep the static
+       * playhead they were written against. */
+      check("stops at the end of every line at 1x, 2x and 4x", async () => {
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+        const hadPaused = Object.getOwnPropertyDescriptor(video, "paused");
+        const hadCurrent = Object.getOwnPropertyDescriptor(video, "currentTime");
+        const realPause = video.pause;
+        const realPlay = video.play;
+
+        let at = 0;
+        let since = 0;
+        let rate = 1;
+        let paused = true;
+        const read = () => (paused ? at : at + ((performance.now() - since) / 1000) * rate);
+        Object.defineProperty(video, "currentTime", {
+          get: read,
+          set: (x) => { at = x; since = performance.now(); },
+          configurable: true,
+        });
+        Object.defineProperty(video, "paused", { get: () => paused, configurable: true });
+        video.pause = () => { at = read(); paused = true; };
+        video.play = () => { since = performance.now(); paused = false; };
+
+        // Four one-second lines with one-second gaps, so the whole sweep takes
+        // seconds rather than minutes at 1x.
+        const cues = [0, 1, 2, 3].map((n) => ({
+          start: 1000 + n * 2000, end: 2000 + n * 2000, text: `line ${n}`,
+        }));
+
+        try {
+          await api.attach({ cues, label: "EN · rate", fileId: 8300, language: "en", slot: 0 });
+          api.setKeyTrack(0);
+          api.updateSettings({ pauseAtLineEnd: true });
+          await sleep(250);
+
+          for (const speed of [1, 2, 4]) {
+            rate = speed;
+            const stops = [];
+            video.currentTime = 0.4;
+            video.play();
+            const deadline = performance.now() + 3000 + 9000 / speed;
+            while (stops.length < cues.length && performance.now() < deadline) {
+              await sleep(20);
+              if (paused) {
+                stops.push(Number(read().toFixed(2)));
+                video.play();
+              }
+            }
+            video.pause();
+            if (stops.length < cues.length) {
+              throw new Error(
+                `at ${speed}x it stopped ${stops.length} of ${cues.length} times (at ${stops})`,
+              );
+            }
+            /* And it has to stop while the line is still on screen. Stopping
+             * past the end leaves a stopped film with an empty subtitle, which
+             * is the opposite of what the mode is for. The early bound is one
+             * step, 200ms of film at 4x. */
+            stops.forEach((stop, n) => {
+              const end = cues[n].end / 1000;
+              if (stop > end + 0.05 || stop < end - 0.3) {
+                throw new Error(
+                  `at ${speed}x it stopped at ${stop}s for a line ending at ${end}s`,
+                );
+              }
+            });
+          }
+        } finally {
+          api.updateSettings({ pauseAtLineEnd: false });
+          video.pause = realPause;
+          video.play = realPlay;
+          if (hadPaused) Object.defineProperty(video, "paused", hadPaused);
+          if (hadCurrent) Object.defineProperty(video, "currentTime", hadCurrent);
           video.currentTime = wasTime;
           if (wasAttached[0]) {
             await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });

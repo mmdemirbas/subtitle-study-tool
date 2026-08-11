@@ -2270,33 +2270,102 @@
    * The keyed subtitle is the one that decides, which is the same rule the
    * line keys use - the language being read is the one whose lines matter. */
   let pausedAtCue = null;
+  /* Where the playhead was, and which line it was in, when this last looked.
+   *
+   * The stop cannot be a test on the current moment alone, and that is the
+   * whole of what playback rate breaks. See the note in the body. */
+  let insideCue = null;
+  let lastFilmMs = null;
+
+  /* A jump no amount of playing accounts for, so it was a seek - the line keys,
+   * the scrubber, a chapter skip. Two seconds of film between two ticks is
+   * forty times normal speed, well past anything a player offers. */
+  const SEEK_JUMP_MS = 2000;
+  /* How far inside the line to land when the playhead has already left it.
+   * Far enough that the line is drawn, small enough to be imperceptible. */
+  const LINE_END_MARGIN_MS = 60;
 
   function pauseAtLineEnd() {
     if (!state.settings.pauseAtLineEnd || !state.video || state.inAd) return;
     const track = state.tracks[state.keyTrack]?.cues.length
       ? state.tracks[state.keyTrack]
       : attachedTracks()[0];
-    if (!track) return;
+    if (!track) {
+      insideCue = null;
+      lastFilmMs = null;
+      return;
+    }
 
     const now = filmTimeMs(track);
+    const was = lastFilmMs;
+    lastFilmMs = now;
+    if (state.video.paused) return;
+
     /* The last line to have started, where several overlap. Stopping at the end
      * of a sign held over the dialogue would stop in the middle of the sentence
      * being spoken, which is the opposite of what this is for. */
     const indexes = findCueIndexes(track.cues, now);
     const cue = indexes.length ? track.cues[indexes[indexes.length - 1]] : null;
+    const before = insideCue;
+    insideCue = cue;
 
-    // Out of the line it stopped at - a gap, the next line, or seeked back over
-    // it - so that line is done and its end can stop the film again.
-    if (pausedAtCue && cue !== pausedAtCue) pausedAtCue = null;
-    if (!cue || cue === pausedAtCue || state.video.paused) return;
-    /* The end of the line, not a moment after it. The tick runs every 50ms, so
-     * the playhead is somewhere in the last tick's worth of the line when this
-     * fires; pausing on the way out rather than after the gap has started is
-     * what keeps the line on screen while it is being read. */
-    if (now < cue.end - TICK_MS) return;
+    /* Forget the line already stopped at, once the playhead has genuinely left
+     * it: a different line has started, or it was seeked back over - which is
+     * the Again key, and that line has to stop at its end a second time.
+     *
+     * Deliberately NOT "the playhead is no longer inside it": the gap after a
+     * line is still that line's, or pressing play would stop the film again a
+     * tick later without having moved. */
+    if (pausedAtCue && ((cue && cue !== pausedAtCue) || now < pausedAtCue.start)) {
+      pausedAtCue = null;
+    }
 
-    pausedAtCue = cue;
+    // A seek is not playback arriving at the end of a line.
+    const step = was == null ? 0 : now - was;
+    if (step < 0 || step > SEEK_JUMP_MS) return;
+
+    /* Which line's end has been reached, and why this looks at two of them.
+     *
+     * The line the playhead is IN, when its end is within one step - that is
+     * the ordinary case, and stopping on the way out is what keeps the line on
+     * screen while it is read. Or the line it WAS in, when a single step
+     * carried the playhead past the end altogether.
+     *
+     * The second branch is the whole reason this is not a test on `now`. The
+     * window is one step wide, and a step is TICK_MS of FILM only while the
+     * film plays at 1x: at 2x it is 100ms, at 4x 200ms, and the 50ms window
+     * the old test used is simply jumped over. Measured over lines at 10-13,
+     * 15-18, 20-23 and 25-28s: at 1x it stopped at all four, at 2x at one of
+     * four, at 4x at none. Nothing recovered a missed stop, so from the
+     * reader's side the mode had switched itself off.
+     *
+     * `step` rather than the tick interval, so this holds at any rate the
+     * player offers without anything having to read playbackRate. */
+    const reach = Math.max(step, TICK_MS);
+    const target =
+      cue && now >= cue.end - reach
+        ? cue
+        : before && before !== cue && now >= before.end
+          ? before
+          : null;
+
+    if (!target || target === pausedAtCue) return;
+    pausedAtCue = target;
     state.video.pause();
+
+    /* Land inside the line, not just past it.
+     *
+     * Above 1x a single step can carry the playhead beyond the end, and the
+     * render that runs later in this same tick would then draw an empty box -
+     * a stopped film with no subtitle on it, which is the opposite of what
+     * this mode is for. Put it back just inside. The move is one step at most,
+     * which is 200ms of film even at 4x. */
+    if (now > target.end) {
+      state.video.currentTime = Math.max(
+        0,
+        streamTimeMs(track, target.end - LINE_END_MARGIN_MS) / 1000,
+      );
+    }
   }
 
   /** The other direction: where a moment of this file lands in the stream. */
