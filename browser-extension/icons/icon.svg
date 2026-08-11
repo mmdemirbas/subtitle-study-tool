@@ -1,0 +1,35 @@
+<!-- The source the PNGs are rendered from. See tools/build-icons.mjs.
+
+     Two lines, two colours, sitting low in the frame: that is the whole
+     product - the language being learnt and the one it is being learnt from,
+     on the same picture at the same moment.
+
+     Deliberately three shapes and no more. At 16px, which is the size that
+     decides whether the extension can be picked out of a toolbar, anything
+     finer than a bar turns to grey mush - no lettering, no outline, no icon
+     inside the icon. The white bar is longer than the amber one so the pair
+     reads as text rather than as a symbol, and the top half is left empty so
+     they read as sitting at the bottom of a frame.
+
+     The gap between the two bars is 14 of 128, which is 1.75px at 16 - the
+     first version used 11 and the two ran together into one block at toolbar
+     size, which is a different mark entirely.
+
+     The plate is dark and stays dark. Measured against the three backgrounds
+     it has to sit on, contrast ratio:
+
+       plate     light toolbar   dark toolbar   dark window
+       #14171c       17.96           1.49          1.12
+       #1c2430       15.62           1.29          1.03
+       #24303f       13.38           1.11          1.20
+       #2c3a4e       11.52           1.05          1.40
+
+     No dark plate has a silhouette on a dark toolbar - 1.05 to 1.49 is
+     nothing - so lightening it only trades away the light-toolbar reading it
+     does have. What survives on dark is the two bars, which is the mark
+     anyway. #14171c is the best of them where it matters. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <rect width="128" height="128" rx="27" fill="#14171c"/>
+  <rect x="22" y="47" width="84" height="20" rx="10" fill="#f2f4f7"/>
+  <rect x="22" y="81" width="60" height="20" rx="10" fill="#e0a458"/>
+</svg>

@@ -12,7 +12,7 @@ Chrome, Edge, Brave or any Chromium browser:
 4. Open the extension's **options** and paste an OpenSubtitles API key
    (opensubtitles.com → your account → Consumers → new consumer)
 
-There is no icon file, so the toolbar shows a default placeholder. Pin it.
+Pin it - the icon is two subtitle lines, white over amber, on a dark plate.
 
 ## Do I need the daemon?
 
