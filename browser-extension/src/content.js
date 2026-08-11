@@ -3545,8 +3545,8 @@
       referenceSlot,
       answer,
       tracks: [
-        { slot: referenceSlot, ...describeTrackForTrace(reference), times: packTimes(referenceTimes) },
-        { slot, ...describeTrackForTrace(target), times: packTimes(targetTimes) },
+        { slot: referenceSlot, ...describeTrackForTrace(reference) },
+        { slot, ...describeTrackForTrace(target) },
       ],
     });
 
@@ -3702,6 +3702,16 @@
     };
   }
 
+  /* Starts AND ends, because the ends are what the aligner does not yet get.
+   *
+   * It is handed cue starts and nothing else, which is the right primitive for
+   * the same subtitle retimed and the wrong one for two languages: the two
+   * subtitlers break the same dialogue into different lines, so a line's start
+   * in one file often has no counterpart in the other. Measured across the
+   * repository's corpus, comparing WHEN THERE IS TEXT ON SCREEN instead lifts
+   * the marginal cross-language pairs from 1.14 and 1.28 times the wrong-film
+   * ceiling to 2.68 and 2.02. Nothing can be done with that unless the ends
+   * were kept at the time, so they are kept. */
   const describeTrackForTrace = (track) => ({
     label: track.label,
     fileId: track.fileId,
@@ -3709,6 +3719,8 @@
     cueCount: track.cues.length,
     offsetMs: track.offsetMs,
     rate: track.rate,
+    times: packTimes(track.cues.map((cue) => cue.start)),
+    ends: packTimes(track.cues.map((cue) => cue.end)),
   });
 
   /* Gaps rather than times: a thousand starts of up to eight digits each,

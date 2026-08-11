@@ -355,12 +355,22 @@ try {
   t("and every attempt to line two subtitles up keeps both files' timings",
     Boolean(alignTrace) &&
       (alignTrace.tracks || []).length === 2 &&
-      alignTrace.tracks.every((track) => Array.isArray(track.times) && track.times.length === 60) &&
+      alignTrace.tracks.every(
+        (track) =>
+          Array.isArray(track.times) &&
+          track.times.length === 60 &&
+          // The ends too: they are what the aligner is not given today and what
+          // a better one would need, so a log without them is not reusable.
+          Array.isArray(track.ends) &&
+          track.ends.length === 60,
+      ) &&
       typeof alignTrace.answer?.verdict === "string",
     JSON.stringify({
       verdict: alignTrace?.answer?.verdict,
       shiftMs: alignTrace?.answer?.shiftMs,
-      kept: (alignTrace?.tracks || []).map((x) => `${x.language}:${x.times?.length}`),
+      kept: (alignTrace?.tracks || []).map(
+        (x) => `${x.language}: ${x.times?.length} starts, ${x.ends?.length} ends`,
+      ),
     }),
   );
 
