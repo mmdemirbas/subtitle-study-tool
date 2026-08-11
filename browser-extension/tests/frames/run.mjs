@@ -86,6 +86,7 @@ try {
             isTopFrame: seen.isTopFrame,
             hasVideo: seen.hasPlayableVideo,
             isSubject: seen.isPageSubject,
+            overlay: seen.overlay,
             surfaces: (seen.surfaces || []).map((s) => s.surface),
           });
         } catch {
@@ -159,6 +160,7 @@ try {
       surfaces: player?.surfaces ?? null,
       hasVideo: player?.hasVideo,
       isSubject: player?.isSubject,
+      overlay: player?.overlay,
     }));
 
   /* The four below are the point of the exercise. A surface drawn inside the
@@ -290,6 +292,78 @@ try {
     Boolean(hidden && shown),
     JSON.stringify({ hidden: Boolean(hidden), shown: Boolean(shown) }));
 
+  /* --- what is written down while nobody is asking ------------------------
+   *
+   * The panel opening is the moment the shape of the page is worth keeping:
+   * three documents, one cross-origin, and which of them holds the film
+   * decides everything. Recorded then rather than when somebody thinks to
+   * press a diagnostic button, because by then the player has often navigated.
+   */
+  const traceLog = async () =>
+    sw.evaluate(async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, frameIds: [0] },
+        func: () => chrome.runtime.sendMessage({ type: "sso:daemon", op: "traceLog", args: {} }),
+      });
+      return result?.entries || [];
+    });
+
+  const panelTrace = await until(async () => {
+    const log = await traceLog();
+    return log.filter((entry) => entry.kind === "panel").pop() || null;
+  }, 6000);
+  t("opening the panel writes down what the page looked like",
+    Boolean(panelTrace) &&
+      (panelTrace.frames || []).length >= 2 &&
+      panelTrace.frames.some((f) => f.report?.frameRole === "chrome") &&
+      panelTrace.frames.some((f) => f.report?.frameRole === "video"),
+    JSON.stringify(
+      (panelTrace?.frames || []).map((f) => ({ id: f.frameId, role: f.report?.frameRole })),
+    ),
+  );
+
+  /* And the one that makes a failed alignment reproducible. Two subtitles are
+   * pushed into the frame with the film, then lined up from the frame with the
+   * controls - which is also the forwarding path under a second name. */
+  await sw.evaluate(async (frameId) => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const cues = (count, step, from) =>
+      Array.from({ length: count }, (_, i) => ({
+        start: from + i * step,
+        end: from + i * step + 900,
+        text: `line ${i}`,
+      }));
+    await chrome.tabs.sendMessage(
+      tab.id,
+      { type: "sso:attach", payload: { cues: cues(60, 1000, 0), label: "EN test", fileId: 101, language: "en", slot: 0 } },
+      { frameId },
+    );
+    await chrome.tabs.sendMessage(
+      tab.id,
+      { type: "sso:attach", payload: { cues: cues(60, 1000, 4000), label: "TR test", fileId: 102, language: "tr", slot: 1 } },
+      { frameId },
+    );
+  }, playerFrameId);
+  await page.waitForTimeout(600);
+  await pressInTopFrame("autoAlign", [1, {}]);
+
+  const alignTrace = await until(async () => {
+    const log = await traceLog();
+    return log.filter((entry) => entry.kind === "align").pop() || null;
+  }, 6000);
+  t("and every attempt to line two subtitles up keeps both files' timings",
+    Boolean(alignTrace) &&
+      (alignTrace.tracks || []).length === 2 &&
+      alignTrace.tracks.every((track) => Array.isArray(track.times) && track.times.length === 60) &&
+      typeof alignTrace.answer?.verdict === "string",
+    JSON.stringify({
+      verdict: alignTrace?.answer?.verdict,
+      shiftMs: alignTrace?.answer?.shiftMs,
+      kept: (alignTrace?.tracks || []).map((x) => `${x.language}:${x.times?.length}`),
+    }),
+  );
+
   /* --- the two ways this arrangement goes stale ---------------------------- */
 
   /* Reloading the extension replaces the top frame's script under an open tab,
@@ -408,13 +482,28 @@ try {
       return null;
     }, label);
 
+  /* Generous, and it has to be: entering fullscreen is a role change that
+   * crosses the worker twice, and the tick that notices it is the slow one.
+   * The detail names every frame's role and whether its overlay was built and
+   * parented, because "nothing is pressable" on its own cannot tell a frame
+   * that never took the job from one that took it and drew nothing. */
   const ccInFullscreen = await until(async () => {
     await wake();
     return pressable("Subtitle controls");
-  });
+  }, 20000);
   t("there is still a button that can be pressed once the player is fullscreen",
     Boolean(ccInFullscreen),
-    ccInFullscreen ? `frame ${ccInFullscreen.frameId}` : "no pressable control in any frame");
+    ccInFullscreen
+      ? `frame ${ccInFullscreen.frameId}`
+      : JSON.stringify(
+          (await frames()).map((f) => ({
+            id: f.frameId,
+            video: f.hasVideo,
+            subject: f.isSubject,
+            overlay: f.overlay,
+            surfaces: f.surfaces,
+          })),
+        ));
 
   /* And the end of it, as a reader performs it: press the button, press
    * something on what opens. A hit test is not a click - the first version of

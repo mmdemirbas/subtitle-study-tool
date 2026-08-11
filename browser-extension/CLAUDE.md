@@ -12,7 +12,7 @@ isolated `window` — never through the DOM, and never reachable from the page.
 | File | Lines | Owns | Exposes |
 |---|---|---|---|
 | `align.js` | 520 | matching a subtitle's timing to the playing release | — |
-| `content.js` | 4.3k | the video, the playback clock, the cue overlay, the CC handle, settings, keys, the frame roles, frame/fullscreen plumbing | `window.__ssoApi`, `__ssoTeardown` |
+| `content.js` | 4.5k | the video, the playback clock, the cue overlay, the CC handle, settings, keys, the frame roles, frame/fullscreen plumbing | `window.__ssoApi`, `__ssoTeardown` |
 | `panel.js` | 3.2k | the control panel window (search, attach, sync, settings) | `window.__ssoPanel`, `__ssoPanelTeardown` |
 | `study.js` | 2.0k | the study rail, word cards, the deck, the lookup popup | `window.__ssoStudy`, `__ssoStudyTeardown` |
 
@@ -105,6 +105,40 @@ frame back to `solo`, so the button does not outlive the film.
 they stay in the video's frame and remain behind a parent overlay on a site
 that paints one. The cue overlay is there too, which is right — it only has to
 be seen, and a transparent interceptor does not hide it.
+
+## The running log — read this before asking anyone to reproduce anything
+
+`trace.js` in the worker keeps a rolling log, written as the extension is used
+rather than when somebody presses a diagnostic button. It exists because two
+questions kept being answered by guesswork:
+
+- **What does that page actually look like?** Every time the control panel
+  opens or closes, every frame's `sso:diagnose` is captured with it — the frame
+  tree, which one holds the film, what each drew, what is covering it, which
+  element has fullscreen, and whether the overlay host was built *and*
+  parented. Asking for this after the fact means asking someone to reproduce
+  something that has already happened, on a page whose player has often
+  navigated since.
+- **Which two files did the aligner refuse?** Every `autoAlign` call records
+  both tracks' cue starts, their labels, languages, counts, offsets and rates,
+  and the answer. Whether two subtitles can be lined up is a property of their
+  cue times and nothing else, so an attempt that failed is only reproducible
+  with the times that failed — and the extension already had them.
+  `alignOutcome` records what the reader then did (`taken`, `undone`), which is
+  the only ground truth there is about whether an answer was right.
+
+Bounded at 40 entries **and** 2MB, whichever comes first, because the two kinds
+differ by two orders of magnitude in size and a count-only cap would let a
+handful of alignments fill the quota. Writes go through the same `inTurn` queue
+the deck uses — read-modify-write on one key with callers milliseconds apart.
+Cue times are stored as gaps, a third of the size, and `unpackTimes`
+reconstructs them exactly.
+
+It never leaves the machine. The report page (`src/report.html`, reachable from
+the panel's "Open the log") saves or copies it; nothing sends it anywhere.
+
+**When a bug report is about sync or about frames, ask for this file, not for a
+description.**
 
 ## The aligner refuses two different ways, and both matter
 

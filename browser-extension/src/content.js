@@ -925,6 +925,22 @@
        * video is not a fault - it is the arrangement working. */
       frameRole: role,
       videoFrameId,
+      /* Which element this document has fullscreen, if any. A whole class of
+       * "nothing works in fullscreen" is decided by this one line, and it was
+       * not in the report while that bug was being chased: the answer differs
+       * per frame, and the interesting case is the frame that says IFRAME. */
+      fullscreen: describeNode(document.fullscreenElement || document.webkitFullscreenElement),
+      /* Built and parented are different questions, and the gap between them
+       * is invisible from every other field here: a host that was created and
+       * never appended reports no surfaces at all, which reads identically to
+       * never having been built - and the two have completely different
+       * causes. */
+      overlay: {
+        built: Boolean(host),
+        inDocument: Boolean(host?.isConnected),
+        parent: describeNode(host?.parentElement),
+        views: views.length,
+      },
 
       // What the title guess would be built from, in the order it prefers.
       titleCandidates: info.candidates,
@@ -3513,10 +3529,27 @@
     const reference = state.tracks[referenceSlot];
     if (!reference || reference.cues.length === 0) return null;
 
-    const answer = aligner.align(
-      reference.cues.map((cue) => cue.start),
-      target.cues.map((cue) => cue.start),
-    );
+    const referenceTimes = reference.cues.map((cue) => cue.start);
+    const targetTimes = target.cues.map((cue) => cue.start);
+    const answer = aligner.align(referenceTimes, targetTimes);
+
+    /* The attempt, whichever way it went, with the two things that decided it.
+     *
+     * Whether two subtitle files can be lined up is a property of their cue
+     * times and nothing else, so an attempt that failed is only reproducible
+     * with the times that failed. Reading the aligner cannot substitute for
+     * the pair it could not match, and asking for the two .srt files after the
+     * fact means asking somebody to find files the extension already had. */
+    trace("align", {
+      slot,
+      referenceSlot,
+      answer,
+      tracks: [
+        { slot: referenceSlot, ...describeTrackForTrace(reference), times: packTimes(referenceTimes) },
+        { slot, ...describeTrackForTrace(target), times: packTimes(targetTimes) },
+      ],
+    });
+
     if (!answer.ok) return { ...answer, referenceSlot };
 
     /* The aligner maps reference-file time to target-file time:
@@ -3667,6 +3700,29 @@
       currentTime: state.video?.currentTime ?? null,
       duration: state.video?.duration ?? null,
     };
+  }
+
+  const describeTrackForTrace = (track) => ({
+    label: track.label,
+    fileId: track.fileId,
+    language: track.language,
+    cueCount: track.cues.length,
+    offsetMs: track.offsetMs,
+    rate: track.rate,
+  });
+
+  /* Gaps rather than times: a thousand starts of up to eight digits each,
+   * against gaps of three or four. Same numbers, a third of the size, and the
+   * size is what decides how many attempts can be kept. trace.js unpacks. */
+  function packTimes(times) {
+    const out = [];
+    let previous = 0;
+    for (const time of times) {
+      const value = Math.round(time);
+      out.push(value - previous);
+      previous = value;
+    }
+    return out;
   }
 
   /** When this subtitle speaks, in the file's own clock, without the words. */
@@ -4001,6 +4057,19 @@
       );
   }
 
+  /* Write something down, for a question nobody has asked yet.
+   *
+   * Never awaited and never able to fail loudly: this is a note in the margin,
+   * and a note that breaks the thing it is describing is worse than no note.
+   * `frames` asks the worker to gather the shape of the page as well, which
+   * only it can do - so the page says what happened and the worker says where.
+   */
+  function trace(kind, detail, { frames = false } = {}) {
+    chrome.runtime
+      .sendMessage({ type: "sso:daemon", op: "trace", args: { kind, detail, frames } })
+      .catch(() => {});
+  }
+
   // --- messaging ------------------------------------------------------------
 
   const onMessage = (message, _sender, sendResponse) => {
@@ -4207,6 +4276,7 @@
     saveTopWord() {
       return Boolean(window.__ssoStudy?.saveTop?.());
     },
+    trace,
     pageInfo,
     hasPlayableVideo,
     updateSettings,

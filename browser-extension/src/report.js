@@ -414,6 +414,125 @@ function planBlock(plan) {
   return box;
 }
 
+// --- the running log ---------------------------------------------------------
+
+/* Separate from the report above, and deliberately so.
+ *
+ * The report is one moment, captured because somebody pressed a button. This
+ * is what happened while nobody was pressing anything - which is where the two
+ * questions that keep needing an answer live: what does that page actually
+ * look like, and which two files was the aligner given when it said no.
+ */
+let traceLog = [];
+
+const AGES = [
+  [1000, "just now"],
+  [60_000, (ms) => `${Math.round(ms / 1000)}s ago`],
+  [3_600_000, (ms) => `${Math.round(ms / 60_000)}m ago`],
+];
+
+function ago(at) {
+  const ms = Date.now() - new Date(at).getTime();
+  for (const [limit, said] of AGES) if (ms < limit) return typeof said === "function" ? said(ms) : said;
+  return new Date(at).toLocaleString();
+}
+
+async function loadTrace() {
+  const answer = await call("traceLog");
+  traceLog = Array.isArray(answer?.entries) ? answer.entries : [];
+  renderTrace();
+}
+
+function renderTrace() {
+  const summary = el("trace-summary");
+  const list = el("trace-list");
+  list.textContent = "";
+
+  if (!traceLog.length) {
+    summary.textContent =
+      "Nothing yet. Open the control panel on a page with a film on it, or press Line up, and it will start filling.";
+    return;
+  }
+
+  const aligns = traceLog.filter((entry) => entry.kind === "align");
+  const bytes = JSON.stringify(traceLog).length;
+  summary.textContent =
+    `${traceLog.length} entries, ${aligns.length} of them alignment attempts` +
+    ` · ${(bytes / 1024).toFixed(0)}KB · oldest ${ago(traceLog[0].at)}`;
+
+  // Newest first: the thing that just went wrong is the thing being looked for.
+  for (const entry of [...traceLog].reverse()) {
+    const row = document.createElement("details");
+    row.className = "frame";
+    const head = document.createElement("summary");
+    head.textContent = `${ago(entry.at)} · ${describeEntry(entry)}`;
+    const body = document.createElement("pre");
+    body.className = "raw";
+    /* The timings are the bulk of an alignment entry and unreadable by eye, so
+     * the page shows their shape and the file keeps the numbers. */
+    body.textContent = JSON.stringify(entry, readableTimes, 2);
+    row.append(head, body);
+    list.appendChild(row);
+  }
+}
+
+function readableTimes(key, value) {
+  if (key !== "times" || !Array.isArray(value)) return value;
+  return `${value.length} cue gaps, kept in the saved file`;
+}
+
+function describeEntry(entry) {
+  if (entry.kind === "panel") {
+    const frames = entry.frames || [];
+    const withVideo = frames.filter((f) => f.report?.hasPlayableVideo).length;
+    const roles = frames.map((f) => `${f.frameId}:${f.report?.frameRole ?? "-"}`).join(" ");
+    return `panel ${entry.open ? "opened" : "closed"} · ${frames.length} frames, ${withVideo} with a film · roles ${roles}`;
+  }
+  if (entry.kind === "align") {
+    const answer = entry.answer || {};
+    const pair = (entry.tracks || [])
+      .map((t) => `${(t.language || "?").toUpperCase()} ${t.cueCount}`)
+      .join(" against ");
+    return `line up · ${pair} · ${answer.verdict ?? "?"} at confidence ${answer.confidence ?? "?"}, coverage ${answer.coverage ?? "?"}`;
+  }
+  if (entry.kind === "alignOutcome") {
+    return `the reader ${entry.outcome} that alignment`;
+  }
+  return entry.kind;
+}
+
+const saveTrace = () => {
+  const text = JSON.stringify({ savedAt: new Date().toISOString(), entries: traceLog }, null, 2);
+  const url = URL.createObjectURL(new Blob([text], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `subtitle-trace-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "")}.json`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+const sayOnTrace = (text) => {
+  el("trace-said").textContent = text;
+  setTimeout(() => (el("trace-said").textContent = ""), 2500);
+};
+
+el("trace-download").addEventListener("click", () => {
+  if (!traceLog.length) return sayOnTrace("Nothing to save yet.");
+  saveTrace();
+});
+
+el("trace-copy").addEventListener("click", async () => {
+  if (!traceLog.length) return sayOnTrace("Nothing to copy yet.");
+  await navigator.clipboard.writeText(JSON.stringify(traceLog));
+  sayOnTrace("Copied.");
+});
+
+el("trace-clear").addEventListener("click", async () => {
+  await call("traceClear");
+  await loadTrace();
+  sayOnTrace("Cleared.");
+});
+
 // --- actions ----------------------------------------------------------------
 
 el("recapture").addEventListener("click", () => load({ fresh: true }));
@@ -440,3 +559,6 @@ el("download").addEventListener("click", () => {
 /* Opened with #capture from the control panel, which means "diagnose the tab I
  * was just looking at" - the capture has already run, so this only renders. */
 load({ fresh: false });
+/* Independent of the report above, and not gated on it: the log is worth
+ * reading on a page that has never had a capture taken, which is most of them. */
+loadTrace();

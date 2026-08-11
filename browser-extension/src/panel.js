@@ -807,6 +807,7 @@
                 for (const number of moved) {
                   applyTiming(number - 1, before.get(number - 1) || { offsetMs: 0, rate: 1 });
                 }
+                api.trace?.("alignOutcome", { slots: moved.map((n) => n - 1), outcome: "undone" });
                 api.showToast("Back to the timing each one had");
                 refresh(api.status());
               },
@@ -2083,6 +2084,11 @@
           label: "Undo",
           onClick: () => {
             applyTiming(slot, undoTo);
+            /* The only ground truth there is about an alignment: the reader
+             * looked at it and put it back. Recorded next to the attempt it
+             * refers to, so a log of attempts is a log of right and wrong
+             * answers rather than a log of answers. */
+            api.trace?.("alignOutcome", { slot, outcome: "undone", offsetMs: answer.offsetMs });
             sayOnCard(slot, "Back to the timing it had");
             refresh(api.status());
           },
@@ -2108,6 +2114,7 @@
           label: "Use it",
           onClick: () => {
             applyTiming(slot, { offsetMs: answer.offsetMs, rate: answer.trackRate });
+            api.trace?.("alignOutcome", { slot, outcome: "taken", offsetMs: answer.offsetMs });
             lined(was);
             refresh(api.status());
           },
@@ -2788,7 +2795,8 @@
     note.className = "sso-note";
     note.textContent =
       "Captures what each frame of this page can see and what the search would do with it, " +
-      "then opens the result. No downloads are spent.";
+      "then opens the result. No downloads are spent. The same page holds the running " +
+      "log, which is written as you go and keeps every attempt to line two subtitles up.";
 
     const row = document.createElement("div");
     row.className = "sso-row";
@@ -2796,7 +2804,17 @@
       primary: true,
       onClick: () => api.detached(runDiagnostic(), "The capture"),
     });
-    row.append(el.diagnose);
+    /* The log is worth reaching without capturing anything, and on a page that
+     * has never had a capture taken - which is most of them. It has been
+     * filling since the first time this panel was opened. */
+    row.append(
+      el.diagnose,
+      button("Open the log", {
+        title: "What the extension has recorded while you were using it, including every attempt to line two subtitles up",
+        onClick: () =>
+          api.detached(chrome.runtime.sendMessage({ type: "sso:openReport" }), "The log"),
+      }),
+    );
 
     el.diagnoseNote = document.createElement("p");
     el.diagnoseNote.className = "sso-note";
@@ -3135,6 +3153,11 @@
     reparent();
     startPlayhead();
     setHostVisible(host, true);
+    /* Every frame's account of itself, at the moment somebody reached for the
+     * controls. This is the cheapest possible answer to "what does that page
+     * actually look like" and it costs nothing but a message - no search, no
+     * download. See trace.js. */
+    api.trace?.("panel", { open: true }, { frames: true });
     unsubscribe ||= api.subscribe(refresh);
     // Point the next attach at the first free subtitle, which is what somebody
     // opening the panel is nearly always about to fill.
@@ -3164,6 +3187,7 @@
   function hide() {
     closeMenu();
     stopPlayhead();
+    api.trace?.("panel", { open: false }, { frames: true });
     // A binding half-read is not a binding; the button that asked is going.
     api.cancelCapture();
     settingsWindow?.hide();

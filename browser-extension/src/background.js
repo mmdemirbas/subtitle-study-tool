@@ -33,6 +33,7 @@ import {
  * cross-origin call, which an MV3 content script cannot make with extension
  * permissions. */
 import { capture, lastReport, usePlanner } from "./diagnose.js";
+import * as trace from "./trace.js";
 import * as deck from "./study/deck.js";
 import { canReachDictionary, lookup } from "./study/lookup.js";
 import { rank } from "./study/rarity.js";
@@ -430,9 +431,52 @@ async function handleDaemonCall(op, args, sender) {
     case "lastDiagnostic":
       return (await lastReport()) || { error: "nothing captured yet" };
 
+    /* Kept as it happens, so a question about a page does not have to be
+     * answered by asking somebody to make it go wrong again. See trace.js. */
+    case "trace": {
+      await trace.record(args.kind, await traceDetail(args, sender));
+      return { ok: true };
+    }
+    case "traceLog":
+      return { entries: await trace.entries() };
+    case "traceClear":
+      await trace.clear();
+      return { ok: true };
+
     default:
       return { error: `unknown daemon operation: ${op}` };
   }
+}
+
+/* What a trace entry carries beyond what the page sent.
+ *
+ * Only the worker can address every frame, so the shape of the page - which
+ * frame holds the film, what each one drew, what is covering it - is gathered
+ * here rather than by whichever frame happened to raise the event. Everything
+ * else is passed through as the page reported it.
+ */
+async function traceDetail(args, sender) {
+  const tab = sender?.tab;
+  const detail = { ...(args.detail || {}) };
+  if (tab?.id != null) detail.tab = { id: tab.id, url: tab.url, title: tab.title };
+  if (!args.frames) return detail;
+
+  const frames = await chrome.webNavigation.getAllFrames({ tabId: tab.id }).catch(() => []);
+  detail.frames = await Promise.all(
+    (frames || []).map(async (frame) => {
+      const seen = await chrome.tabs
+        .sendMessage(tab.id, { type: "sso:diagnose" }, { frameId: frame.frameId })
+        .catch(() => null);
+      return {
+        frameId: frame.frameId,
+        parentFrameId: frame.parentFrameId,
+        url: frame.url,
+        reachable: Boolean(seen),
+        report: seen,
+      };
+    }),
+  );
+  return detail;
 }
 
 // --- commands ---------------------------------------------------------------

@@ -288,6 +288,78 @@ t(
   after.join(",") || "(empty)",
 );
 
+// --- the running log --------------------------------------------------------
+/* Same slow store as the deck above, and for the same reason: this is a
+ * read-modify-write on one key with two callers that fire milliseconds apart -
+ * the panel opening writes one entry and a Line up pressed on it writes
+ * another. Against an instant store they never overlap and the test proves
+ * nothing. */
+const trace = await import("../src/trace.js");
+
+await trace.clear();
+await Promise.all([
+  trace.record("panel", { open: true }),
+  trace.record("align", { slot: 1 }),
+  trace.record("alignOutcome", { outcome: "undone" }),
+]);
+const kinds = (await trace.entries()).map((e) => e.kind).sort();
+t("three traces written at once all survive", kinds.length === 3, kinds.join(",") || "(empty)");
+
+t(
+  "every entry is stamped, whatever the caller passed",
+  (await trace.entries()).every((e) => typeof e.at === "string" && !Number.isNaN(Date.parse(e.at))),
+  JSON.stringify((await trace.entries()).map((e) => e.at)),
+);
+
+/* The bound that matters is bytes, not entries. An alignment attempt carries
+ * two files' worth of timings and is two orders of magnitude bigger than a
+ * page trace, so a count-only cap would let a handful of them fill the quota
+ * and take the deck down with them. */
+await trace.clear();
+// Twelve at roughly 230KB each, which is 2.7MB against a 2MB bound - and well
+// under the 40-entry one, so only the byte cap can save it.
+const fat = { times: Array.from({ length: 40000 }, (_, i) => i) };
+const FAT_COUNT = 12;
+for (let i = 0; i < FAT_COUNT; i++) await trace.record("align", { i, ...fat });
+const survived = await trace.entries();
+t(
+  "a few very large entries drop the oldest rather than growing without limit",
+  survived.length < FAT_COUNT && survived.length >= 1 && JSON.stringify(survived).length <= 2_000_000,
+  `${survived.length} entries, ${JSON.stringify(survived).length} bytes`,
+);
+t(
+  "and what survives is the newest",
+  survived[survived.length - 1]?.i === FAT_COUNT - 1,
+  `last entry i=${survived[survived.length - 1]?.i}`,
+);
+
+await trace.clear();
+for (let i = 0; i < 45; i++) await trace.record("panel", { i });
+const capped = await trace.entries();
+t(
+  "the count is bounded too, keeping the most recent",
+  capped.length === 40 && capped[0].i === 5 && capped[39].i === 44,
+  `${capped.length} entries, first i=${capped[0]?.i}, last i=${capped[capped.length - 1]?.i}`,
+);
+
+/* Cue times are stored as gaps to keep more of them; a pack that does not
+ * reconstruct exactly is worse than no pack, because the file it produces
+ * looks usable and is not. */
+const times = [0, 1000, 1001, 45678, 45679, 3_600_000];
+t(
+  "packed cue times come back exactly",
+  JSON.stringify(trace.unpackTimes(trace.packTimes(times))) === JSON.stringify(times),
+  JSON.stringify(trace.unpackTimes(trace.packTimes(times))),
+);
+t(
+  "and packing is smaller than not",
+  JSON.stringify(trace.packTimes(times)).length < JSON.stringify(times).length,
+  `${JSON.stringify(trace.packTimes(times)).length} against ${JSON.stringify(times).length}`,
+);
+
+await trace.clear();
+t("clearing empties it", (await trace.entries()).length === 0);
+
 chrome.storage.local.get = instant.get;
 chrome.storage.local.set = instant.set;
 
