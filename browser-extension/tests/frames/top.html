@@ -29,11 +29,19 @@
     /* The player's origin is a DIFFERENT PORT, which is a different origin -
        so this is genuinely cross-origin, not a same-origin iframe wearing the
        shape of one. The port arrives in the query string because the harness
-       server picks it at run time. */
+       server picks it at run time.
+
+       ?depth=2 puts a same-origin document in between, which is what the real
+       site does: streaming-site.example loads its own /watch/index.html, and that loads
+       the player from another host. Every level runs the extension, and what
+       each of them sees of a fullscreen session started at the bottom is
+       different - so the two arrangements are not interchangeable. */
     const params = new URLSearchParams(location.search);
     const playerPort = params.get("playerPort");
     document.getElementById("player").src =
-      `http://127.0.0.1:${playerPort}/tests/frames/player.html`;
+      params.get("depth") === "2"
+        ? `${location.origin}/tests/frames/mid.html?playerPort=${playerPort}`
+        : `http://127.0.0.1:${playerPort}/tests/frames/player.html`;
 
     /* Counts every click the interceptor swallows, so a test can tell "the
        click was taken by the page" from "the click did nothing". */

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>middle frame — same origin as the top, no video</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0f1216; overflow: hidden; }
+  iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+</style>
+</head>
+<body>
+  <iframe id="player" allow="fullscreen"></iframe>
+  <script>
+    /* The level the two-frame vehicle was missing.
+     *
+     * Measured on streaming-site.example: the page is three documents deep, and the
+     * middle one is SAME origin as the top while the player is not. It matters
+     * because every frame runs the extension, so a fullscreen session started
+     * two levels down is seen by two intermediate documents as "an <iframe> is
+     * fullscreen" - and each of them used to answer that by requesting
+     * fullscreen on the iframe's parent, one after the other.
+     */
+    const params = new URLSearchParams(location.search);
+    document.getElementById("player").src =
+      `http://127.0.0.1:${params.get("playerPort")}/tests/frames/player.html`;
+  </script>
+</body>
+</html>

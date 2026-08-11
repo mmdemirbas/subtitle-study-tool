@@ -1734,6 +1734,24 @@
       switchingTo = null;
       return current;
     }
+    /* An <iframe> is the one member of that list this must not act on.
+     *
+     * The escalation below exists for a <video>, which paints its own frames
+     * and nothing else, so a surface appended to it is never seen. An iframe
+     * is the opposite: it renders a whole document, and the extension is
+     * running inside that document too. Moving the session up to the iframe's
+     * parent takes fullscreen away from the frame the site gave it to - and on
+     * a page three documents deep, two intermediate frames do it one after the
+     * other. Measured on the three-frame vehicle: the top document ended up
+     * with BODY as its fullscreen element, elementsFromPoint answered that our
+     * panel was topmost, and a real click on its close button did nothing.
+     *
+     * There is nothing to hold here. The frame with the film draws the
+     * controls while it is fullscreen - see reportFrameRole. */
+    if (current.tagName === "IFRAME") {
+      switchingTo = null;
+      return null;
+    }
     const holder = current.parentElement;
     if (!holder || switchingTo === holder) return null;
     switchingTo = holder;
@@ -3699,9 +3717,20 @@
    * extension page, or refused - means nobody else will, so this frame keeps
    * it. One button either way, and never none.
    */
+  /* Fullscreen undoes the whole reason the controls went up to the top frame.
+   *
+   * Only the fullscreen element's subtree is painted and only it is given
+   * pointer events, so while the film's frame is fullscreen the page's overlay
+   * is not on screen at all - and nothing the top document draws can be
+   * pressed, whatever elementsFromPoint says about it. So the film's frame
+   * stops claiming, which hands the controls straight back to it, where its
+   * own fullscreen handling has always put them inside the session. */
+  const inFullscreenHere = () =>
+    Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+
   function reportFrameRole() {
     if (window === window.top) return; // the top frame is told; it does not claim
-    const subject = isPageSubject(pickVideoCached());
+    const subject = isPageSubject(pickVideoCached()) && !inFullscreenHere();
     if (subject === claimedSubject) return;
     claimedSubject = subject;
     chrome.runtime
@@ -3842,6 +3871,12 @@
     mirrorSettings = "";
     mirrorSeenAt = 0;
     if (handle) handle.dataset.visible = "false";
+    /* Whatever was open here is about a film this frame no longer knows
+     * anything about, and on the way into fullscreen it is about to become
+     * unreachable as well. Leaving it would put a panel back on screen on the
+     * way out of fullscreen that the reader believes they closed, which is the
+     * oldest bug in this file. */
+    window.__ssoPanel?.hide?.();
     notify();
   }
 
@@ -4391,7 +4426,12 @@
   /* Forced, because entering fullscreen adds the fullscreen element to the top
    * layer after everything already in it - so what was in front is now behind,
    * and only re-entering puts it back. */
-  const onFullscreenChange = () => attachToCorrectParent({ raise: true });
+  const onFullscreenChange = () => {
+    // Before the reparent, so the frame that is about to take the controls
+    // back is already the one placing them.
+    reportFrameRole();
+    attachToCorrectParent({ raise: true });
+  };
   document.addEventListener("fullscreenchange", onFullscreenChange);
   document.addEventListener("webkitfullscreenchange", onFullscreenChange);
   loadOverlayStyles();

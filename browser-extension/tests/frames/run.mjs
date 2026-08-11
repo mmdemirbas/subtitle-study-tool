@@ -133,13 +133,19 @@ try {
   /* The pointer move is what builds anything, and it only counts once the
    * video is loadable - so keep moving until something is drawn rather than
    * moving once and hoping the file arrived first. */
+  /* Longer than the rest, because this is the cold one: the extension has to
+   * install, the frame has to pull a video file over a socket, and the roles
+   * are settled by a tick that is deliberately slow with nothing attached.
+   * Measured: this assertion failed on roughly one run in three at 8s. The
+   * failure detail carries hasVideo and isSubject, so a recurrence says
+   * whether the wait was the problem or the video was. */
   let seen =
     (await until(async () => {
       await wake();
       const all = await frames();
       const inner = all.find((f) => f.frameId !== 0 && !f.absent);
       return inner?.surfaces?.length ? all : null;
-    })) ?? (await frames());
+    }, 20000)) ?? (await frames());
   const top = seen.find((f) => f.frameId === 0);
   const player = seen.find((f) => f.frameId !== 0 && !f.absent);
 
@@ -149,7 +155,11 @@ try {
 
   t("the cue overlay is built where the video is",
     has(player, "sso-root"),
-    `player frame surfaces: [${player?.surfaces?.join(", ") ?? "-"}]`);
+    JSON.stringify({
+      surfaces: player?.surfaces ?? null,
+      hasVideo: player?.hasVideo,
+      isSubject: player?.isSubject,
+    }));
 
   /* The four below are the point of the exercise. A surface drawn inside the
    * player's frame cannot out-rank anything the top document paints over that
@@ -328,6 +338,101 @@ try {
   t("and the top frame stops being the controls when the video's frame goes",
     Boolean(wentAway),
     `top frame role: ${await roleIn(0)}`);
+
+  /* --- fullscreen, which undoes everything above ---------------------------
+   *
+   * Only the fullscreen element's subtree is painted and only it is given
+   * pointer events, so while the player's frame is fullscreen nothing the top
+   * document draws can be pressed - and the site's overlay is not on screen
+   * either, which was the whole reason to be up there. So the controls go back
+   * to the film's frame, and the site keeps the fullscreen session it asked
+   * for.
+   *
+   * Both halves are checked, because the extension used to answer "an <iframe>
+   * is fullscreen" by requesting fullscreen on that iframe's PARENT. That is a
+   * race with the site's own session, and measured over six runs of this
+   * vehicle it went the extension's way four times and the site's way twice -
+   * and on the two where the site won there was no pressable control anywhere
+   * on the page. Which is exactly the report: everything works until you go
+   * fullscreen. */
+  await page.goto(`http://127.0.0.1:${TOP_PORT}/tests/frames/top.html?playerPort=${PLAYER_PORT}&depth=2`, {
+    waitUntil: "domcontentloaded",
+  });
+  await page.waitForTimeout(400);
+  await until(async () => {
+    await wake();
+    const all = await frames();
+    return all.find((f) => f.frameId === 0)?.surfaces?.length ? all : null;
+  });
+
+  const film = page.frames().find((f) => f.url().includes("player.html"));
+  await film.evaluate(() => {
+    /* What a player's own fullscreen button does: its container, not the
+     * <video>, from inside the frame the video is in. */
+    const go = document.createElement("button");
+    go.id = "sso-test-fs";
+    go.style.cssText = "position:fixed;left:2px;top:2px;z-index:9";
+    go.addEventListener("click", () => document.getElementById("v").parentElement.requestFullscreen?.());
+    document.body.appendChild(go);
+  });
+  await film.click("#sso-test-fs");
+  await page.waitForTimeout(1200);
+  await wake();
+
+  const heldBy = await page.evaluate(() =>
+    document.fullscreenElement
+      ? `${document.fullscreenElement.tagName}${document.fullscreenElement.id ? "#" + document.fullscreenElement.id : ""}`
+      : "none",
+  );
+  t("the site keeps the fullscreen session it asked for",
+    heldBy === "IFRAME#player",
+    `the top document's fullscreen element is ${heldBy}`);
+
+  /* Every surface in every frame, so "is there a way in" is asked of the page
+   * rather than of a frame chosen in advance. */
+  const pressable = async (label) =>
+    sw.evaluate(async (want) => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const all = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+      for (const f of all) {
+        const seen = await chrome.tabs
+          .sendMessage(tab.id, { type: "sso:diagnose" }, { frameId: f.frameId })
+          .catch(() => null);
+        for (const surface of seen?.surfaces || []) {
+          const hit = (surface.targets || []).find(
+            (x) => x.label === want && x.rendered !== false && x.reachable,
+          );
+          if (hit) return { frameId: f.frameId, at: hit.at };
+        }
+      }
+      return null;
+    }, label);
+
+  const ccInFullscreen = await until(async () => {
+    await wake();
+    return pressable("Subtitle controls");
+  });
+  t("there is still a button that can be pressed once the player is fullscreen",
+    Boolean(ccInFullscreen),
+    ccInFullscreen ? `frame ${ccInFullscreen.frameId}` : "no pressable control in any frame");
+
+  /* And the end of it, as a reader performs it: press the button, press
+   * something on what opens. A hit test is not a click - the first version of
+   * this check watched for the panel's host rather than its box and reported
+   * a press as landing when nothing had happened. */
+  if (ccInFullscreen) {
+    await page.mouse.click(ccInFullscreen.at[0], ccInFullscreen.at[1]);
+    await page.waitForTimeout(900);
+    const close = await until(async () => pressable("Close"), 4000);
+    t("pressing it opens a panel there that answers its own controls",
+      Boolean(close) && close.frameId === ccInFullscreen.frameId,
+      JSON.stringify({ cc: ccInFullscreen.frameId, panel: close?.frameId ?? null }));
+  } else {
+    t("pressing it opens a panel there that answers its own controls", false, "no button to press");
+  }
+
+  await page.evaluate(() => document.exitFullscreen?.()).catch(() => {});
+  await page.waitForTimeout(600);
 
   // ------------------------------------------------------- the ordinary page --
   /* Nothing above may cost anything on a page whose video IS in the top frame,
