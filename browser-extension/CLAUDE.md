@@ -11,16 +11,16 @@ isolated `window` — never through the DOM, and never reachable from the page.
 
 | File | Lines | Owns | Exposes |
 |---|---|---|---|
-| `align.js` | 435 | matching a subtitle's timing to the playing release | — |
-| `content.js` | 3.5k | the video, the playback clock, the cue overlay, the CC handle, settings, keys, frame/fullscreen plumbing | `window.__ssoApi`, `__ssoTeardown` |
-| `panel.js` | 2.5k | the control panel window (search, attach, sync, settings) | `window.__ssoPanel`, `__ssoPanelTeardown` |
-| `study.js` | 1.9k | the study rail, word cards, the deck, the lookup popup | `window.__ssoStudy`, `__ssoStudyTeardown` |
+| `align.js` | 520 | matching a subtitle's timing to the playing release | — |
+| `content.js` | 4.0k | the video, the playback clock, the cue overlay, the CC handle, settings, keys, frame/fullscreen plumbing | `window.__ssoApi`, `__ssoTeardown` |
+| `panel.js` | 3.2k | the control panel window (search, attach, sync, settings) | `window.__ssoPanel`, `__ssoPanelTeardown` |
+| `study.js` | 2.0k | the study rail, word cards, the deck, the lookup popup | `window.__ssoStudy`, `__ssoStudyTeardown` |
 
 `content.js` is the only one that touches the `<video>`. `panel.js` and
 `study.js` reach it exclusively through `window.__ssoApi`. Keep that direction:
 nothing in content.js should depend on the panel's internals, only on the
 `__ssoPanel` / `__ssoStudy` method surface it calls (`toggle`, `reparent`,
-`rescale`, `onCue`, `claimPointerDown`, `saveTop`, `setEnabled`).
+`rescale`, `onCue`, `claimPointerDown`, `claimPointerUp`, `saveTop`, `setEnabled`).
 
 Re-injection is supported and expected: every file calls the previous
 `__ssoXTeardown` on load so a reload leaves exactly one copy running.
@@ -52,6 +52,26 @@ whole is one box in the parent's paint order. No z-index and no `showPopover()`
 inside the frame can change that.
 
 This is a known open defect — see `docs/reports/`.
+
+## The aligner refuses two different ways, and both matter
+
+`align.js` answers `apply`, `offer` or `no`. **`apply` needs a high confidence
+AND a pairing rate above chance** (`AUTO_MIN_COVERAGE`), because the binomial
+score can clear the auto threshold on a long file with a thin excess over
+chance - and when it does, the shift it carries is the wrong one. Measured on
+The Americans, where the show burns English subtitles into the picture for the
+Russian dialogue so the English `.srt` is silent through those scenes: a
+competing peak 3.4 seconds away won and was applied silently at confidence 8.3.
+
+The gate is one-directional by construction - it can only turn `apply` into
+`offer` - so it cannot touch the boundary the file is really about, the 3.11
+wrong pair against the 3.55 right one. Keep it that way. `test_align.py` runs
+the real corpus and will notice.
+
+Cross-language pairs for this series are the worst in the corpus: coverage
+0.25, confidence 3.8 to 6.1, because the two subtitlers cut the dialogue into
+different lines (1173 English cues against 915 Turkish, median gap between
+nearest starts 505ms against a 250ms tolerance). That is content, not a defect.
 
 ## The search pipeline exists twice, and the copy that runs is the quiet one
 
@@ -129,6 +149,35 @@ Each of these was a reported bug. Undoing one brings the bug back.
   576 square pixels including its centre, so the × could not be pressed at all,
   on every window at every size. A harness check hit-tests every head control
   on every window we draw.
+- **Study gets first refusal on the press AND on the release.**
+  `claimPointerDown` deliberately declines a plain tap on a word, because the
+  box has to stay draggable by its words and a tap is only a tap once it has
+  failed to move. `onCuePointerUp` therefore asks `claimPointerUp` before
+  forwarding the click to the player. Without that, tapping a word pinned it
+  *and* played or paused the film - measured - and made the "pause when a word
+  is clicked" setting impossible to switch off.
+- **Ad time belongs to the playback, not to a subtitle and not to the tab.**
+  `state.adDriftMs` is cleared by a new programme (`noticeProgrammeChange`) and
+  by nothing else. `attach()` used to clear it, which destroyed the correction
+  belonging to the track already on screen. Use `forgetAdDrift()`; there are
+  three callers and they all have to forget the stamp as well as the number.
+- **Nothing may assume the tick is 50ms of FILM.** It is 50ms of wall time, so
+  at 2x playback it is 100ms of film and at 4x 200ms. Anything testing "are we
+  near the end of this cue" has to work from the step the playhead actually
+  took (`now - was`), not from `TICK_MS`. `pauseAtLineEnd` is the worked
+  example, and the reason the harness's `currentTime` is configurable: a static
+  playhead cannot show any of this, and the case that teleports it to 2.98s
+  passed against a feature that was broken at every speed but one.
+- **`api.daemon` never rejects, and callers rely on it.** A channel failure -
+  the extension reloaded under an open tab - comes back as `{ transportError }`
+  in the same shape the worker uses for its own errors. Every call site is an
+  `await` inside something started from a click, which cannot catch. Anything
+  new that starts async work from a handler goes through `api.detached(promise,
+  "What it was")` so the failure is said rather than dropped.
+- **`saveOffset` is throttled, and `loadOffset` reads the queue first.** The
+  offset is written on every pointermove of a map drag and every 80ms of a held
+  nudge. The pending value is newer than the stored one, so re-attaching the
+  same file inside the window must not read back the older number.
 - **A drag ends on `pointerup` AND on a move with no button held.**
   `event.buttons === 0` means the press ended somewhere we never heard about;
   without that branch the gesture outlives it and the next move — or the next
@@ -159,7 +208,16 @@ Use `tests/serve.py`, not `python3 -m http.server` — see `tests/README.md`.
 
 `harness.html` loads the real `src/` files from disk, so it tests shipped code.
 Counts go in the commit message (the convention is a trailing line like
-`166 overlay, 25 fallback, 14 worker, 318 daemon`).
+`173 overlay, 25 fallback, 19 worker, 320 daemon`).
+
+**A stub that is more forgiving than the API it stands for is not a test.**
+Two of these have already hidden a whole feature that never ran:
+`getManifest` returned a `css` key the real manifest does not have, so an
+`insertCSS` that throws in Chrome looked fine and took the `executeScript`
+after it down with it; and the storage stub handed every reader the same array
+object, so three concurrent deck saves pushed into one array and all survived
+by accident. Both now reject and copy the way the real thing does. When you add
+to a stub, make it refuse what Chrome refuses.
 
 **The daemon suite is part of this extension's net**, not a separate project:
 `subtitle-daemon/tests/test_js_parity.py` runs `src/subtitles/*.js` under node
@@ -177,8 +235,26 @@ surface, and a search fix that four green suites said was complete.
 page, so anything about nested frames, cross-origin players or a parent page's
 overlay has to be checked in a real browser on a real site.
 
+## The manifest, and two things that are load-bearing in it
+
+- **`content_scripts[0]` has `js` and deliberately no `css`.** Every stylesheet
+  is fetched at runtime and adopted into a shadow root, because streaming sites
+  ship a strict `style-src`. Anything passing `scripts.css` to
+  `chrome.scripting.insertCSS` therefore passes `undefined`, and Chrome answers
+  that with *"Exactly one of 'css' and 'files' must be specified"* - which is
+  how both re-injection paths spent their whole life throwing on their first
+  line. `inject()` in `background.js` is the only caller; keep it the only one.
+- **`host_permissions` includes `<all_urls>` and needs to.**
+  `chrome.scripting.executeScript` requires a host permission for the target,
+  and the sweep over already-open tabs on install has no `activeTab` grant to
+  borrow. It is not extra access: `content_scripts` already matches
+  `<all_urls>`, so this only lets the programmatic API reach what the
+  declarative one already does.
+
 ## Reloading during development
 
 `chrome://extensions` → reload. The content scripts tear down and re-inject
-themselves, but the service worker does not re-run for already-open tabs —
-reload the tab too when touching `background.js`.
+themselves, and the service worker re-injects into every open tab on update -
+which now actually happens, so a page reload should not be needed. Reload the
+tab anyway when touching `background.js`, since the worker does not re-run for
+tabs that already have a current content script.

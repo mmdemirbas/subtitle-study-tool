@@ -33,10 +33,10 @@ video.
 | Directory | What it is | State |
 |---|---|---|
 | `browser-extension/` | MV3 extension. Overlays subtitles on any `<video>` in a page, driven by the page's own playback clock. One click to find and attach a subtitle — two languages side by side, with word lookup and a personal deck. | see its README |
-| `subtitle-daemon/` | Local HTTP service. Searches and downloads from OpenSubtitles, caches aggressively, converts to WebVTT. Backs both the extension and the viewer. | see its README |
-| `srt-viewer/` | Single-file browser app, "SRT Study Tool v7". Dual-subtitle study surface with its own virtual playback clock. | working |
-| `srt-translator/` | Python CLI. Batch-translates a whole `.srt` via OpenAI / DeepL / Google / Azure / LibreTranslate, with a SQLite dedup cache. | working |
-| `subgen/` | Local Whisper transcription — batch today, realtime for the live overlay. | migrated, see below |
+| `subtitle-daemon/` | Local HTTP service. Searches and downloads from OpenSubtitles, caches aggressively, converts to WebVTT. **Optional** - the extension does the whole pipeline itself now. What the daemon still adds is a signed-in account (10 downloads a day instead of 5), the cache on disk, the API key outside the browser, and word lookup without a permission prompt. | see its README |
+| `srt-viewer/` | Single-file browser app, "SRT Study Tool v7". Dual-subtitle study surface with its own virtual playback clock, for studying without a video. Also where the subtitle corpus the aligner is tested against lives. | see its README |
+| `srt-translator/` | Python CLI. Batch-translates a whole `.srt` via OpenAI / DeepL / Google / Azure / LibreTranslate, with a SQLite dedup cache. Made the Turkish files in `srt-viewer/subtitles/`. | working |
+| `subgen/` | Local Whisper transcription, for a film nobody has subtitled. Batch today, over a file you already have; realtime is still an idea. | see its README |
 | `scripts/` | `setup-whisper.sh` builds whisper.cpp and fetches models. | working |
 | `docs/` | Bake-off results and older design specs. | reference |
 

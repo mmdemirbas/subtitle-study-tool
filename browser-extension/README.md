@@ -20,15 +20,27 @@ Not for subtitles. The extension does the whole thing itself — search, rank,
 download, decode, annotate, cache — and only defers to the daemon when the
 daemon happens to be running.
 
-Start the daemon (`cd ../subtitle-daemon && ./run.sh`) when you want:
+Start the daemon (`cd ../subtitle-daemon && ./run.sh`) when you want one of
+these four. They are the whole of what it still buys you:
 
-- **Local transcription**, for a film with no subtitle anywhere. That needs a
-  model and audio capture, which a browser extension cannot do.
+- **Twice the downloads.** OpenSubtitles allows 5 a day anonymously and 10 on a
+  signed-in free account. The daemon holds a username and password and signs
+  in; the extension has no login at all, so on its own it is on the lower
+  number. This is the one that bites, because 5 is two dual-language films.
 - **The cache on disk**, shared with the SRT viewer and surviving a browser
-  profile reset.
-- **The API key out of the browser**, in `config.local.json` instead.
+  profile reset. The two caches converge whenever the daemon is up, so nothing
+  either side has downloaded is ever downloaded twice.
+- **The API key out of the browser**, in `config.local.json` instead of
+  extension storage.
+- **Word lookup with no permission prompt.** Definitions and translations are
+  cross-origin calls. The daemon just makes them; the extension has to ask for
+  an optional host permission on the options page first.
 
 When it is running it answers everything and the extension's own key is unused.
+
+**Local transcription is not one of them, yet.** The daemon has no Whisper in
+it - `subgen/` does that offline, against a file you already have. Live
+transcription of a playing stream is still the idea it was.
 
 ### Two caches, kept in step
 
