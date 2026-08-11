@@ -11,6 +11,7 @@
     "webNavigation"
   ],
   "host_permissions": [
+    "<all_urls>",
     "http://127.0.0.1:8791/*",
     "https://api.opensubtitles.com/*",
     "https://*.opensubtitles.com/*",

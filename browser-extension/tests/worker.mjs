@@ -9,10 +9,16 @@
  * registers are captured and then invoked, so what is under test is the same
  * dispatch the browser would perform.
  */
-const listeners = { message: [], removed: [] };
+const listeners = { message: [], removed: [], command: null };
 const store = {};
 const sentToTab = [];
+// Every scripting call the worker made, so a test can assert the injection
+// happened rather than only that nothing threw.
+const injected = [];
 let tabStatusReply = { ok: true, hasVideo: true, attached: false };
+// Whether the tab has a content script that answers. False is a tab left open
+// across an extension update, which is the case the self-heal exists for.
+let pingAlive = false;
 
 globalThis.indexedDB = {
   open: () => {
@@ -24,13 +30,27 @@ globalThis.indexedDB = {
 
 globalThis.chrome = {
   runtime: {
-    getManifest: () => ({ version: "test", content_scripts: [{ js: [], css: [] }] }),
+    /* Mirrors the real manifest, and the `css` key is deliberately absent.
+     *
+     * It used to be `[{ js: [], css: [] }]`, which handed the worker a key the
+     * real manifest does not have - every stylesheet here is fetched at runtime
+     * and adopted into a shadow root, so `content_scripts[0]` carries only
+     * `js`. With the key supplied by the stub, the insertCSS that opens both
+     * injection paths looked fine; against the real manifest it throws
+     * "Exactly one of 'css' and 'files' must be specified" and takes the
+     * executeScript after it down with it. A stub more forgiving than the API
+     * it stands for is how a whole feature ran green having never run. */
+    getManifest: () => ({
+      version: "test",
+      content_scripts: [{ js: ["src/align.js", "src/content.js"], matches: ["<all_urls>"] }],
+    }),
     getURL: (p) => `chrome-extension://test/${p}`,
     onInstalled: { addListener() {} },
     onMessage: { addListener: (fn) => listeners.message.push(fn) },
     lastError: null,
   },
-  commands: { onCommand: { addListener() {} } },
+  // Captured, not discarded: the command path is where the self-heal runs.
+  commands: { onCommand: { addListener: (fn) => { listeners.command = fn; } } },
   storage: {
     local: {
       async get(key) {
@@ -50,11 +70,41 @@ globalThis.chrome = {
     async sendMessage(tabId, message) {
       sentToTab.push({ tabId, type: message.type, message });
       if (message.type === "sso:status") return { ...tabStatusReply };
-      if (message.type === "sso:ping") return { ok: true };
+      if (message.type === "sso:ping") {
+        // What Chrome does when nothing is listening in the tab.
+        if (!pingAlive) throw new Error("Could not establish connection.");
+        return { ok: true, version: chrome.runtime.getManifest().version };
+      }
       return { ok: true };
     },
   },
-  scripting: { async insertCSS() {}, async executeScript() {} },
+  /* Rejects what the real API rejects.
+   *
+   * These were `async insertCSS() {}` and `async executeScript() {}` - stubs
+   * that accept anything. Against them, an insertCSS called with
+   * `files: undefined` looked like a working line, and the executeScript it
+   * shared a try with looked like it ran. In Chrome the first throws "Exactly
+   * one of 'css' and 'files' must be specified" and the second never happens.
+   * A stub more permissive than the API is not a test of the caller. */
+  scripting: {
+    async insertCSS(options) {
+      injected.push({ what: "css", ...options });
+      const given = (value) => value !== undefined && value !== null;
+      if (given(options.css) === given(options.files)) {
+        throw new Error("Exactly one of 'css' and 'files' must be specified.");
+      }
+      if (given(options.files) && !Array.isArray(options.files)) {
+        throw new Error("'files' must be an array.");
+      }
+    },
+    async executeScript(options) {
+      injected.push({ what: "js", ...options });
+      if (!Array.isArray(options.files) || options.files.length === 0) {
+        throw new Error("Exactly one of 'files' and 'func' must be specified.");
+      }
+      return [];
+    },
+  },
   webNavigation: { async getAllFrames() { return [{ frameId: 0 }]; } },
   action: { async setBadgeText() {}, async setBadgeBackgroundColor() {} },
 };
@@ -155,7 +205,40 @@ got = pickSecondLanguage({ results: [EN], languages: ["en"], taken: "en", used: 
 t("one configured language is not a missing pair", got.result === null && got.reason === "",
   JSON.stringify(got));
 
-// 8. The deck is one storage key, and every writer has to take its turn.
+// 8. A tab left open across an update is repaired, and the repair really runs.
+//
+// Reloading an extension does not update tabs that are already open: they keep
+// the previous content script until navigated, so a new command arrives and
+// nothing in the page knows about it. ensureInjected is the answer to that, and
+// it had never once executed - the insertCSS opening it threw on every call and
+// took the executeScript with it.
+//
+// Asserting on `injected` rather than on "nothing threw", because not throwing
+// is exactly what the broken version did.
+injected.length = 0;
+sentToTab.length = 0;
+pingAlive = false; // the tab is stale
+await listeners.command("toggle-panel");
+t(
+  "a stale tab gets the current content scripts",
+  injected.some((call) => call.what === "js" && call.files?.length),
+  JSON.stringify(injected.map((c) => c.what)),
+);
+t(
+  "and the command is delivered afterwards",
+  sentToTab.some((m) => m.type === "sso:togglePanel"),
+  sentToTab.map((m) => m.type).join(","),
+);
+
+// A tab already running the current version is left alone.
+injected.length = 0;
+pingAlive = true;
+await listeners.command("toggle-panel");
+t("a tab already running the current version is not re-injected",
+  injected.length === 0, JSON.stringify(injected.map((c) => c.what)));
+pingAlive = false;
+
+// 9. The deck is one storage key, and every writer has to take its turn.
 //
 // save() is read-modify-write and neither the read nor the write is atomic, so
 // two saves started together each read the deck before either writes it and the

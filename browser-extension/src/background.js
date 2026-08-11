@@ -49,27 +49,57 @@ const TOP_FRAME = 0;
  * re-injection is harmless. */
 chrome.runtime.onInstalled.addListener(async () => {
   const injectable = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
-  const scripts = chrome.runtime.getManifest().content_scripts?.[0];
-  if (!scripts) return;
-
-  await Promise.all(
-    injectable.map(async (tab) => {
-      if (!tab.id) return;
-      try {
-        await chrome.scripting.insertCSS({
-          target: { tabId: tab.id, allFrames: true },
-          files: scripts.css,
-        });
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id, allFrames: true },
-          files: scripts.js,
-        });
-      } catch {
-        // Restricted pages (chrome://, the web store) refuse injection.
-      }
-    }),
-  );
+  await Promise.all(injectable.map((tab) => inject(tab.id)));
 });
+
+/* Put the current content scripts into one tab, every frame of it.
+ *
+ * One function with two callers, and both of them used to open with an
+ * insertCSS whose `files` came from `content_scripts[0].css` - a key this
+ * manifest does not have, because every stylesheet here is fetched at runtime
+ * and adopted into a shadow root instead (see the notes in content.js on
+ * style-src). So `files` was undefined, and Chrome answers that with
+ *
+ *   Exactly one of 'css' and 'files' must be specified.
+ *
+ * Both calls sat in one try, so the executeScript below it - the line that
+ * does the actual work - was never reached. Neither re-injection had ever run.
+ *
+ * tests/worker.mjs could not see it: its stub manifest returned
+ * `content_scripts: [{ js: [], css: [] }]`, supplying the key the real one
+ * lacks, and its scripting stub accepted arguments the API rejects. The stub
+ * now mirrors the real manifest.
+ */
+async function inject(tabId) {
+  if (!tabId) return false;
+  const scripts = chrome.runtime.getManifest().content_scripts?.[0];
+  if (!scripts?.js?.length) return false;
+
+  // Only if there is any, and never in the same try as the scripts: a
+  // stylesheet that fails to insert must not cost the injection.
+  if (scripts.css?.length) {
+    try {
+      await chrome.scripting.insertCSS({
+        target: { tabId, allFrames: true },
+        files: scripts.css,
+      });
+    } catch {
+      // Styling is not what makes the extension work.
+    }
+  }
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: scripts.js,
+    });
+    return true;
+  } catch {
+    // A restricted page (chrome://, the web store), or a tab this extension
+    // has no host permission for.
+    return false;
+  }
+}
 
 // --- sites that put subtitles on by themselves ------------------------------
 
@@ -569,23 +599,7 @@ async function ensureInjected(tabId) {
   } catch {
     // No content script at all, or it is old enough to not know about ping.
   }
-
-  const scripts = chrome.runtime.getManifest().content_scripts?.[0];
-  if (!scripts) return false;
-
-  try {
-    await chrome.scripting.insertCSS({
-      target: { tabId, allFrames: true },
-      files: scripts.css,
-    });
-    await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
-      files: scripts.js,
-    });
-    return true;
-  } catch {
-    return false; // restricted page
-  }
+  return inject(tabId);
 }
 
 async function send(tabId, frameId, message) {
