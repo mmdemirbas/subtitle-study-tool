@@ -1295,16 +1295,17 @@
      * Clicking anywhere on the card that is not a control selects it. */
     const root = document.createElement("div");
     root.className = "sso-track";
-    root.tabIndex = 0;
-    root.setAttribute("role", "button");
+    /* A group, not a button.
+     *
+     * It carried role="button" with tabindex 0, and twelve real buttons inside
+     * it - a control that contains controls, which is not a thing, and which
+     * leaves a screen reader announcing "button" over a region whose contents
+     * it then reads out one interactive element at a time. Selecting is still a
+     * click anywhere on the card for a mouse; the keyboard reaches it through
+     * the name, which is a real button and says whether it is pressed. */
+    root.setAttribute("role", "group");
     root.addEventListener("click", (event) => {
       if (event.target.closest("button, input, label, .sso-nudge")) return;
-      api.setKeyTrack(slot);
-    });
-    root.addEventListener("keydown", (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      if (event.target !== root) return;
-      event.preventDefault();
       api.setKeyTrack(slot);
     });
 
@@ -1317,8 +1318,20 @@
      * "1. Battlestar.Galactic..." and "2. Battlestar.Galactica..." - two cards
      * with nothing to tell them apart, on the one line whose job is telling
      * them apart. The last token is held out of the truncation. */
-    const label = document.createElement("span");
+    /* The name IS the selection.
+     *
+     * It has to be reachable and operable from the keyboard, and the card
+     * around it cannot be the control - see the note on the group above. A
+     * button here gives Enter and Space for free, carries aria-pressed to say
+     * which subtitle the keys act on, and is the element a reader would point
+     * at if asked which one is selected. */
+    const label = document.createElement("button");
+    label.type = "button";
     label.className = "sso-track__label";
+    label.addEventListener("click", (event) => {
+      event.stopPropagation();
+      api.setKeyTrack(slot);
+    });
     const labelHead = document.createElement("span");
     labelHead.className = "sso-track__name";
     const labelTail = document.createElement("span");
@@ -2960,8 +2973,13 @@
        * would be answering a question nobody asked. */
       const study = window.__ssoStudy?.settings?.();
       const learning = Boolean(study?.studySlots?.includes(slot));
-      card.root.dataset.selected =
-        status.trackCount > 1 && status.keyTrack === slot ? "true" : "false";
+      const selected = status.trackCount > 1 && status.keyTrack === slot;
+      card.root.dataset.selected = selected ? "true" : "false";
+      card.root.setAttribute("aria-label", `Subtitle ${slot + 1}${track.label ? ` - ${track.label}` : ""}`);
+      card.label.setAttribute("aria-pressed", selected ? "true" : "false");
+      // With one subtitle there is nothing to choose between, so the name is
+      // not offering a choice either.
+      card.label.disabled = status.trackCount < 2;
       card.root.title =
         status.trackCount > 1 && status.keyTrack !== slot
           ? "Click to point the keys and the study rail at this subtitle"

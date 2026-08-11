@@ -401,16 +401,32 @@ button.sso-quick__study[data-on="true"] {
  * "1. Battlestar.Galactic..." - 397px of name in 155px of card, and nothing on
  * the line whose job is telling them apart. The head shrinks and the tail does
  * not, which is the whole mechanism. */
+/* It is a <button> now, so it needs the reset: it is the selection control,
+ * and the whole card cannot be one while it contains twelve of them. Looks
+ * exactly as it did - the button is the semantics, not the appearance. */
 .sso-track__label {
   display: flex;
   flex: 1;
   min-width: 0;
   align-items: baseline;
+  padding: 0;
+  font-family: inherit;
   font-size: var(--sso-t-lead);
   font-weight: 650;
   letter-spacing: -0.01em;
+  text-align: left;
   color: var(--sso-ink);
   white-space: nowrap;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+
+/* One subtitle is not a choice, so the name stops offering one - without
+ * dimming, because it is still the name and still has to be read. */
+.sso-track__label:disabled {
+  color: var(--sso-ink);
+  cursor: default;
 }
 
 .sso-track__name {

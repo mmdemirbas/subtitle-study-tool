@@ -794,7 +794,7 @@
   }
 
   /** A short, readable path to an element, for pasting into a bug report. */
-  function describeNode(node) {
+  function nodePath(node) {
     const parts = [];
     let cursor = node;
     for (let depth = 0; cursor && depth < 4; depth++, cursor = cursor.parentElement) {
@@ -860,7 +860,7 @@
       found.push({
         ...match,
         text: text.slice(0, 60),
-        path: describeNode(node),
+        path: nodePath(node),
         selected: selected.length > 0,
         selectedBecause: selected,
         visible: node.getBoundingClientRect().width > 0,
@@ -2075,6 +2075,14 @@
     if (overlaySheet) toastLayer.shadow.adoptedStyleSheets = [overlaySheet];
     toast = document.createElement("div");
     toast.className = "sso-toast";
+    /* Announced, because this is the extension's only voice: "Subtitle 1 on -
+     * 1183 lines", "Ad break over - subtitles shifted 90s", "daily download
+     * limit reached", and every Undo it offers. None of it reached a screen
+     * reader. `polite` rather than `assertive`: it is never urgent enough to
+     * interrupt what is being read, and one of these can appear while a film
+     * plays without anybody having asked for it. */
+    toast.setAttribute("role", "status");
+    toast.setAttribute("aria-live", "polite");
     toastLayer.shadow.append(toast);
     return toast;
   }
@@ -2755,6 +2763,14 @@
   async function loadOffset(fileId) {
     const nothing = { offsetMs: 0, rate: 1, known: false };
     if (fileId == null) return nothing;
+    /* A correction still waiting to be written is newer than the one on disk.
+     *
+     * saveOffset is throttled, so re-attaching the same file inside that window
+     * - which is what replacing a subtitle with another release of itself does
+     * - read back the value from before the reader's last nudge and quietly
+     * undid it. The queue is the truth until it drains. */
+    const pending = pendingOffsets.get(fileId);
+    if (pending) return { ...pending, known: true };
     try {
       const stored = await chrome.storage.local.get(offsetKey(fileId));
       const saved = stored[offsetKey(fileId)];
@@ -2770,11 +2786,42 @@
     }
   }
 
+  /* How long a correction has to settle before it is written down.
+   *
+   * setOffset is on two gestures that fire at pointer rate: dragging the
+   * timeline strip on a card, which calls it on every pointermove, and holding
+   * a nudge button, which calls it every 80ms. Measured: 60 writes for a
+   * 60-sample drag and 24 for a two-second hold, each one an IPC to the browser
+   * process and a disk write, for a number that was superseded 16ms later.
+   *
+   * The same reasoning already sat eleven lines below in rememberTimingSoon -
+   * "what is worth remembering is where the reader stopped, not every step on
+   * the way" - and had been applied to the release memory and not to the offset
+   * it is derived from.
+   *
+   * A throttle rather than a plain debounce, so a long drag still gets written
+   * down every so often instead of only at the end. */
+  const SAVE_OFFSET_MS = 400;
+  const pendingOffsets = new Map();
+  let offsetWriteTimer = null;
+
   function saveOffset(track) {
     if (track.fileId == null) return;
-    chrome.storage.local
-      .set({ [offsetKey(track.fileId)]: { offsetMs: track.offsetMs, rate: track.rate } })
-      .catch(() => {});
+    // Per file, so nudging one subtitle does not discard the other's write.
+    pendingOffsets.set(track.fileId, { offsetMs: track.offsetMs, rate: track.rate });
+    if (offsetWriteTimer !== null) return;
+    offsetWriteTimer = setTimeout(flushOffsets, SAVE_OFFSET_MS);
+  }
+
+  /** Write whatever is waiting. Also called on the way out - see the teardown. */
+  function flushOffsets() {
+    clearTimeout(offsetWriteTimer);
+    offsetWriteTimer = null;
+    if (pendingOffsets.size === 0) return;
+    const patch = {};
+    for (const [fileId, timing] of pendingOffsets) patch[offsetKey(fileId)] = timing;
+    pendingOffsets.clear();
+    chrome.storage.local.set(patch).catch(() => {});
   }
 
   /* The correction, carried to the next episode.
@@ -2975,7 +3022,14 @@
     if (!Number.isFinite(fileMs)) return;
 
     track.corrections.push({ fileMs, offsetMs: track.offsetMs });
-    if (track.corrections.length > DRIFT_MAX_NOTES) track.corrections.shift();
+    /* Past the cap, drop the SECOND oldest rather than the first.
+     *
+     * The estimate is a straight line through the earliest correction and the
+     * latest, so shift() threw away the one point that gives the line its span
+     * - the opposite of what the note beside DRIFT_MAX_NOTES says it is for.
+     * After eight nudges the span collapsed toward the recent few and a real
+     * drift stopped clearing the twenty-minute bar a rate needs. */
+    if (track.corrections.length > DRIFT_MAX_NOTES) track.corrections.splice(1, 1);
     offerDrift(track, slot, durationMs);
   }
 
@@ -3884,7 +3938,14 @@
 
   /* Everything this injection added, undone. Called by the next injection so a
    * version upgrade leaves exactly one copy running. */
+  /* A correction still waiting to be written is lost if the tab goes first,
+   * and the reader would have to make it again on the next episode. */
+  const onPageHide = () => flushOffsets();
+  window.addEventListener("pagehide", onPageHide);
+
   window.__ssoTeardown = () => {
+    flushOffsets();
+    window.removeEventListener("pagehide", onPageHide);
     clearInterval(ticker);
     ticker = null;
     tickerMs = 0;

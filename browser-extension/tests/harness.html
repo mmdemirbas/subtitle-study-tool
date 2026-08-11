@@ -4005,9 +4005,16 @@
               `dragged 100,70 and it went ${Math.round(moved.left - start.left)},` +
               `${Math.round(moved.top - start.top)}`);
 
-          // And a press on its own words is not a grab.
+          /* And a press on its own words is not a grab.
+           *
+           * Text inside a control counts as a specimen here, which it did not
+           * before: the panel's root screen is very nearly all controls now
+           * that the subtitle's name is the selection button, and there was no
+           * wordy element left outside one to press. Widening the search does
+           * not weaken the assertion - it is still "the window did not move" -
+           * and a press on a button's label must not drag the window either. */
           const wordy = [...shadow.querySelectorAll("*")].find((n) =>
-            !n.closest(off) &&
+            !n.closest(".sso-win__head, .sso-grip") &&
             [...n.childNodes].some((c) => c.nodeType === 3 && c.textContent.trim()) &&
             n.getBoundingClientRect().width > 10);
           if (!wordy) throw new Error("the window says nothing at all");

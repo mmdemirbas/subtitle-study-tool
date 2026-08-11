@@ -137,7 +137,6 @@
   let clearEl = null;
   let foldEl = null;
   let gearEl = null;
-  let titleEl = null;
   let settingsEl = null;
   let setEls = null;
   let keyEls = null;
@@ -423,7 +422,14 @@
       if (isRare && !known) rare.push({ word, rank });
     }
 
-    if (!settings.auto || rare.length === 0) return;
+    /* Nothing to build when the rail is not on screen.
+     *
+     * The hover path carries this guard and says why - "adding to a list nobody
+     * can see would only spend lookups" - and the automatic path, which is the
+     * one that runs on every line of the film, did not. Measured with the rail
+     * put away: cards built into a host at display:none and 0px wide, and a
+     * dictionary lookup spent on a word nobody could read. */
+    if (!settings.auto || !settings.showRail || rare.length === 0) return;
     /* Rarest first, then capped. When a line has more unfamiliar words than
      * fit, the rarest are the ones a reader is least likely to have got from
      * context. */
@@ -433,6 +439,20 @@
     }
   }
 
+  /* Languages the worker has no frequency table for.
+   *
+   * rank() answers those with nothing at all, and "answered, and this word is
+   * not in it" has to stay distinguishable from "no opinion" - so there is no
+   * per-word value to cache and the cache could never fill. Measured over eight
+   * cue changes with an untabled language: nine round trips to the worker, the
+   * same four words asked twice inside the run, and nothing ever marked. It
+   * would have gone on for the whole film.
+   *
+   * A language rather than a word, because the answer is a property of the
+   * language. Not persisted: a table can arrive with the next version, and one
+   * probe per session is nothing. */
+  const untabled = new Set();
+
   async function ranksFor(words, language) {
     const known = new Map();
     const missing = [];
@@ -441,10 +461,18 @@
       if (rankCache.has(key)) known.set(word, rankCache.get(key));
       else missing.push(word);
     }
-    if (missing.length === 0) return known;
+    if (missing.length === 0 || untabled.has(language)) return known;
 
     const response = await api.daemon("rank", { words: missing, language });
     const ranks = response?.ranks || {};
+    /* Nothing back for a request that named words is the table being absent -
+     * a language that has one always answers for every word it was asked
+     * about, with null for the ones it does not hold. */
+    if (Object.keys(ranks).length === 0) {
+      untabled.add(language);
+      emptyNote();
+      return known;
+    }
     for (const word of missing) {
       // A language with no table answers with nothing at all, which has to stay
       // distinguishable from "answered, and this word is not in it".
@@ -559,6 +587,7 @@
    *
    * Consumed on the way out, so one press can only ever be claimed once. */
   function claimPointerUp(slot, event) {
+    if (!settings.enabled || !isStudied(slot)) return false;
     const tap = pendingTap;
     if (!tap || tap.pointerId !== event.pointerId) return false;
     pendingTap = null;
@@ -883,7 +912,6 @@
     gearEl.title = "How study works";
     gearEl.addEventListener("click", () => api.detached(openRailSettings(), "Study settings"));
 
-    titleEl = title;
     head.append(title, countEl, clearEl, gearEl, foldEl, close);
 
     listEl = document.createElement("div");
@@ -1150,6 +1178,20 @@
     if (!noteEl) return;
     const empty = cards.length === 0;
     noteEl.hidden = !empty;
+    /* Honest about the one case where nothing will ever appear.
+     *
+     * Rarity marking ships a table per language, and for anything else the
+     * answer is "no opinion" - which is right, and on screen it is a rail
+     * promising that rare words will turn up, staying empty for two hours,
+     * with nothing anywhere saying why. Hovering still answers, so the
+     * sentence says what does work rather than only what does not. */
+    const language = studyLanguage();
+    if (untabled.has(language)) {
+      noteEl.textContent =
+        `No word-frequency list for ${language.toUpperCase()}, so nothing is marked ` +
+        `automatically. Hover a word to look it up; shift-drag for a phrase.`;
+      return;
+    }
     noteEl.textContent = settings.auto
       ? "Rare words appear here as they are said. Hover any word to look it up; shift-drag for a phrase."
       : "Hover a word in the subtitle to look it up. Shift-drag across words for a phrase.";
@@ -1588,7 +1630,7 @@
         translation: card.lookup?.translation || "",
         sentence: card.sentence,
         paired: card.paired || [],
-        title: filmTitle(),
+        title: filmTitle(card.slot),
         fileId: info.fileId,
         timeMs: card.timeMs,
         url: location.href,
@@ -1621,8 +1663,14 @@
     return true;
   }
 
-  function filmTitle() {
-    const info = api.trackInfo(studiedSlots()[0] ?? 0);
+  /* The film this word came out of.
+   *
+   * `slot` matters for the same reason saveCard reads card.slot for the fileId
+   * - with two subtitles being studied, "the first studied one" names the wrong
+   * film half the time. That fix reached the id and not the title beside it, so
+   * a card saved from the second subtitle carried the first one's label. */
+  function filmTitle(slot) {
+    const info = api.trackInfo(Number.isInteger(slot) ? slot : studiedSlots()[0] ?? 0);
     if (info.label) return info.label;
     return api.pageInfo().candidates[0]?.text || document.title;
   }
