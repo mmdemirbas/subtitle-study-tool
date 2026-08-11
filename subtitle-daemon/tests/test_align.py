@@ -180,6 +180,93 @@ def test_the_gap_is_still_a_gap(verdicts: dict[str, dict]) -> None:
     )
 
 
+def test_every_silent_application_pairs_better_than_chance(
+    verdicts: dict[str, dict],
+) -> None:
+    """A shift is only applied without asking when the files really agree.
+
+    Confidence alone cannot carry this. It answers "how surprised should I be
+    that this many cues line up", and on a thousand-cue file a thin excess over
+    chance, spread across the whole film, clears the auto threshold on sheer
+    length. Coverage is the direct measure of the excess, and for these cue
+    densities chance is about 0.21.
+
+    Guarding the constant here rather than only in align.js, because the number
+    is a claim about this corpus and this is where the corpus lives.
+    """
+    thin = {
+        name: (answer["confidence"], answer["coverage"])
+        for name, answer in verdicts.items()
+        if answer.get("verdict") == "apply" and answer["coverage"] < 0.28
+    }
+    assert not thin, f"applied a shift that paired barely better than chance: {thin}"
+
+
+def _blank_scenes(times: list[int], scenes: int, share: float) -> list[int]:
+    """Remove contiguous stretches, the way a burned-in scene removes them.
+
+    Not random thinning: what the reported case has is whole scenes present in
+    one language and absent from the other, which costs the true peak a block
+    of its votes rather than a scattering of them.
+    """
+    span = times[-1] - times[0]
+    width = (span * share) / scenes
+    holes = [
+        (times[0] + span * ((n + 0.5) / scenes) - width / 2,
+         times[0] + span * ((n + 0.5) / scenes) + width / 2)
+        for n in range(scenes)
+    ]
+    return [t for t in times if not any(lo <= t <= hi for lo, hi in holes)]
+
+
+def test_a_language_that_subtitles_more_scenes_does_not_cause_a_wrong_shift() -> None:
+    """The Americans, season two, and the reason this test exists.
+
+    The show burns English subtitles into the picture for the Russian dialogue,
+    so the English .srt is SILENT through those scenes while the Turkish .srt
+    keeps translating them. Both files are the same episode; one of them simply
+    has nothing to say for minutes at a time.
+
+    Blanking those scenes out of the English file takes votes away from the
+    true offset, and a competing peak 3.4 seconds away wins. Before the
+    coverage gate this came back verdict "apply" at confidence 8.33 to 9.87 -
+    so the subtitle was silently moved three and a half seconds and announced
+    as lined up, which reads as the file being wrong rather than the alignment.
+
+    The assertion is not "it must find the right answer". With a quarter of the
+    dialogue missing it may honestly fail. It is that it must never APPLY a
+    wrong one on its own.
+    """
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    english = CACHE / "12574865.srt"
+    turkish = CACHE / "3637542.srt"
+    if not english.exists() or not turkish.exists():
+        pytest.skip("The Americans S01E01 is not in the cache")
+
+    a, b = _starts(english), _starts(turkish)
+    truth = _run([("truth", a, b)])["truth"]
+    assert truth["ok"], "the untouched pair should still be recognised"
+
+    cases = [
+        (f"{int(share * 100)}pc-over-{scenes}", _blank_scenes(a, scenes, share), b)
+        for share in (0.10, 0.15, 0.20, 0.25, 0.30)
+        for scenes in (3, 5, 8)
+    ]
+    wrong = {}
+    for name, answer in _run(cases).items():
+        if answer.get("verdict") != "apply":
+            continue
+        off = abs(answer["shiftMs"] - truth["shiftMs"])
+        if off > 1000:
+            wrong[name] = (off, answer["confidence"], answer["coverage"])
+
+    assert not wrong, (
+        "applied a shift far from the truth for a pair whose languages cover "
+        f"different scenes: {wrong} (the truth is {truth['shiftMs']}ms)"
+    )
+
+
 def test_a_different_cut_is_declined(verdicts: dict[str, dict]) -> None:
     """Same episode, but re-cut - and no single offset can fix it.
 

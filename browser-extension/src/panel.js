@@ -2062,7 +2062,18 @@
     if (answer.verdict === "apply") {
       lined(was);
     } else if (answer.verdict === "offer") {
-      sayOnCard(slot, `These look ${api.describeOffset(answer.offsetMs)} apart.`, {
+      /* Two reasons a subtitle is only offered, and they want different words.
+       *
+       * "thin" means the arithmetic was confident and the two files still only
+       * agree about a fifth of their lines - which is what one language
+       * subtitling scenes the other leaves to burned-in captions looks like
+       * from in here, and is exactly where the number comes back wrong. Naming
+       * it stops the reader reading "not sure" as "wrong film" and going to
+       * download another release, which does not help. */
+      const why = answer.reason === "thin"
+        ? " The two files only agree about a fifth of their lines, so check it before taking it."
+        : "";
+      sayOnCard(slot, `These look ${api.describeOffset(answer.offsetMs)} apart.${why}`, {
         action: {
           label: "Use it",
           onClick: () => {

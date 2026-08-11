@@ -142,6 +142,38 @@
   const AUTO = 8;
   const OVERWHELMING = 60;
 
+  /* Confidence is not enough to act without asking. How much of the two files
+   * actually paired has to be above chance as well.
+   *
+   * The binomial score answers "how surprised should I be that this many cues
+   * line up", and on a thousand-cue file a thin excess over chance spread
+   * across the whole film can clear AUTO on sheer n. Coverage is the direct
+   * measure of that excess: matched, over the cues there were to match.
+   *
+   * Measured over this repository's corpus, and the two groups do not overlap:
+   *
+   *   0.322 0.328 0.408 0.662 0.730 1.000 1.000   every genuine "apply"
+   *   0.206 0.216 0.217 0.218                     every wrong shift applied
+   *
+   * The second row is the case reported from The Americans, where the English
+   * subtitle is silent through the Russian scenes - the show burns those in -
+   * while the Turkish keeps translating them. Blanking those scenes out of the
+   * English file costs the true peak its votes, a competing peak 3.4 SECONDS
+   * away wins, and it came back verdict "apply" at confidence 8.33 to 9.87.
+   * A subtitle silently moved three and a half seconds is the failure this
+   * whole file exists to prevent.
+   *
+   * The second row is not a coincidence: p0 for these densities is about 0.17,
+   * so 0.21 IS the chance pairing rate. A shift that pairs no better than
+   * chance must not be applied on its own, whatever the arithmetic says about
+   * how many cues that is.
+   *
+   * 0.28 sits between the two, with headroom on both sides. The guard is
+   * deliberately one-directional: it can only ever turn "apply" into "offer",
+   * never "no" into "yes", so the boundary this file is really about - the
+   * 3.11 wrong pair against the 3.55 right one - is untouched by it. */
+  const AUTO_MIN_COVERAGE = 0.28;
+
   // --- the maths ---------------------------------------------------------------
 
   /* log of n choose k, via lgamma. Binomial tails at n in the thousands
@@ -420,11 +452,20 @@
     }
 
     const ok = Boolean(best) && best.confidence >= ACCEPT;
+    /* Both gates, not either. See AUTO_MIN_COVERAGE for the measurement: a
+     * pairing rate at chance can still clear AUTO on a long file, and when it
+     * does the shift it carries is the wrong one. */
+    const sure = ok && best.confidence >= AUTO && best.coverage >= AUTO_MIN_COVERAGE;
     return {
       ok,
       // How much this is worth acting on by itself. See ACCEPT and AUTO.
-      verdict: !ok ? "no" : best.confidence >= AUTO ? "apply" : "offer",
-      reason: ok ? "matched" : "low-confidence",
+      verdict: !ok ? "no" : sure ? "apply" : "offer",
+      /* Why it is only an offer, for the surface that has to say so. "thin"
+       * means the two files agree about too few of their lines to move one
+       * without being asked - which is what two subtitlers cutting the same
+       * speech into different lines looks like from in here, and is a
+       * different sentence from "not confident". */
+      reason: ok ? (sure ? "matched" : best.confidence >= AUTO ? "thin" : "matched") : "low-confidence",
       rate: best.rate,
       shiftMs: best.shiftMs,
       confidence: Number(best.confidence.toFixed(2)),
