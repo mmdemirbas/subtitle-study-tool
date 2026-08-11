@@ -1410,14 +1410,29 @@
   // pointer is captured, so the release belongs to that box whatever it is over.
   function onCuePointerUp(event) {
     if (!drag || event.pointerId !== drag.pointerId) return;
-    const { moved, startX, startY } = drag;
+    const { moved, startX, startY, slot } = drag;
     const view = views[drag.slot];
     drag = null;
     view.cueBox.releasePointerCapture?.(event.pointerId);
     view.root.dataset.dragging = "false";
     view.root.dataset.sizing = "false";
 
-    if (!moved) forwardClickBeneath(startX, startY, event);
+    if (moved) return;
+    /* Study gets first refusal on the RELEASE as well as on the press.
+     *
+     * A press on a word cannot be judged when it arrives - it is a tap only if
+     * it does not move, and until then the box still has to be draggable by
+     * its words, which is most of the box. So claimPointerDown deliberately
+     * declines and watches the pointer to its end. Nothing then told this that
+     * the press had been consumed, so the tap pinned the word AND was
+     * forwarded to the player underneath: measured, one card in the rail and
+     * one click delivered, and the film went from playing to paused. Study's
+     * own contract says a click on a word pins it and a click anywhere else
+     * pauses, and it made the "pause when a word is clicked" setting
+     * meaningless - with it off the film paused anyway, and if it was already
+     * paused, looking at a word started it. */
+    if (window.__ssoStudy?.claimPointerUp?.(slot, event)) return;
+    forwardClickBeneath(startX, startY, event);
   }
 
   /* Both boxes have to be transparent to the hit test, not just the one that

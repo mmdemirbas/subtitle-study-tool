@@ -3773,6 +3773,53 @@
         }
       });
 
+      /* ...and a tap on a WORD must not, which is the other half of the same
+       * rule and was doing both.
+       *
+       * A press on a word cannot be judged when it arrives - it is a tap only
+       * if it does not move, and until then the box has to stay draggable by
+       * its words. So claimPointerDown declines and watches the pointer to its
+       * end, and nothing told content.js the press had been consumed: the word
+       * was pinned AND the click was handed to the player, so the film played
+       * or paused because a word was looked at. It also made "pause when a word
+       * is clicked" meaningless - with it off the film paused anyway, and if it
+       * was already paused, looking at a word started it. */
+      check("tapping a word does not also play or pause the film", async () => {
+        await showWordyCue();
+        await sleep(200);
+        const word = wordEl("frankly");
+        if (!word) throw new Error("no word to tap");
+
+        let reached = 0;
+        const player = document.getElementById("player");
+        const count = () => reached++;
+        player.addEventListener("click", count);
+
+        const cue = cueOf(0);
+        cue.setPointerCapture = () => {};
+        cue.releasePointerCapture = () => {};
+        const box = word.getBoundingClientRect();
+        const x = box.left + box.width / 2;
+        const y = box.top + box.height / 2;
+        const ev = (type, buttons) => new PointerEvent(type, {
+          pointerId: 11, clientX: x, clientY: y, button: 0, buttons,
+          bubbles: true, composed: true,
+        });
+        word.dispatchEvent(ev("pointerdown", 1));
+        word.dispatchEvent(ev("pointerup", 0));
+        await sleep(250);
+        player.removeEventListener("click", count);
+
+        if (reached !== 0)
+          throw new Error(`the tap reached the player ${reached} time(s)`);
+        const pinned = [...railShadow().querySelectorAll(".sso-card")].find(
+          (node) => node.querySelector(".sso-card__term")?.textContent === "frankly",
+        );
+        if (!pinned) throw new Error("the word was not pinned, so nothing was claimed");
+        if (pinned.dataset.pinned !== "true")
+          throw new Error("the card is in the rail but was not pinned by the tap");
+      });
+
       check("dragging the subtitle still moves it with study mode on", async () => {
         const before = window.__ssoApi.status().settings.tracks[0].posY;
         const box = cueOf(0).getBoundingClientRect();

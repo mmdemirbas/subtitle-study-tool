@@ -499,9 +499,17 @@
     return false;
   }
 
+  /* The press being watched for a tap, so its release can be claimed.
+   *
+   * content.js offers every release here before handing the click to the
+   * player underneath. Without that, a tap on a word did both: the word was
+   * pinned and the film played or paused. See claimPointerUp. */
+  let pendingTap = null;
+
   function watchTap(word, down) {
     const start = { x: down.clientX, y: down.clientY };
     let moved = false;
+    pendingTap = { pointerId: down.pointerId, moved: false };
 
     const detach = () => {
       document.removeEventListener("pointermove", onMove, true);
@@ -518,12 +526,20 @@
        * completed tap. */
       if (event.buttons === 0) {
         detach();
+        // Not a completed tap, so it is not this file's to claim either - the
+        // film should still get the click if content.js decides to forward one.
+        pendingTap = null;
         return;
       }
       if (Math.abs(event.clientX - start.x) > 4 || Math.abs(event.clientY - start.y) > 4) {
         moved = true;
+        if (pendingTap) pendingTap.moved = true;
       }
     };
+    /* Left for claimPointerUp to consume rather than cleared here. This runs
+     * on the document in the capture phase, which is BEFORE the cue box's own
+     * pointerup handler - so clearing it now would leave content.js nothing to
+     * ask by the time it asks. */
     const onUp = () => {
       detach();
       if (!moved) pinWord(word);
@@ -532,6 +548,21 @@
     document.addEventListener("pointermove", onMove, true);
     document.addEventListener("pointerup", onUp, true);
     document.addEventListener("pointercancel", onUp, true);
+  }
+
+  /* Was that release a tap on a word?
+   *
+   * Answered for content.js, which asks before forwarding the click to the
+   * player. True means this file has dealt with it: the word is pinned, and
+   * the film must not also play or pause because a word was looked at. A press
+   * that moved is a drag of the subtitle box and its click was never ours.
+   *
+   * Consumed on the way out, so one press can only ever be claimed once. */
+  function claimPointerUp(slot, event) {
+    const tap = pendingTap;
+    if (!tap || tap.pointerId !== event.pointerId) return false;
+    pendingTap = null;
+    return !tap.moved;
   }
 
   /* The rank the word was marked with, as the card wants it: a number, null for
@@ -1914,6 +1945,7 @@
   window.__ssoStudy = {
     onCue,
     claimPointerDown,
+    claimPointerUp,
     reparent,
     rescale,
     toggle,
