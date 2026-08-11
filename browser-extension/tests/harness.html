@@ -457,6 +457,53 @@
         if (text) throw new Error("cue still rendered during the ad: " + text);
       });
 
+      /* An advert interrupts the video, not one of the subtitle files - so the
+       * measured time has to survive a second subtitle arriving.
+       *
+       * attach() used to clear it, which quietly broke the subtitle that was
+       * already correct. Measured before the fix: 90000ms of ad time held, then
+       * 0 the moment a second subtitle landed in the empty slot, leaving the
+       * first one ninety seconds out with nothing on screen saying why. On a
+       * stream with server-side ads and a dual-language setup that is the
+       * ordinary path - attach one, watch, add the other. */
+      check("ad time survives a second subtitle being attached", async () => {
+        window.__ssoApi.detach();
+        window.__ssoApi.clearAdDrift();
+        await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
+        await adBreak(90);
+        const measured = window.__ssoApi.status().adDriftMs;
+        if (Math.abs(measured - 90000) > 1500)
+          throw new Error(`the ad break was not measured: ${measured}ms`);
+
+        await window.__ssoApi.attach({ cues: CUES, label: "TR", fileId: 8802, language: "tr", slot: 1 });
+        await sleep(150);
+        const after = window.__ssoApi.status().adDriftMs;
+        if (after !== measured)
+          throw new Error(`attaching a second subtitle changed the ad time: ${measured} -> ${after}`);
+      });
+
+      /* ...and must NOT survive the next episode, which is a different
+       * playback. The stamp is the same settled programme mark the worker is
+       * told about, so a title flicker does not throw the correction away. */
+      check("ad time does not carry into the next programme", async () => {
+        const was = document.title;
+        try {
+          if (!window.__ssoApi.status().adDriftMs)
+            throw new Error("the previous case should have left ad time measured");
+          document.title = "The Americans S02E03";
+          // Longer than PROGRAMME_SETTLE_MS, so the mark is committed.
+          await sleep(1900);
+          const after = window.__ssoApi.status().adDriftMs;
+          if (after !== 0)
+            throw new Error(`the last programme's ad time was kept: ${after}ms`);
+        } finally {
+          document.title = was;
+          await sleep(1900);
+          window.__ssoApi.detach();
+          await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 1, language: "en", slot: 0 });
+        }
+      });
+
       check("a marker that flickers is not counted as an ad", async () => {
         window.__ssoApi.clearAdDrift();
         const slot = document.getElementById("ad-slot");

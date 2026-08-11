@@ -2435,6 +2435,14 @@
    * that the subtitles are up before the recap ends. */
   const PROGRAMME_SETTLE_MS = 1500;
   let programme = { mark: "", since: 0, told: "" };
+  /* Which programme the accumulated ad time was measured against.
+   *
+   * The correction is stream seconds that were not film, so it is true of one
+   * playback and meaningless for the next thing that starts in the same tab.
+   * Carrying it into the next episode would shift every line by the length of
+   * the last episode's ad breaks. Cleared on the same settled mark the worker
+   * is told about, not on a bare title flicker. */
+  let adDriftFor = "";
 
   function noticeProgrammeChange() {
     // An advert is not a new programme, and on the players that swap the
@@ -2450,6 +2458,11 @@
     if (programme.told === mark) return;
     if (performance.now() - programme.since < PROGRAMME_SETTLE_MS) return;
 
+    /* A different programme, so last one's ad time is not this one's. Here
+     * rather than in attach(), because it is the programme changing that makes
+     * the number wrong - not a subtitle arriving. */
+    if (adDriftFor && adDriftFor !== mark) forgetAdDrift();
+
     /* Marked as told before the worker answers, not after. The tick runs
      * twenty times a second and this is a round trip; without it, twenty
      * requests go out before the first one is back. */
@@ -2460,6 +2473,17 @@
   }
 
   let lastAdPoll = 0;
+
+  /* Throw the measured ad time away. One function, three callers - the panel's
+   * Clear button, the worker, and a new programme starting - because they all
+   * have to forget the same three things and one of them forgetting only the
+   * number would leave a stamp that clears the next programme's drift too. */
+  function forgetAdDrift() {
+    state.adDriftMs = 0;
+    state.inAd = false;
+    adDriftFor = "";
+    for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;
+  }
 
   /* Detecting the two edges of an ad break is the entire mechanism: the gap
    * between them, measured in stream time, IS the correction. */
@@ -2484,6 +2508,9 @@
       // adding it would wreck the timing rather than repair it.
       if (elapsed >= AD_MIN_MS && elapsed <= AD_MAX_MS) {
         state.adDriftMs += elapsed;
+        // Stamped with what it was measured against, so the next programme
+        // does not inherit it. See adDriftFor.
+        adDriftFor = programmeMark() || adDriftFor;
         showToast(`Ad break over — subtitles shifted ${(elapsed / 1000).toFixed(0)}s`);
       }
       for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;
@@ -3085,8 +3112,23 @@
     track.rate = timing.rate;
     track.activeIndexes = NEEDS_REDRAW;
     track.visible = true;
-    state.adDriftMs = 0;
-    state.inAd = false;
+    /* Ad time is NOT cleared here, and that is the whole point of it being on
+     * `state` rather than on a track.
+     *
+     * It used to be, along with `inAd`, which quietly destroyed the correction
+     * belonging to whatever was already on screen. Measured: an ad break that
+     * advanced the stream by 90 seconds is detected and held as 90000ms;
+     * attaching a second subtitle to the empty slot put it back to 0, and the
+     * first subtitle - which had been correct - was ninety seconds out with
+     * nothing on screen saying why. It reads as "the sync broke when I added
+     * the second language", and on a server-side-ad-inserted stream with a
+     * dual-language setup that is the ordinary path, not an edge of one.
+     *
+     * An advert interrupts the video. What it belongs to is this playback of
+     * this programme, so that is what clears it - see noticeProgrammeChange.
+     * `inAd` is pollAdState's to own for the same reason: clearing it in the
+     * middle of a break makes the break look like it started at the attach,
+     * and the measured length comes out short. */
     state.visible = true;
     state.video = pickVideo();
 
@@ -3495,8 +3537,7 @@
       }
 
       case "sso:clearAdDrift":
-        state.adDriftMs = 0;
-        for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;
+        forgetAdDrift();
         notify();
         sendResponse({ ok: true });
         return false;
@@ -3566,8 +3607,7 @@
       notify();
     },
     clearAdDrift() {
-      state.adDriftMs = 0;
-      for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;
+      forgetAdDrift();
       notify();
     },
     pageInfo,
