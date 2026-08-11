@@ -424,6 +424,8 @@ function planBlock(plan) {
  * look like, and which two files was the aligner given when it said no.
  */
 let traceLog = [];
+let traceState = null;
+let traceFolder = "subtitle-overlay-log";
 
 const AGES = [
   [1000, "just now"],
@@ -440,6 +442,8 @@ function ago(at) {
 async function loadTrace() {
   const answer = await call("traceLog");
   traceLog = Array.isArray(answer?.entries) ? answer.entries : [];
+  traceState = answer?.state || null;
+  traceFolder = answer?.folder || traceFolder;
   renderTrace();
 }
 
@@ -448,17 +452,28 @@ function renderTrace() {
   const list = el("trace-list");
   list.textContent = "";
 
+  /* What is on disk first, and what is still in hand second. The folder is the
+   * record; the buffer is the few seconds that have not reached it yet, and
+   * confusing the two is how somebody concludes there is nothing to look at. */
+  const written = traceState?.written || 0;
+  const onDisk = written
+    ? `${written} file${written === 1 ? "" : "s"} in your downloads under ${traceFolder}/` +
+      ` — ${traceState.entriesWritten} entries, ${(traceState.bytesWritten / 1048576).toFixed(1)}MB`
+    : `nothing written yet — the folder ${traceFolder}/ appears in your downloads on the first flush`;
+  const waiting = traceLog.length
+    ? `${traceLog.length} more waiting to be written (${ago(traceLog[0].at)} onwards)`
+    : "nothing waiting";
+  const trouble = traceState?.lastError
+    ? ` · LAST WRITE FAILED: ${traceState.lastError} — the entries are being kept, not dropped`
+    : "";
+  summary.textContent = `${onDisk} · ${waiting}${trouble}`;
+
   if (!traceLog.length) {
-    summary.textContent =
-      "Nothing yet. Open the control panel on a page with a film on it, or press Line up, and it will start filling.";
+    if (!written) {
+      list.textContent = "";
+    }
     return;
   }
-
-  const aligns = traceLog.filter((entry) => entry.kind === "align");
-  const bytes = JSON.stringify(traceLog).length;
-  summary.textContent =
-    `${traceLog.length} entries, ${aligns.length} of them alignment attempts` +
-    ` · ${(bytes / 1024).toFixed(0)}KB · oldest ${ago(traceLog[0].at)}`;
 
   // Newest first: the thing that just went wrong is the thing being looked for.
   for (const entry of [...traceLog].reverse()) {
@@ -516,15 +531,19 @@ const sayOnTrace = (text) => {
   setTimeout(() => (el("trace-said").textContent = ""), 2500);
 };
 
-el("trace-download").addEventListener("click", () => {
-  if (!traceLog.length) return sayOnTrace("Nothing to save yet.");
-  saveTrace();
+el("trace-flush").addEventListener("click", async () => {
+  const answer = await call("traceFlush");
+  await loadTrace();
+  sayOnTrace(
+    answer?.empty ? "Nothing was waiting." :
+    answer?.ok ? `Wrote ${answer.entries} entries to ${answer.file}.` :
+    `Could not write it: ${answer?.reason || answer?.transportError || "unknown"}`,
+  );
 });
 
-el("trace-copy").addEventListener("click", async () => {
-  if (!traceLog.length) return sayOnTrace("Nothing to copy yet.");
-  await navigator.clipboard.writeText(JSON.stringify(traceLog));
-  sayOnTrace("Copied.");
+el("trace-download").addEventListener("click", () => {
+  if (!traceLog.length) return sayOnTrace("Nothing waiting - what is already written is in the folder.");
+  saveTrace();
 });
 
 el("trace-clear").addEventListener("click", async () => {

@@ -127,18 +127,35 @@ questions kept being answered by guesswork:
   `alignOutcome` records what the reader then did (`taken`, `undone`), which is
   the only ground truth there is about whether an answer was right.
 
-Bounded at 40 entries **and** 2MB, whichever comes first, because the two kinds
-differ by two orders of magnitude in size and a count-only cap would let a
-handful of alignments fill the quota. Writes go through the same `inTurn` queue
-the deck uses — read-modify-write on one key with callers milliseconds apart.
-Cue times are stored as gaps, a third of the size, and `unpackTimes`
-reconstructs them exactly.
+It also records every message shown to the reader (`said` — that is the
+extension's entire error surface), every attach and detach, every keyboard or
+toolbar command with the frame it addressed, every auto-attach plan, and every
+error or unhandled rejection that reached the top of a frame or the worker.
 
-It never leaves the machine. The report page (`src/report.html`, reachable from
-the panel's "Open the log") saves or copies it; nothing sends it anywhere.
+**It writes itself to disk. Nothing has to be pressed.** Entries buffer in
+storage for at most six seconds (or forty entries, or 4MB) and are then written
+to `~/Downloads/subtitle-overlay-log/<timestamp>.json`, one file per flush, and
+the buffer is emptied. That shape is deliberate and is a correction of the
+first version: the failures worth recording are the ones where nothing responds
+to clicks, so a record that needs a button pressed is a record you do not have
+on the day you need it. `downloads.ui` is requested and the download UI is
+switched off, or the browser would announce a file every few seconds during a
+film.
 
-**When a bug report is about sync or about frames, ask for this file, not for a
-description.**
+The bounds are on the **buffer**, not on the record — the folder is as large as
+the disk allows, which is what `unlimitedStorage` and one-file-per-flush are
+for. A write that fails **keeps** the entries and records `lastError`; dropping
+them is the one failure that leaves nothing to look at. `BUFFER_PANIC_ENTRIES`
+is the only hard stop, far above any normal flush.
+
+Writes go through the same `inTurn` queue the deck uses. Cue times are stored
+as gaps, a third of the size, and `unpackTimes` reconstructs them exactly;
+starts **and ends** are kept, because the ends are what a better aligner needs
+and what `align()` is never given.
+
+**When a bug report is about sync or about frames, read
+`~/Downloads/subtitle-overlay-log/` — do not ask anyone to reproduce
+anything.**
 
 ## The aligner refuses two different ways, and both matter
 

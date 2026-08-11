@@ -111,20 +111,23 @@
       <section class="card" id="trace-card">
         <h2>What has been happening</h2>
         <p class="note">
-          Written down as you use the extension rather than when you press a
-          button: the shape of the page every time the control panel opens or
-          closes, and every attempt to line two subtitles up — with both files'
-          timings and what you then did about the answer. It is the only record
-          of an alignment that failed, and it is what makes that failure
-          reproducible without hunting for the two files again.
-          <strong>None of it leaves this machine</strong> unless you save it
-          here and send it somewhere yourself.
+          <strong>This writes itself to disk. Nothing here needs pressing.</strong>
+          Every few seconds the extension saves what it has seen into a folder
+          in your downloads — the shape of every frame each time the control
+          panel opens or closes, every attempt to line two subtitles up with
+          both files' timings, every message you were shown, every attach, and
+          every error that reached the top of a frame or the service worker.
+          The buttons below are only for getting it out sooner.
+        </p>
+        <p class="note">
+          It stays on this machine: it is written to a folder, not sent
+          anywhere. Delete the folder whenever you like.
         </p>
         <p class="note" id="trace-summary"></p>
         <div class="row">
-          <button type="button" id="trace-download">Save the log</button>
-          <button type="button" id="trace-copy">Copy the log</button>
-          <button type="button" id="trace-clear">Clear it</button>
+          <button type="button" id="trace-flush" class="primary">Write what is buffered now</button>
+          <button type="button" id="trace-download">Save a copy here too</button>
+          <button type="button" id="trace-clear">Clear the buffer</button>
           <span class="note" id="trace-said"></span>
         </div>
         <div id="trace-list"></div>

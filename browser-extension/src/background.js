@@ -48,6 +48,38 @@ const TOP_FRAME = 0;
  * So on install and on update, inject the current scripts into every tab that
  * already matches. Frames that already have them exit on their own guard, so
  * re-injection is harmless. */
+/* Nothing here should ever put a download bubble on screen.
+ *
+ * The log writes a file every few seconds while a film is playing, and a
+ * browser announcing each one is worse than not recording at all. Guarded
+ * because the permission can be absent on an older build and the whole worker
+ * must not fail to start over a notification setting. */
+try {
+  chrome.downloads?.setUiOptions?.({ enabled: false });
+} catch {
+  // Older Chrome, or the permission was declined. The log still writes.
+}
+
+/* The worker's own failures, recorded rather than lost to a console nobody has
+ * open. An unhandled rejection in here is invisible from the page and from the
+ * report, and it is exactly the class of thing that makes a button do nothing. */
+globalThis.addEventListener("error", (event) => {
+  trace.record("error", {
+    where: "worker",
+    message: String(event.message || event.error?.message || event.error || "error"),
+    stack: String(event.error?.stack || "").slice(0, 2000),
+    file: `${event.filename || ""}:${event.lineno || 0}`,
+  });
+});
+globalThis.addEventListener("unhandledrejection", (event) => {
+  trace.record("error", {
+    where: "worker",
+    unhandledRejection: true,
+    message: String(event.reason?.message || event.reason || "rejection"),
+    stack: String(event.reason?.stack || "").slice(0, 2000),
+  });
+});
+
 chrome.runtime.onInstalled.addListener(async () => {
   const injectable = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
   await Promise.all(injectable.map((tab) => inject(tab.id)));
@@ -438,7 +470,9 @@ async function handleDaemonCall(op, args, sender) {
       return { ok: true };
     }
     case "traceLog":
-      return { entries: await trace.entries() };
+      return { entries: await trace.entries(), state: await trace.state(), folder: trace.FOLDER };
+    case "traceFlush":
+      return trace.flush();
     case "traceClear":
       await trace.clear();
       return { ok: true };
@@ -495,6 +529,18 @@ async function runCommand(command) {
   await ensureInjected(tab.id);
 
   const status = await tabStatus(tab.id);
+  /* What the shortcut was asked for and what it found, before it acts. A
+   * command that appears to do nothing is one of the two most common reports,
+   * and the answer is nearly always in which frame the worker addressed. */
+  trace.record("command", {
+    command,
+    tab: { id: tab.id, url: tab.url, title: tab.title },
+    frameId: status?.frameId ?? null,
+    chromeFrameId: status?.chromeFrameId ?? null,
+    hasVideo: status?.hasVideo ?? false,
+    attached: status?.attached ?? false,
+    trackCount: status?.trackCount ?? 0,
+  });
   const frameId = status?.frameId ?? TOP_FRAME;
   /* The panel opens where the controls are, which is not always where the
    * video is. Toasts deliberately stay in the video's frame: they only have to
@@ -645,6 +691,9 @@ async function autoAttach(tab, frameId, status) {
     await notify(tab.id, frameId, "Looking for subtitles…");
 
     const plan = await planAutoAttach(tab, frameId);
+    // The whole decision, including the results it ranked, so "it picked the
+    // wrong subtitle" can be answered without running the search again.
+    trace.record("autoAttach", { frameId, plan });
 
     if (plan.decision === "error" || plan.decision === "nothing-found") {
       await notify(tab.id, frameId, plan.reason);

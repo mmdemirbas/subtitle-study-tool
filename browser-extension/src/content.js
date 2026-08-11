@@ -2146,6 +2146,13 @@
    * next one does not have to remember.
    */
   function showToast(message, { action = null, slot = null } = {}) {
+    /* Everything the reader was told, in order.
+     *
+     * This is the extension's whole error surface: when something goes wrong
+     * the reader sees a sentence here and nothing else is written down
+     * anywhere. Recording the sentences means a report of "it said something
+     * about the daemon and then stopped working" has the sentence in it. */
+    trace("said", { message: String(message), slot, hadAction: Boolean(action) });
     if (slot != null && window.__ssoPanel?.sayOnCard?.(slot, message, { action })) return;
     ensureOverlay();
     ensureToast();
@@ -3344,6 +3351,23 @@
     state.visible = true;
     state.video = pickVideo();
 
+    /* Which file landed in which slot, with the timing it was given. "The
+     * wrong subtitle attached" and "the right one attached at the wrong
+     * offset" look identical from outside and have nothing in common. */
+    trace("attach", {
+      slot: index,
+      label: track.label,
+      fileId: track.fileId,
+      language: track.language,
+      cueCount: track.cues.length,
+      offsetMs: track.offsetMs,
+      rate: track.rate,
+      timingWasKnown: timing.known,
+      duration: state.video?.duration ?? null,
+      firstCueMs: track.cues[0]?.start ?? null,
+      lastCueMs: track.cues[track.cues.length - 1]?.start ?? null,
+    });
+
     ensureOverlay();
     syncRootVisibility();
 
@@ -3577,6 +3601,15 @@
 
   /** Drop one track, or every track when no slot is named. */
   function detach(slot) {
+    trace("detach", {
+      slot: slot ?? null,
+      tracks: state.tracks.map((track, index) => ({
+        slot: index,
+        label: track.label,
+        fileId: track.fileId,
+        cueCount: track.cues.length,
+      })),
+    });
     const slots = slot == null ? state.tracks.map((_, index) => index) : [Number(slot)];
     for (const index of slots) {
       const track = state.tracks[index];
@@ -4076,6 +4109,33 @@
    * `frames` asks the worker to gather the shape of the page as well, which
    * only it can do - so the page says what happened and the worker says where.
    */
+  /* Anything that reached the top of this frame, which is the class of failure
+   * that presents as a control doing nothing.
+   *
+   * A page's console is not evidence: nobody has it open during a film, it is
+   * per frame, and on a nested player the interesting frame is not the one
+   * anybody would think to open it on. */
+  const onWindowError = (event) => {
+    trace("error", {
+      where: window === window.top ? "top frame" : "frame",
+      url: location.href,
+      message: String(event.message || event.error?.message || event.error || "error"),
+      stack: String(event.error?.stack || "").slice(0, 2000),
+      file: `${event.filename || ""}:${event.lineno || 0}`,
+    });
+  };
+  const onRejection = (event) => {
+    trace("error", {
+      where: window === window.top ? "top frame" : "frame",
+      url: location.href,
+      unhandledRejection: true,
+      message: String(event.reason?.message || event.reason || "rejection"),
+      stack: String(event.reason?.stack || "").slice(0, 2000),
+    });
+  };
+  window.addEventListener("error", onWindowError);
+  window.addEventListener("unhandledrejection", onRejection);
+
   function trace(kind, detail, { frames = false } = {}) {
     chrome.runtime
       .sendMessage({ type: "sso:daemon", op: "trace", args: { kind, detail, frames } })
@@ -4551,6 +4611,8 @@
     document.removeEventListener("fullscreenchange", onFullscreenChange);
     document.removeEventListener("webkitfullscreenchange", onFullscreenChange);
     chrome.runtime.onMessage.removeListener(onMessage);
+    window.removeEventListener("error", onWindowError);
+    window.removeEventListener("unhandledrejection", onRejection);
     toastLayer?.remove();
     toastLayer = null;
     toast = null;

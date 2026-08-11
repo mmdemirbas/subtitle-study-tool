@@ -13,8 +13,11 @@
     "activeTab",
     "scripting",
     "storage",
+    "unlimitedStorage",
     "tabs",
-    "webNavigation"
+    "webNavigation",
+    "downloads",
+    "downloads.ui"
   ],
   "host_permissions": [
     "<all_urls>",

@@ -9,7 +9,19 @@
  * registers are captured and then invoked, so what is under test is the same
  * dispatch the browser would perform.
  */
-const listeners = { message: [], removed: [], command: null };
+const listeners = { message: [], removed: [], command: null, global: {} };
+// Every file the log wrote, and a switch for making the write fail.
+const written = [];
+let downloadsFail = false;
+
+/* A service worker's global is an EventTarget and node's is not, so the worker
+ * registering its own error handlers would throw here on a line that is
+ * correct in Chrome. Captured rather than ignored: a test can fire them, which
+ * is the only way to check that a failure in the worker is written down at
+ * all. */
+globalThis.addEventListener = (type, fn) => {
+  (listeners.global[type] ||= []).push(fn);
+};
 const store = {};
 const sentToTab = [];
 // Every scripting call the worker made, so a test can assert the injection
@@ -51,6 +63,17 @@ globalThis.chrome = {
   },
   // Captured, not discarded: the command path is where the self-heal runs.
   commands: { onCommand: { addListener: (fn) => { listeners.command = fn; } } },
+  /* The log writes itself to disk, so the thing that writes it is stubbed the
+   * way Chrome behaves: a promise, an id back, and a rejection when it cannot
+   * write - which is the case the buffer must survive rather than discard. */
+  downloads: {
+    setUiOptions() {},
+    async download(options) {
+      if (downloadsFail) throw new Error("disk is full");
+      written.push(options);
+      return written.length;
+    },
+  },
   storage: {
     local: {
       async get(key) {
@@ -296,7 +319,19 @@ t(
  * nothing. */
 const trace = await import("../src/trace.js");
 
-await trace.clear();
+/* The command tests above record traces of their own, and they do not wait for
+ * them - the worker's callers never do, deliberately. So a case that counts
+ * entries has to let those land and then start from empty, or it is counting
+ * somebody else's work and will fail depending on how the event loop went. */
+const resetTrace = async () => {
+  downloadsFail = false;
+  await new Promise((r) => setTimeout(r, 60));
+  await trace.flush();
+  await trace.clear();
+  written.length = 0;
+};
+
+await resetTrace();
 await Promise.all([
   trace.record("panel", { open: true }),
   trace.record("align", { slot: 1 }),
@@ -311,35 +346,71 @@ t(
   JSON.stringify((await trace.entries()).map((e) => e.at)),
 );
 
-/* The bound that matters is bytes, not entries. An alignment attempt carries
- * two files' worth of timings and is two orders of magnitude bigger than a
- * page trace, so a count-only cap would let a handful of them fill the quota
- * and take the deck down with them. */
-await trace.clear();
-// Twelve at roughly 230KB each, which is 2.7MB against a 2MB bound - and well
-// under the 40-entry one, so only the byte cap can save it.
-const fat = { times: Array.from({ length: 40000 }, (_, i) => i) };
-const FAT_COUNT = 12;
-for (let i = 0; i < FAT_COUNT; i++) await trace.record("align", { i, ...fat });
-const survived = await trace.entries();
+/* The point of the whole rewrite: the record reaches disk without anybody
+ * pressing anything. A log you have to click Save on is a log you do not have
+ * on the day the clicks are the thing that stopped working. */
+await trace.flush();
 t(
-  "a few very large entries drop the oldest rather than growing without limit",
-  survived.length < FAT_COUNT && survived.length >= 1 && JSON.stringify(survived).length <= 2_000_000,
-  `${survived.length} entries, ${JSON.stringify(survived).length} bytes`,
-);
-t(
-  "and what survives is the newest",
-  survived[survived.length - 1]?.i === FAT_COUNT - 1,
-  `last entry i=${survived[survived.length - 1]?.i}`,
+  "flushing writes a file and empties the buffer",
+  written.length === 1 && (await trace.entries()).length === 0,
+  `${written.length} file(s), ${(await trace.entries()).length} left buffered`,
 );
 
-await trace.clear();
-for (let i = 0; i < 45; i++) await trace.record("panel", { i });
-const capped = await trace.entries();
+const wrote = JSON.parse(decodeURIComponent(escape(atob(written[0].url.split(",")[1]))));
 t(
-  "the count is bounded too, keeping the most recent",
-  capped.length === 40 && capped[0].i === 5 && capped[39].i === 44,
-  `${capped.length} entries, first i=${capped[0]?.i}, last i=${capped[capped.length - 1]?.i}`,
+  "and the file holds the entries, not a summary of them",
+  wrote.entries.length === 3 && wrote.entries.some((e) => e.kind === "align"),
+  JSON.stringify(wrote.entries.map((e) => e.kind)),
+);
+t(
+  "written under one folder, so the whole record is one directory",
+  String(written[0].filename).startsWith(`${trace.FOLDER}/`) && !written[0].saveAs,
+  String(written[0].filename),
+);
+
+/* A disk that will not take the file must not cost the entries. Discarding
+ * them is the one failure that leaves nothing to look at afterwards, which is
+ * the entire thing this file exists to prevent. */
+await resetTrace();
+downloadsFail = true;
+await trace.record("panel", { open: true });
+const failed = await trace.flush();
+t(
+  "a write that fails keeps the entries rather than dropping them",
+  failed.ok === false && (await trace.entries()).length === 1,
+  `${(await trace.entries()).length} entries kept, reason ${failed.reason}`,
+);
+t(
+  "and says so, so the report page can show it",
+  (await trace.state()).lastError?.includes("disk is full"),
+  String((await trace.state()).lastError),
+);
+downloadsFail = false;
+await trace.flush();
+t(
+  "and the next write gets them out",
+  written.length === 1 && (await trace.entries()).length === 0,
+  `${written.length} file(s)`,
+);
+
+/* Nothing waits for a timer to be reached before any of it is on disk. Past
+ * the threshold the flush happens on the spot, so an afternoon of use is a
+ * directory of files rather than one buffer that a crash takes with it. */
+await resetTrace();
+for (let i = 0; i < 45; i++) await trace.record("panel", { i });
+t(
+  "a busy session flushes itself without waiting for the timer",
+  written.length >= 1,
+  `${written.length} file(s) written, ${(await trace.entries()).length} still buffered`,
+);
+const all = written.flatMap(
+  (file) => JSON.parse(decodeURIComponent(escape(atob(file.url.split(",")[1])))).entries,
+);
+const carried = [...all, ...(await trace.entries())].map((e) => e.i);
+t(
+  "and not one entry is lost between the buffer and the files",
+  carried.length === 45 && carried.every((n, k) => n === k),
+  `${carried.length} entries, first ${carried[0]}, last ${carried[carried.length - 1]}`,
 );
 
 /* Cue times are stored as gaps to keep more of them; a pack that does not
@@ -357,7 +428,21 @@ t(
   `${JSON.stringify(trace.packTimes(times)).length} against ${JSON.stringify(times).length}`,
 );
 
-await trace.clear();
+/* A failure inside the worker is invisible from the page and from the report,
+ * and it is exactly what makes a control do nothing. */
+await resetTrace();
+for (const fn of listeners.global.unhandledrejection || []) {
+  fn({ reason: new Error("something in the worker gave up") });
+}
+await new Promise((r) => setTimeout(r, 30));
+const errors = (await trace.entries()).filter((e) => e.kind === "error");
+t(
+  "a rejection nobody caught in the worker is written down",
+  errors.length === 1 && errors[0].message.includes("gave up") && errors[0].where === "worker",
+  JSON.stringify(errors.map((e) => e.message)),
+);
+
+await resetTrace();
 t("clearing empties it", (await trace.entries()).length === 0);
 
 chrome.storage.local.get = instant.get;
