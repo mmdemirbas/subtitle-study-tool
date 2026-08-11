@@ -12,7 +12,7 @@ isolated `window` — never through the DOM, and never reachable from the page.
 | File | Lines | Owns | Exposes |
 |---|---|---|---|
 | `align.js` | 520 | matching a subtitle's timing to the playing release | — |
-| `content.js` | 4.0k | the video, the playback clock, the cue overlay, the CC handle, settings, keys, frame/fullscreen plumbing | `window.__ssoApi`, `__ssoTeardown` |
+| `content.js` | 4.3k | the video, the playback clock, the cue overlay, the CC handle, settings, keys, the frame roles, frame/fullscreen plumbing | `window.__ssoApi`, `__ssoTeardown` |
 | `panel.js` | 3.2k | the control panel window (search, attach, sync, settings) | `window.__ssoPanel`, `__ssoPanelTeardown` |
 | `study.js` | 2.0k | the study rail, word cards, the deck, the lookup popup | `window.__ssoStudy`, `__ssoStudyTeardown` |
 
@@ -27,10 +27,6 @@ Re-injection is supported and expected: every file calls the previous
 
 ## The frame model — read this before any UI change
 
-The extension builds its UI **in whichever frame owns the `<video>`**.
-`onPointerMove` gates on `isPageSubject(pickVideoCached())`, so on a page with
-no video nothing is built at all.
-
 On real streaming sites the video is usually **not** in the top frame. Measured
 on `streaming-site.example` (2026-08-08):
 
@@ -40,18 +36,75 @@ top      streaming-site.example/tv/...              no video   1400x813
      └─  embos.top/tv/?mid=...                THE VIDEO  cross-origin, 1136x568 at (32,120)
 ```
 
-So the panel, the study rail and the CC handle are all drawn inside a
-cross-origin iframe two levels deep that occupies a fraction of the viewport.
-
 **A nested frame cannot escape its parent's stacking order.** Verified: a
 `popover` element promoted to the top layer inside an iframe still loses to a
 plain `position:fixed; inset:0; z-index:2147483647` div that the *parent*
 document appends to `<html>` — the click goes to the parent's overlay and the
 in-iframe panel never sees it. The top layer is per-document; the iframe as a
 whole is one box in the parent's paint order. No z-index and no `showPopover()`
-inside the frame can change that.
+inside the frame can change that. streaming-site.example appends exactly such an iframe,
+so a CC button drawn in the player's frame was visible and unpressable.
 
-This is a known open defect — see `docs/reports/`.
+### So the frames divide the work
+
+Each frame is one of three roles, held in `role` in `content.js`:
+
+| Role | When | What it draws |
+|---|---|---|
+| `solo` | the video is in this frame, or there is no video | everything, as before |
+| `video` | this frame has the film, the top frame took the controls | the cue overlay only — **no CC button** |
+| `chrome` | this frame is the top one and the film is elsewhere | the CC button, the panel, toasts |
+
+Nothing about `solo` changed, and most pages are `solo`. The split only happens
+when `isPageSubject()` is true in a frame that is not the top one.
+
+**The two frames cannot see each other**, so every word goes through the
+service worker:
+
+- The video frame reports `{type: "sso:frameRole", hasSubject}` on every change
+  and **takes the answer** — `"video"` only if the top frame accepted the job.
+  If it did not (no content script up there), the answer is `"solo"` and the
+  player's frame keeps its own button. One button either way, and never none.
+- `sso:toChrome` / `sso:toVideo` are the relay. `videoFrames` in
+  `background.js` is the routing table, one entry per tab.
+- The video frame pushes `sso:mirror` — its whole `status()`, the study
+  settings and, only when the attached files change, the cue times. Throttled
+  to 150ms while something is attached and 1s while nothing is, because that
+  message is also the heartbeat and it must not keep the service worker
+  resident for the life of an idle tab.
+- The chrome frame's `status()` **is** that mirror, and says `mirrored: true`.
+  `tabStatus()` in `daemon.js` skips mirrored frames when looking for the video
+  and reports where the controls are as `chromeFrameId` — so an attach still
+  goes to the film and `toggle-panel` still goes to the panel.
+- Everything on `__ssoApi` that changes the film is wrapped once by the
+  `FORWARDED` list and sent as `sso:call`. The receiving side checks the same
+  list, so the two cannot drift. `callVideoFrame` **never rejects** — it toasts
+  and resolves null, because nearly every caller is a click handler.
+
+Three consequences worth keeping in mind:
+
+- **Read-modify-write across the gap is a bug.** The held nudge button used to
+  read the offset and send the sum; against a mirror one round trip behind,
+  every repeat after the first computes from a stale number. `api.nudge` takes
+  the *step*, so the addition happens where the value is. Any new relative
+  control does the same.
+- **`panel.js` may not reach `window.__ssoStudy` directly** — that only ever
+  finds the copy in its own document. `api.studySettings()`,
+  `setStudyEnabled`, `toggleStudySlot`, `toggleStudy`, `saveTopWord`.
+- **`onKeyDown` goes through `__ssoApi`, not the functions behind it.** A
+  keystroke lands in whichever document has focus, which on a nested player is
+  usually the frame with no subtitle in it.
+
+The arrangement heals in both directions, and both are checked:
+a push refused by a top frame that no longer thinks it draws the controls
+(which is what a re-injection leaves behind) clears `claimedSubject` so the
+next tick claims again; and 3s of silence from the video frame drops the top
+frame back to `solo`, so the button does not outlive the film.
+
+**Still open:** the study rail and clicking a word both need the cue text, so
+they stay in the video's frame and remain behind a parent overlay on a site
+that paints one. The cue overlay is there too, which is right — it only has to
+be seen, and a transparent interceptor does not hide it.
 
 ## The aligner refuses two different ways, and both matter
 
@@ -195,13 +248,19 @@ path.
 
 ## Tests
 
-No runner, no dependencies. All three print PASS/FAIL and run themselves.
+Four checks. The first three need no dependencies and print PASS/FAIL
+themselves; the fourth needs a real browser, and says so if it cannot find one.
 
 ```bash
 node tests/worker.mjs          # the service worker, with Chrome stubbed
 python3 tests/serve.py         # then open, in a browser:
 #   http://127.0.0.1:8997/tests/harness.html    the overlay in a deliberately hostile page
 #   http://127.0.0.1:8997/tests/fallback.html   the fetch path without the daemon
+
+# and the one the other three cannot ask - the unpacked extension in Chrome,
+# with the video in a cross-origin frame under a full-viewport interceptor:
+npm i playwright-core          # anywhere; this repo does not depend on it
+PLAYWRIGHT_PATH=<that>/node_modules node tests/frames/run.mjs
 ```
 
 Use `tests/serve.py`, not `python3 -m http.server` — see `tests/README.md`.
@@ -231,9 +290,27 @@ Three checks written this way caught real holes their authors had not thought
 of — the toast host missing a guard, the settings window being a separate
 surface, and a search fix that four green suites said was complete.
 
-**The harness cannot see the frame problem above.** It is a single-document
-page, so anything about nested frames, cross-origin players or a parent page's
-overlay has to be checked in a real browser on a real site.
+**The harness cannot see the frame problem above.** It is a single document, so
+`tests/frames/` exists for that: two `serve.py` instances on two ports, which
+are two origins, a player page in a nested iframe and a fixed full-viewport
+interceptor the top page can switch on. Twelve assertions, and the two that
+matter most are the reverse ones - a video in the top frame must still draw
+everything in that one frame, and no second frame may do anything.
+
+Two things about it that cost time to learn:
+
+- **The player page needs a real video file**, not a `defineProperty` on
+  `duration`. The single-document harness gets away with that because it loads
+  `src/` as page scripts; here the content script is in the isolated world,
+  where a page-world redefinition is invisible, `duration` reads NaN and
+  `pickVideo` correctly rejects the page. `clip.mp4` is 95s of flat colour at
+  6KB, and the ffmpeg line that made it is in `player.html`.
+- **Wait for the thing, do not sleep.** Everything here is settled by a tick
+  that is 500ms when nothing is attached, behind a video loading over a socket,
+  behind an extension installing. And the CC button fades after 2.6s of
+  stillness by design, so a poll that only looks is racing that timer - it has
+  to keep the pointer moving. Both of those produced a check that passed twice
+  and failed on a cold profile.
 
 ## The manifest, and two things that are load-bearing in it
 

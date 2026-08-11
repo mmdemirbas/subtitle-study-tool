@@ -107,14 +107,39 @@ try {
     await page.waitForTimeout(700);
   };
 
+  /* Poll to a deadline rather than sleeping a guessed interval.
+   *
+   * A fixed wait here is a coin toss on a cold profile: the extension has to
+   * install, the frame has to load a video file over a socket, and the frame
+   * roles are settled by a tick that is deliberately slow when there is
+   * nothing attached. Measured: the same assertion failed on the first run of
+   * a fresh profile and passed on both repeats. */
+  const until = async (what, ms = 8000) => {
+    const deadline = Date.now() + ms;
+    for (;;) {
+      const seen = await what();
+      if (seen) return seen;
+      if (Date.now() > deadline) return null;
+      await page.waitForTimeout(200);
+    }
+  };
+
   // ---------------------------------------------------------------- nested --
   await page.goto(`http://127.0.0.1:${TOP_PORT}/tests/frames/top.html?playerPort=${PLAYER_PORT}`, {
     waitUntil: "domcontentloaded",
   });
-  await page.waitForTimeout(1400);
-  await wake();
+  await page.waitForTimeout(400);
 
-  let seen = await frames();
+  /* The pointer move is what builds anything, and it only counts once the
+   * video is loadable - so keep moving until something is drawn rather than
+   * moving once and hoping the file arrived first. */
+  let seen =
+    (await until(async () => {
+      await wake();
+      const all = await frames();
+      const inner = all.find((f) => f.frameId !== 0 && !f.absent);
+      return inner?.surfaces?.length ? all : null;
+    })) ?? (await frames());
   const top = seen.find((f) => f.frameId === 0);
   const player = seen.find((f) => f.frameId !== 0 && !f.absent);
 
@@ -126,17 +151,56 @@ try {
     has(player, "sso-root"),
     `player frame surfaces: [${player?.surfaces?.join(", ") ?? "-"}]`);
 
-  /* The three below are the point of the exercise. A surface drawn inside the
+  /* The four below are the point of the exercise. A surface drawn inside the
    * player's frame cannot out-rank anything the top document paints over that
    * frame - the top layer is per document - so the chrome has to be built in
-   * the top frame when the video is not there. */
-  t("the CC handle is built in the top frame",
-    has(top, "sso-handle") || has(top, "sso-chrome"),
-    `top frame surfaces: [${top?.surfaces?.join(", ") ?? "-"}]`);
+   * the top frame when the video is not there.
+   *
+   * The CC button is not a surface of its own; it lives in the overlay host's
+   * shadow root beside the cue boxes, so it is found among that surface's
+   * targets. Which is the better question anyway: a button that exists and
+   * cannot be pressed is the defect, not the absence of one. */
+  const ccButton = async (frameId) =>
+    sw.evaluate(async (id) => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const seen = await chrome.tabs.sendMessage(tab.id, { type: "sso:diagnose" }, { frameId: id });
+      for (const surface of seen.surfaces || []) {
+        const cc = (surface.targets || []).find((x) => x.label === "Subtitle controls");
+        if (cc) return { surface: surface.surface, ...cc };
+      }
+      return { none: true, surfaces: (seen.surfaces || []).map((x) => x.surface) };
+    }, frameId);
+
+  let cc = (await until(async () => {
+    const seen = await ccButton(0);
+    return seen.none ? null : seen;
+  })) ?? (await ccButton(0));
+  t("the CC handle is drawn in the top frame, where the video is not",
+    !cc.none && cc.rendered !== false && cc.reachable,
+    JSON.stringify(cc));
+
+  /* And the whole reason it is up there. With the site's overlay on, a button
+   * drawn inside the player's frame is behind a box in this document and the
+   * press is the site's. One drawn here is not. */
+  await page.evaluate(() => window.__intercept(true));
+  await wake();
+  cc = await ccButton(0);
+  t("and it can still be pressed through the page's own full-viewport overlay",
+    !cc.none && cc.rendered !== false && cc.reachable,
+    JSON.stringify(cc));
+  await page.evaluate(() => window.__intercept(false));
 
   await sw.evaluate(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    await chrome.tabs.sendMessage(tab.id, { type: "sso:togglePanel" }, { frameId: 0 }).catch(() => {});
+    /* Through the worker's own command path, not addressed by hand: which
+     * frame the panel opens in is part of what is being checked, and the
+     * worker decides that from tabStatus. Injected into a frame because the
+     * worker does not receive its own runtime messages - this is the popup's
+     * route, from a real content-script context. */
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [0] },
+      func: () => chrome.runtime.sendMessage({ type: "sso:command", command: "toggle-panel" }),
+    });
   });
   await page.waitForTimeout(900);
   seen = await frames();
@@ -181,15 +245,103 @@ try {
     JSON.stringify(reach));
   await page.evaluate(() => window.__intercept(false));
 
+  await page.evaluate(() => window.__intercept(false));
+
+  /* --- and the other direction: does a press up here reach the film? -------
+   *
+   * Everything above is about being seen and being clickable. This is the half
+   * that makes the button worth pressing: the panel is in a document with no
+   * video in it, so every control on it has to act on one somewhere else.
+   * Asked through executeScript because __ssoApi lives in the isolated world,
+   * which is where a content script's own call would come from. */
+  const pressInTopFrame = async (method, args) =>
+    sw.evaluate(async ([m, a]) => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, frameIds: [0] },
+        func: (method, args) => Boolean(window.__ssoApi?.[method]?.(...args)) || true,
+        args: [m, a],
+      });
+      return result;
+    }, [method, args]);
+
+  const playerFrameId = player.frameId;
+  const playerSays = async () =>
+    sw.evaluate(async (id) => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      return chrome.tabs.sendMessage(tab.id, { type: "sso:status" }, { frameId: id });
+    }, playerFrameId);
+
+  await pressInTopFrame("setVisible", [false]);
+  const hidden = await until(async () => ((await playerSays())?.visible === false ? true : null), 3000);
+  await pressInTopFrame("setVisible", [true]);
+  const shown = await until(async () => ((await playerSays())?.visible === true ? true : null), 3000);
+  t("a control pressed in the top frame acts on the video in the other one",
+    Boolean(hidden && shown),
+    JSON.stringify({ hidden: Boolean(hidden), shown: Boolean(shown) }));
+
+  /* --- the two ways this arrangement goes stale ---------------------------- */
+
+  /* Reloading the extension replaces the top frame's script under an open tab,
+   * and the replacement starts out knowing nothing. Without the push learning
+   * it was dropped, the page would be left with no button at all and nothing
+   * to put one back. */
+  await sw.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [0] },
+      files: ["src/align.js", "src/content.js", "src/panel.js", "src/study.js"],
+    });
+  });
+  const returned = await until(async () => {
+    // Keep the pointer moving: the button fades after 2.6s of stillness, by
+    // design, and a poll that only looks would be racing that timer.
+    await wake();
+    const seen = await ccButton(0);
+    return seen.none || !seen.reachable ? null : seen;
+  }, 12000);
+  t("the button comes back when the top frame's script is replaced under it",
+    Boolean(returned),
+    JSON.stringify(returned ?? (await ccButton(0))));
+
+  /* And the reverse: the site tears the player out, or navigates it away. The
+   * button must not outlive the film - a control that opens a panel reporting
+   * a video that is not there is worse than no control. */
+  await page.evaluate(() => document.getElementById("player").remove());
+  /* On the role, not on whether the button can be clicked. It fades on its own
+   * after 2.6 seconds of stillness, so "not reachable" would pass with the
+   * whole arrangement still in place and nothing having noticed - which is
+   * what the first draft of this check measured. */
+  const roleIn = async (frameId) =>
+    sw.evaluate(async (id) => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const seen = await chrome.tabs
+        .sendMessage(tab.id, { type: "sso:diagnose" }, { frameId: id })
+        .catch(() => null);
+      return seen?.frameRole ?? "absent";
+    }, frameId);
+
+  const wentAway = await until(async () => {
+    await wake();
+    return (await roleIn(0)) === "solo" ? true : null;
+  }, 10000);
+  t("and the top frame stops being the controls when the video's frame goes",
+    Boolean(wentAway),
+    `top frame role: ${await roleIn(0)}`);
+
   // ------------------------------------------------------- the ordinary page --
   /* Nothing above may cost anything on a page whose video IS in the top frame,
    * which is most of them. Same page, opened directly. */
   await page.goto(`http://127.0.0.1:${PLAYER_PORT}/tests/frames/player.html`, {
     waitUntil: "domcontentloaded",
   });
-  await page.waitForTimeout(1400);
-  await wake();
-  seen = await frames();
+  await page.waitForTimeout(400);
+  seen =
+    (await until(async () => {
+      await wake();
+      const all = await frames();
+      return all.find((f) => f.frameId === 0)?.surfaces?.length ? all : null;
+    })) ?? (await frames());
   const only = seen.find((f) => f.frameId === 0);
 
   t("a video in the top frame still draws everything in that one frame",

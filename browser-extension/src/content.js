@@ -391,6 +391,12 @@
   let handleTimer = null;
   let ticker = null;
   let tickerMs = 0;
+  /* Which half of a split page this frame is - "solo", "video" or "chrome".
+   * Up here with the rest of the shared state because the tick, the key
+   * handler, status() and the diagnostic all ask; the whole arrangement is in
+   * "the other frame" below. */
+  let role = "solo";
+  let videoFrameId = null;
 
   // --- video selection ------------------------------------------------------
 
@@ -915,6 +921,10 @@
       isTopFrame: window === window.top,
       title: document.title,
       version: VERSION,
+      /* Which half of a split page this frame is. "chrome" on a frame with no
+       * video is not a fault - it is the arrangement working. */
+      frameRole: role,
+      videoFrameId,
 
       // What the title guess would be built from, in the order it prefers.
       titleCandidates: info.candidates,
@@ -2211,6 +2221,10 @@
     // cannot be forgotten at one of them.
     startTicking(anyAttached() ? TICK_MS : IDLE_TICK_MS);
 
+    /* Before the "no video here" exit below, because losing the video is
+     * exactly the change the other frame has to be told about. */
+    mindTheOtherFrame();
+
     if (!state.video || !state.video.isConnected) {
       state.video = pickVideo();
       if (!state.video) return;
@@ -2394,9 +2408,12 @@
   }
 
   /** The other direction: where a moment of this file lands in the stream. */
-  function streamTimeMs(track, fileMs) {
+  /* The drift is a parameter rather than a read of `state`, because the frame
+   * drawing the controls for a nested player has no ad drift of its own - the
+   * only one that matters is the one that came across in the mirror. */
+  function streamTimeMs(track, fileMs, driftMs = state.adDriftMs) {
     const scaled = track.rate && track.rate !== 1 ? fileMs * track.rate : fileMs;
-    return scaled + track.offsetMs + state.adDriftMs;
+    return scaled + track.offsetMs + driftMs;
   }
 
   // --- moving by line ---------------------------------------------------------
@@ -2988,8 +3005,16 @@
     if (byHand) noteCorrection(track, slot);
   }
 
-  const nudge = (deltaMs, { slot = state.keyTrack } = {}) =>
-    setOffset(state.tracks[slot].offsetMs + deltaMs, { slot });
+  /* Relative, and that is the point of it existing beside setOffset.
+   *
+   * The held nudge buttons repeat every 80ms, and the panel drawing them may
+   * be in a different frame from the offset they are moving - where reading a
+   * value, adding a step and sending the sum means every repeat after the
+   * first computes from the number before the previous one. Asking for the
+   * step instead of the sum has no such window: the addition happens where the
+   * value is. */
+  const nudge = (deltaMs, { slot = state.keyTrack, quiet = false } = {}) =>
+    setOffset(state.tracks[slot].offsetMs + deltaMs, { slot, quiet });
 
   /* --- drift ----------------------------------------------------------------
    *
@@ -3194,33 +3219,46 @@
     const step = event.shiftKey ? state.settings.largeStepMs : state.settings.smallStepMs;
     let handled = true;
 
+    /* Through the api rather than the functions behind it, because a keystroke
+     * lands in whichever document has focus and on a nested player that is
+     * usually the top frame - which has no subtitle of its own to move. The
+     * api is the thing that knows where the film is, and status() is asked for
+     * the same reason: `state` here would answer about an empty document.
+     *
+     * The toasts stay in the frame the key was pressed in, which is where the
+     * reader is looking. */
+    const api = window.__ssoApi;
+    const seen = status();
+
     if (isKey(typed, keys.togglePanel)) {
       window.__ssoPanel?.toggle();
-    } else if (!anyAttached()) {
+    } else if (!seen.attached) {
       handled = false; // the rest only make sense with something attached
     } else if (isKey(typed, keys.earlier)) {
-      nudge(-step);
+      api.nudge(-step);
     } else if (isKey(typed, keys.later)) {
-      nudge(step);
+      api.nudge(step);
     } else if (isKey(typed, keys.prevLine)) {
-      handled = stepLine(-1);
+      // Forwarded it answers with a promise rather than "there was a line to
+      // step to", so the key counts as handled either way.
+      handled = Boolean(api.stepLine(-1));
     } else if (isKey(typed, keys.nextLine)) {
-      handled = stepLine(1);
-    } else if (event.key === "Escape" && state.placing) {
-      window.__ssoApi.setPlacing(false);
+      handled = Boolean(api.stepLine(1));
+    } else if (event.key === "Escape" && seen.placing) {
+      api.setPlacing(false);
     } else if (isKey(typed, keys.reset)) {
       // Both, because a subtitle that has been stretched is not back to the
       // file's own timing until the stretch goes too.
-      setRate(1, { quiet: true });
-      setOffset(0, { quiet: true });
+      api.setRate(1, { quiet: true });
+      api.setOffset(0, { quiet: true });
       showToast("Subtitle back to the file's own timing");
     } else if (isKey(typed, keys.toggleOverlay)) {
-      setVisible(!state.visible);
-      showToast(state.visible ? "Subtitles shown" : "Subtitles hidden");
+      api.setVisible(!seen.visible);
+      showToast(seen.visible ? "Subtitles hidden" : "Subtitles shown");
     } else if (isKey(typed, keys.toggleStudy)) {
-      handled = Boolean(window.__ssoStudy?.toggle());
+      handled = Boolean(api.toggleStudy());
     } else if (isKey(typed, keys.saveWord)) {
-      handled = Boolean(window.__ssoStudy?.saveTop());
+      handled = Boolean(api.saveTopWord());
     } else {
       handled = false;
     }
@@ -3537,7 +3575,7 @@
   }
 
   /** Whether there is something to put back, for the panel to offer it. */
-  const removedTrack = () =>
+  const lastRemoved = () =>
     removed && { slot: removed.slot, label: removed.track.label, at: removed.at };
 
   function setVisible(visible, { slot = null } = {}) {
@@ -3572,7 +3610,15 @@
    * above it describe the primary, or the only, subtitle, so a caller that
    * only wants to say "attached, 1183 lines" does not have to know there can
    * be two. */
+  /* Status has one caller shape and two sources. In the frame drawing controls
+   * for a video in another frame there is nothing local to report, so the
+   * answer is what was last pushed across - and it says so, because the worker
+   * has to be able to tell that frame from the one holding the film. */
   function status() {
+    return role === "chrome" ? mirroredStatus() : localStatus();
+  }
+
+  function localStatus() {
     const attached = attachedTracks();
     const lead = attached[0] || state.tracks[PRIMARY];
     return {
@@ -3605,7 +3651,13 @@
     };
   }
 
+  /** When this subtitle speaks, in the file's own clock, without the words. */
+  function cueTimesFor(slot) {
+    return (state.tracks[slot]?.cues || []).map((cue) => cue.start);
+  }
+
   function notify() {
+    pushMirror();
     for (const listener of listeners) {
       try {
         listener(status());
@@ -3613,6 +3665,305 @@
         // A broken subscriber must not stop playback rendering.
       }
     }
+  }
+
+  // --- the other frame ------------------------------------------------------
+
+  /* Where the film is, and where the controls are, when those are not the same
+   * document.
+   *
+   * Sites that embed a player from another host paint over the frame they put
+   * it in. Measured on streaming-site.example: an <iframe> appended to <html>, fixed,
+   * inset 0, z-index 2147483647, swallowing every click on the page. The top
+   * layer is per document, so nothing drawn inside the player's frame can get
+   * above that - the frame itself is behind it. The CC button was visible and
+   * every press went to the site.
+   *
+   * So the two frames divide the work. This one keeps the subtitles if it has
+   * the video, because that is where the picture is and where a word has to be
+   * clicked; the top frame draws the button and the panel, because that is the
+   * document being painted in. They cannot see each other - different origins -
+   * so the service worker carries every word, and the frame with the video
+   * pushes its state across so the panel up there is not blind.
+   *
+   * On the ordinary page, where the video is in the top frame, `role` stays
+   * "solo" and not a line of this runs.
+   */
+  let claimedSubject = null; // video frame: what was last reported, so it is said once
+
+  /* Tell the worker whether this frame holds the film, and take the answer.
+   *
+   * The answer is not a formality. Being told "video" means the top frame
+   * accepted the job of drawing the button, so this frame stops drawing one.
+   * Being told "solo" - because the top frame has no content script, or is an
+   * extension page, or refused - means nobody else will, so this frame keeps
+   * it. One button either way, and never none.
+   */
+  function reportFrameRole() {
+    if (window === window.top) return; // the top frame is told; it does not claim
+    const subject = isPageSubject(pickVideoCached());
+    if (subject === claimedSubject) return;
+    claimedSubject = subject;
+    chrome.runtime
+      .sendMessage({ type: "sso:frameRole", hasSubject: subject })
+      .then((reply) => {
+        role = reply?.role === "video" ? "video" : "solo";
+        // The top frame's button is the one now; take this frame's away
+        // rather than leaving two of them on screen until it times out.
+        if (role === "video" && handle) handle.dataset.visible = "false";
+      })
+      .catch(() => {
+        role = "solo";
+      });
+  }
+
+  /* How often the video frame's state crosses the gap.
+   *
+   * Every push is a structured clone through the service worker, and the tick
+   * that would trigger one runs twenty times a second. 150ms is under the
+   * threshold where a readout looks laggy and is a fifth of the traffic.
+   *
+   * Slower with nothing attached, for the same reason the tick itself is: the
+   * playhead is then on nobody's screen, and a message per tick would keep the
+   * service worker resident for the life of the tab to report a number no
+   * surface is reading. It cannot stop altogether - the silence is what tells
+   * the other frame the player has gone. */
+  const MIRROR_MS = 150;
+  const IDLE_MIRROR_MS = 1000;
+  let mirrorAt = 0;
+  let mirrorTimer = null;
+  let mirrorSignature = "";
+
+  function pushMirror() {
+    if (role !== "video") return;
+    clearTimeout(mirrorTimer);
+    mirrorTimer = null;
+    const wait = (anyAttached() ? MIRROR_MS : IDLE_MIRROR_MS) - (Date.now() - mirrorAt);
+    if (wait > 0) {
+      mirrorTimer = setTimeout(pushMirror, wait);
+      return;
+    }
+    mirrorAt = Date.now();
+
+    const snapshot = localStatus();
+    /* The cue times are the expensive part - a thousand numbers per track - and
+     * they change only when a different file is attached, never with the
+     * playhead. So they ride the change rather than the clock. Timing is not in
+     * the signature on purpose: the times are in the file's own clock, and the
+     * offset and rate that turn them into stream time travel in the status. */
+    const signature = snapshot.tracks.map((track) => `${track.fileId}:${track.cueCount}`).join("|");
+    const heavy = signature !== mirrorSignature;
+    mirrorSignature = signature;
+
+    chrome.runtime
+      .sendMessage({
+        type: "sso:toChrome",
+        message: {
+          type: "sso:mirror",
+          status: snapshot,
+          removed: lastRemoved() || null,
+          // The panel's Study button and the "learning" chip on each card read
+          // this, and it lives in the frame the rail is drawn in.
+          study: window.__ssoStudy?.settings?.() || null,
+          cueTimes: heavy ? snapshot.tracks.map((_, slot) => cueTimesFor(slot)) : null,
+        },
+      })
+      .then((reply) => {
+        /* A top frame that no longer thinks it draws the controls.
+         *
+         * It is replaced whenever the extension updates under an open tab, and
+         * a fresh copy starts out "solo" knowing nothing - so it drops the
+         * push, and there is no button on the page and nothing pushing it
+         * back. Forgetting the claim makes the next tick say it all again. */
+        if (!reply?.ok) claimedSubject = null;
+      })
+      .catch(() => {
+        claimedSubject = null;
+      });
+  }
+
+  /* The pointer summoning a button in a document it never enters.
+   *
+   * Moving the mouse over a nested player raises no event in the top frame at
+   * all - events do not cross a frame boundary - so the button up there would
+   * appear only when the pointer happened to be outside the video. Once every
+   * half second is enough to keep it up while a hand is moving, and it stops
+   * the moment the hand does. */
+  const POKE_MS = 500;
+  let pokedAt = 0;
+
+  function pokeChrome() {
+    if (role !== "video") return;
+    const now = Date.now();
+    if (now - pokedAt < POKE_MS) return;
+    pokedAt = now;
+    chrome.runtime
+      .sendMessage({ type: "sso:toChrome", message: { type: "sso:pointerAlive" } })
+      .catch(() => {});
+  }
+
+  // --- being the frame that draws the controls ------------------------------
+
+  /* What the chrome frame knows, which is only what has been sent to it. */
+  let mirror = null;
+  let mirrorSettings = ""; // so an unchanged settings object is not re-applied
+  let mirrorSeenAt = 0;
+  /* How long a silence means the video's frame is gone.
+   *
+   * It pushes at least once a second while it is there, so three seconds of
+   * nothing is not a quiet moment - it is a frame that navigated, or a player
+   * the site tore out. Left alone the button would stay on a page with no film
+   * behind it, and every press would open a panel reporting a video that is
+   * not there. */
+  const MIRROR_SILENCE_MS = 3000;
+
+  function setFrameRole(next, frameId) {
+    if (next === "chrome") {
+      videoFrameId = frameId ?? null;
+      if (role === "chrome") return;
+      role = "chrome";
+      mirror = null;
+      mirrorSettings = "";
+      // The clock starts now, not at whatever the last arrangement left
+      // behind, or the silence check below would fire before the first push.
+      mirrorSeenAt = Date.now();
+      /* The button, straight away rather than on the next pointer move. The
+       * frame that told us has a film in it, which is the whole condition for
+       * showing one. */
+      ensureOverlay();
+      revealHandle();
+      askForMirror();
+      return;
+    }
+    if (role !== "chrome") return;
+    role = "solo";
+    videoFrameId = null;
+    mirror = null;
+    mirrorSettings = "";
+    mirrorSeenAt = 0;
+    if (handle) handle.dataset.visible = "false";
+    notify();
+  }
+
+  /* One tick's worth of keeping the two frames in step, whichever this is.
+   *
+   * Called from tick() so it runs at the same cadence as everything else, and
+   * so the three questions - has my role changed, is my state stale up there,
+   * has the film's frame gone quiet - are asked in one place. */
+  function mindTheOtherFrame() {
+    reportFrameRole();
+    if (role === "video") pushMirror();
+    if (role === "chrome" && mirrorSeenAt && Date.now() - mirrorSeenAt > MIRROR_SILENCE_MS) {
+      setFrameRole("solo");
+    }
+  }
+
+  function askForMirror() {
+    if (role !== "chrome") return;
+    chrome.runtime
+      .sendMessage({ type: "sso:toVideo", message: { type: "sso:mirrorPlease" } })
+      .catch(() => {});
+  }
+
+  /* Answers whether it was taken, and the answer is load-bearing: a push that
+   * lands in a frame no longer drawing the controls is how the sender finds
+   * out to claim again. */
+  function takeMirror(message) {
+    if (role !== "chrome") return false;
+    mirror = mirror || { status: null, cueTimes: [], removed: null };
+    mirror.status = message.status || null;
+    mirror.removed = message.removed || null;
+    mirror.study = message.study || null;
+    mirrorSeenAt = Date.now();
+    if (message.cueTimes) mirror.cueTimes = message.cueTimes;
+
+    /* The panel reads settings out of the status, but this frame's own keydown
+     * handler reads them out of `state`. A binding changed in the panel has to
+     * work in the document the reader is typing into, which is this one. */
+    const written = JSON.stringify(mirror.status?.settings || null);
+    if (mirror.status?.settings && written !== mirrorSettings) {
+      mirrorSettings = written;
+      state.settings = mirror.status.settings;
+      applySettings();
+    }
+
+    // The heavy half is only sent when it changes, so a chrome frame that
+    // arrived after the change has to say so once.
+    const missing = (mirror.status?.tracks || []).some(
+      (track, slot) => track.cueCount > 0 && (mirror.cueTimes[slot]?.length ?? 0) !== track.cueCount,
+    );
+    if (missing) askForMirror();
+
+    notify();
+    return true;
+  }
+
+  function mirroredStatus() {
+    const base = mirror?.status || localStatus();
+    return { ...base, mirrored: true, videoFrameId };
+  }
+
+  /* Every api call that changes something about the film, sent to the frame
+   * that has it.
+   *
+   * A list rather than a branch inside each, because the list is the thing
+   * worth reading: it is exactly the set of calls that are about the film
+   * rather than about this document. Everything not named here - the geometry
+   * helpers, the toast, the key capture, the page metadata - is answered where
+   * it is asked, because that is where the document is.
+   */
+  const FORWARDED = [
+    "attach",
+    "detach",
+    "setVisible",
+    "setOffset",
+    "setRate",
+    "nudge",
+    "stepLine",
+    "updateSettings",
+    "updateTrackSettings",
+    "resetSettings",
+    "resetKeys",
+    "resetPosition",
+    "setKeyTrack",
+    "clearAdDrift",
+    "setPlacing",
+    "arrange",
+    "applyLook",
+    "autoAlign",
+    "undoRemove",
+    "pauseVideo",
+    "setStudyEnabled",
+    "toggleStudySlot",
+    "toggleStudy",
+    "saveTopWord",
+  ];
+
+  /* Never rejects, and that is deliberate.
+   *
+   * Almost every caller is a click handler that cannot await, so a rejection
+   * here would be an unhandled one - invisible, with a control that silently
+   * did nothing. The failure is said out loud instead, and the value comes back
+   * as null, which is what the two callers that read one already treat as "no
+   * answer". */
+  function callVideoFrame(method, args) {
+    return chrome.runtime
+      .sendMessage({ type: "sso:toVideo", message: { type: "sso:call", method, args } })
+      .then(
+        (reply) => {
+          if (reply?.ok) return reply.value ?? null;
+          showToast(
+            reply
+              ? `That did not work - ${reply.reason || "the video refused it"}`
+              : "Lost touch with the frame the video is in",
+          );
+          return null;
+        },
+        () => {
+          showToast("Lost touch with the frame the video is in");
+          return null;
+        },
+      );
   }
 
   // --- messaging ------------------------------------------------------------
@@ -3694,6 +4045,58 @@
         sendResponse({ ok: Boolean(window.__ssoPanel) });
         return false;
 
+      // --- the two frames talking to each other ---------------------------
+
+      case "sso:frameRole":
+        setFrameRole(message.role, message.videoFrameId);
+        sendResponse({ ok: true });
+        return false;
+
+      case "sso:mirror":
+        sendResponse({ ok: takeMirror(message) });
+        return false;
+
+      case "sso:mirrorPlease":
+        // A chrome frame that arrived after the last change, asking for the
+        // half that only travels when it changes.
+        mirrorSignature = "";
+        mirrorAt = 0;
+        pushMirror();
+        sendResponse({ ok: true });
+        return false;
+
+      case "sso:pointerAlive":
+        if (role === "chrome") {
+          ensureOverlay();
+          revealHandle();
+        }
+        sendResponse({ ok: true });
+        return false;
+
+      /* The chrome frame asking for something to be done to the film.
+       *
+       * A named list, not whatever it asks for. This arrives from another frame
+       * of a page, and the api holds things that take DOM nodes and build
+       * windows; what may cross the gap is the set that takes plain values and
+       * is about the film. */
+      case "sso:call": {
+        if (!FORWARDED.includes(message.method)) {
+          sendResponse({ ok: false, reason: `${message.method} is not forwardable` });
+          return false;
+        }
+        try {
+          const value = window.__ssoApi[message.method](...(message.args || []));
+          Promise.resolve(value).then(
+            (settled) => sendResponse({ ok: true, value: settled ?? null }),
+            (error) => sendResponse({ ok: false, reason: String(error?.message || error) }),
+          );
+        } catch (error) {
+          sendResponse({ ok: false, reason: String(error?.message || error) });
+          return false;
+        }
+        return true;
+      }
+
       case "sso:toast":
         showToast(String(message.message || ""));
         sendResponse({ ok: true });
@@ -3750,6 +4153,25 @@
       forgetAdDrift();
       notify();
     },
+    /* Study mode lives where the cue text is, which on a nested player is not
+     * the frame drawing the panel. The panel used to reach `window.__ssoStudy`
+     * directly, which only ever finds the copy in its own document - so these
+     * three go through the api, where the forwarding already is. */
+    studySettings() {
+      return (role === "chrome" ? mirror?.study : window.__ssoStudy?.settings?.()) || null;
+    },
+    setStudyEnabled(on) {
+      return window.__ssoStudy?.setEnabled?.(Boolean(on));
+    },
+    toggleStudySlot(slot) {
+      return window.__ssoStudy?.toggleStudySlot?.(slot);
+    },
+    toggleStudy() {
+      return Boolean(window.__ssoStudy?.toggle?.());
+    },
+    saveTopWord() {
+      return Boolean(window.__ssoStudy?.saveTop?.());
+    },
     pageInfo,
     hasPlayableVideo,
     updateSettings,
@@ -3765,7 +4187,9 @@
     fonts: FONTS,
     showToast,
     undoRemove,
-    removedTrack,
+    removedTrack() {
+      return (role === "chrome" ? mirror?.removed : lastRemoved()) || null;
+    },
     /* Study mode needs to read the line under a word to save it with its
      * sentence, and the paired line in the other language, which is the whole
      * reason a word is worth saving at all. */
@@ -3788,7 +4212,7 @@
      * in place would silently reorder the track and break the binary search
      * that findCueIndexes depends on. */
     cueTimes(slot) {
-      return (state.tracks[slot]?.cues || []).map((cue) => cue.start);
+      return role === "chrome" ? (mirror?.cueTimes?.[slot] || []).slice() : cueTimesFor(slot);
     },
     /* File clock to stream clock, for a track that may not be attached yet.
      *
@@ -3796,10 +4220,16 @@
      * one axis; without this each caller would re-derive `t * rate + offset +
      * adDrift` and one of them would forget the ad drift. */
     toStreamMs(slot, fileMs) {
-      const track = state.tracks[slot];
-      return track ? streamTimeMs(track, fileMs) : fileMs;
+      const mirrored = role === "chrome";
+      const track = (mirrored ? mirror?.status?.tracks : state.tracks)?.[slot];
+      if (!track) return fileMs;
+      return streamTimeMs(track, fileMs, mirrored ? mirror?.status?.adDriftMs || 0 : state.adDriftMs);
     },
     filmTimeMs() {
+      if (role === "chrome") {
+        const seen = mirror?.status;
+        return seen?.currentTime == null ? null : seen.currentTime * 1000 - (seen.adDriftMs || 0);
+      }
       return state.video ? state.video.currentTime * 1000 - state.adDriftMs : null;
     },
     pauseVideo() {
@@ -3863,13 +4293,45 @@
     },
   };
 
+  /* The api is one shape and answers from two places.
+   *
+   * In the frame drawing controls for a video that is somewhere else, every
+   * call above that changes the film has to happen where the film is. Wrapping
+   * once here rather than branching inside twenty methods keeps each of them
+   * about the thing it does, and keeps the set that crosses the gap written
+   * down in one place - which is also the list the receiving side checks
+   * against, so the two cannot drift.
+   *
+   * When the video is in this frame - which is every ordinary page - the
+   * wrapper calls straight through and costs one comparison. */
+  for (const name of FORWARDED) {
+    const local = window.__ssoApi[name];
+    if (typeof local !== "function") throw new Error(`forwarded api has no ${name}`);
+    window.__ssoApi[name] = (...args) =>
+      role === "chrome" ? callVideoFrame(name, args) : local(...args);
+  }
+
   // --- wiring ---------------------------------------------------------------
 
   /* The handle only appears where there is something to control, and only
    * while the mouse is moving - so it is never in the way of the film. */
   function onPointerMove() {
+    /* The frame drawing the controls has no video to gate on - it was told
+     * there is one, by the frame that has it. */
+    if (role === "chrome") {
+      ensureOverlay();
+      revealHandle();
+      return;
+    }
     if (!isPageSubject(pickVideoCached())) return;
     ensureOverlay();
+    /* The button is in the top frame now, and a pointer moving in here raises
+     * no event up there - events do not cross a frame boundary. So say so,
+     * rather than drawing a second button nobody can press. */
+    if (role === "video") {
+      pokeChrome();
+      return;
+    }
     revealHandle();
   }
 
@@ -3952,6 +4414,7 @@
     clearTimeout(toastTimer);
     clearTimeout(handleTimer);
     clearTimeout(rememberTimer);
+    clearTimeout(mirrorTimer);
     videoResize?.disconnect();
     observedVideo = null;
     document.removeEventListener("keydown", onCaptureKey, true);

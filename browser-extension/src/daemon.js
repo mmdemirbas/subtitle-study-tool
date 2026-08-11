@@ -151,19 +151,40 @@ export async function attachToTab(tabId, { cues, label, fileId, language, slot =
   throw new Error(lastReason);
 }
 
-/** Ask every frame for status; return the first one that holds a video. */
+/* Ask every frame for status; return the first one that holds a video.
+ *
+ * A frame drawing the controls for a video in another frame answers with that
+ * video's state and says `mirrored`, which is what the panel it draws needs and
+ * exactly the wrong answer here: an attach or a detach sent to it would arrive
+ * at a document with no video in it. So the search is for the frame that
+ * actually holds the film, and where the controls are is reported alongside
+ * rather than instead - the keyboard shortcut that opens the panel needs it.
+ */
 export async function tabStatus(tabId) {
   let fallback = null;
+  let chromeFrameId = null;
+  let found = null;
   for (const frameId of await frameIds(tabId)) {
     try {
       const status = await chrome.tabs.sendMessage(tabId, { type: "sso:status" }, options(frameId));
-      if (status?.hasVideo) return { ...status, frameId };
+      if (status?.mirrored) {
+        chromeFrameId = frameId;
+        continue;
+      }
+      if (status?.hasVideo && !found) {
+        found = { ...status, frameId };
+        // Both answers are wanted, and the order frames arrive in is not
+        // promised - so stop early only once the other one is in hand.
+        if (chromeFrameId != null) break;
+        continue;
+      }
       if (status && !fallback) fallback = { ...status, frameId };
     } catch {
       // no content script in this frame
     }
   }
-  return fallback;
+  const answer = found || fallback;
+  return answer && { ...answer, chromeFrameId };
 }
 
 /**

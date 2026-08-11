@@ -195,9 +195,98 @@ async function onProgrammeChange(sender, mark) {
   return { ok: true };
 }
 
+// --- which frame does what --------------------------------------------------
+
+/* Two frames, one film, and no way for them to speak except through here.
+ *
+ * Sites that embed a player from another host put the video in a cross-origin
+ * frame and then paint over it. Measured on streaming-site.example: an <iframe> appended
+ * to <html>, fixed, inset 0, z-index 2147483647, taking every click on the
+ * page. The top layer is per document, so nothing drawn inside the player's
+ * frame can get above that - the whole frame is behind it. The CC button was
+ * visible and every press went to the site.
+ *
+ * So the frames divide the work. The frame with the video keeps the subtitles,
+ * because that is where the picture is and where a word has to be clicked. The
+ * top frame gets the button and the panel, because that is the document the
+ * page is painting in. Different origins, so every word between them is
+ * carried here.
+ *
+ * On the ordinary page, where the video is in the top frame, none of this runs
+ * and nothing changes.
+ */
+const videoFrames = new Map(); // tabId -> the frame holding the video, when it is not the top one
+
+chrome.tabs.onRemoved.addListener((tabId) => videoFrames.delete(tabId));
+
+/* A frame saying whether it holds the film - and being told what that makes it.
+ *
+ * The answer matters: a frame told it is the video frame stops drawing its own
+ * CC button, because the top frame is drawing one. If the top frame did not
+ * take the job - no content script there, an extension page, a sandboxed
+ * document - the answer is "solo" and the player's frame keeps its button. One
+ * button either way, and never none.
+ */
+async function noteFrameRole(sender, hasSubject) {
+  const tabId = sender?.tab?.id;
+  const frameId = sender?.frameId;
+  if (tabId == null || frameId == null) return { ok: false, role: "solo" };
+
+  if (!hasSubject) {
+    /* Only the frame that claimed it may give it up. Every frame of the page
+     * reports, so a sibling frame whose preview stopped playing must not
+     * unseat the player. */
+    if (videoFrames.get(tabId) === frameId) {
+      videoFrames.delete(tabId);
+      await send(tabId, TOP_FRAME, { type: "sso:frameRole", role: "solo" });
+    }
+    return { ok: true, role: "solo" };
+  }
+
+  if (frameId === TOP_FRAME) {
+    videoFrames.delete(tabId);
+    return { ok: true, role: "solo" };
+  }
+
+  videoFrames.set(tabId, frameId);
+  const answer = await send(tabId, TOP_FRAME, {
+    type: "sso:frameRole",
+    role: "chrome",
+    videoFrameId: frameId,
+  });
+  if (!answer?.ok) {
+    videoFrames.delete(tabId);
+    return { ok: true, role: "solo" };
+  }
+  return { ok: true, role: "video" };
+}
+
+async function relay(message, sender) {
+  const tabId = sender?.tab?.id;
+  if (tabId == null) return null;
+  const to = message.type === "sso:toChrome" ? TOP_FRAME : videoFrames.get(tabId);
+  // Never back to the sender: a frame that was both would talk to itself.
+  if (to == null || to === sender.frameId) return null;
+  return send(tabId, to, message.message);
+}
+
 // --- daemon proxy for panel.js and popup.js ---------------------------------
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "sso:frameRole") {
+    noteFrameRole(sender, Boolean(message.hasSubject)).then(sendResponse, () =>
+      sendResponse({ ok: false, role: "solo" }),
+    );
+    return true;
+  }
+
+  if (message?.type === "sso:toChrome" || message?.type === "sso:toVideo") {
+    // A frame that has gone is not an error here; the sender reads null as
+    // "nobody is listening" and carries on alone.
+    relay(message, sender).then(sendResponse, () => sendResponse(null));
+    return true;
+  }
+
   if (message?.type === "sso:daemon") {
     handleDaemonCall(message.op, message.args || {}, sender)
       .then(sendResponse)
@@ -363,9 +452,14 @@ async function runCommand(command) {
 
   const status = await tabStatus(tab.id);
   const frameId = status?.frameId ?? TOP_FRAME;
+  /* The panel opens where the controls are, which is not always where the
+   * video is. Toasts deliberately stay in the video's frame: they only have to
+   * be seen, and when a nested player goes fullscreen the top frame's document
+   * is not being painted at all. */
+  const panelFrame = status?.chromeFrameId ?? frameId;
 
   if (command === "toggle-panel") {
-    const result = await send(tab.id, frameId, { type: "sso:togglePanel" });
+    const result = await send(tab.id, panelFrame, { type: "sso:togglePanel" });
     if (!result?.ok) {
       // Reaching here means the page refused injection, so there is nowhere to
       // draw a toast either. The badge is the only surface left.
@@ -513,9 +607,10 @@ async function autoAttach(tab, frameId, status) {
       return;
     }
 
-    // Both of these mean "a human has to choose", so both open the panel.
+    // Both of these mean "a human has to choose", so both open the panel -
+    // in the frame that draws it, which on a nested player is not this one.
     if (plan.decision === "too-weak" || plan.decision === "unknown-episode") {
-      await send(tab.id, frameId, { type: "sso:togglePanel" });
+      await send(tab.id, status?.chromeFrameId ?? frameId, { type: "sso:togglePanel" });
       await notify(tab.id, frameId, plan.reason);
       return;
     }

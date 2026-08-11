@@ -738,7 +738,7 @@
      * you can only reach by first being in the state it turns on is not a
      * switch - and everything else about study is on the rail's own gear. */
     el.studyButton = button("Study", {
-      onClick: () => window.__ssoStudy?.setEnabled(!window.__ssoStudy.settings().enabled),
+      onClick: () => api.setStudyEnabled(!api.studySettings()?.enabled),
       title: "Mark the words that are rare in film dialogue and show what they mean",
     });
     el.studyButton.className = "sso-quick__study";
@@ -749,7 +749,7 @@
      * instead of once per card. Hidden with fewer than two, where it would be a
      * button that cannot do anything. */
     el.lineUpAll = button("Line up all", {
-      onClick: lineUpAll,
+      onClick: () => api.detached(lineUpAll(), "Lining them up"),
       title: "Move every other subtitle to agree with the first",
     });
     el.lineUpAll.className = "sso-quick__align sso-quiet";
@@ -770,7 +770,10 @@
    * button that shows the number before taking it. Saying "two lined up, one
    * not sure" is the honest summary of a batch where the answers differ - a
    * single "done" would claim the uncertain one as settled. */
-  function lineUpAll() {
+  /* Asynchronous only because the aligner may be in another frame - see the
+   * note on api.autoAlign. With the video in this one it resolves in the same
+   * turn and nothing about the sequence below changes. */
+  async function lineUpAll() {
     const status = api.status();
     const first = status.tracks.findIndex((track) => track.attached);
     if (first === -1) return;
@@ -785,7 +788,7 @@
     for (const [slot, track] of status.tracks.entries()) {
       if (!track.attached || slot === first) continue;
       before.set(slot, timingOf(slot));
-      const answer = api.autoAlign?.(slot, { against: first });
+      const answer = await api.autoAlign?.(slot, { against: first });
       if (answer?.applied) moved.push(slot + 1);
       else if (answer?.verdict === "offer") unsure.push(slot + 1);
     }
@@ -851,8 +854,8 @@
 
     const apply = (quiet) => {
       const held = startedAt ? Date.now() - startedAt : 0;
-      const current = api.status().tracks[slot].offsetMs;
-      api.setOffset(current + direction * stepFor(held), { slot, quiet });
+      // The step, not the sum: see the note on api.nudge.
+      api.nudge(direction * stepFor(held), { slot, quiet });
     };
 
     const stop = () => {
@@ -860,8 +863,9 @@
       timer = null;
       if (!startedAt) return;
       startedAt = 0;
-      // One toast for the whole gesture, naming where it ended up.
-      api.setOffset(api.status().tracks[slot].offsetMs, { slot });
+      // One toast for the whole gesture, naming where it ended up. A nudge of
+      // nothing, so the number it names is read where it is kept.
+      api.nudge(0, { slot });
     };
 
     const tick = () => {
@@ -1388,7 +1392,7 @@
     learnChip.type = "button";
     learnChip.addEventListener("click", (event) => {
       event.stopPropagation();
-      window.__ssoStudy?.toggleStudySlot(slot);
+      api.toggleStudySlot(slot);
       refresh(api.status());
     });
 
@@ -1571,7 +1575,7 @@
      * with the playback buttons. Reported as exactly that. */
     const lineUpButton = button("Line up", {
       title: "Work out the gap from where the two subtitles say the same things",
-      onClick: () => lineUp(slot),
+      onClick: () => api.detached(lineUp(slot), "Lining it up"),
     });
     lineUpButton.className = "sso-sync__align";
     offsets.append(lineUpButton);
@@ -2062,13 +2066,13 @@
     api.setOffset(offsetMs ?? 0, { slot, quiet: true });
   };
 
-  function lineUp(slot) {
+  async function lineUp(slot) {
     /* Read before the aligner runs, because the confident band applies itself
      * inside autoAlign and after the call there is nothing left to remember.
      * Undo used to put back rate 1 and offset 0, which is where a file starts
      * out and not where the reader was if they had already timed it by hand. */
     const was = timingOf(slot);
-    const answer = api.autoAlign?.(slot);
+    const answer = await api.autoAlign?.(slot);
     if (!answer) {
       sayOnCard(slot, "Nothing to line this up against", { warn: true });
       return;
@@ -2929,7 +2933,7 @@
 
     /* The shared row. Nothing attached means nothing to arrange and nothing to
      * study, and the empty state below owns that screen on its own. */
-    const study = window.__ssoStudy?.settings?.() || null;
+    const study = api.studySettings();
     el.quick.hidden = !status.attached;
     el.arrangeGroup.hidden = status.trackCount < 2;
     el.moveButton.textContent = status.placing ? "Done" : "Place";
@@ -2971,7 +2975,7 @@
        * on saying it. Only meaningful with two subtitles - with one there is
        * nothing to choose between, and a card lit up as "the selected one"
        * would be answering a question nobody asked. */
-      const study = window.__ssoStudy?.settings?.();
+      const study = api.studySettings();
       const learning = Boolean(study?.studySlots?.includes(slot));
       const selected = status.trackCount > 1 && status.keyTrack === slot;
       card.root.dataset.selected = selected ? "true" : "false";
