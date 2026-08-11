@@ -27,6 +27,22 @@ const ui = {
 
 const session = { tab: null, frameId: 0 };
 
+/* Run a click handler that awaits something, and say so when it fails.
+ *
+ * chrome.runtime.sendMessage rejects on a channel failure - the extension
+ * reloaded under this popup, a worker that threw while starting - and an async
+ * click handler drops that rejection on the floor. The popup then closes, or
+ * does not, with nothing said. */
+const onClick = (node, work) =>
+  node.addEventListener("click", () => {
+    Promise.resolve()
+      .then(work)
+      .catch((error) => {
+        ui.diagnoseNote.hidden = false;
+        ui.diagnoseNote.textContent = String(error?.message || error);
+      });
+  });
+
 init().catch((error) => block(error?.message || "Something went wrong.", ""));
 
 async function init() {
@@ -90,21 +106,21 @@ async function refresh() {
 
 // --- actions ----------------------------------------------------------------
 
-ui.find.addEventListener("click", async () => {
+onClick(ui.find, async () => {
   // Same path as the keyboard shortcut, including the match-quality gate that
   // opens the panel instead of attaching something unrelated.
   await chrome.runtime.sendMessage({ type: "sso:command", command: "auto-attach" });
   window.close();
 });
 
-ui.panel.addEventListener("click", async () => {
+onClick(ui.panel, async () => {
   // Via the worker, so it re-injects into a tab still running an older content
   // script rather than failing silently.
   await chrome.runtime.sendMessage({ type: "sso:command", command: "toggle-panel" });
   window.close();
 });
 
-ui.toggle.addEventListener("click", async () => {
+onClick(ui.toggle, async () => {
   const result = await send({ type: "sso:toggleVisible" });
   if (result?.ok) ui.toggle.textContent = result.visible ? "Hide subtitles" : "Show subtitles";
 });
@@ -112,7 +128,7 @@ ui.toggle.addEventListener("click", async () => {
 /* Capture before opening the report, and stay open while it runs: the popup
  * closing would take the capture with it. The worker opens the report tab, and
  * that is what closes the popup. */
-ui.diagnose.addEventListener("click", async () => {
+onClick(ui.diagnose, async () => {
   ui.diagnose.disabled = true;
   ui.diagnoseNote.hidden = false;
   ui.diagnoseNote.textContent = "Asking every frame…";

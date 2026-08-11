@@ -6,8 +6,17 @@
  * worker, the same way the panel does.
  */
 
+/* Never rejects, the same contract content.js gives the panel.
+ *
+ * sendMessage rejects when the channel fails rather than when the work does -
+ * the extension reloaded under this page, or a worker that threw while
+ * starting - and every caller here is inside a click handler that cannot
+ * catch. Answering in the shape the worker already uses for its own failures
+ * means one failure mode to read instead of two, and no dropped rejection. */
 const call = (op, args = {}) =>
-  chrome.runtime.sendMessage({ type: "sso:daemon", op, args });
+  chrome.runtime
+    .sendMessage({ type: "sso:daemon", op, args })
+    .catch((error) => ({ transportError: String(error?.message || error) }));
 
 const el = (id) => document.getElementById(id);
 

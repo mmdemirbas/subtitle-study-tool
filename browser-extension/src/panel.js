@@ -128,11 +128,24 @@
    * adopts the same one, which is what stops the two floating surfaces drifting
    * into different visual languages again. It goes first so panel.css can
    * override any of it. */
+  /* A stylesheet that will not load costs the look, never the panel.
+   *
+   * These are web-accessible resources fetched at runtime, and the fetch fails
+   * for a reason that has nothing to do with the panel: the extension being
+   * reloaded under an open tab invalidates the context and every getURL with
+   * it. Left to reject, it took build() with it, and build() is awaited by
+   * show(), which is called from a click that cannot catch anything - so the
+   * CC button did nothing at all and said nothing about why. Unstyled is a
+   * worse panel; absent is not a panel. */
   async function loadStyles() {
     if (sheets) return sheets;
     const files = ["src/chrome.css", "src/panel.css"];
     const texts = await Promise.all(
-      files.map((file) => fetch(chrome.runtime.getURL(file)).then((r) => r.text())),
+      files.map((file) =>
+        fetch(chrome.runtime.getURL(file))
+          .then((r) => r.text())
+          .catch(() => ""),
+      ),
     );
     sheets = texts.map((css) => {
       const made = new CSSStyleSheet();
@@ -186,7 +199,7 @@
     el.gear.type = "button";
     el.gear.textContent = "⚙";
     el.gear.title = "Settings";
-    el.gear.addEventListener("click", () => openSettings());
+    el.gear.addEventListener("click", () => api.detached(openSettings(), "Settings"));
 
     /* Folds to the title bar, the same control the study rail has. Different
      * from closing: the panel stays where it was put and at the size it was
@@ -2135,7 +2148,7 @@
     el.query.placeholder = "Film or series title";
     el.query.addEventListener("keydown", (event) => {
       event.stopPropagation(); // typing must not trigger nudge bindings
-      if (event.key === "Enter") runSearch(el.query.value.trim());
+      if (event.key === "Enter") api.detached(runSearch(el.query.value.trim()), "The search");
     });
 
     const grow = document.createElement("div");
@@ -2147,7 +2160,9 @@
      * once a subtitle is attached this is an adjustment surface with no single
      * next action, and a filled blue button in it would be claiming otherwise.
      * Enter in the field runs the same search. */
-    row.append(grow, button("Search", { onClick: () => runSearch(el.query.value.trim()) }));
+    row.append(grow, button("Search", {
+      onClick: () => api.detached(runSearch(el.query.value.trim()), "The search"),
+    }));
 
     el.searchNote = document.createElement("p");
     el.searchNote.className = "sso-note";
@@ -2163,7 +2178,7 @@
      * Three, because two cannot break a tie and four is another download for a
      * question the first three have usually settled. */
     el.tryBest = button("Try the best 3", {
-      onClick: () => tryBest(),
+      onClick: () => api.detached(tryBest(), "Trying the best three"),
       title: "Download the top three and keep whichever lines up best. Costs three downloads.",
     });
     el.tryBest.className = "sso-try";
@@ -2312,7 +2327,7 @@
           .join(" · ");
 
         b.append(top, sub);
-        b.addEventListener("click", () => attachResult(result));
+        b.addEventListener("click", () => api.detached(attachResult(result), "That subtitle"));
         item.append(b);
         return item;
       }),
@@ -2372,27 +2387,35 @@
     );
     const reference = referenceSlot >= 0 ? api.cueTimes(referenceSlot) : null;
 
+    /* Re-enabled in a finally, not after the loop.
+     *
+     * Anything thrown between the two assignments left the button disabled for
+     * the life of the panel, with no way back short of closing and reopening
+     * it - a control that has permanently stopped working because one download
+     * went wrong. runDiagnostic already had this shape and these two did not. */
     el.tryBest.disabled = true;
     el.searchNote.className = "sso-note";
     const tried = [];
     const failed = [];
-    for (const [index, result] of picks.entries()) {
-      el.searchNote.textContent =
-        `Trying ${index + 1} of ${picks.length} · ${result.release || result.movie_name || ""}`;
-      const response = await api.daemon("fetch", {
-        fileId: result.file_id,
-        context: fetchContext(result),
-      });
-      if (!response || response.error || response.transportError || !response.cues?.length) {
-        failed.push(response?.quota_exceeded ? "the daily download limit" : "a failed download");
-        // A quota wall will not heal on the next one, so stop asking.
-        if (response?.quota_exceeded) break;
-        continue;
+    try {
+      for (const [index, result] of picks.entries()) {
+        el.searchNote.textContent =
+          `Trying ${index + 1} of ${picks.length} · ${result.release || result.movie_name || ""}`;
+        const response = await api.daemon("fetch", {
+          fileId: result.file_id,
+          context: fetchContext(result),
+        });
+        if (!response || response.error || response.transportError || !response.cues?.length) {
+          failed.push(response?.quota_exceeded ? "the daily download limit" : "a failed download");
+          // A quota wall will not heal on the next one, so stop asking.
+          if (response?.quota_exceeded) break;
+          continue;
+        }
+        tried.push({ result, cues: response.cues });
       }
-      tried.push({ result, cues: response.cues });
+    } finally {
+      el.tryBest.disabled = false;
     }
-
-    el.tryBest.disabled = false;
     if (!tried.length) {
       el.searchNote.className = "sso-note sso-note--warn";
       el.searchNote.textContent = failed.length
@@ -2754,7 +2777,7 @@
     row.className = "sso-row";
     el.diagnose = button("Diagnose this page", {
       primary: true,
-      onClick: runDiagnostic,
+      onClick: () => api.detached(runDiagnostic(), "The capture"),
     });
     row.append(el.diagnose);
 
@@ -3107,9 +3130,13 @@
     fitToViewport();
     // Asynchronous now that it crosses to the worker, so it fills in a moment
     // after the panel appears rather than holding it up.
-    if (!el.query.value) bestPageTitle().then((title) => {
-      if (!el.query.value) el.query.value = title;
-    });
+    if (!el.query.value) {
+      // Filling in the box is a convenience; failing to must not be an error.
+      bestPageTitle().then(
+        (title) => { if (!el.query.value) el.query.value = title; },
+        () => {},
+      );
+    }
   }
 
   function hide() {

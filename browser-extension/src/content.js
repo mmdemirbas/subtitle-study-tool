@@ -1567,7 +1567,9 @@
     node.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      window.__ssoPanel?.toggle();
+      // toggle() builds the panel on first use, which fetches two stylesheets.
+      // Dropping that promise is how the button comes to do nothing silently.
+      window.__ssoApi.detached(window.__ssoPanel?.toggle(), "The panel");
     });
 
     /* Every property that decides whether this is on screen is set inline and
@@ -3771,8 +3773,39 @@
     /* Daemon calls are routed through the service worker: MV3 content scripts
      * no longer make cross-origin requests with extension permissions, and the
      * daemon would reject the page's own origin anyway. */
+    /* Never rejects, and that is a contract every caller depends on.
+     *
+     * The worker already answers its own failures as data - `{ transportError }`
+     * from the handler's catch - but a failure of the CHANNEL is a rejection
+     * from sendMessage itself, and there are two ordinary ways to get one: the
+     * extension being reloaded or updated under an open tab ("Extension context
+     * invalidated"), and no listener being registered because the worker threw
+     * while starting. Every one of the eleven call sites is an `await` inside a
+     * function started from a click, so a rejection there was an unhandled
+     * rejection with the surface left on whatever it last said - "Searching…"
+     * forever, a Try-the-best button disabled for the life of the panel.
+     *
+     * Answering in the same shape the worker uses means no caller has to learn
+     * a second failure mode, and the ones that already check transportError -
+     * search, fetch, diagnose, deckSave - report it without changing. */
     daemon(op, args) {
-      return chrome.runtime.sendMessage({ type: "sso:daemon", op, args });
+      return chrome.runtime
+        .sendMessage({ type: "sso:daemon", op, args })
+        .catch((error) => ({ transportError: String(error?.message || error) }));
+    },
+    /* Start work from somewhere that cannot await it.
+     *
+     * Every click handler here begins something asynchronous - a message to the
+     * worker, a stylesheet fetch, a window that builds itself - and a handler
+     * cannot await. A rejection dropped at that boundary is invisible: no
+     * toast, nothing in a console the reader would open, and a control that
+     * simply does nothing. This is the one place that boundary is crossed, so
+     * the failure gets said out loud and names which thing failed rather than
+     * being one generic message for every kind. */
+    detached(promise, what) {
+      Promise.resolve(promise).catch((error) => {
+        showToast(`${what} did not work - ${error?.message || error}`);
+      });
     },
   };
 

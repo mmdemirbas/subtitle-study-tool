@@ -675,10 +675,10 @@
       const term = word.dataset.w;
       const slot = Number(word.dataset.slot);
       const language = studyLanguage(slot);
-      if (settings.hoverCard) showPopup(word, term, language);
+      if (settings.hoverCard) api.detached(showPopup(word, term, language), "That lookup");
       // With the rail put away the popup is the whole answer; adding to a list
       // nobody can see would only spend lookups.
-      if (settings.showRail) addCard(term, { rank: rankOf(word), language, slot });
+      if (settings.showRail) api.detached(addCard(term, { rank: rankOf(word), language, slot }), "That word");
     }, settings.dwellMs);
   }
 
@@ -881,7 +881,7 @@
     gearEl.type = "button";
     gearEl.textContent = "⚙";
     gearEl.title = "How study works";
-    gearEl.addEventListener("click", () => openRailSettings());
+    gearEl.addEventListener("click", () => api.detached(openRailSettings(), "Study settings"));
 
     titleEl = title;
     head.append(title, countEl, clearEl, gearEl, foldEl, close);
@@ -1123,11 +1123,20 @@
     node.hidden = !visible;
   }
 
+  /* Unstyled beats absent - the same reason panel.js catches here. The fetch
+   * fails when the extension is reloaded under an open tab, and letting it
+   * reject took build() with it, then turnOn(), then syncPresence(), which is
+   * called from a subscription that cannot catch anything: the rail silently
+   * stopped appearing and the only trace was an unhandled rejection. */
   async function loadStyles() {
     if (sheets) return sheets;
     const files = ["src/chrome.css", "src/study.css"];
     const texts = await Promise.all(
-      files.map((file) => fetch(chrome.runtime.getURL(file)).then((r) => r.text())),
+      files.map((file) =>
+        fetch(chrome.runtime.getURL(file))
+          .then((r) => r.text())
+          .catch(() => ""),
+      ),
     );
     sheets = texts.map((css) => {
       const made = new CSSStyleSheet();
@@ -1212,9 +1221,19 @@
     const key = `${language}>${target}:${term}`;
     if (lookupCache.has(key)) return lookupCache.get(key);
 
+    /* A transportError is an answer now, not a rejection, so it needs reading
+     * here or it arrives as an entry with no definitions and no translation and
+     * the popup says "nothing found for that word" about a word it never asked
+     * about. The catch stays for anything else that can go wrong. */
     const pending = api
       .daemon("lookup", { query: term, language, target })
-      .then((response) => response || { definitions: [], unavailable: "Lookup failed." })
+      .then((response) => {
+        if (!response) return { definitions: [], unavailable: "Lookup failed." };
+        if (response.transportError) {
+          return { definitions: [], unavailable: `Lookup failed - ${response.transportError}` };
+        }
+        return response;
+      })
       .catch(() => ({ definitions: [], unavailable: "Lookup failed." }));
     lookupCache.set(key, pending);
     const settled = await pending;
@@ -1492,7 +1511,7 @@
     save.className = "sso-card__save";
     save.textContent = card.saved ? "Saved" : "Save";
     save.disabled = card.saved;
-    save.addEventListener("click", () => saveCard(card));
+    save.addEventListener("click", () => api.detached(saveCard(card), "Saving that word"));
 
     const pin = document.createElement("button");
     pin.type = "button";
@@ -1935,7 +1954,7 @@
   }
 
   const toggle = () => {
-    setEnabled(!settings.enabled);
+    api.detached(setEnabled(!settings.enabled), "Study mode");
     return true;
   };
 
@@ -1965,9 +1984,9 @@
      * other nine. Attaching later brings it up, which is what makes this a
      * subscription rather than a one-off check. */
     api.subscribe?.(() => {
-      syncPresence();
+      api.detached(syncPresence(), "The study rail");
     });
-    syncPresence();
+    api.detached(syncPresence(), "The study rail");
   });
 
   window.__ssoStudyTeardown = () => {

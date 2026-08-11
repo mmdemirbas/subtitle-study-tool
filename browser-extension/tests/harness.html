@@ -3773,6 +3773,69 @@
         }
       });
 
+      /* Nothing the reader can press may leave a rejection on the floor.
+       *
+       * Every one of these surfaces begins asynchronous work from a click, and
+       * a click handler cannot await: a rejection there is an unhandled
+       * rejection, which means no toast, nothing in a console anybody opens,
+       * and a control that silently does nothing. The two things that actually
+       * reject are the message to the worker - the extension being reloaded
+       * under an open tab invalidates the context - and the stylesheet fetch
+       * that builds a surface.
+       *
+       * This suite already fails on any unhandled rejection (see `loose` at the
+       * bottom), so the assertion is simply that driving these paths with the
+       * channel broken produces none, and that the reader is told. */
+      check("a broken channel is reported, not dropped", async () => {
+        const realSend = chrome.runtime.sendMessage;
+        const seen = [];
+        const onLoose = (event) => seen.push(String(event.reason?.message ?? event.reason));
+        window.addEventListener("unhandledrejection", onLoose);
+        /* Read off the toast the overlay actually draws, not off the API.
+         * detached() calls content.js's own showToast from inside its closure,
+         * so replacing the exported one intercepts nothing. */
+        const toastText = () =>
+          [...document.querySelectorAll("div")]
+            .find((d) => d.shadowRoot?.querySelector(".sso-toast"))
+            ?.shadowRoot.querySelector(".sso-toast").textContent || "";
+        // What Chrome does to every in-flight call once the extension reloads.
+        chrome.runtime.sendMessage = async () => {
+          throw new Error("Extension context invalidated.");
+        };
+        try {
+          const panel = panelShadow();
+          panel.querySelector(".sso-panel__back")?.click();
+          await sleep(120);
+          // The search, which is the longest chain: pageContext, then search.
+          window.__ssoApi.detached(Promise.reject(new Error("probe")), "A probe");
+          await sleep(120);
+          const probeSaid = toastText();
+          const add = panel.querySelector(".sso-add");
+          if (add && !add.hidden) { add.click(); await sleep(150); }
+          const search = [...panel.querySelectorAll("button")].find(
+            (b) => b.textContent === "Search",
+          );
+          if (search) { search.click(); await sleep(400); }
+          const diagnose = [...panel.querySelectorAll("button")].find(
+            (b) => /Diagnose/.test(b.textContent),
+          );
+          if (diagnose) { diagnose.click(); await sleep(400); }
+          await sleep(400);
+
+          if (seen.length)
+            throw new Error(`unhandled rejection(s): ${seen.join(" | ")}`);
+          if (!/A probe did not work/.test(probeSaid))
+            throw new Error(`detached() said nothing; the toast read "${probeSaid}"`);
+        } finally {
+          chrome.runtime.sendMessage = realSend;
+          window.removeEventListener("unhandledrejection", onLoose);
+          // Back to the subtitles, which is where the cases after this expect
+          // the panel to be.
+          panelShadow()?.querySelector(".sso-panel__back")?.click();
+          await sleep(250);
+        }
+      });
+
       /* ...and a tap on a WORD must not, which is the other half of the same
        * rule and was doing both.
        *
