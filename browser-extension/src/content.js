@@ -267,6 +267,15 @@
      * needed to use the tool: the panel opens from the CC button and every
      * binding has a control beside the thing it acts on. */
     keysEnabled: false,
+
+    /* The running log, and the switch that stops it.
+     *
+     * On by default because its whole value is being there before anybody
+     * knew they wanted it - a record that starts when you go looking for one
+     * has already missed the thing. Off means off everywhere and at once: the
+     * frames and the service worker both route through trace.js, which reads
+     * this, so nothing keeps recording after the switch is thrown. */
+    diagnostics: true,
   };
 
   /* What the old physical bindings typed on a US layout.
@@ -4137,6 +4146,9 @@
   window.addEventListener("unhandledrejection", onRejection);
 
   function trace(kind, detail, { frames = false } = {}) {
+    // Checked here as well as in the worker, so switching it off also stops
+    // the messages, not only what is done with them.
+    if (state.settings.diagnostics === false) return;
     chrome.runtime
       .sendMessage({ type: "sso:daemon", op: "trace", args: { kind, detail, frames } })
       .catch(() => {});

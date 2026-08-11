@@ -10,9 +10,24 @@
  * dispatch the browser would perform.
  */
 const listeners = { message: [], removed: [], command: null, global: {} };
-// Every file the log wrote, and a switch for making the write fail.
+// Every file the log wrote, every batch it POSTed to the daemon, and switches
+// for making either fail - which is the interesting half.
 const written = [];
+const posted = [];
 let downloadsFail = false;
+let daemonUp = true;
+
+/* The daemon is a socket, so it is stubbed as one. The extension does not
+ * health-check it: the POST is the check, and "not running" arrives as a fetch
+ * that rejects - which is exactly what this does. */
+globalThis.fetch = async (url, options) => {
+  if (String(url).includes("/log")) {
+    if (!daemonUp) throw new TypeError("Failed to fetch");
+    posted.push(JSON.parse(options.body));
+    return { ok: true, status: 200, json: async () => ({ ok: true, file: "logs/today.jsonl" }) };
+  }
+  throw new TypeError("Failed to fetch");
+};
 
 /* A service worker's global is an EventTarget and node's is not, so the worker
  * registering its own error handlers would throw here on a line that is
@@ -325,10 +340,12 @@ const trace = await import("../src/trace.js");
  * somebody else's work and will fail depending on how the event loop went. */
 const resetTrace = async () => {
   downloadsFail = false;
+  daemonUp = true;
   await new Promise((r) => setTimeout(r, 60));
   await trace.flush();
   await trace.clear();
   written.length = 0;
+  posted.length = 0;
 };
 
 await resetTrace();
@@ -346,71 +363,111 @@ t(
   JSON.stringify((await trace.entries()).map((e) => e.at)),
 );
 
-/* The point of the whole rewrite: the record reaches disk without anybody
- * pressing anything. A log you have to click Save on is a log you do not have
- * on the day the clicks are the thing that stopped working. */
+/* The daemon is the destination, not the download folder. A browser extension
+ * cannot write to a directory, and the one API that puts a file on disk
+ * announces every file it writes - which for something recording while a film
+ * plays is a popup every few seconds. The daemon is a program with a
+ * filesystem. */
 await trace.flush();
 t(
-  "flushing writes a file and empties the buffer",
-  written.length === 1 && (await trace.entries()).length === 0,
-  `${written.length} file(s), ${(await trace.entries()).length} left buffered`,
+  "a flush goes to the daemon and nothing is downloaded",
+  posted.length === 1 && posted[0].entries.length === 3 && written.length === 0,
+  `${posted.length} posted, ${written.length} downloaded`,
+);
+t(
+  "and the buffer is emptied only once it is somewhere else",
+  (await trace.entries()).length === 0,
+  `${(await trace.entries()).length} left`,
 );
 
-const wrote = JSON.parse(decodeURIComponent(escape(atob(written[0].url.split(",")[1]))));
+/* With the daemon down it HOLDS. This is the whole answer to the popups: an
+ * evening of viewing stays in the browser rather than announcing a file every
+ * few seconds, and goes out in one piece when the daemon appears. */
+await resetTrace();
+daemonUp = false;
+for (let i = 0; i < 80; i++) await trace.record("panel", { i });
+t(
+  "with no daemon it holds everything rather than downloading",
+  written.length === 0 && (await trace.entries()).length === 80,
+  `${written.length} downloaded, ${(await trace.entries()).length} held`,
+);
+
+daemonUp = true;
+await trace.flush();
+t(
+  "and sends the lot the moment the daemon is there",
+  posted.length === 1 && posted[0].entries.length === 80 && (await trace.entries()).length === 0,
+  `${posted.length} batch(es), ${posted[0]?.entries.length} entries`,
+);
+
+/* Asked for by hand on the report page, with no daemon: that is the one time a
+ * file is the right answer. */
+await resetTrace();
+daemonUp = false;
+await trace.record("panel", { open: true });
+const forced = await trace.flush({ force: true });
+t(
+  "asking for it by hand with no daemon downloads a file",
+  forced.ok && written.length === 1 && String(written[0].filename).startsWith(`${trace.FOLDER}/`),
+  `${written.length} file(s): ${written[0]?.filename}`,
+);
+/* Read defensively: when the case above fails there is no file to open, and a
+ * suite that throws there reports nothing about any case after it. */
+const readFile = (file) => {
+  try {
+    return JSON.parse(decodeURIComponent(escape(atob(file.url.split(",")[1]))));
+  } catch {
+    return null;
+  }
+};
+const wrote = written[0] ? readFile(written[0]) : null;
 t(
   "and the file holds the entries, not a summary of them",
-  wrote.entries.length === 3 && wrote.entries.some((e) => e.kind === "align"),
-  JSON.stringify(wrote.entries.map((e) => e.kind)),
-);
-t(
-  "written under one folder, so the whole record is one directory",
-  String(written[0].filename).startsWith(`${trace.FOLDER}/`) && !written[0].saveAs,
-  String(written[0].filename),
+  wrote?.entries?.length === 1 && wrote.entries[0].kind === "panel",
+  wrote ? JSON.stringify(wrote.entries.map((e) => e.kind)) : "no file was written",
 );
 
-/* A disk that will not take the file must not cost the entries. Discarding
- * them is the one failure that leaves nothing to look at afterwards, which is
- * the entire thing this file exists to prevent. */
+/* Nothing may be dropped by a destination that refused it. Losing the entries
+ * is the one outcome that leaves nothing at all to look at afterwards. */
 await resetTrace();
+daemonUp = false;
 downloadsFail = true;
-await trace.record("panel", { open: true });
-const failed = await trace.flush();
+await trace.record("align", { slot: 0 });
+const refused = await trace.flush({ force: true });
 t(
-  "a write that fails keeps the entries rather than dropping them",
-  failed.ok === false && (await trace.entries()).length === 1,
-  `${(await trace.entries()).length} entries kept, reason ${failed.reason}`,
+  "a destination that refuses it keeps the entries rather than dropping them",
+  refused.ok === false && (await trace.entries()).length === 1,
+  `${(await trace.entries()).length} kept, reason ${refused.reason}`,
 );
 t(
   "and says so, so the report page can show it",
-  (await trace.state()).lastError?.includes("disk is full"),
+  Boolean((await trace.state()).lastError),
   String((await trace.state()).lastError),
 );
-downloadsFail = false;
-await trace.flush();
-t(
-  "and the next write gets them out",
-  written.length === 1 && (await trace.entries()).length === 0,
-  `${written.length} file(s)`,
-);
 
-/* Nothing waits for a timer to be reached before any of it is on disk. Past
- * the threshold the flush happens on the spot, so an afternoon of use is a
- * directory of files rather than one buffer that a crash takes with it. */
+/* The switch. Off means nothing is recorded at all - not recorded and
+ * discarded, not recorded and held. */
 await resetTrace();
-for (let i = 0; i < 45; i++) await trace.record("panel", { i });
+store["sso:settings"] = { diagnostics: false };
+await trace.record("panel", { open: true });
+await trace.record("align", { slot: 0 });
 t(
-  "a busy session flushes itself without waiting for the timer",
-  written.length >= 1,
-  `${written.length} file(s) written, ${(await trace.entries()).length} still buffered`,
+  "the switch stops it recording anything",
+  (await trace.entries()).length === 0,
+  `${(await trace.entries()).length} entries got through`,
 );
-const all = written.flatMap(
-  (file) => JSON.parse(decodeURIComponent(escape(atob(file.url.split(",")[1])))).entries,
-);
-const carried = [...all, ...(await trace.entries())].map((e) => e.i);
+store["sso:settings"] = { diagnostics: true };
+await trace.record("panel", { open: true });
 t(
-  "and not one entry is lost between the buffer and the files",
-  carried.length === 45 && carried.every((n, k) => n === k),
-  `${carried.length} entries, first ${carried[0]}, last ${carried[carried.length - 1]}`,
+  "and switching it back on starts it again",
+  (await trace.entries()).length === 1,
+  `${(await trace.entries()).length} entries`,
+);
+delete store["sso:settings"];
+t(
+  "an installation with no such setting keeps recording",
+  await trace.enabled(),
+  "defaulted off, which would lose the record on every existing install",
 );
 
 /* Cue times are stored as gaps to keep more of them; a pack that does not

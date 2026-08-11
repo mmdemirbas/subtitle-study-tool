@@ -472,7 +472,9 @@ async function handleDaemonCall(op, args, sender) {
     case "traceLog":
       return { entries: await trace.entries(), state: await trace.state(), folder: trace.FOLDER };
     case "traceFlush":
-      return trace.flush();
+      // force, because this one was asked for: if the daemon is down it writes
+      // a file rather than reporting that it is still holding everything.
+      return trace.flush({ force: Boolean(args.force) });
     case "traceClear":
       await trace.clear();
       return { ok: true };

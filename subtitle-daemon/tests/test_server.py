@@ -797,3 +797,62 @@ def test_a_clean_typed_title_survives_the_guesser_untouched(http) -> None:
     base, _stub = http
     _status, payload = _get(base, "/search?query=Crime+101")
     assert payload["used"]["query"] == "Crime 101"
+
+
+# --- the extension's running log --------------------------------------------
+
+
+def test_the_log_is_appended_a_line_at_a_time(http, tmp_path, monkeypatch) -> None:
+    """Somewhere real for the extension to put its record.
+
+    A browser extension cannot write to a directory. The only API that puts a
+    file on disk is the download machinery, and it announces every file it
+    writes - which, for something recording while a film plays, is a popup
+    every few seconds. This endpoint exists so that never has to happen.
+
+    One line of JSON per entry, appended: a long session costs one growing file
+    rather than a directory of thousands, and a crash halfway through a write
+    costs the last line rather than the file.
+    """
+    base, _ = http
+    logs = tmp_path / "logs"
+    monkeypatch.setattr(server_module, "LOG_DIR", logs)
+
+    status, first = _post(base, "/log", {"entries": [{"kind": "panel"}, {"kind": "align"}]})
+    assert status == 200, first
+    assert first["written"] == 2
+
+    status, second = _post(base, "/log", {"entries": [{"kind": "said", "message": "hello"}]})
+    assert status == 200, second
+
+    written = list(logs.glob("*.jsonl"))
+    assert len(written) == 1, f"expected one file for one day, got {written}"
+    lines = [json.loads(line) for line in written[0].read_text("utf-8").splitlines()]
+    assert [entry["kind"] for entry in lines] == ["panel", "align", "said"]
+
+
+def test_a_log_body_may_be_far_larger_than_any_other(http, tmp_path, monkeypatch) -> None:
+    """One alignment entry carries two subtitle files' worth of timings.
+
+    Every other endpoint is capped at 64KB, which is right for them and would
+    reject the one body that legitimately is not small. It is written straight
+    to a file and never held, so the ceiling costs disk rather than memory.
+    """
+    base, _ = http
+    monkeypatch.setattr(server_module, "LOG_DIR", tmp_path / "logs")
+
+    fat = {"kind": "align", "times": list(range(60_000))}
+    assert len(json.dumps(fat)) > server_module.MAX_BODY_BYTES
+    status, answer = _post(base, "/log", {"entries": [fat]})
+    assert status == 200, answer
+    assert answer["written"] == 1
+
+
+def test_a_log_without_entries_is_refused_rather_than_written(http, tmp_path, monkeypatch) -> None:
+    base, _ = http
+    logs = tmp_path / "logs"
+    monkeypatch.setattr(server_module, "LOG_DIR", logs)
+
+    _status, answer = _post(base, "/log", {"entries": "not a list"})
+    assert "error" in answer
+    assert not logs.exists()

@@ -1,52 +1,62 @@
-/* What the extension saw, written to disk by itself.
+/* What the extension saw, kept without anybody having to ask for it.
  *
- * The first version of this kept a log in the browser and put a Save button on
- * the report page. That is the wrong shape, and the reason is the whole point
- * of the log: the failures worth recording are the ones where nothing is
- * responding to clicks. A record you have to press a button to keep is a
- * record you do not have on the day you need it.
+ * Two failed shapes preceded this one and both are worth stating, because the
+ * obvious answer is wrong twice over.
  *
- * So nothing here waits to be asked. Entries accumulate in storage for a few
- * seconds and are then written to a file under the browser's download folder,
- * one file per flush, and the buffer is emptied. Nothing has to be pressed,
- * nothing has to be reproduced, and the file is on disk before the tab that
- * produced it is closed.
+ * A log with a Save button is useless: the failures worth recording are the
+ * ones where nothing is responding to clicks, so a record that needs a button
+ * pressed is a record you do not have on the day you need it.
  *
- * What gets recorded is deliberately wide: the shape of every frame whenever
- * the panel opens or closes, every alignment attempt with both files' timings,
- * every message shown to the reader, every attach and detach, and every error
- * that reached the top of a frame or the worker. Narrowing it means deciding
- * in advance which question will be asked, which is exactly what has been
- * getting this wrong.
+ * A log that writes itself through `chrome.downloads` is worse. A browser
+ * extension cannot write to a directory - the only API that puts a real file
+ * on disk is the download machinery - and that machinery announces every file
+ * it writes. Recording as you watch then means a popup every few seconds.
+ * `setUiOptions` is supposed to silence it and did not.
  *
- * All of it stays on this machine. It is written to a folder, not sent
- * anywhere; nothing in this file opens a socket.
+ * So the log goes to the daemon, which is a program with a filesystem and is
+ * already part of this project: one POST per flush, one line of JSON per entry
+ * appended to subtitle-daemon/logs/<date>.jsonl. No files, no popups, no
+ * ceiling but the disk.
+ *
+ * When the daemon is not running the log simply stays in the browser, which is
+ * why `unlimitedStorage` is asked for. It keeps accumulating - hundreds of
+ * megabytes if it comes to that - and goes out in one piece the moment the
+ * daemon appears. Downloading is the last resort and only happens when the
+ * buffer is genuinely enormous or somebody asks for it on the report page.
+ *
+ * All of it is on this machine. Nothing here talks to anything but 127.0.0.1.
  */
 
 const KEY = "sso:trace";
 const STATE_KEY = "sso:traceState";
+const SETTINGS_KEY = "sso:settings";
 export const FOLDER = "subtitle-overlay-log";
+const DAEMON_LOG = "http://127.0.0.1:8791/log";
 
-/* Bounds on the BUFFER, not on the record.
+/* How long an entry may sit before the daemon is offered it.
  *
- * The record is the folder, and it is as large as the disk allows - that is
- * what `unlimitedStorage` and writing to files are for. These only decide how
- * long an entry may sit in the browser before it is on disk, so they are small
- * on purpose: a crash, a tab close or a worker eviction can only cost whatever
- * has not been flushed yet.
- */
-const FLUSH_AFTER_MS = 6000;
-const FLUSH_AT_ENTRIES = 40;
-const FLUSH_AT_BYTES = 4_000_000;
+ * Only a few seconds, because sending it costs a local POST and nothing else -
+ * there is no file, no popup and nothing for anybody to notice. */
+const FLUSH_AFTER_MS = 8000;
+const FLUSH_AT_ENTRIES = 60;
 
-/* The one hard limit left, and it is a safety catch rather than a policy: if
- * writing to disk is failing - the folder is gone, the permission was revoked,
- * the disk is full - the buffer must not grow until it takes the browser's
- * storage down with it. Well above any normal flush. */
-const BUFFER_PANIC_ENTRIES = 4000;
+/* And how much may pile up when the daemon is NOT there.
+ *
+ * Deliberately enormous. With nowhere free to put it, the only ways out are to
+ * hold it or to download it, and downloading is the thing that interrupts. So
+ * it holds - a whole evening of viewing, several films' worth of alignment
+ * attempts - and only writes a file when even that is exhausted. Storage is
+ * unlimited by permission, so these are the real bound rather than the
+ * browser's. */
+const HOLD_ENTRIES = 20000;
+const HOLD_BYTES = 400_000_000;
 
 let queue = Promise.resolve();
 let flushTimer = null;
+/* Whether the daemon answered last time. Not a health check: the POST itself
+ * is the check, and this only stops the timer firing at a socket that was not
+ * there a moment ago. */
+let daemonSeen = true;
 
 function inTurn(work) {
   const done = queue.then(work, work);
@@ -66,13 +76,35 @@ export async function entries() {
   }
 }
 
-/** Counts and filenames, so the report page can say what exists without reading it. */
+/** Counts and destinations, so the report page can say what exists. */
 export async function state() {
+  const empty = {
+    sentToDaemon: 0,
+    entriesSent: 0,
+    filesWritten: 0,
+    bytesOut: 0,
+    lastDestination: null,
+    lastError: null,
+  };
   try {
     const stored = await chrome.storage.local.get(STATE_KEY);
-    return { written: 0, entriesWritten: 0, bytesWritten: 0, files: [], lastError: null, ...(stored[STATE_KEY] || {}) };
+    return { ...empty, ...(stored[STATE_KEY] || {}) };
   } catch {
-    return { written: 0, entriesWritten: 0, bytesWritten: 0, files: [], lastError: null };
+    return empty;
+  }
+}
+
+/* The switch, read from the same settings object the panel writes.
+ *
+ * Off means off everywhere and immediately - the worker's own records go
+ * through here too, so one flag covers the frames and the worker without
+ * either having to be told. */
+export async function enabled() {
+  try {
+    const stored = await chrome.storage.local.get(SETTINGS_KEY);
+    return stored[SETTINGS_KEY]?.diagnostics !== false;
+  } catch {
+    return true;
   }
 }
 
@@ -87,6 +119,7 @@ export function clear() {
 export function record(kind, detail) {
   return inTurn(async () => {
     try {
+      if (!(await enabled())) return;
       const log = await entries();
       log.push({ at: new Date().toISOString(), kind, ...detail });
       await chrome.storage.local.set({ [KEY]: log });
@@ -98,16 +131,16 @@ export function record(kind, detail) {
 }
 
 function schedule(log) {
-  const full =
-    log.length >= FLUSH_AT_ENTRIES ||
-    log.length >= BUFFER_PANIC_ENTRIES ||
-    roughBytes(log) >= FLUSH_AT_BYTES;
-  if (full) {
+  if (log.length >= FLUSH_AT_ENTRIES || (!daemonSeen && overflowing(log))) {
     flush();
     return;
   }
   clearTimeout(flushTimer);
   flushTimer = setTimeout(flush, FLUSH_AFTER_MS);
+}
+
+function overflowing(log) {
+  return log.length >= HOLD_ENTRIES || roughBytes(log) >= HOLD_BYTES;
 }
 
 /* Measured on the last few entries and multiplied out, rather than by
@@ -117,62 +150,102 @@ function schedule(log) {
 function roughBytes(log) {
   const sample = log.slice(-3);
   if (!sample.length) return 0;
-  const each = JSON.stringify(sample).length / sample.length;
-  return each * log.length;
+  return (JSON.stringify(sample).length / sample.length) * log.length;
 }
 
 /**
- * Put whatever is buffered on disk, and empty the buffer.
+ * Get whatever is buffered out of the browser.
  *
- * One file per flush, named by the time it was written, so nothing is ever
- * rewritten and a long session costs a directory of small files rather than
- * one file re-serialised every few seconds.
+ * The daemon first, always. A file only when the daemon is absent AND the
+ * buffer has grown past what is reasonable to hold, or when `force` says
+ * somebody asked for one on the report page.
  */
-export function flush() {
+export function flush({ force = false } = {}) {
   clearTimeout(flushTimer);
   flushTimer = null;
   return inTurn(async () => {
     const log = await entries();
     if (!log.length) return { ok: true, empty: true };
 
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const name = `${FOLDER}/${stamp}.json`;
-    const text = JSON.stringify({ writtenAt: new Date().toISOString(), entries: log });
-
-    try {
-      await chrome.downloads.download({
-        url: asDataUrl(text),
-        filename: name,
-        conflictAction: "uniquify",
-        saveAs: false,
-      });
-    } catch (error) {
-      /* Left in the buffer deliberately - the next flush tries again, and a
-       * record that quietly deleted itself because the disk was full is worse
-       * than one that stopped growing. The panic bound above is what stops
-       * that becoming unbounded. */
-      const was = await state();
-      await chrome.storage.local
-        .set({ [STATE_KEY]: { ...was, lastError: String(error?.message || error) } })
-        .catch(() => {});
-      return { ok: false, reason: String(error?.message || error) };
+    const sent = await toDaemon(log);
+    daemonSeen = sent.ok;
+    if (sent.ok) {
+      await settle(log, { destination: "daemon", bytes: sent.bytes, daemon: true });
+      return { ok: true, destination: "daemon", entries: log.length, file: sent.file };
     }
 
-    const was = await state();
-    await chrome.storage.local.set({
-      [KEY]: [],
-      [STATE_KEY]: {
-        ...was,
-        written: was.written + 1,
-        entriesWritten: was.entriesWritten + log.length,
-        bytesWritten: was.bytesWritten + text.length,
-        // Enough to name the folder and the newest file; the folder is the record.
-        files: [...was.files, name].slice(-20),
-        lastError: null,
-      },
-    });
-    return { ok: true, file: name, entries: log.length, bytes: text.length };
+    if (!force && !overflowing(log)) {
+      /* Held on purpose. Nothing has been lost and nothing has interrupted:
+       * the entries stay where they are until the daemon comes up or until
+       * there are too many to keep. */
+      await note({ lastError: sent.reason, lastDestination: "held in the browser" });
+      return { ok: true, held: log.length, reason: sent.reason };
+    }
+
+    const written = await toFile(log);
+    if (!written.ok) {
+      await note({ lastError: written.reason });
+      return { ok: false, reason: written.reason };
+    }
+    await settle(log, { destination: written.file, bytes: written.bytes, daemon: false });
+    return { ok: true, destination: "file", entries: log.length, file: written.file };
   });
+}
+
+async function toDaemon(log) {
+  const text = JSON.stringify({ entries: log });
+  try {
+    const answer = await fetch(DAEMON_LOG, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: text,
+    });
+    if (!answer.ok) return { ok: false, reason: `daemon answered ${answer.status}` };
+    const said = await answer.json().catch(() => ({}));
+    return { ok: true, bytes: text.length, file: said.file || null };
+  } catch (error) {
+    return { ok: false, reason: `daemon not running (${error?.message || error})` };
+  }
+}
+
+async function toFile(log) {
+  const text = JSON.stringify({ writtenAt: new Date().toISOString(), entries: log });
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const name = `${FOLDER}/${stamp}.json`;
+  try {
+    await chrome.downloads.download({
+      url: asDataUrl(text),
+      filename: name,
+      conflictAction: "uniquify",
+      saveAs: false,
+    });
+    return { ok: true, file: name, bytes: text.length };
+  } catch (error) {
+    return { ok: false, reason: String(error?.message || error) };
+  }
+}
+
+/* Emptied only after it is somewhere else. A buffer cleared on a write that
+ * failed is the one outcome that leaves nothing at all to look at. */
+async function settle(log, { destination, bytes, daemon }) {
+  const was = await state();
+  await chrome.storage.local.set({
+    [KEY]: [],
+    [STATE_KEY]: {
+      ...was,
+      sentToDaemon: was.sentToDaemon + (daemon ? 1 : 0),
+      filesWritten: was.filesWritten + (daemon ? 0 : 1),
+      entriesSent: was.entriesSent + log.length,
+      bytesOut: was.bytesOut + bytes,
+      lastDestination: destination,
+      lastError: null,
+    },
+  });
+}
+
+async function note(patch) {
+  const was = await state();
+  await chrome.storage.local.set({ [STATE_KEY]: { ...was, ...patch } }).catch(() => {});
 }
 
 /* A data URL, because a service worker has no URL.createObjectURL.

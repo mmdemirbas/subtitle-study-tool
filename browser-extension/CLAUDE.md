@@ -132,21 +132,34 @@ extension's entire error surface), every attach and detach, every keyboard or
 toolbar command with the frame it addressed, every auto-attach plan, and every
 error or unhandled rejection that reached the top of a frame or the worker.
 
-**It writes itself to disk. Nothing has to be pressed.** Entries buffer in
-storage for at most six seconds (or forty entries, or 4MB) and are then written
-to `~/Downloads/subtitle-overlay-log/<timestamp>.json`, one file per flush, and
-the buffer is emptied. That shape is deliberate and is a correction of the
-first version: the failures worth recording are the ones where nothing responds
-to clicks, so a record that needs a button pressed is a record you do not have
-on the day you need it. `downloads.ui` is requested and the download UI is
-switched off, or the browser would announce a file every few seconds during a
-film.
+**It goes to the daemon, and that is the third shape this took.** Both earlier
+ones are worth knowing so they are not tried again:
 
-The bounds are on the **buffer**, not on the record — the folder is as large as
-the disk allows, which is what `unlimitedStorage` and one-file-per-flush are
-for. A write that fails **keeps** the entries and records `lastError`; dropping
-them is the one failure that leaves nothing to look at. `BUFFER_PANIC_ENTRIES`
-is the only hard stop, far above any normal flush.
+1. *A log with a Save button.* Useless — the failures worth recording are the
+   ones where nothing responds to clicks.
+2. *A log that writes itself through `chrome.downloads`.* Worse. An extension
+   cannot write to a directory; the only API that puts a file on disk is the
+   download machinery, and it announces every file. Recording while a film
+   plays meant a popup every few seconds. `setUiOptions({enabled:false})` is
+   supposed to silence that and **did not** — reported, not theorised.
+
+So `flush()` POSTs to `http://127.0.0.1:8791/log` and the daemon appends one
+line of JSON per entry to `subtitle-daemon/logs/<date>.jsonl`. No files, no
+popups, no ceiling but the disk. **Read that directory instead of asking anyone
+to reproduce anything.**
+
+With the daemon down it simply **holds** — up to 20000 entries or 400MB, which
+is what `unlimitedStorage` is for — and sends the lot in one piece the moment
+the daemon appears. A file is downloaded only if even that fills, or if asked
+for on the report page. The buffer is emptied **only after** the entries are
+somewhere else; a destination that refuses them keeps them and records
+`lastError`.
+
+**The switch is `settings.diagnostics`**, on by default, in the panel's *If
+this page is not working* section. `trace.js` reads it, so one flag covers the
+frames and the worker; `content.js` checks it too, so switching it off stops
+the messages as well as what is done with them. An installation that predates
+the setting reads as **on** — `!== false`, never `=== true`.
 
 Writes go through the same `inTurn` queue the deck uses. Cue times are stored
 as gaps, a third of the size, and `unpackTimes` reconstructs them exactly;

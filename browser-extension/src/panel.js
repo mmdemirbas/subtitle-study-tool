@@ -2798,6 +2798,18 @@
       "then opens the result. No downloads are spent. The same page holds the running " +
       "log, which is written as you go and keeps every attempt to line two subtitles up.";
 
+    /* The switch, on this screen rather than buried in the settings window,
+     * because this is the screen that explains what it turns off. */
+    el.diagnostics = toggle_(
+      "Keep a running log",
+      api.status().settings.diagnostics !== false,
+      (on) => api.updateSettings({ diagnostics: on }),
+    );
+    el.diagnostics.row.title =
+      "Records what each frame looks like, every attempt to line two subtitles up, " +
+      "and every error - to the daemon if it is running, otherwise held in the browser. " +
+      "Nothing is sent anywhere. Turn it off and nothing is recorded at all.";
+
     const row = document.createElement("div");
     row.className = "sso-row";
     el.diagnose = button("Diagnose this page", {
@@ -2819,7 +2831,7 @@
     el.diagnoseNote = document.createElement("p");
     el.diagnoseNote.className = "sso-note";
 
-    wrap.append(note, row, el.diagnoseNote);
+    wrap.append(note, el.diagnostics.row, row, el.diagnoseNote);
     return wrap;
   }
 
@@ -3105,6 +3117,9 @@
     el.dimNonSpeech.input.checked = Boolean(settings.dimNonSpeech);
 
     el.keysEnabled.input.checked = Boolean(settings.keysEnabled);
+    // Default on, so an installation that predates the setting reads as on
+    // rather than as a switch somebody turned off.
+    if (el.diagnostics) el.diagnostics.input.checked = settings.diagnostics !== false;
     el.keysOff.hidden = Boolean(settings.keysEnabled);
     for (const [name] of KEY_FIELDS) {
       const key = settings.keys[name];

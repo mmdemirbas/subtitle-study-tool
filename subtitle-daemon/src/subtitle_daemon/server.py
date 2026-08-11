@@ -25,6 +25,7 @@ import json
 import logging
 import re
 import threading
+from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -32,7 +33,7 @@ from urllib.parse import parse_qs, urlparse
 
 from . import matching, subtitles, titles
 from .cache import Cache
-from .config import CACHE_DIR, Config
+from .config import CACHE_DIR, LOG_DIR, Config
 from .lookups import Lookups
 from .opensubtitles import Client, OpenSubtitlesError, QuotaExceededError
 
@@ -52,6 +53,12 @@ _ALLOWED_ORIGIN = re.compile(
 )
 
 MAX_BODY_BYTES = 64 * 1024
+
+# The running log is the one body that is legitimately large: a single
+# alignment entry carries two subtitle files' worth of timings. It is written
+# straight to a file and never parsed into anything the rest of the daemon
+# holds, so a bigger ceiling here costs disk, not memory.
+MAX_LOG_BODY_BYTES = 64 * 1024 * 1024
 
 # Everything a search derives about its result set, and therefore everything a
 # cache hit has to reproduce. Anything omitted here silently reverts to its
@@ -83,6 +90,33 @@ class Service:
             self.client.login(config.username or "", config.password or "")
 
     # --- operations ---------------------------------------------------------
+
+    def append_log(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Somewhere real for the extension's running log to go.
+
+        A browser extension cannot write to a directory. The only API that puts
+        a real file on disk is the download machinery, and that announces every
+        file it writes - which, for something that records as you watch, means a
+        popup every few seconds. The daemon has no such problem: it is a program
+        with a filesystem.
+
+        One line of JSON per entry, appended. Appending means a long session
+        costs one file that grows rather than a directory of thousands, and a
+        crash halfway through a write costs the last line rather than the file.
+        """
+        entries = body.get("entries")
+        if not isinstance(entries, list):
+            return {"error": "entries must be a list"}
+
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        path = LOG_DIR / f"{day}.jsonl"
+        written = 0
+        with self._lock, path.open("a", encoding="utf-8") as handle:
+            for entry in entries:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                written += 1
+        return {"ok": True, "written": written, "file": str(path)}
 
     def health(self) -> dict[str, Any]:
         return {
@@ -666,7 +700,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._origin_ok():
             return
         parsed = urlparse(self.path)
-        if parsed.path not in ("/fetch", "/cached"):
+        if parsed.path not in ("/fetch", "/cached", "/log"):
             self._send(HTTPStatus.NOT_FOUND, {"error": "no such endpoint"})
             return
 
@@ -675,7 +709,8 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError:
             self._send(HTTPStatus.BAD_REQUEST, {"error": "bad Content-Length"})
             return
-        if length > MAX_BODY_BYTES:
+        ceiling = MAX_LOG_BODY_BYTES if parsed.path == "/log" else MAX_BODY_BYTES
+        if length > ceiling:
             self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "body too large"})
             return
 
@@ -690,6 +725,8 @@ class _Handler(BaseHTTPRequestHandler):
 
         if parsed.path == "/cached":
             self._send(HTTPStatus.OK, self.service.import_subtitle(body))
+        elif parsed.path == "/log":
+            self._send(HTTPStatus.OK, self.service.append_log(body))
         else:
             self._send(HTTPStatus.OK, self.service.fetch(body))
 

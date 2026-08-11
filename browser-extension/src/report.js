@@ -455,25 +455,26 @@ function renderTrace() {
   /* What is on disk first, and what is still in hand second. The folder is the
    * record; the buffer is the few seconds that have not reached it yet, and
    * confusing the two is how somebody concludes there is nothing to look at. */
-  const written = traceState?.written || 0;
-  const onDisk = written
-    ? `${written} file${written === 1 ? "" : "s"} in your downloads under ${traceFolder}/` +
-      ` — ${traceState.entriesWritten} entries, ${(traceState.bytesWritten / 1048576).toFixed(1)}MB`
-    : `nothing written yet — the folder ${traceFolder}/ appears in your downloads on the first flush`;
+  const sent = traceState?.sentToDaemon || 0;
+  const files = traceState?.filesWritten || 0;
+  const out = sent || files
+    ? `${traceState.entriesSent} entries sent out` +
+      (sent ? `, ${sent} batch${sent === 1 ? "" : "es"} to the daemon (subtitle-daemon/logs/)` : "") +
+      (files ? `, ${files} file${files === 1 ? "" : "s"} downloaded under ${traceFolder}/` : "") +
+      ` — ${(traceState.bytesOut / 1048576).toFixed(1)}MB`
+    : "nothing sent out yet";
   const waiting = traceLog.length
-    ? `${traceLog.length} more waiting to be written (${ago(traceLog[0].at)} onwards)`
-    : "nothing waiting";
+    ? `${traceLog.length} held here (${ago(traceLog[0].at)} onwards)`
+    : "nothing held";
+  /* Not an error when the daemon is simply not running. It says so, and says
+   * that the entries are being kept, because "held in the browser" and "lost"
+   * are the two readings and only one of them is true. */
   const trouble = traceState?.lastError
-    ? ` · LAST WRITE FAILED: ${traceState.lastError} — the entries are being kept, not dropped`
+    ? ` · ${traceState.lastError} — entries are being kept, not dropped`
     : "";
-  summary.textContent = `${onDisk} · ${waiting}${trouble}`;
+  summary.textContent = `${out} · ${waiting}${trouble}`;
 
-  if (!traceLog.length) {
-    if (!written) {
-      list.textContent = "";
-    }
-    return;
-  }
+  if (!traceLog.length) return;
 
   // Newest first: the thing that just went wrong is the thing being looked for.
   for (const entry of [...traceLog].reverse()) {
@@ -535,14 +536,15 @@ el("trace-flush").addEventListener("click", async () => {
   const answer = await call("traceFlush");
   await loadTrace();
   sayOnTrace(
-    answer?.empty ? "Nothing was waiting." :
-    answer?.ok ? `Wrote ${answer.entries} entries to ${answer.file}.` :
-    `Could not write it: ${answer?.reason || answer?.transportError || "unknown"}`,
+    answer?.empty ? "Nothing was held." :
+    answer?.held ? `The daemon is not running, so ${answer.held} entries are still here.` :
+    answer?.ok ? `Sent ${answer.entries} entries to ${answer.file || answer.destination}.` :
+    `Could not send it: ${answer?.reason || answer?.transportError || "unknown"}`,
   );
 });
 
 el("trace-download").addEventListener("click", () => {
-  if (!traceLog.length) return sayOnTrace("Nothing waiting - what is already written is in the folder.");
+  if (!traceLog.length) return sayOnTrace("Nothing held - what has gone out is already saved.");
   saveTrace();
 });
 

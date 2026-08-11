@@ -22,6 +22,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DAEMON_ROOT = REPO_ROOT / "subtitle-daemon"
 CONFIG_PATH = DAEMON_ROOT / "config.local.json"
 CACHE_DIR = DAEMON_ROOT / "cache"
+# Where the extension's running log lands. A directory the daemon owns, so the
+# browser never has to download a file to get a record onto disk - see
+# `/log` in server.py.
+LOG_DIR = DAEMON_ROOT / "logs"
 
 DEFAULT_PORT = 8791
 
