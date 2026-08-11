@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>nested player — the frame with the video</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #12161c; overflow: hidden; }
+  video { width: 100%; height: 100%; display: block; background: #1b2028; }
+</style>
+</head>
+<body>
+  <video id="v" src="clip.mp4" muted playsinline loop></video>
+  <script>
+    /* A REAL video file, and that is the point of it.
+     *
+     * The single-document harness fakes `duration` and `currentTime` with
+     * defineProperty, which works there because it loads the extension's
+     * sources as page scripts - same world, same object. Here the content
+     * script is in the isolated world, where a page-world redefinition is
+     * invisible: `video.duration` reads NaN, pickVideo rejects it, and the
+     * extension correctly decides this page has nothing to subtitle. The
+     * first run of this vehicle spent its time proving exactly that.
+     *
+     * clip.mp4 is 95 seconds of flat colour at 320x180 and 6KB, which clears
+     * MIN_VIDEO_SECONDS with nothing to spare in the repository. Rebuild with:
+     *
+     *   ffmpeg -f lavfi -i color=c=#1b2028:s=320x180:r=2:d=95 \
+     *          -c:v libx264 -preset veryslow -crf 51 -g 200 \
+     *          -pix_fmt yuv420p -movflags +faststart clip.mp4
+     */
+    const video = document.getElementById("v");
+    video.play().catch(() => {});
+
+    /* Players bind play/pause to the surface and stop propagation on pointer
+       events inside it. Both are why the extension's own listeners are
+       capture-phase, and both belong in a page that stands in for one. */
+    window.__playerClicks = 0;
+    document.addEventListener("click", () => { window.__playerClicks += 1; });
+    for (const type of ["pointermove", "mousemove"]) {
+      video.addEventListener(type, (e) => e.stopPropagation());
+    }
+  </script>
+</body>
+</html>

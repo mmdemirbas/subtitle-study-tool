@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>nested player — top frame</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0b0d10; color: #cfd4db;
+               font: 13px ui-monospace, Menlo, monospace; }
+  header { padding: 8px 12px; }
+  /* The player sits in a frame that is a fraction of the viewport, the way
+     streaming-site.example does it: 1136x568 at (32,120) inside a 1400x813 window. */
+  iframe#player { position: absolute; left: 32px; top: 120px;
+                  width: 1136px; height: 568px; border: 0; }
+
+  /* What the site paints over everything, and the whole reason this page
+     exists. Measured on the real one: an <iframe> appended to <html>, fixed,
+     full viewport, z-index at the maximum, taking every click. A div stands in
+     for it here - the shape is what matters, not what tag it is. */
+  #interceptor { position: fixed; inset: 0; z-index: 2147483647;
+                 background: transparent; pointer-events: auto; }
+</style>
+</head>
+<body>
+  <header>top frame &mdash; the player is in a cross-origin iframe below</header>
+  <iframe id="player" allow="fullscreen"></iframe>
+  <div id="interceptor" hidden></div>
+
+  <script>
+    /* The player's origin is a DIFFERENT PORT, which is a different origin -
+       so this is genuinely cross-origin, not a same-origin iframe wearing the
+       shape of one. The port arrives in the query string because the harness
+       server picks it at run time. */
+    const params = new URLSearchParams(location.search);
+    const playerPort = params.get("playerPort");
+    document.getElementById("player").src =
+      `http://127.0.0.1:${playerPort}/tests/frames/player.html`;
+
+    /* Counts every click the interceptor swallows, so a test can tell "the
+       click was taken by the page" from "the click did nothing". */
+    window.__stolen = 0;
+    const interceptor = document.getElementById("interceptor");
+    interceptor.addEventListener("click", () => { window.__stolen += 1; });
+    interceptor.addEventListener("pointerdown", () => { window.__stolen += 1; });
+
+    window.__intercept = (on) => { interceptor.hidden = !on; };
+  </script>
+</body>
+</html>
