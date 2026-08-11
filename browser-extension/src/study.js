@@ -1545,12 +1545,28 @@
       },
     });
 
+    /* Only claim it once it has landed.
+     *
+     * background.js answers `{ transportError }` whenever deck.save throws - a
+     * storage quota, a worker torn down mid-call - and that object carries no
+     * `added`, so this used to fall through to "already saved" and then mark
+     * the word as met. A word marked as met stops being underlined and stops
+     * arriving in the rail, so the one the reader tried hardest to keep is the
+     * one that quietly disappears. Two states were being reported as a third
+     * that was true of neither. */
+    const failed = !response || response.transportError || response.error;
+    if (failed || (!response.added && !response.entry)) {
+      const why = response?.transportError || response?.error || response?.reason || "no answer";
+      api.showToast(`Could not save "${card.term}" - ${why}`);
+      return false;
+    }
+
     card.saved = true;
     savedTerms.add(`${card.language}:${card.term}`);
     redrawCard(card);
     remarkCurrent();
     api.showToast(
-      response?.added ? `Saved "${card.term}" with its line` : `"${card.term}" is already saved`,
+      response.added ? `Saved "${card.term}" with its line` : `"${card.term}" is already saved`,
     );
     return true;
   }

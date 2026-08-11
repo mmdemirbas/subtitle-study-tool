@@ -36,13 +36,44 @@ async function write(entries) {
   return entries;
 }
 
+/* Every writer takes its turn, because all three are read-modify-write on one
+ * storage key and none of them is atomic.
+ *
+ * `all()` and `set()` are both round trips to the browser process, so two saves
+ * started close together each read the deck before either writes it, and the
+ * second write lands on top of the first. Measured in node against a 5ms
+ * store: two words saved together left one entry, and the lost one vanished
+ * with no exception and nothing in the log.
+ *
+ * It is reachable by ordinary use - the save key pressed twice, Save clicked on
+ * one card while another is still in flight, two tabs open on the same film.
+ * A queue is enough here: one extension process, no other writer, and a deck
+ * write is a few milliseconds.
+ *
+ * The chain never rejects, so one failed save cannot wedge every later one;
+ * the caller still sees its own rejection through the promise it was handed. */
+let queue = Promise.resolve();
+
+function inTurn(work) {
+  const done = queue.then(work, work);
+  queue = done.then(
+    () => {},
+    () => {},
+  );
+  return done;
+}
+
 /**
  * Add an entry, or return the existing one untouched.
  *
  * `added` says which happened, so the toast can say "saved" rather than
  * claiming to have saved something that was already there.
  */
-export async function save(entry) {
+export function save(entry) {
+  return inTurn(() => addOne(entry));
+}
+
+async function addOne(entry) {
   const term = String(entry.term || "").trim();
   if (!term) return { added: false, entry: null, reason: "nothing to save" };
 
@@ -96,16 +127,22 @@ export function pairedOf(entry) {
   return [];
 }
 
-export async function remove(id) {
-  const entries = await all();
-  const kept = entries.filter((entry) => entry.id !== id);
-  await write(kept);
-  return { removed: entries.length - kept.length, size: kept.length };
+export function remove(id) {
+  // In the queue too: a removal racing a save reads the deck before the save
+  // lands and writes it back without the new entry.
+  return inTurn(async () => {
+    const entries = await all();
+    const kept = entries.filter((entry) => entry.id !== id);
+    await write(kept);
+    return { removed: entries.length - kept.length, size: kept.length };
+  });
 }
 
-export async function clear() {
-  await write([]);
-  return { size: 0 };
+export function clear() {
+  return inTurn(async () => {
+    await write([]);
+    return { size: 0 };
+  });
 }
 
 /** The terms already in the deck, so the overlay can mark them as met before. */

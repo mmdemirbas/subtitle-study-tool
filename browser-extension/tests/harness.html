@@ -3604,6 +3604,81 @@
           throw new Error("the word is not marked as already saved");
       });
 
+      /* A save that failed has to say so.
+       *
+       * The card used to write its own outcome before reading the answer:
+       * `card.saved = true` and the term into savedTerms, then a toast chosen
+       * on `response.added`. background.js replies `{ transportError }`
+       * whenever deck.save throws - a storage quota, a worker torn down
+       * mid-call - and that object carries no `added`, so the reader was told
+       * the word was "already saved" and the word was marked as met. A word
+       * marked as met stops being underlined and stops reaching the rail, so
+       * the one they tried hardest to keep is the one that quietly went. */
+      check("a save that failed is not reported as one that was already there", async () => {
+        /* A word that has NOT already been saved, because the case above saved
+         * "frankly" and a saved card's button is disabled. Lowering the
+         * threshold puts two more of the line's words in the rail without
+         * touching study's on/off state, which would empty it. */
+        const wasStudy = window.__ssoStudy.settings();
+        const toasts = [];
+        const realToast = window.__ssoApi.showToast;
+        try {
+          window.__ssoStudy.updateSettings({ rarityRank: 500, maxPerCue: 3, keep: 5 });
+          await showWordyCue();
+          await sleep(300);
+
+          const cards = [...railShadow().querySelectorAll(".sso-card")];
+          const card = cards.find(
+            (node) => node.querySelector(".sso-card__term")?.textContent !== "frankly",
+          );
+          if (!card) throw new Error(`no unsaved card in the rail (${cards.length} cards)`);
+          const term = card.querySelector(".sso-card__term").textContent;
+          // Only the open card carries its actions, so open it first.
+          if (card.dataset.focused !== "true") {
+            card.querySelector(".sso-card__head").click();
+            await sleep(150);
+          }
+          const button = card.querySelector(".sso-card__save");
+          if (!button || button.disabled)
+            throw new Error(`"${term}" has no usable Save button`);
+
+          // The stub and the toast capture go in last, so nothing before this
+          // is read as an answer about the save.
+          window.__stubDaemon = {
+            deckSave: () => ({ transportError: "QUOTA_BYTES quota exceeded" }),
+          };
+          window.__ssoApi.showToast = (message, options) => {
+            toasts.push(String(message));
+            return realToast(message, options);
+          };
+          button.click();
+          await sleep(250);
+
+          const said = toasts.join(" | ");
+          if (/already saved|^Saved /.test(said))
+            throw new Error(`a failed save was announced as a success: "${said}"`);
+          if (!/could not save/i.test(said))
+            throw new Error(`a failed save said nothing useful: "${said}"`);
+
+          const after = [...railShadow().querySelectorAll(".sso-card")].find(
+            (node) => node.querySelector(".sso-card__term")?.textContent === term,
+          );
+          if (after?.dataset.saved === "true")
+            throw new Error("the card marked itself saved after a failed save");
+          if (wordEl(term)?.dataset.saved === "true")
+            throw new Error("the word was marked as met after a failed save");
+        } finally {
+          window.__stubDaemon = null;
+          window.__ssoApi.showToast = realToast;
+          window.__ssoStudy.updateSettings({
+            rarityRank: wasStudy.rarityRank,
+            maxPerCue: wasStudy.maxPerCue,
+            keep: wasStudy.keep,
+          });
+          await sleep(150);
+        }
+      });
+
       check("a sweep whose end was never seen does not save a phrase later", async () => {
         /* The same shape as the stale drag reported on the timeline strip. The
          * word sweep and the tap watcher both removed their document listeners

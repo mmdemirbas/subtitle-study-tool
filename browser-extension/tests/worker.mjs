@@ -155,6 +155,59 @@ got = pickSecondLanguage({ results: [EN], languages: ["en"], taken: "en", used: 
 t("one configured language is not a missing pair", got.result === null && got.reason === "",
   JSON.stringify(got));
 
+// 8. The deck is one storage key, and every writer has to take its turn.
+//
+// save() is read-modify-write and neither the read nor the write is atomic, so
+// two saves started together each read the deck before either writes it and the
+// second write lands on top of the first. Measured against a 5ms store before
+// the queue: two words saved at once left one entry, and the lost one went with
+// no exception and nothing in the log. Reachable by pressing the save key
+// twice, by clicking Save on one card while another is in flight, or from two
+// tabs on the same film.
+//
+// The stub is slowed AND made to copy for this, because the plain one cannot
+// show the defect and the reason is worth writing down: it hands every reader
+// the same array object, so three concurrent saves push into one array and all
+// three survive by accident. Real chrome.storage serialises across a process
+// boundary, so each reader gets its own copy and the last write wins. A stub
+// that shares structure is more forgiving than the API it stands for, and the
+// case passes against the broken code - which is how this went unnoticed.
+const deck = await import("../src/study/deck.js");
+
+const instant = { get: chrome.storage.local.get, set: chrome.storage.local.set };
+const real = (fn) => async (...args) => {
+  await new Promise((r) => setTimeout(r, 5));
+  return structuredClone(await fn.apply(chrome.storage.local, structuredClone(args)));
+};
+chrome.storage.local.get = real(instant.get);
+chrome.storage.local.set = real(instant.set);
+
+await deck.clear();
+await Promise.all([
+  deck.save({ term: "warrant", language: "en", fileId: 1 }),
+  deck.save({ term: "reckon", language: "en", fileId: 1 }),
+  deck.save({ term: "quarry", language: "en", fileId: 1 }),
+]);
+const kept = (await deck.all()).map((entry) => entry.term).sort();
+t("three words saved at once all survive", kept.length === 3, kept.join(",") || "(empty)");
+
+await deck.clear();
+await deck.save({ term: "one", language: "en", fileId: 1 });
+const [only] = await deck.all();
+await Promise.all([
+  deck.save({ term: "two", language: "en", fileId: 1 }),
+  deck.remove(only.id),
+]);
+const after = (await deck.all()).map((entry) => entry.term);
+t(
+  "a removal racing a save does not take the save with it",
+  after.length === 1 && after[0] === "two",
+  after.join(",") || "(empty)",
+);
+
+chrome.storage.local.get = instant.get;
+chrome.storage.local.set = instant.set;
+
 for (const r of results) console.log(r.ok ? "PASS" : "FAIL", "-", r.name, r.ok ? "" : `→ ${r.detail}`);
 console.log(`\n${results.filter((r) => r.ok).length}/${results.length} passed`);
 process.exit(results.every((r) => r.ok) ? 0 : 1);
