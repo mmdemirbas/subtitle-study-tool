@@ -217,7 +217,87 @@
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: none;
-  border: 1px solid var(--sso-line);
+  /* A fill rather than the hairline it used to carry: the reason stands - an
+   * unbordered word in a title bar reads as a second title rather than as
+   * something to press - and a fill says it in the one elevation system every
+   * other control on both windows now uses. */
+  background: var(--sso-fill);
+}
+
+/* --- controls ---------------------------------------------------------------
+ *
+ * Three weights, and every button in either window is one of them.
+ *
+ * Selected as a bare element, deliberately: this is the floor every other rule
+ * builds on, so `.sso-icon` (a class) has to outrank it without being written
+ * as `.sso-win .sso-icon`. Scoped by the shadow root the sheet is adopted into,
+ * not by a selector - it cannot reach the page. Written first as
+ * `.sso-win button` and the title bar's glyphs immediately grew fills they had
+ * spent two redesigns not having.
+ *
+ * There was one: a rounded box with a hairline border and a fill, used for all
+ * thirteen controls on the panel's subtitles screen. Everything was emphasised,
+ * so nothing was - "Next" carried the same weight as "Line up" - and a screen
+ * of equal boxes reads as a wireframe rather than as a surface with a point.
+ * Thirteen hairlines is also border AND shadow on one screen, which is the
+ * most reliable way to make a design look untouched by anybody.
+ *
+ * So fill is the only elevation system a control has, borders are gone, and
+ * what separates the tiers is how much fill each carries at rest.
+ *
+ *   quiet   nothing at rest, fill on hover. Anything reached for often and
+ *           costing nothing to press.
+ *   normal  a soft fill. The instrument keys, which have to look pressable
+ *           because they are pressed while watching something else.
+ *   accent  one per screen at most, where there is a single obvious next action.
+ *
+ * Height is shared rather than falling out of padding, so a row of mixed tiers
+ * lines up and every one of them clears the 24px pointer target.
+ */
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 26px;
+  padding: 4px 9px;
+  font-family: inherit;
+  font-size: var(--sso-t-body);
+  font-weight: 500;
+  color: var(--sso-ink);
+  background: var(--sso-fill);
+  border: 0;
+  border-radius: var(--sso-r-ctl);
+  cursor: pointer;
+  transition:
+    background var(--sso-motion) ease,
+    color var(--sso-motion) ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--sso-fill-hover);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* The quiet tier. Named rather than assumed: a control with no fill at rest has
+ * to sit somewhere a reader already expects one - inside a card, in a row with
+ * its siblings - and that is a judgement per control, not a default. */
+.sso-quiet {
+  color: var(--sso-ink-2);
+  background: transparent;
+}
+
+.sso-quiet:hover:not(:disabled) {
+  color: var(--sso-ink);
+  background: var(--sso-fill);
 }
 
 /* --- focus ------------------------------------------------------------------

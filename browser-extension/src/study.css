@@ -199,7 +199,6 @@ button.sso-set__key {
   font-size: var(--sso-t-small);
   color: var(--sso-ink);
   background: var(--sso-fill);
-  border: 1px solid var(--sso-line);
   border-radius: 6px;
   cursor: pointer;
 }
@@ -215,7 +214,7 @@ button.sso-set__key[data-set="false"] {
 
 button.sso-set__key[data-capturing="true"] {
   color: var(--sso-accent-ink);
-  border-color: var(--sso-accent);
+  box-shadow: inset 0 0 0 1px var(--sso-accent);
 }
 
 button.sso-set__key--clear {
@@ -244,7 +243,6 @@ button.sso-set__action {
   font-weight: 600;
   color: var(--sso-ink-2);
   background: var(--sso-fill);
-  border: 1px solid var(--sso-line);
   border-radius: 7px;
   cursor: pointer;
 }
@@ -475,7 +473,6 @@ button.sso-set__action:hover {
   font-weight: 600;
   color: var(--sso-ink-2);
   background: var(--sso-fill);
-  border: 1px solid var(--sso-line);
   border-radius: 6px;
   cursor: pointer;
   transition:

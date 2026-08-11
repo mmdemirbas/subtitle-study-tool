@@ -678,7 +678,7 @@
 
     const arranger = (kind, title, onClick) => {
       const b = button("", { title, onClick });
-      b.className = "sso-arr";
+      b.className = "sso-arr sso-quiet";
       const icon = document.createElement("span");
       icon.className = `sso-arr__i sso-arr__i--${kind}`;
       b.append(icon);
@@ -718,7 +718,7 @@
       onClick: () => api.setPlacing(!api.status().placing),
       title: "Drag a subtitle around the picture: the middle moves it, an edge makes it wider",
     });
-    el.moveButton.className = "sso-quick__move";
+    el.moveButton.className = "sso-quick__move sso-quiet";
 
     /* The one control that is not about position. It is on this surface at all
      * because the rail it belongs to does not exist until it is on - a switch
@@ -739,7 +739,7 @@
       onClick: lineUpAll,
       title: "Move every other subtitle to agree with the first",
     });
-    el.lineUpAll.className = "sso-quick__align";
+    el.lineUpAll.className = "sso-quick__align sso-quiet";
 
     const spacer = document.createElement("span");
     spacer.className = "sso-grow";
@@ -937,7 +937,9 @@
    * every cue as itself, found by binary search - twenty of them, in their
    * exact places, which is what "the same line, here and there" needs.
    */
-  const MAP_HEIGHT = 26;
+  // Must match .sso-map__plot's height in panel.css: the canvas is sized in
+  // device pixels from it, and a disagreement blurs every bar.
+  const MAP_HEIGHT = 30;
 
   /* Whole film, then a minute, then fifteen seconds. Three steps because they
    * answer three different questions - where am I, which line is which, and is
@@ -1522,10 +1524,10 @@
      * spoken, which is what it is reached for, and it takes a second press to
      * go back one. */
     const lines = document.createElement("div");
-    lines.className = "sso-row";
+    lines.className = "sso-row sso-row--steps";
     const stepper = (text, direction, why) => {
       const b = button(text, { title: why });
-      b.className = "sso-line-step";
+      b.className = "sso-line-step sso-quiet";
       b.addEventListener("click", () => api.stepLine(direction, { slot }));
       return b;
     };

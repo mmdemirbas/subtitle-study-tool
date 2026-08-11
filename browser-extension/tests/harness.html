@@ -1462,6 +1462,34 @@
         await sleep(150);
       });
 
+      check("the title bar's own controls stay quiet until they are wanted", async () => {
+        /* None of them is what a window is for, so none of them carries a fill
+         * at rest - and they sit on the one strip that is always visible when
+         * the window is folded.
+         *
+         * Asserted because it was lost to a specificity slip rather than a
+         * decision: the shared button base was written as `.sso-win button`,
+         * which is (0,1,1) and outranks `.sso-icon` at (0,1,0), so every glyph
+         * in every title bar grew a box. Nothing failed; it was caught by
+         * looking at a screenshot, which is not a thing that happens reliably. */
+        await window.__ssoPanel.show();
+        await sleep(150);
+        const clear = (value) =>
+          !value || value === "transparent" || /rgba\(0, 0, 0, 0\)/.test(value);
+        const loud = [];
+        for (const shadow of [panelShadow(), railShadow()].filter(Boolean)) {
+          for (const icon of shadow.querySelectorAll(".sso-win__head .sso-icon")) {
+            // The one word button is deliberately filled: an unbordered word in
+            // a title bar reads as a second title rather than as a control.
+            if (icon.classList.contains("sso-icon--word")) continue;
+            const background = getComputedStyle(icon).backgroundColor;
+            if (!clear(background)) loud.push(`${icon.title || icon.textContent}: ${background}`);
+          }
+        }
+        if (loud.length)
+          throw new Error(`title-bar controls carrying a fill at rest: ${loud.join(", ")}`);
+      });
+
       check("the nudge buttons say what is wrong, not which way to push", async () => {
         /* An arrow re-introduces exactly the question the words remove: film
          * time is stream time minus the offset, so a larger offset shows the

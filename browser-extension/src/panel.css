@@ -130,8 +130,8 @@ button.sso-add:hover:not(:disabled) {
  * darker than the card, which is what makes a card read as one thing. */
 .sso-sec {
   padding: 9px 10px 10px;
-  background: var(--sso-surface-2);
-  border: 1px solid var(--sso-line-soft);
+  background: rgba(255, 255, 255, 0.055);
+  border: 0;
   border-radius: 9px;
 }
 
@@ -292,7 +292,7 @@ button.sso-arr {
   height: 12px;
   border: 1px solid currentColor;
   border-radius: 2px;
-  opacity: 0.65;
+  opacity: 0.85;
 }
 
 button.sso-arr:hover .sso-arr__i {
@@ -342,8 +342,8 @@ button.sso-arr:hover .sso-arr__i {
  * that turns it on is lit while it is on, and says Done rather than Move. */
 button.sso-quick__move[data-on="true"] {
   color: var(--sso-accent-ink);
-  background: rgba(76, 139, 245, 0.1);
-  border-color: rgba(76, 139, 245, 0.55);
+  background: rgba(76, 139, 245, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(76, 139, 245, 0.45);
 }
 
 /* Study is amber wherever it appears - the marked word on the film, the chip
@@ -352,8 +352,8 @@ button.sso-quick__move[data-on="true"] {
  * thing rather than two blue controls that happen to be related. */
 button.sso-quick__study[data-on="true"] {
   color: #d8a86a;
-  background: rgba(216, 168, 106, 0.1);
-  border-color: rgba(216, 168, 106, 0.5);
+  background: rgba(216, 168, 106, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(216, 168, 106, 0.45);
 }
 
 /* --- one subtitle's controls ------------------------------------------------
@@ -370,14 +370,21 @@ button.sso-quick__study[data-on="true"] {
  * that is touched while a film is playing.
  */
 
+/* A card is a surface, not an outline.
+ *
+ * It carried a hairline border and a 4.5% fill, so the border did the
+ * separating and the fill did almost nothing. On a dark field the surface is
+ * the stronger signal and the cheaper one: raising the fill and dropping the
+ * border removes a line from the screen and makes the card read as raised
+ * rather than as drawn. */
 .sso-track {
-  background: var(--sso-surface-2);
-  border: 1px solid var(--sso-line);
+  background: rgba(255, 255, 255, 0.055);
+  border: 0;
   border-radius: 9px;
 }
 
 .sso-track + .sso-track {
-  margin-top: 6px;
+  margin-top: 8px;
 }
 
 .sso-track__head {
@@ -443,28 +450,41 @@ button.sso-quick__study[data-on="true"] {
   display: flex;
   gap: 5px;
   align-items: stretch;
-  margin: 0 0 7px;
+  margin: 0 0 6px;
 }
 
+/* The steps sit closer to the row above than to the card's edge, because they
+ * belong to the subtitle rather than to the gap after it. */
+.sso-row--steps {
+  justify-content: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+/* The map is the card's content, so it is a well cut into the surface rather
+ * than another bordered control sitting on it. An inset shadow reads as depth
+ * where a hairline read as one more box in a screen that had thirteen. */
 .sso-map__plot {
   position: relative;
   flex: 1;
   min-width: 0;
-  height: 26px;
+  height: 30px;
   overflow: hidden;
   cursor: ew-resize;
-  background: rgba(0, 0, 0, 0.22);
-  border: 1px solid var(--sso-line-soft);
+  background: rgba(0, 0, 0, 0.3);
+  border: 0;
   border-radius: var(--sso-r-ctl);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
   touch-action: pan-y;
+  transition: box-shadow var(--sso-motion) ease;
 }
 
 .sso-map__plot:hover {
-  border-color: var(--sso-line);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 0 0 1px var(--sso-line);
 }
 
 .sso-map__plot[data-dragging="true"] {
-  border-color: var(--sso-accent);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 0 0 1px var(--sso-accent);
 }
 
 /* The canvas is sized in device pixels by the script and laid out in CSS
@@ -488,14 +508,17 @@ button.sso-quick__study[data-on="true"] {
 .sso-map__zoom {
   flex: none;
   width: 34px;
+  min-height: 30px;
+  padding: 0;
   font: inherit;
   font-size: var(--sso-t-micro);
   font-variant-numeric: tabular-nums;
   font-weight: 600;
+  letter-spacing: 0.02em;
   color: var(--sso-ink-3);
   cursor: pointer;
   background: var(--sso-fill);
-  border: 1px solid var(--sso-line-soft);
+  border: 0;
   border-radius: var(--sso-r-ctl);
 }
 
@@ -542,19 +565,21 @@ button.sso-quick__study[data-on="true"] {
   transition: background 140ms ease, border-color 140ms ease;
 }
 
+/* The edge and the surface, and no longer the whole outline.
+ *
+ * It was a full accent border plus a glow plus the edge - three signals for a
+ * selection, on a screen whose one accent also marks the action worth taking.
+ * Two things in the accent meaning two different things is how an accent stops
+ * meaning anything. The edge is unmistakable and costs no colour anywhere else. */
 .sso-track[data-selected="true"] {
-  /* One step above its neighbour on the same field, which is what makes it
-   * read as raised rather than as a different kind of card. */
-  background: rgba(255, 255, 255, 0.075);
-  border-color: rgba(76, 139, 245, 0.55);
+  background: rgba(255, 255, 255, 0.085);
   box-shadow: inset 3px 0 0 var(--sso-accent);
 }
 
 /* Only the unselected one invites a click, which is the only one where a click
  * does anything. */
 .sso-track[data-selected="false"]:hover {
-  background: var(--sso-fill);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.075);
 }
 
 .sso-track:focus-visible {
@@ -965,20 +990,17 @@ button.sso-nudge:hover:not(:disabled) .sso-nudge__step {
  * read. Two equal halves, because neither direction is the more likely one and
  * two buttons of different widths read as one control and an afterthought.
  */
+/* Moving the film by this subtitle's lines. Quiet, and no taller than it needs
+ * to be: these were two full-width slabs 38px high, which gave the least
+ * considered controls on the card the most area on it. */
 button.sso-line-step {
-  flex: 1;
+  flex: none;
   min-width: 0;
-  padding: 5px 7px;
+  min-height: 24px;
+  padding: 3px 7px;
   font-size: var(--sso-t-small);
   font-weight: 600;
   white-space: nowrap;
-}
-
-/* Lining up is the odd one out in this row: the other two move the film, this
- * moves the subtitle. Said with the accent ink rather than a different shape,
- * so the row stays one row. */
-button.sso-line-step--align {
-  color: var(--sso-accent-ink);
 }
 
 /* Every subtitle to agree with the first, from the row that is about all of
@@ -1008,13 +1030,21 @@ button.sso-quick__align {
  * so is a bare `input.sso-sync__field`. A tie goes to whichever comes later,
  * which is the generic width:100%: the field filled the row, the reading beside
  * it wrapped onto two lines, and the Reset was pushed out of sight entirely. */
+/* The one number on the card, and the loudest thing on it.
+ *
+ * It was 13px/600 between two 13px/600 button labels, so the reading - the
+ * thing that actually changes, and the thing the five controls around it exist
+ * to change - was visually subordinate to its own controls. A lead-size,
+ * tabular, heavy number is what a reader should find first when they glance
+ * down mid-scene. */
 .sso-panel input.sso-sync__field {
   flex: none;
-  width: 62px;
+  width: 66px;
   padding: 4px 6px;
-  font-size: var(--sso-t-body);
+  font-size: var(--sso-t-lead);
   font-variant-numeric: tabular-nums;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   text-align: center;
   background: transparent;
   border-color: transparent;
@@ -1104,8 +1134,8 @@ button.sso-seg__b {
  * border and its ink and leaves the fill to the action. */
 button.sso-seg__b[data-on="true"] {
   color: var(--sso-accent-ink);
-  background: rgba(76, 139, 245, 0.1);
-  border-color: rgba(76, 139, 245, 0.55);
+  background: rgba(76, 139, 245, 0.18);
+  box-shadow: inset 0 0 0 1px rgba(76, 139, 245, 0.45);
 }
 
 /* A control whose setting is off does not disappear - that would hide what the
@@ -1116,32 +1146,6 @@ button.sso-seg__b[data-on="true"] {
 
 /* --- controls -------------------------------------------------------------- */
 
-button {
-  padding: 5px 9px;
-  font-size: var(--sso-t-body);
-  font-weight: 500;
-  color: var(--sso-ink);
-  background: var(--sso-fill);
-  border: 1px solid var(--sso-line);
-  border-radius: var(--sso-r-ctl);
-  cursor: pointer;
-  transition:
-    background var(--sso-motion) ease,
-    border-color var(--sso-motion) ease;
-}
-
-button:hover:not(:disabled) {
-  background: var(--sso-fill-hover);
-}
-
-button:active:not(:disabled) {
-  transform: translateY(1px);
-}
-
-button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
 
 /* The panel's one primary, and it belongs to the empty state: that is the only
  * moment here with a single obvious next action. Once a subtitle is attached
@@ -1150,7 +1154,6 @@ button:disabled {
 button.sso-primary {
   color: #fff;
   background: #2f5da8;
-  border-color: #3b6fc4;
 }
 
 button.sso-primary:hover:not(:disabled) {
