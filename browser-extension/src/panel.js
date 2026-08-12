@@ -256,7 +256,6 @@
     el.screens = {
       root: screen(buildTracks()),
       find: screen(buildSearch()),
-      style: screen(buildStyle()),
     };
     body.append(...Object.values(el.screens));
 
@@ -531,7 +530,6 @@
    * their tools, and having them spring open again is the thing they folded
    * them to avoid. */
   function setFolded(next) {
-    closeMenu();
     folded = Boolean(next);
     if (el.panel) el.panel.dataset.folded = folded ? "true" : "false";
     if (el.fold) {
@@ -733,15 +731,15 @@
     });
     el.moveButton.className = "sso-quick__move sso-quiet";
 
-    /* The one control that is not about position. It is on this surface at all
-     * because the rail it belongs to does not exist until it is on - a switch
-     * you can only reach by first being in the state it turns on is not a
-     * switch - and everything else about study is on the rail's own gear. */
-    el.studyButton = button("Study", {
-      onClick: () => api.setStudyEnabled(!api.studySettings()?.enabled),
-      title: "Mark the words that are rare in film dialogue and show what they mean",
-    });
-    el.studyButton.className = "sso-quick__study";
+    /* There is no Study button here any more.
+     *
+     * It switched study on without naming a subtitle, next to a per-subtitle
+     * "learn" chip that was itself hidden until study was already on. Two
+     * controls for one idea, each unusable in the state the other one governed:
+     * the row's button could not say WHICH subtitle, and the chip could not be
+     * seen from the state it was for getting out of. The chip does both now -
+     * marking a subtitle turns study on, unmarking the last turns it off - and
+     * it says which one, which the button never could. */
 
     /* The version that names no subtitle: every other one moves to agree with
      * the first. On this row rather than on a card because it is about the set
@@ -757,9 +755,7 @@
     const spacer = document.createElement("span");
     spacer.className = "sso-grow";
 
-    el.quick.append(
-      el.arrangeGroup, el.centreButton, el.moveButton, el.lineUpAll, spacer, el.studyButton,
-    );
+    el.quick.append(el.arrangeGroup, el.centreButton, el.moveButton, spacer, el.lineUpAll);
     return el.quick;
   }
 
@@ -959,14 +955,23 @@
   // device pixels from it, and a disagreement blurs every bar.
   const MAP_HEIGHT = 30;
 
-  /* Whole film, then a minute, then fifteen seconds. Three steps because they
-   * answer three different questions - where am I, which line is which, and is
-   * this exactly on - and because a slider would be a fourth control on a card
-   * that already has nine. */
+  /* A minute, then fifteen seconds, then the whole film. Three steps because
+   * they answer three different questions - which line is which, is this
+   * exactly on, and where am I - and because a slider would be a fourth
+   * control on a card that already has nine.
+   *
+   * A minute is where it opens, and the whole film is now the step you go to
+   * rather than the one you start on. The measurement that decides it: on a
+   * two-hour film in a 296px strip a 4.2 second error - a big one, the kind
+   * that lands a line on the wrong speaker - is 0.06% of the width, which is a
+   * third of one pixel. The opening scale showed every sync error worth fixing
+   * as nothing at all, so the map opened saying the two subtitles agreed. At 60
+   * seconds across, a pixel is a fifth of a second and the same error is 21px
+   * of displacement between one card and the other. */
   const MAP_SPANS = [
-    { ms: 0, label: "film", title: "Showing the whole film. Click for a closer look." },
     { ms: 60000, label: "60s", title: "Showing a minute around the playhead. Click to go closer." },
     { ms: 15000, label: "15s", title: "Showing 15 seconds around the playhead. Click for the whole film." },
+    { ms: 0, label: "film", title: "Showing the whole film. Click to come back to a minute." },
   ];
 
   function buildTimeline(slot) {
@@ -1330,6 +1335,18 @@
      * button here gives Enter and Space for free, carries aria-pressed to say
      * which subtitle the keys act on, and is the element a reader would point
      * at if asked which one is selected. */
+    /* And the name is where a different subtitle is asked for.
+     *
+     * Replacing one is a question about WHICH FILE this is, and the name is the
+     * answer to that question already on the card. It was a menu item, two
+     * clicks away behind a "⋯" that also held Style and Remove, which is what
+     * made the menu feel like a filing cabinet - three unrelated verbs sharing
+     * one button because none of them had a home.
+     *
+     * A double-click, not a single one, because a single click on the name
+     * already means something here: it selects the card. Double-click is the
+     * conventional "open this" everywhere a name is also a selection, and a
+     * single click stays the cheap, reversible one. */
     const label = document.createElement("button");
     label.type = "button";
     label.className = "sso-track__label";
@@ -1337,45 +1354,43 @@
       event.stopPropagation();
       api.setKeyTrack(slot);
     });
+    label.addEventListener("dblclick", (event) => {
+      event.stopPropagation();
+      // The selection the first click of the pair made stands: replacing a
+      // subtitle is also a good reason to be pointing the keys at it.
+      openFind(slot);
+    });
     const labelHead = document.createElement("span");
     labelHead.className = "sso-track__name";
     const labelTail = document.createElement("span");
     labelTail.className = "sso-track__tail";
     label.append(labelHead, labelTail);
 
-    /* Everything this subtitle can have done to it, on demand.
+    /* The menu of verbs is gone, and every one of them is on the face.
      *
-     * These were four permanent controls on the card - Hide, Remove, Reset
-     * timing, and two sliders - none of which is touched while a film plays.
-     * Behind one button they stop competing with the timing row, which is the
-     * only thing here that is. Remove goes last, after a rule and in the danger
-     * ink, because a menu makes it one tap with no confirmation; the undo is
-     * what makes that safe. */
-    const more = document.createElement("button");
-    more.className = "sso-icon sso-track__more";
-    more.type = "button";
-    more.textContent = "⋯";
-    more.title = "What can be done to this subtitle";
-    more.setAttribute("aria-haspopup", "menu");
-    more.addEventListener("click", (event) => {
+     * It held three things that have nothing to do with each other - Style,
+     * Replace, Remove - collected behind one "⋯" because none of them had a
+     * home rather than because they belonged together. A menu is two clicks and
+     * a reading step for each, and it hid the two that say something about the
+     * card's state: whether this subtitle is being studied, and that it can be
+     * taken off at all.
+     *
+     * Each now sits where its own question is asked. Replace is on the name,
+     * which is the answer to "which file is this". Style opens the look of THIS
+     * subtitle. Remove sits beside Hide, because they are the two ways to stop
+     * seeing something and a reader reaching for one is choosing between them. */
+    const styleButton = document.createElement("button");
+    styleButton.className = "sso-icon sso-track__style";
+    styleButton.type = "button";
+    styleButton.title = "Colour, font, size, outline";
+    styleButton.setAttribute("aria-label", "Style this subtitle");
+    /* Drawn, not written: three letters of "Aa" in the row that already carries
+     * an eye. A word here would take the room the name needs, and the two
+     * letters are how every editor on earth says "type". */
+    styleButton.textContent = "Aa";
+    styleButton.addEventListener("click", (event) => {
       event.stopPropagation();
-      // A click from a key press carries detail 0. The menu uses this to decide
-      // whether to take focus, so a mouse user is not shown a focus ring.
-      more.dataset.viaKey = event.detail === 0 ? "true" : "false";
-      menu(more, [
-        {
-          label: "Style…",
-          title: "Colour, font, size, outline",
-          onClick: () => openStyle(slot),
-        },
-        {
-          label: "Replace…",
-          title: "Find a different subtitle for this one",
-          onClick: () => openFind(slot),
-        },
-        null,
-        { label: "Remove", danger: true, onClick: () => removeTrack(slot) },
-      ]);
+      openStyle(slot);
     });
 
     /* Whether this subtitle is one of the languages being learnt.
@@ -1387,7 +1402,16 @@
      *
      * And it is a switch per subtitle rather than a radio, because study can
      * follow more than one at once. Its former shape said "move study here",
-     * which cannot express "both" and cannot express "neither". */
+     * which cannot express "both" and cannot express "neither".
+     *
+     * It is on the face whether or not study mode is on, and that is what
+     * retired the Study button from the row above. The two controls were one
+     * idea split in half: a global switch that named no subtitle, and a
+     * per-subtitle mark that only appeared once the global switch was already
+     * on - so the mark was invisible in exactly the state a reader would use it
+     * to leave. Marking a subtitle IS switching study on, and unmarking the
+     * last one IS switching it off. See emptyMeansOff in study.js, which held
+     * the second half of that rule already. */
     const learnChip = document.createElement("button");
     learnChip.className = "sso-track__learn";
     learnChip.type = "button";
@@ -1420,6 +1444,69 @@
       api.setVisible(!api.status().tracks[slot].visible, { slot });
     });
 
+    /* Taking a subtitle off, beside the other way of not seeing it.
+     *
+     * On the face rather than in a menu, and asking twice rather than once. A
+     * menu item is safe by being hard to reach, which is a poor trade: it costs
+     * every deliberate removal two clicks and a reading step to protect against
+     * a mis-click. Asking on the spot costs the same two presses and protects
+     * against the same mistake, with the state visible in between - the button
+     * says what the next press will do rather than doing it.
+     *
+     * The armed state expires, and that is the part that makes it safe rather
+     * than merely slow. A button left armed is a mine: the reader gives up,
+     * looks away, comes back, presses what they think is the ordinary control
+     * and loses the subtitle. Four seconds is long enough to move a pointer
+     * across a 340px panel and short enough that nothing survives a distraction.
+     * The undo behind it stays, because two presses is a smaller guarantee than
+     * a way back. */
+    const REMOVE_ARMED_MS = 4000;
+    let armedTimer = null;
+
+    const remove = document.createElement("button");
+    remove.className = "sso-icon sso-track__remove";
+    remove.type = "button";
+    remove.dataset.armed = "false";
+    remove.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (remove.dataset.armed === "true") {
+        disarm();
+        removeTrack(slot);
+        return;
+      }
+      arm();
+    });
+    /* Disarmed by leaving it as well as by time. Moving the pointer off the
+     * button is the clearest statement there is that the reader has changed
+     * their mind, and it costs nothing to believe them. */
+    remove.addEventListener("pointerleave", disarm);
+
+    /* One place decides what the button says, so the two faces cannot drift
+     * apart - the armed one is the whole safety mechanism and a stale "✕" over
+     * an armed button would remove a subtitle nobody asked to remove. */
+    function face(armed) {
+      remove.dataset.armed = armed ? "true" : "false";
+      remove.textContent = armed ? "Remove?" : "✕";
+      remove.title = armed
+        ? "Press again to take this subtitle off"
+        : "Take this subtitle off";
+      remove.setAttribute("aria-label", remove.title);
+    }
+
+    function arm() {
+      face(true);
+      clearTimeout(armedTimer);
+      armedTimer = setTimeout(disarm, REMOVE_ARMED_MS);
+    }
+
+    function disarm() {
+      clearTimeout(armedTimer);
+      armedTimer = null;
+      face(false);
+    }
+
+    face(false);
+
     /* No fold on a card.
      *
      * It carried one over from when a card was seven controls tall and two of
@@ -1427,7 +1514,7 @@
      * pixels - so folding it saves twenty-six of them and costs the timing row,
      * which is the one thing on this surface that is used while a film runs.
      * A control that hides the only thing worth showing is not worth a click. */
-    head.append(label, learnChip, visible, more);
+    head.append(label, learnChip, styleButton, visible, remove);
 
     /* One row: say what is wrong, twice as fast or twice as fine, and read what
      * it did in the middle.
@@ -1603,8 +1690,8 @@
 
     root.append(head, body);
     return {
-      root, learnChip, label, labelHead, labelTail,
-      offsetField, offsetReset, visible, more, lineUpButton, timeline, said,
+      root, learnChip, label, labelHead, labelTail, styleButton,
+      offsetField, offsetReset, visible, remove, disarm, lineUpButton, timeline, said,
     };
   }
 
@@ -1772,7 +1859,6 @@
   const SCREEN_TITLES = {
     root: "Subtitle Overlay",
     find: "Find a subtitle",
-    style: "Style",
   };
 
   let atScreen = "root";
@@ -1785,7 +1871,6 @@
   }
 
   function goTo(name) {
-    closeMenu();
     atScreen = name;
     for (const [key, node] of Object.entries(el.screens)) node.hidden = key !== name;
     el.back.hidden = name === "root";
@@ -1826,7 +1911,6 @@
         buildSite(), buildWatching(), buildAppearance(), buildKeys(), buildDiagnostics(),
       );
     }
-    closeMenu();
     await settingsWindow.show(host);
     refresh(api.status());
     refreshSite();
@@ -1896,9 +1980,36 @@
    * segmented control asking again - a section away from a second, identical
    * pair of buttons meaning something else entirely - was a question with the
    * answer already in it. */
-  function openStyle(slot) {
+  /* Style is a window, not a screen, and the difference is the subtitle.
+   *
+   * A screen replaces what the panel is showing, so changing how a subtitle
+   * looks meant losing the list of subtitles - including the other one, which
+   * is the whole reason a colour or a size is being changed at all. The two
+   * want opposite treatments and the only way to judge one is against the
+   * other. A window sits beside the panel and both stay on screen, which is
+   * also what Settings needed and for the same reason.
+   *
+   * Built on first use and kept, so its size and place survive within a session
+   * as well as between them. */
+  let styleWindow = null;
+
+  async function openStyle(slot) {
     styleSlot = slot >= 0 && slot < api.trackCount ? slot : 0;
-    goTo("style");
+    if (!styleWindow) {
+      styleWindow = api.makeWindow({
+        title: "Style",
+        sheets,
+        storeKey: "sso:panelStyleWindow",
+        width: 340,
+        height: 400,
+        accent: "#4c8bf5",
+        accentInk: "#93b9fb",
+        onClose: () => refresh(api.status()),
+      });
+      styleWindow.body.append(buildStyle());
+    }
+    await styleWindow.show(host);
+    refresh(api.status());
   }
 
   function openFind(slot) {
@@ -1913,114 +2024,6 @@
     el.query.select();
   }
 
-  /* A menu of verbs, anchored to the button that opened it.
-   *
-   * It is a child of .sso-panel rather than a second shadow host. The panel is
-   * `overflow: hidden auto` - hidden across, auto down - so a menu no wider
-   * than the panel and right-aligned to its anchor is clipped on neither axis,
-   * and it scrolls with the row it belongs to, which is what a menu anchored to
-   * a row should do. A floating host would need its own stylesheet adoption,
-   * its own fullscreen re-parenting and its own teardown, for a list of five
-   * words.
-   *
-   * Only one is open at a time, and it closes on a press outside it, on
-   * Escape, and on anything that changes screen. It does NOT close on scroll:
-   * it is a child of the scrolling container, so it moves with the row it is
-   * anchored to rather than detaching from it - and a scroll dismissal was
-   * closing menus by itself, because re-fitting the panel to the viewport can
-   * emit a scroll event that no reader caused.
-   */
-  let openMenu = null;
-  let menuLife = null;
-
-  /* Closing takes the dismiss listeners and the layer with it.
-   *
-   * They used to be registered `{ once: true }` and left to expire on their
-   * own, which is not the same thing: a menu closed by Escape or by picking an
-   * item leaves its listeners attached, and the next menu is then closed by the
-   * *previous* menu's handler. It presented as a menu that opens and is
-   * instantly gone, only ever the second menu of a session, which is exactly
-   * the sort of thing that survives a manual check. */
-  function closeMenu() {
-    menuLife?.abort();
-    menuLife = null;
-    openMenu?.remove();
-    openMenu = null;
-  }
-
-  function menu(anchor, items) {
-    closeMenu();
-    const layer = api.makeLayer({ zIndex: "2147483647" });
-    layer.shadow.adoptedStyleSheets = sheets;
-
-    const node = document.createElement("div");
-    node.className = "sso-win sso-menu";
-    node.setAttribute("role", "menu");
-
-    for (const item of items) {
-      if (item?.hidden) continue;
-      if (item === null) {
-        const rule = document.createElement("div");
-        rule.className = "sso-menu__rule";
-        node.append(rule);
-        continue;
-      }
-      const b = document.createElement("button");
-      b.type = "button";
-      b.className = item.danger ? "sso-menu__item sso-menu__item--danger" : "sso-menu__item";
-      b.setAttribute("role", "menuitem");
-      b.textContent = item.label;
-      if (item.title) b.title = item.title;
-      b.addEventListener("click", () => {
-        closeMenu();
-        item.onClick();
-      });
-      node.append(b);
-    }
-    layer.shadow.append(node);
-    openMenu = layer;
-
-    /* In viewport coordinates, hanging left from the anchor's right edge, and
-     * flipped above it when there is no room below.
-     *
-     * The layer is a host of its own rather than a child of the panel, which is
-     * the whole point: a menu opened near the bottom of the panel used to be
-     * cut off at the panel's edge. Nothing above this host can clip it. */
-    const at = anchor.getBoundingClientRect();
-    const box = node.getBoundingClientRect();
-    const below = at.bottom + 4;
-    const top = below + box.height > window.innerHeight - 8
-      ? Math.max(8, at.top - box.height - 4)
-      : below;
-    const left = clamp(at.right - box.width, 8, Math.max(8, window.innerWidth - box.width - 8));
-    layer.place(left, top);
-
-    if (anchor.dataset.viaKey === "true") node.querySelector("button")?.focus();
-
-    menuLife = new AbortController();
-    const { signal } = menuLife;
-    node.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") {
-        closeMenu();
-        anchor.focus();
-      }
-    }, { signal });
-
-    /* Bound after this click finishes, or the press that opened the menu is the
-     * one that dismisses it. Watched on the document because the menu is no
-     * longer inside the panel's shadow tree, so a press on the panel is now a
-     * press somewhere else entirely. */
-    setTimeout(() => {
-      if (signal.aborted) return;
-      const away = (event) => {
-        const path = event.composedPath?.() || [];
-        if (!path.includes(node) && !path.includes(anchor)) closeMenu();
-      };
-      document.addEventListener("pointerdown", away, { capture: true, signal });
-      window.addEventListener("resize", closeMenu, { signal });
-    }, 0);
-    return node;
-  }
 
   /* Taking a subtitle off is the one destructive thing this panel does, and it
    * used to be a plain button next to Hide with no way back - a mis-click cost
@@ -2958,12 +2961,11 @@
       : "Open something that plays, then come back.";
     el.noneAction.hidden = !status.hasVideo;
     // Both slots full means the plus has nowhere to put anything; replacing one
-    // is what the card's own menu is for.
+    // is what a double-click on a card's name is for.
     el.add.hidden = !status.attached || status.trackCount >= api.trackCount;
 
-    /* The shared row. Nothing attached means nothing to arrange and nothing to
-     * study, and the empty state below owns that screen on its own. */
-    const study = api.studySettings();
+    /* The shared row. Nothing attached means nothing to arrange, and the empty
+     * state below owns that screen on its own. */
     el.quick.hidden = !status.attached;
     el.arrangeGroup.hidden = status.trackCount < 2;
     el.moveButton.textContent = status.placing ? "Done" : "Place";
@@ -2973,11 +2975,6 @@
     el.moveButton.title = status.placing
       ? "Drag the stand-in to where the subtitle should be, then press Done"
       : "Drag a subtitle around the picture: the middle moves it, an edge makes it wider";
-    // study.js is a separate content script; if it did not load there is
-    // nothing to switch on and the row should not claim otherwise.
-    el.studyButton.hidden = !study;
-    el.studyButton.dataset.on = study?.enabled ? "true" : "false";
-    el.studyButton.setAttribute("aria-pressed", study?.enabled ? "true" : "false");
 
     // The one fact a folded title bar has to carry.
     el.state.textContent = status.attached
@@ -3023,13 +3020,19 @@
        * the state's word in both positions, so an off switch read as a label
        * saying this subtitle was being studied when it was not. */
       card.learnChip.textContent = learning ? "learning" : "learn";
-      /* Shown on every attached subtitle now, not only on the one being
-       * studied: a switch nobody can see in its off position is not a switch.
-       * Still nothing to choose between with one subtitle on screen. */
-      card.learnChip.hidden = !study?.enabled || status.trackCount < 2;
+      /* On every attached subtitle, whether or not study mode is running.
+       *
+       * It used to need `study.enabled` AND a second subtitle, which hid it in
+       * both of the states it is reached for: study off, where it is the way to
+       * turn study on, and one subtitle, where it is the only mark saying that
+       * subtitle is the one being learnt. All that is left is study.js having
+       * loaded at all - with no study there is nothing to switch. */
+      card.learnChip.hidden = !study;
       card.learnChip.title = learning
         ? "Study is marking the rare words in this subtitle — click to stop"
-        : "Click to study this subtitle too";
+        : study?.enabled
+          ? "Click to study this subtitle too"
+          : "Mark the rare words in this subtitle and show what they mean";
       card.learnChip.setAttribute("aria-pressed", learning ? "true" : "false");
       // Nothing to line up against with one subtitle on screen.
       card.lineUpButton.hidden = status.trackCount < 2;
@@ -3056,6 +3059,10 @@
       if (card.saidFor !== track.fileId) {
         if (card.saidFor !== undefined) clearSaid(slot);
         card.saidFor = track.fileId;
+        /* And an armed Remove is about the subtitle that was in this card. A
+         * different one arriving under a button already asking "Remove?" is the
+         * one way this control could take something nobody offered it. */
+        card.disarm();
       }
       card.timeline.draw(status);
     });
@@ -3073,10 +3080,18 @@
         : `The result you pick becomes subtitle ${targetSlot + 1}.`;
     }
 
-    if (showing("style")) {
+    if (styleWindow?.isOpen()) {
       const look = settings.tracks[styleSlot];
       const track = status.tracks[styleSlot];
-      el.title.textContent = `Style · subtitle ${styleSlot + 1}`;
+      /* Which subtitle this is about, on the window's own bar. It has to be
+       * there: the window is beside the panel rather than instead of it, so
+       * two of them can be open at once and neither would otherwise say which
+       * subtitle it changes. */
+      styleWindow.setTitle(
+        track?.attached
+          ? `Style · subtitle ${styleSlot + 1}`
+          : "Style",
+      );
       el.styleSize.input.value = String(look.fontScale);
       el.styleSize.readout.textContent = look.fontScale.toFixed(2);
       el.styleWidth.input.value = String(Math.round(look.widthPercent));
@@ -3101,7 +3116,6 @@
         b.dataset.on = Object.entries(wanted)
           .every(([key, value]) => look[key] === value) ? "true" : "false";
       }
-      if (!track?.attached) el.title.textContent = "Style";
     }
 
     // The settings are their own window now, so what decides whether they are
@@ -3200,12 +3214,15 @@
   }
 
   function hide() {
-    closeMenu();
     stopPlayhead();
     api.trace?.("panel", { open: false }, { frames: true });
     // A binding half-read is not a binding; the button that asked is going.
     api.cancelCapture();
+    // Every window this panel opened goes with it. They are separate hosts, so
+    // hiding the panel does not hide them, and one left behind is a Style
+    // window floating over a film with nothing to close it from.
     settingsWindow?.hide();
+    styleWindow?.hide();
     if (host) setHostVisible(host, false);
     if (unsubscribe) {
       unsubscribe();
@@ -3252,10 +3269,11 @@
   window.__ssoPanelTeardown = () => {
     // Both live on hosts outside this shadow tree, so removing the panel does
     // not remove them.
-    closeMenu();
     stopPlayhead();
     settingsWindow?.destroy();
     settingsWindow = null;
+    styleWindow?.destroy();
+    styleWindow = null;
     window.removeEventListener("resize", clampIntoView);
     unsubscribe?.();
     unsubscribe = null;

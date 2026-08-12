@@ -346,16 +346,6 @@ button.sso-quick__move[data-on="true"] {
   box-shadow: inset 0 0 0 1px rgba(76, 139, 245, 0.45);
 }
 
-/* Study is amber wherever it appears - the marked word on the film, the chip
- * on the card that says which subtitle it reads, and the switch here. One
- * feature, one colour, so the switch and its effect are recognisably the same
- * thing rather than two blue controls that happen to be related. */
-button.sso-quick__study[data-on="true"] {
-  color: #d8a86a;
-  background: rgba(216, 168, 106, 0.18);
-  box-shadow: inset 0 0 0 1px rgba(216, 168, 106, 0.45);
-}
-
 /* --- one subtitle's controls ------------------------------------------------
  *
  * Each attached subtitle gets a card holding everything that belongs to it -
@@ -679,75 +669,6 @@ button.sso-track__learn[data-on="false"] {
   }
 }
 
-/* --- the menu of verbs ------------------------------------------------------
- *
- * A child of .sso-panel, not a floating host. The panel is `overflow: hidden
- * auto`, so a menu no wider than it and right-aligned to its anchor is clipped
- * on neither axis, and it scrolls with the row it belongs to.
- *
- * It is the one surface here allowed to be opaque: it sits over the cards, and
- * a translucent menu on top of a card on top of a film is three layers of text
- * in the same place.
- */
-
-/* On a host of its own, so nothing can clip it. The width bound is the
- * viewport's rather than the panel's for the same reason. */
-.sso-menu {
-  min-width: 152px;
-  max-width: min(280px, calc(100vw - 16px));
-  padding: 4px;
-  background: #20242c;
-  border: 1px solid var(--sso-line);
-  border-radius: 9px;
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.5),
-    0 10px 26px -10px rgba(0, 0, 0, 0.9);
-}
-
-button.sso-menu__item {
-  display: block;
-  width: 100%;
-  padding: 6px 9px;
-  font-size: var(--sso-t-body);
-  font-weight: 500;
-  text-align: left;
-  color: var(--sso-ink-2);
-  background: none;
-  border: 0;
-  border-radius: 6px;
-  white-space: nowrap;
-}
-
-button.sso-menu__item:hover:not(:disabled) {
-  color: var(--sso-ink);
-  background: var(--sso-fill-hover);
-}
-
-button.sso-menu__item:active:not(:disabled) {
-  transform: none;
-}
-
-/* The line that sets the destructive item apart, so it has to be seen. The
- * shared --sso-line is a hairline for edges over a moving picture; on an
- * opaque menu it reads as a gap, which is the one thing this must not be. */
-.sso-menu__rule {
-  height: 1px;
-  margin: 5px 2px;
-  background: rgba(255, 255, 255, 0.16);
-}
-
-/* The one item that destroys something says so before it is pressed, not
- * after. Ink at rest so it does not shout from a closed menu's shadow; the
- * full colour arrives under the pointer, where the decision is made. */
-button.sso-menu__item--danger {
-  color: var(--sso-danger);
-}
-
-button.sso-menu__item--danger:hover:not(:disabled) {
-  color: #fff;
-  background: rgba(240, 131, 111, 0.35);
-}
-
 /* --- a subtitle that is off the picture -------------------------------------
  *
  * Hide lives in the menu now, so the control that was carrying this state is
@@ -969,6 +890,55 @@ button.sso-track__eye[data-on="false"] {
 
 button.sso-track__eye[data-on="false"] .sso-eye__bar {
   opacity: 1;
+}
+
+/* "Aa", set in the face it opens the settings for. It is the only glyph in
+ * this row that is letters rather than a shape, which is the point: the two
+ * beside it act on the subtitle, and this one acts on its lettering. */
+button.sso-track__style {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: 620;
+  letter-spacing: -0.02em;
+}
+
+/* Two faces, and the armed one has to be unmistakable.
+ *
+ * At rest it is the quietest control in the head - it destroys something, and a
+ * destructive control that catches the eye is one that gets pressed. Armed it
+ * is the loudest thing on the card: it has taken over the row's width, it is
+ * carrying the danger colour at full strength, and it says the word. The
+ * difference between the two states is the whole safety mechanism, so it is
+ * carried by shape, width, colour AND text rather than by any one of them.
+ */
+button.sso-track__remove[data-armed="false"] {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 4px;
+  font-size: 13px;
+  opacity: 0.75;
+}
+
+button.sso-track__remove[data-armed="false"]:hover:not(:disabled) {
+  color: var(--sso-danger);
+  background: rgba(240, 131, 111, 0.14);
+  opacity: 1;
+}
+
+button.sso-track__remove[data-armed="true"] {
+  padding: 0 8px;
+  font-size: var(--sso-t-micro);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: var(--sso-danger);
+}
+
+button.sso-track__remove[data-armed="true"]:hover:not(:disabled) {
+  color: #fff;
+  background: #e4674f;
 }
 
 button.sso-nudge:hover:not(:disabled) .sso-nudge__step {

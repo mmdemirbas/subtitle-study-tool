@@ -255,18 +255,18 @@
       const panelShadow = () =>
         [...document.querySelectorAll("div")].find((d) => d.shadowRoot && d.shadowRoot.querySelector(".sso-panel"))?.shadowRoot;
 
-      /* The card menu is on a host of its own, outside the panel's shadow tree.
-       * That is the point of it: a menu opened near the bottom of the panel was
-       * being cut off at the panel's edge, and nothing above its own host can
-       * clip it. So it is looked for in the document, not in the panel. */
-      const menuShadow = () =>
-        [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(".sso-menu"))?.shadowRoot;
-      const menuItems = () => [...(menuShadow()?.querySelectorAll(".sso-menu__item") || [])];
-
-      /* Settings are a window of their own now, not a screen in the panel, so
-       * they are looked for in the document too. */
-      const sheetShadow = () =>
-        [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(".sso-sheet"))?.shadowRoot;
+      /* Settings and Style are windows of their own, not screens in the panel,
+       * so they are looked for in the document rather than inside it - and by
+       * TITLE, because there can now be two of them open at once and the first
+       * `.sso-sheet` in the document is whichever was created first. A helper
+       * that returned "a window" was fine while there was only one; with two it
+       * would quietly assert against the wrong surface. */
+      const sheetNamed = (word) =>
+        [...document.querySelectorAll("div")]
+          .map((d) => d.shadowRoot)
+          .find((s) => s?.querySelector(".sso-sheet") &&
+            new RegExp(word, "i").test(s.querySelector(".sso-win__title")?.textContent || ""));
+      const sheetShadow = () => sheetNamed("settings");
       const openSettings = async () => {
         [...panelShadow().querySelectorAll(".sso-win__head button")]
           .find((b) => b.textContent === "⚙")?.click();
@@ -1581,76 +1581,165 @@
         }
       });
 
-      check("the menu of verbs opens inside the panel and closes on anything", async () => {
-        /* It is a child of .sso-panel rather than a floating host, which only
-         * works because the panel is `overflow: hidden auto` - so the thing to
-         * assert is that it is actually reachable, not merely present. */
+      check("every verb a subtitle has is on its own card face", async () => {
+        /* The "\u22ef" menu is gone and each of its three items sits where its
+         * own question is asked. What has to be true of all three is that they
+         * are REAL targets on the face - a verb moved out of a menu and drawn
+         * as a 2px sliver is worse than the menu was. */
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        const opener = card.querySelector(".sso-track__more");
-        opener.click();
-        await sleep(60);
-        const open = menuShadow()?.querySelector(".sso-menu");
-        if (!open) throw new Error("nothing opened");
+        if (card.querySelector(".sso-track__more"))
+          throw new Error("the menu opener is still on the card");
 
-        const menuBox = open.getBoundingClientRect();
-        if (menuBox.width === 0 || menuBox.height === 0) throw new Error("the menu has no size");
-        /* Fully on screen, and free to leave the panel.
-         *
-         * Reported: the menu was cut off at the panel's edge. It was a child of
-         * the panel, which scrolls, so the panel's overflow clipped it - fine
-         * for content and wrong for a menu. It has its own host now, and the
-         * only thing it has to stay inside is the window. */
-        if (menuBox.left < 0 || menuBox.top < 0 ||
-            menuBox.right > window.innerWidth || menuBox.bottom > window.innerHeight)
-          throw new Error(
-            `off screen: menu at ${Math.round(menuBox.left)},${Math.round(menuBox.top)} ` +
-            `${Math.round(menuBox.width)}×${Math.round(menuBox.height)} ` +
-            `in a ${window.innerWidth}×${window.innerHeight} window`);
-        // Nothing may clip it: every item is where the box says it is.
-        const last = [...open.querySelectorAll(".sso-menu__item")].pop();
-        if (last.getBoundingClientRect().bottom > menuBox.bottom + 1)
-          throw new Error("the last item is outside the menu box");
-        // Every item must be a real target, not a 2px sliver behind an edge.
-        for (const item of open.querySelectorAll(".sso-menu__item")) {
-          const box = item.getBoundingClientRect();
-          if (box.height < 24) throw new Error(`a menu item is ${Math.round(box.height)}px tall`);
+        const face = {
+          learn: card.querySelector(".sso-track__learn"),
+          style: card.querySelector(".sso-track__style"),
+          eye: card.querySelector(".sso-track__eye"),
+          remove: card.querySelector(".sso-track__remove"),
+        };
+        for (const [name, node] of Object.entries(face)) {
+          if (!node) throw new Error(`no ${name} on the card face`);
+          const box = node.getBoundingClientRect();
+          // 22px is what the head's controls are drawn at; anything under 20
+          // means it is being squeezed out by the name beside it.
+          if (box.width < 20 || box.height < 20)
+            throw new Error(`${name} is ${Math.round(box.width)}\u00d7${Math.round(box.height)}`);
+          if (!node.title) throw new Error(`${name} says nothing about what it does`);
         }
 
-        // Escape closes it, and one press of the opener does not leave two.
-        open.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-        await sleep(40);
-        if (menuShadow()?.querySelector(".sso-menu")) throw new Error("Escape did not close it");
-        opener.click();
-        await sleep(40);
-        opener.click();
-        await sleep(40);
-        if ([...document.querySelectorAll("div")].filter((d) => d.shadowRoot?.querySelector(".sso-menu")).length > 1)
-          throw new Error("two menus at once");
-        /* And it survives the panel scrolling under it.
-         *
-         * The menu is a child of the scrolling container, so it travels with
-         * the row it is anchored to. A scroll dismissal closed menus by itself:
-         * re-fitting the panel to the viewport emits a scroll no reader caused,
-         * and because the listener was registered `{ once: true }` and never
-         * removed, it was the *previous* menu's handler that closed the next
-         * one. Consistently the second menu of a session, which is exactly the
-         * shape of bug that survives a manual check. */
-        panelShadow().querySelector(".sso-panel").dispatchEvent(new Event("scroll"));
-        await sleep(60);
-        if (!menuShadow()?.querySelector(".sso-menu"))
-          throw new Error("a scroll closed the menu");
+        /* The learn chip shows with study OFF, which is the change that let the
+         * row's Study button go. It used to need study.enabled AND a second
+         * subtitle, so it was invisible in both states it is reached for. */
+        /* The state is set here rather than inherited: an earlier case leaves
+         * study on, and a case that asserts against whatever the one before it
+         * happened to leave passes or fails by running order. */
+        await window.__ssoStudy.setEnabled(false);
+        await sleep(160);
+        if (face.learn.hidden) throw new Error("the learn chip is hidden");
+        if (face.learn.dataset.on !== "false")
+          throw new Error(`with study off the chip reads ${face.learn.dataset.on}`);
+        if ([...panelShadow().querySelectorAll("button")].some((b) => b.textContent === "Study"))
+          throw new Error("the row still carries a Study button");
+      });
 
-        menuShadow()?.querySelector(".sso-menu")
-          ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      check("marking a subtitle to learn is what switches study on", async () => {
+        /* One control, both directions. The rule lives in study.js
+         * (slotsAndSwitchAgree) and the panel must not carry a second copy of
+         * it: marking turns study on, unmarking the last turns it off. */
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        const learn = card.querySelector(".sso-track__learn");
+        const on = () => Boolean(window.__ssoStudy?.settings?.().enabled);
+        // From a known off, whatever the case before this one left behind.
+        await window.__ssoStudy.setEnabled(false);
+        await sleep(160);
+        if (on()) throw new Error("study would not switch off");
+
+        learn.click();
+        await sleep(260);
+        if (!on()) throw new Error("pressing learn did not switch study on");
+        if (learn.dataset.on !== "true")
+          throw new Error("study is on and the chip still reads off");
+        /* And it built something. A switch that changes a setting without
+         * building the rail is the reported failure - "I cannot see the study
+         * panel" - so the assertion is the box, not the flag. */
+        const rail = [...document.querySelectorAll("div")]
+          .find((d) => d.shadowRoot?.querySelector(".sso-rail"));
+        if (!rail) throw new Error("study is on and no rail was built");
+        const railBox = rail.getBoundingClientRect();
+        if (railBox.width === 0 || railBox.height === 0)
+          throw new Error(`the rail is ${Math.round(railBox.width)}\u00d7${Math.round(railBox.height)}`);
+
+        learn.click();
+        await sleep(260);
+        if (on()) throw new Error("unmarking the last subtitle did not switch study off");
+        // And left off, so the cases after this one start where they expect to.
+        await window.__ssoStudy.setEnabled(false);
+        await sleep(120);
+      });
+
+      check("Remove asks twice, and forgets it was asked", async () => {
+        /* A menu item was safe by being hard to reach, which costs every
+         * deliberate removal two clicks to guard against a mis-click. Asking on
+         * the spot costs the same and shows the state in between.
+         *
+         * The expiry is the half that matters: a button left armed is a mine.
+         * The reader looks away, comes back, presses what they take to be the
+         * ordinary control, and the subtitle is gone. */
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        const remove = card.querySelector(".sso-track__remove");
+        const attached = () => window.__ssoApi.status().tracks.filter((t) => t.attached).length;
+        const before = attached();
+
+        remove.click();
         await sleep(40);
-        // A third opening, after two dismissals, still works.
-        opener.click();
-        await sleep(60);
-        if (!menuShadow()?.querySelector(".sso-menu"))
-          throw new Error("a menu dismissed twice cannot be opened a third time");
-        menuShadow()?.querySelector(".sso-menu")
-          .dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        if (remove.dataset.armed !== "true") throw new Error("one press did not arm it");
+        if (attached() !== before) throw new Error("one press removed the subtitle");
+        // Armed, it must say so in words as well as in colour.
+        if (!/remove/i.test(remove.textContent))
+          throw new Error(`armed, it reads "${remove.textContent}"`);
+
+        // Leaving the button is the clearest "I have changed my mind" there is.
+        remove.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true }));
         await sleep(40);
+        if (remove.dataset.armed !== "false") throw new Error("leaving it did not disarm it");
+        if (attached() !== before) throw new Error("the subtitle went anyway");
+
+        // And the second press, when it is the second press, does the thing.
+        remove.click();
+        await sleep(40);
+        remove.click();
+        await sleep(120);
+        if (attached() !== before - 1)
+          throw new Error(`two presses left ${attached()} attached, was ${before}`);
+        window.__ssoApi.undoRemove();
+        await sleep(160);
+        if (attached() !== before) throw new Error("undo did not put it back");
+      });
+
+      check("Style opens beside the subtitles rather than instead of them", async () => {
+        /* It was a screen, so changing how one subtitle looks hid the other one
+         * - and the only way to judge a colour or a size is against the subtitle
+         * it has to sit beside. Both stay on screen now. */
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        card.querySelector(".sso-track__style").click();
+        await sleep(240);
+
+        const style = sheetNamed("style");
+        if (!style) throw new Error("no Style window opened");
+        const box = style.querySelector(".sso-sheet").getBoundingClientRect();
+        if (box.width === 0 || box.height === 0) throw new Error("the Style window has no size");
+
+        // The panel is still there, and still showing the subtitles.
+        const tracks = [...panelShadow().querySelectorAll(".sso-track")].filter((c) => !c.hidden);
+        if (!tracks.length) throw new Error("opening Style hid the subtitles");
+        const panelBox = panelShadow().querySelector(".sso-panel").getBoundingClientRect();
+        if (panelBox.width === 0) throw new Error("opening Style collapsed the panel");
+
+        // It says which subtitle it is about, because two windows can be open.
+        const title = style.querySelector(".sso-win__title").textContent;
+        if (!/subtitle\s*\d/i.test(title)) throw new Error(`the title reads "${title}"`);
+        style.querySelector(".sso-icon--close").click();
+        await sleep(120);
+      });
+
+      check("a double-click on the name asks for a different subtitle", async () => {
+        /* Replacing one is a question about WHICH FILE this is, and the name is
+         * that answer already on the card. Double, not single: a single click
+         * already means "select this card", and the cheap reversible gesture
+         * keeps the single. */
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        const name = card.querySelector(".sso-track__label");
+
+        name.click();
+        await sleep(80);
+        const title = () => panelShadow().querySelector(".sso-win__title").textContent;
+        if (/find/i.test(title())) throw new Error("a single click left the subtitles");
+
+        name.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true }));
+        await sleep(160);
+        if (!/find/i.test(title()))
+          throw new Error(`a double-click left the panel on "${title()}"`);
+        panelShadow().querySelector(".sso-panel__back").click();
+        await sleep(120);
       });
 
       check("hiding a subtitle says so on its card", async () => {
@@ -1811,12 +1900,11 @@
         const shadow = panelShadow();
         /* Which subtitle a result fills is carried by the route in, not asked
          * again on the screen: you said it by which plus you pressed, or by
-         * whose menu you opened Replace from. */
+         * which card's name you double-clicked. */
         const card = [...shadow.querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        card.querySelector(".sso-track__more").click();
-        await sleep(60);
-        menuItems().find((b) => b.textContent === "Replace…").click();
-        await sleep(80);
+        card.querySelector(".sso-track__label")
+          .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true }));
+        await sleep(120);
         if (shadow.querySelector(".sso-screen[hidden]") === null)
           throw new Error("the screens did not switch");
         const said = shadow.querySelector(".sso-find__for").textContent;
@@ -2050,19 +2138,18 @@
         await sleep(80);
 
         const card = [...shadow.querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        card.querySelector(".sso-track__more").click();
-        await sleep(60);
-        menuItems().find((b) => b.textContent === "Style…").click();
-        await sleep(120);
+        card.querySelector(".sso-track__style").click();
+        await sleep(200);
 
-        const said = shadow.querySelector(".sso-win__title").textContent;
-        if (!/subtitle 1/i.test(said)) throw new Error(`the screen says "${said}"`);
-        const size = [...shadow.querySelectorAll(".sso-screen")]
-          .find((s) => !s.hidden).querySelector('input[type="range"]');
+        const style = sheetNamed("style");
+        if (!style) throw new Error("no Style window opened");
+        const said = style.querySelector(".sso-win__title").textContent;
+        if (!/subtitle 1/i.test(said)) throw new Error(`the window says "${said}"`);
+        const size = style.querySelector('input[type="range"]');
         if (Number(size.value) !== 1.15)
           throw new Error(`it is showing ${size.value}, which is the other subtitle's size`);
 
-        shadow.querySelector(".sso-panel__back").click();
+        style.querySelector(".sso-icon--close").click();
         await sleep(60);
         window.__ssoApi.updateTrackSettings(0, { fontScale: was[0] });
         window.__ssoApi.updateTrackSettings(1, { fontScale: was[1] });
@@ -2259,21 +2346,19 @@
         const fold = [...shadow.querySelectorAll(".sso-win__head button")]
           .find((b) => /^[▾▸]$/.test(b.textContent));
         const card = [...shadow.querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        card?.querySelector(".sso-track__more").click();
-        await sleep(60);
-        menuItems().find((b) => b.textContent === "Style…")?.click();
-        await sleep(80);
-        fold.click(); // fold from the style screen
+        const toFind = () => card?.querySelector(".sso-track__label")
+          .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true }));
+        toFind();
+        await sleep(120);
+        fold.click(); // fold from the Find screen
         await sleep(60);
         fold.click(); // and back open
         await sleep(60);
         if (shadow.querySelector(".sso-screen").hidden)
           throw new Error("it unfolded onto the screen it was folded from");
 
-        card?.querySelector(".sso-track__more").click();
-        await sleep(60);
-        menuItems().find((b) => b.textContent === "Style…")?.click();
-        await sleep(80);
+        toFind();
+        await sleep(120);
         window.__ssoPanel.hide();
         await sleep(40);
         await window.__ssoPanel.show();
@@ -2297,15 +2382,12 @@
         await sleep(40);
 
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        card.querySelector(".sso-track__more").click();
-        await sleep(60);
-        const remove = menuItems()
-          .find((b) => b.textContent === "Remove");
+        const remove = card.querySelector(".sso-track__remove");
         if (!remove) throw new Error("no way to remove a subtitle");
-        if (!remove.classList.contains("sso-menu__item--danger"))
-          throw new Error("the destructive item looks like the others");
-        remove.click();
-        await sleep(60);
+        remove.click(); // arms it
+        await sleep(40);
+        remove.click(); // and takes it
+        await sleep(80);
         if (window.__ssoApi.status().tracks[0].attached)
           throw new Error("Remove did not remove it");
 
@@ -3254,17 +3336,26 @@
         sheetShadow().querySelector(".sso-icon--close").click();
         await sleep(120);
 
-        const study = panelShadow().querySelector(".sso-quick__study");
+        /* And the switch is the card's own learn chip, not a button in the row
+         * above naming no subtitle. There is exactly one of them per subtitle
+         * and none anywhere else, which is the property worth asserting: a
+         * second copy in a second place meaning a third thing is what this
+         * whole arrangement replaced. */
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        const study = card?.querySelector(".sso-track__learn");
         if (!study || study.hidden) throw new Error("no study switch on the subtitles");
+        if ([...panelShadow().querySelectorAll("button")].some((b) => b.textContent === "Study"))
+          throw new Error("a second, subtitle-less Study switch is still on the row");
+
         const was = window.__ssoStudy.settings().enabled;
         study.click();
-        await sleep(200);
+        await sleep(260);
         if (window.__ssoStudy.settings().enabled === was)
           throw new Error("the switch did not switch anything");
         if (study.dataset.on !== String(!was))
-          throw new Error(`it switched and the button says ${study.dataset.on}`);
+          throw new Error(`it switched and the chip says ${study.dataset.on}`);
         study.click();
-        await sleep(200);
+        await sleep(260);
       });
 
       check("where the two subtitles sit is decided on the subtitles screen", async () => {
@@ -5006,6 +5097,15 @@
       window.addEventListener("error", (e) => loose.push(e.message));
       window.addEventListener("unhandledrejection", (e) => loose.push(String(e.reason?.message ?? e.reason)));
 
+      /* Which case is running, readable from outside.
+       *
+       * A row is appended only when a case FINISHES, so a run that stops part
+       * way says nothing about where it stopped - the stalled case is the one
+       * after the last row, and until now the only way to find it was to count.
+       * Driven headless, this is the difference between "it stalls" and a name. */
+      window.__caseNames = cases.map((c) => c.name);
+      window.__running = null;
+
       (async () => {
         await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1 });
         await sleep(250);
@@ -5013,6 +5113,7 @@
         const out = document.getElementById("results");
         let passed = 0;
         for (const { name, fn } of cases) {
+          window.__running = name;
           const row = document.createElement("div");
           row.className = "case";
           try {

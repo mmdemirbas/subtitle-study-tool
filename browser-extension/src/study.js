@@ -194,13 +194,37 @@
   }
 
   /* Empty and off are the same state said two ways, so neither can be reached
-   * without the other. Unmarking the last subtitle IS the switch; and switching
-   * study on with nothing marked marks the first attached subtitle, because a
-   * feature that is on and visibly doing nothing reads as broken. */
-  function emptyMeansOff(patch) {
+   * without the other - and now in both directions.
+   *
+   * Unmarking the last subtitle IS switching study off, and switching study on
+   * with nothing marked marks the first attached subtitle, because a feature
+   * that is on and visibly doing nothing reads as broken. Marking a subtitle is
+   * the same statement from the other end, so it switches study on.
+   *
+   * That third case is what let the panel's Study button go. It named no
+   * subtitle, and the per-subtitle chip beside it was hidden until study was
+   * already on - so a reader with study off had a switch that could not say
+   * which subtitle, and a subtitle mark they could not see. One control says
+   * both now, and this is the one place that rule lives. */
+  /* Which side was thrown decides which side follows.
+   *
+   * Getting this wrong makes the feature unswitchable, and it did: a first
+   * version read only the merged state, so "marked means on" fired on the very
+   * call that was trying to switch study off - the marks were still there, so
+   * enabled was put straight back to true. The harness caught it as "study
+   * would not switch off". `patch.enabled` is the distinction, and it has to be
+   * tested for `true`/`false` rather than for truthiness, because absent and
+   * false are the two different cases this whole function turns on. */
+  function slotsAndSwitchAgree(patch) {
     const next = { ...settings, ...patch };
-    if (Array.isArray(next.studySlots) && next.studySlots.length > 0) return {};
-    if (patch.enabled) return { studySlots: [firstAttachedSlot()] };
+    const marked = Array.isArray(next.studySlots) && next.studySlots.length > 0;
+
+    // The switch was thrown, so the marks follow it.
+    if (patch.enabled === true) return marked ? {} : { studySlots: [firstAttachedSlot()] };
+    if (patch.enabled === false) return { studySlots: [] };
+
+    // The marks were changed, so the switch follows them.
+    if (marked) return next.enabled ? {} : { enabled: true };
     return next.enabled ? { enabled: false } : {};
   }
 
@@ -216,25 +240,56 @@
    * same reason turning study on redraws. The record for a subtitle no longer
    * followed goes with it: its words are about to be replaced by a render that
    * will not wrap them, and a stale record would keep answering for them. */
+  /* Dropping the record unmarks its words first, and that order is the whole
+   * of it. The marks are undone by walking `lines`, so a record deleted before
+   * the walk takes the only way of finding them with it - the words stay amber
+   * over the film until the next cue happens to replace them.
+   *
+   * It only became reachable when switching study off started clearing the
+   * marked subtitles too (see slotsAndSwitchAgree): that clears every slot, so
+   * every line was deleted here, and turnOff then had nothing left to walk.
+   * Caught by the harness as "words are still marked". Unmarking belongs where
+   * the record is dropped rather than in the caller, because there are now two
+   * callers and either could be the one that empties it. */
   function followedSubtitlesChanged() {
-    for (const slot of [...lines.keys()]) if (!isStudied(slot)) lines.delete(slot);
+    for (const slot of [...lines.keys()]) {
+      if (isStudied(slot)) continue;
+      for (const span of lines.get(slot)?.words || []) {
+        span.dataset.rare = "false";
+        span.dataset.selected = "false";
+      }
+      lines.delete(slot);
+    }
     if (latestSlot != null && !isStudied(latestSlot)) latestSlot = studiedSlots()[0] ?? null;
     if (settings.enabled) api.redrawCues?.();
   }
 
   /* One call rather than the panel doing the array arithmetic, because "empty
    * is off" has to hold in exactly one place. A second copy of that rule in
-   * another file is how the two come to disagree. */
-  function toggleStudySlot(slot) {
+   * another file is how the two come to disagree.
+   *
+   * It builds and tears down the rail as well, and has to: marking a subtitle
+   * now switches study on, and a switch that changes the setting without
+   * building anything is a switch that reads as broken. That work lived in
+   * setEnabled alone, which was the only door to it while the panel had a
+   * separate Study button. Both doors lead to the same room. */
+  async function toggleStudySlot(slot) {
     const next = isStudied(slot)
       ? studiedSlots().filter((studied) => studied !== slot)
       : [...studiedSlots(), slot].sort((a, b) => a - b);
-    return updateSettings({ studySlots: next });
+    const was = settings.enabled;
+    updateSettings({ studySlots: next });
+    // Turning study on with the rail put away from a previous session would
+    // look like nothing happened. Same reason as in setEnabled.
+    if (settings.enabled && !settings.showRail) updateSettings({ showRail: true });
+    await syncPresence();
+    if (settings.enabled !== was) sayWhatStudyIsDoing();
+    return settings;
   }
 
   function updateSettings(patch) {
     const was = studiedSlots().join(",");
-    settings = { ...settings, ...patch, ...emptyMeansOff(patch) };
+    settings = { ...settings, ...patch, ...slotsAndSwitchAgree(patch) };
     chrome.storage.local.set({ [SETTINGS_KEY]: settings }).catch(() => {});
     applySettings();
     if (studiedSlots().join(",") !== was) followedSubtitlesChanged();
@@ -1932,20 +1987,30 @@
     if (settings.enabled && !settings.showRail) updateSettings({ showRail: true });
 
     await syncPresence();
+    sayWhatStudyIsDoing();
+  }
 
+  /* What the switch just did, said once and from one place.
+   *
+   * Both ways in - the card's learn chip and the keyboard - end here, so the
+   * two cannot come to describe the same state differently. The middle branch
+   * is the one worth keeping: the switch is on and nothing appeared, and the
+   * reason is that there is no subtitle on this page yet. Silence there reads
+   * as a broken feature. */
+  function sayWhatStudyIsDoing() {
     if (!settings.enabled) {
       api.showToast("Study mode off");
-    } else if (!studiable()) {
-      // Honest rather than silent: the switch is on and nothing appeared,
-      // and the reason is that there is no subtitle on this page yet.
-      api.showToast("Study mode on — attach a subtitle to see it");
-    } else {
-      api.showToast(
-        settings.auto
-          ? "Study mode on — rare words appear at the side"
-          : "Study mode on — hover a word to look it up",
-      );
+      return;
     }
+    if (!studiable()) {
+      api.showToast("Study mode on — attach a subtitle to see it");
+      return;
+    }
+    api.showToast(
+      settings.auto
+        ? "Study mode on — rare words appear at the side"
+        : "Study mode on — hover a word to look it up",
+    );
   }
 
   async function turnOn() {
