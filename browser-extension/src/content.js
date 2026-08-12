@@ -4320,6 +4320,14 @@
     toTopLayer,
     fromTopLayer,
     paintableParent,
+    /* Which element a surface has to be inside to take a click right now, or
+     * null when nothing is fullscreen. Exported for the same reason
+     * paintableParent is: it is not the same question, it is the one with the
+     * exceptions in it - an IFRAME does not count, and a fullscreen <video>
+     * cannot hold children so the session is moved onto the nearest thing that
+     * can. A caller that re-derived it from document.fullscreenElement would
+     * get all three of those wrong. */
+    fullscreenHolder,
     keepPointersInside,
     setPlacing(on) {
       state.placing = Boolean(on);

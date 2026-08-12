@@ -530,6 +530,99 @@ try {
     t("pressing it opens a panel there that answers its own controls", false, "no button to press");
   }
 
+  /* --- and the switch that has to reach the film from wherever it is thrown --
+   *
+   * Reported as "I cannot see the study panel". Study is one setting shared by
+   * the whole browser, but study.js runs in every frame and each keeps its own
+   * copy, so "shared" was only true at load. Thrown in a frame with no subtitle
+   * in it - the top one, which is where the panel is, or whichever has focus
+   * when the key is pressed - it set enabled=true there, built nothing, and
+   * said "Study mode on" anyway.
+   *
+   * Measured on this vehicle before the fix, in fullscreen: the top frame read
+   * on=true and the film's frame read on=false, and there was no rail in any of
+   * the three documents. So the assertion is the RAIL, in the frame that has
+   * the film, from a switch thrown somewhere else - not the flag, which is
+   * exactly what was already true while nothing appeared. */
+  const studyState = async () =>
+    sw.evaluate(async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const all = await chrome.webNavigation.getAllFrames({ tabId: tab.id });
+      const out = [];
+      for (const f of all) {
+        const got = await chrome.scripting
+          .executeScript({
+            target: { tabId: tab.id, frameIds: [f.frameId] },
+            func: () => {
+              let rail = null;
+              for (const node of document.querySelectorAll("*")) {
+                const first = node.shadowRoot?.firstElementChild;
+                if (typeof first?.className === "string" && first.className.includes("sso-rail")) {
+                  const box = node.getBoundingClientRect();
+                  rail = [Math.round(box.width), Math.round(box.height)];
+                }
+              }
+              return {
+                on: Boolean(window.__ssoStudy?.settings?.().enabled),
+                attached: Boolean(window.__ssoApi?.status?.().attached),
+                rail,
+              };
+            },
+          })
+          .catch(() => null);
+        if (got?.[0]?.result) out.push({ frameId: f.frameId, ...got[0].result });
+      }
+      return out;
+    });
+
+  /* A subtitle first: study reads cues, so with nothing attached it correctly
+   * builds nothing and this would assert against the wrong reason. The page was
+   * navigated for the fullscreen section above, which detached what the earlier
+   * section attached. */
+  const filmFrameId = (await studyState()).at(-1)?.frameId;
+  await sw.evaluate(async (frameId) => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const cues = Array.from({ length: 40 }, (_, i) => ({
+      start: i * 1000,
+      end: i * 1000 + 900,
+      text: `the quixotic ephemeral line ${i}`,
+    }));
+    await chrome.tabs.sendMessage(
+      tab.id,
+      { type: "sso:attach", payload: { cues, label: "EN study", fileId: 909, language: "en", slot: 0 } },
+      { frameId },
+    );
+  }, filmFrameId);
+  await page.waitForTimeout(500);
+
+  await sw.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [0] },
+      func: () => window.__ssoApi?.setStudyEnabled?.(true),
+    });
+  });
+
+  const studyReached = await until(async () => {
+    await wake();
+    const all = await studyState();
+    const film = all.find((f) => f.attached);
+    return film?.on && film.rail && film.rail[0] > 0 ? all : null;
+  }, 15000);
+  t("study switched on away from the film still builds the rail where the film is",
+    Boolean(studyReached),
+    JSON.stringify(await studyState()));
+
+  // And off again, so the ordinary-page section below starts where it expects.
+  await sw.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [0] },
+      func: () => window.__ssoApi?.setStudyEnabled?.(false),
+    });
+  });
+  await page.waitForTimeout(400);
+
   await page.evaluate(() => document.exitFullscreen?.()).catch(() => {});
   await page.waitForTimeout(600);
 

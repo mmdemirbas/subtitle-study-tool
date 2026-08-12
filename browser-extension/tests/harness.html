@@ -52,6 +52,26 @@
     <script>
       // --- chrome API stub ------------------------------------------------
       const store = {};
+
+      /* Writes announce themselves, the way Chrome's do.
+       *
+       * Asynchronously, and that is the faithful part: a listener that ran
+       * inside set() would let a writer see its own event before its own next
+       * statement, which Chrome never does and which is exactly the ordering a
+       * settings listener has to survive. */
+      const storageListeners = new Set();
+      const fireStorageChange = (changes) => {
+        if (!storageListeners.size || !Object.keys(changes).length) return;
+        setTimeout(() => {
+          for (const fn of storageListeners) {
+            try {
+              fn(changes, "local");
+            } catch {
+              // One broken listener must not stop the others, as in Chrome.
+            }
+          }
+        }, 0);
+      };
       const EXT = "../src/";
       // Everything the page reported to the worker, in order.
       window.__sent = [];
@@ -139,21 +159,50 @@
          * that happened to exist when this was written. A missing method
          * throws inside a .catch()-ed promise, which passes silently: the
          * suite reported 62/62 green while three real calls were failing. */
-        storage: { local: {
-          get: async (k) => {
-            const keys = typeof k === "string" ? [k] : Array.isArray(k) ? k : Object.keys(k ?? store);
-            const out = {};
-            for (const key of keys) if (key in store) out[key] = store[key];
-            return out;
+        /* onChanged is not optional in this stub, and leaving it out cost a
+         * whole file. study.js registers a listener at load - that is how the
+         * frames come to agree about whether study is on - and a stub without
+         * it threw before __ssoStudy was installed, so every study case failed
+         * with "Cannot read properties of undefined". A stub that offers less
+         * than Chrome does is the same defect as one that forgives more. */
+        storage: {
+          local: {
+            get: async (k) => {
+              const keys = typeof k === "string" ? [k] : Array.isArray(k) ? k : Object.keys(k ?? store);
+              const out = {};
+              for (const key of keys) if (key in store) out[key] = store[key];
+              return out;
+            },
+            set: async (o) => {
+              const changes = {};
+              for (const [key, value] of Object.entries(o)) {
+                changes[key] = { oldValue: store[key], newValue: value };
+              }
+              Object.assign(store, o);
+              fireStorageChange(changes);
+            },
+            remove: async (k) => {
+              const changes = {};
+              for (const key of typeof k === "string" ? [k] : k) {
+                changes[key] = { oldValue: store[key], newValue: undefined };
+                delete store[key];
+              }
+              fireStorageChange(changes);
+            },
+            clear: async () => {
+              const changes = {};
+              for (const key of Object.keys(store)) {
+                changes[key] = { oldValue: store[key], newValue: undefined };
+                delete store[key];
+              }
+              fireStorageChange(changes);
+            },
           },
-          set: async (o) => Object.assign(store, o),
-          remove: async (k) => {
-            for (const key of typeof k === "string" ? [k] : k) delete store[key];
+          onChanged: {
+            addListener: (fn) => storageListeners.add(fn),
+            removeListener: (fn) => storageListeners.delete(fn),
           },
-          clear: async () => {
-            for (const key of Object.keys(store)) delete store[key];
-          },
-        } },
+        },
       };
 
       /* Ranks for the words in the cues below. "frankly" is deliberately far

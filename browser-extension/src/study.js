@@ -180,6 +180,53 @@
     applySettings();
   }
 
+  /* Every frame keeps its own copy of these, and storage is what makes the
+   * copies agree.
+   *
+   * Study is one setting shared by the whole browser, but this file runs in
+   * every frame of every page, so "shared" was only true at load. A switch
+   * thrown in one frame wrote storage and changed nothing anywhere else -
+   * measured on a player nested three documents deep, in fullscreen: the panel
+   * is drawn in the top frame, the film is at the bottom, and pressing study
+   * set enabled=true in a frame with no subtitle in it. Nothing was built,
+   * nothing appeared, and the toast said it had worked. Reported as "I cannot
+   * see the study panel".
+   *
+   * A storage listener is the general answer rather than another relay: it
+   * covers the panel, the keyboard and any future caller at once, and it does
+   * not care which frame holds the film or whether the two are split at all.
+   * Our own writes are counted rather than compared, and that is the second
+   * version of this. Comparing the event's value against the last thing we
+   * wrote looks right and is wrong the moment two writes go out together -
+   * which they routinely do, since marking a subtitle writes the marks and
+   * then writes showRail. By the time the FIRST event arrives the guard holds
+   * the second value, so the frame does not recognise its own write, adopts
+   * the older one, and study is torn down and rebuilt for nothing. It cost 26
+   * harness cases. Chrome emits one event per set() that touches the key, in
+   * write order, so counting them out is exact where comparing is not. */
+  let selfWrites = 0;
+
+  function adoptSettingsFrom(stored) {
+    if (selfWrites > 0) {
+      selfWrites--;
+      return;
+    }
+    if (!stored || JSON.stringify(stored) === JSON.stringify(settings)) return;
+    const was = settings.enabled;
+    settings = { ...DEFAULT_SETTINGS, ...migrate(stored) };
+    applySettings();
+    // Only the switch changes what exists; everything else is appearance, and
+    // applySettings has already dealt with it.
+    if (settings.enabled !== was) api.detached?.(syncPresence(), "Study mode");
+    api.notifyChanged?.();
+  }
+
+  const onStorageChanged = (changes, area) => {
+    if (area !== "local" || !changes[SETTINGS_KEY]) return;
+    adoptSettingsFrom(changes[SETTINGS_KEY].newValue);
+  };
+  chrome.storage.onChanged.addListener(onStorageChanged);
+
   /* `studySlot` was one number until study could follow more than one subtitle.
    * A reader who had pointed it at the second one keeps it pointed there, and
    * the old key is dropped rather than left to be read by something later. It
@@ -290,7 +337,13 @@
   function updateSettings(patch) {
     const was = studiedSlots().join(",");
     settings = { ...settings, ...patch, ...slotsAndSwitchAgree(patch) };
-    chrome.storage.local.set({ [SETTINGS_KEY]: settings }).catch(() => {});
+    // Counted before the write, so the event it raises is spent on the way
+    // back in rather than being mistaken for another frame's.
+    selfWrites += 1;
+    chrome.storage.local.set({ [SETTINGS_KEY]: settings }).catch(() => {
+      // No write, no event to spend.
+      selfWrites = Math.max(0, selfWrites - 1);
+    });
     applySettings();
     if (studiedSlots().join(",") !== was) followedSubtitlesChanged();
     // The panel draws the study controls from here, and does not subscribe to
@@ -993,6 +1046,8 @@
     makeResizable();
     await restorePosition();
     applySettings();
+    // Now that it has a box, and not before. See restorePosition.
+    clampIntoView();
     return host;
   }
 
@@ -1893,6 +1948,21 @@
     } catch {
       // The default corner is fine.
     }
+    /* And never off the edge of THIS viewport.
+     *
+     * The position is one stored value shared by every page, and the box it was
+     * stored against is not the box it is restored into: the rail is built in
+     * the frame that holds the film, which on a nested player is a fraction of
+     * the window, and the same frame is the whole screen once the player goes
+     * fullscreen. A rail dragged to the right-hand side of a 2056px fullscreen
+     * session comes back at left: 1800 in a 1136px-wide player frame, which is
+     * off the end of it - and it carries its own close and park controls, so it
+     * is unreachable and unputtable-away at once. clampIntoView existed and ran
+     * only on resize, which is the one moment this never happens on.
+     *
+     * Called by build() after applySettings rather than here: clamping measures
+     * the box, and until applySettings has decided whether the rail is showing,
+     * the box is 0x0 and the clamp returns without doing anything. */
   }
 
   function clampIntoView() {
@@ -1998,6 +2068,29 @@
    * reason is that there is no subtitle on this page yet. Silence there reads
    * as a broken feature. */
   function sayWhatStudyIsDoing() {
+    /* And written down, with the shape of the page attached.
+     *
+     * This is the entry that was missing. Two days of logs carry every study
+     * toast and not one capture of the frames while study was on - both
+     * toggles fell between two panel captures - so the rail's absence from
+     * every capture said nothing at all, and the question "where was the rail
+     * drawn" could not be answered without asking somebody to do it again.
+     * Switching study on is exactly as interesting as opening the panel: it is
+     * the moment a surface is supposed to appear, and which frame it appeared
+     * in is the whole question. */
+    api.trace?.(
+      "study",
+      {
+        on: settings.enabled,
+        slots: studiedSlots(),
+        studiable: studiable(),
+        railBuilt: Boolean(host),
+        railBox: host ? (({ x, y, width, height }) => [
+          Math.round(x), Math.round(y), Math.round(width), Math.round(height),
+        ])(host.getBoundingClientRect()) : null,
+      },
+      { frames: true },
+    );
     if (!settings.enabled) {
       api.showToast("Study mode off");
       return;
@@ -2015,7 +2108,17 @@
 
   async function turnOn() {
     if (!host) await build();
-    reparent();
+    /* Into the fullscreen element straight away, not on the next mouse move.
+     *
+     * A bare reparent() takes the top-layer path and returns without moving the
+     * host anywhere, and inside a fullscreen session that leaves the rail
+     * painted over the film and taking none of its own clicks - the browser
+     * hit-tests within the fullscreen element's subtree alone. It was corrected
+     * by the next pointermove, through attachToCorrectParent, which means the
+     * rail was dead for as long as the reader sat still after switching study
+     * on. Asking content.js for the holder is the same question it answers on
+     * every fullscreen change; there is no reason to wait for a mouse. */
+    reparent(api.fullscreenHolder?.() || null);
     setStudyFlag(true);
     await loadSavedTerms();
     refreshCount();
@@ -2105,6 +2208,11 @@
   window.__ssoStudyTeardown = () => {
     document.removeEventListener("pointerover", onPointerOver, { capture: true });
     window.removeEventListener("resize", clampIntoView);
+    /* Re-injection is expected, so a listener left behind is a second copy of
+     * this file reacting to every settings write - and its `settings` and its
+     * `host` are the previous instance's, which is how a rail that was torn
+     * down comes back. */
+    chrome.storage.onChanged.removeListener(onStorageChanged);
     clearTimeout(hoverTimer);
     host?.remove();
     host = null;
