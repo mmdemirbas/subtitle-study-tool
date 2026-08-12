@@ -2005,6 +2005,23 @@
     }
   }
 
+  /* Where the rail was last put. Same reason as the panel's copy: rescale
+   * removes a transform and then reads getBoundingClientRect, and content.js
+   * calls reparent twenty times a second from tick() whether or not anything
+   * has moved. See the note above placedIn in panel.js. */
+  const TOP_LAYER = "top layer";
+  let placedIn = null;
+  /* The host too, not just where it went. turnOff drops the rail and turnOn
+   * builds a fresh one, so a memo keyed on the destination alone would tell the
+   * new host it had already been measured in a place it has never been. */
+  let placedHost = null;
+  const settle = (where) => {
+    if (placedIn === where && placedHost === host) return;
+    placedIn = where;
+    placedHost = host;
+    rescale();
+  };
+
   /* Follows the overlay into the fullscreen element, since only that subtree is
    * rendered while fullscreen is on. */
   function reparent(parent, { raise = false } = {}) {
@@ -2019,7 +2036,7 @@
      * fullscreenHolder in content.js. */
     const raiseOne = (node) => node && api.toTopLayer?.(node, { again: raise });
     if (!parent && raiseOne(host) && (!popupHost || raiseOne(popupHost))) {
-      rescale();
+      settle(TOP_LAYER);
       return;
     }
     api.fromTopLayer?.(host);
@@ -2029,7 +2046,7 @@
     // The popup is anchored to the subtitle, so it has to follow the subtitle
     // into fullscreen or it renders behind the film.
     if (popupHost && target && popupHost.parentElement !== target) target.appendChild(popupHost);
-    rescale();
+    settle(target);
   }
 
   /* Same counter-scale as the panel: a fullscreen element the player has scaled

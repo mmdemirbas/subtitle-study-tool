@@ -3436,7 +3436,18 @@
 
   function hide() {
     stopPlayhead();
-    api.trace?.("panel", { open: false }, { frames: true });
+    /* Only when there was something to close.
+     *
+     * hide() is called on every frame-role change, and setFrameRole("solo")
+     * fires whenever the mirror has been quiet for three seconds - which a
+     * BACKGROUND tab produces on a timer, because its intervals are clamped to
+     * one a minute and the push cannot beat its own silence check. Each of
+     * those shipped a full cross-frame diagnostic: a message to every frame and
+     * 13.5KB to the daemon, for a panel that was already shut.
+     *
+     * Measured in one day's log: 741 panel captures totalling 10.2MB, of which
+     * 708 said open:false, at a median 60.1s apart - the background clamp. */
+    if (isPanelVisible()) api.trace?.("panel", { open: false }, { frames: true });
     // A binding half-read is not a binding; the button that asked is going.
     api.cancelCapture();
     // Every window this panel opened goes with it. They are separate hosts, so
@@ -3453,6 +3464,32 @@
 
   const toggle = () => (isPanelVisible() ? hide() : show());
 
+  /* Where the panel was last put, so a reparent that moves nothing costs
+   * nothing.
+   *
+   * rescale removes a transform and then reads getBoundingClientRect: a write
+   * followed by a read, which is a forced layout every time it runs. content.js
+   * calls reparent from tick(), twenty times a second, and again on every
+   * pointer event - and on all but a handful of those the panel is exactly
+   * where it already was. Measured on the nested player vehicle with two
+   * subtitles attached and the mouse still: 11.4 layouts a second with the
+   * panel open against 0.8 with it shut.
+   *
+   * The scale only changes when the panel moves into or out of a scaled
+   * container, which is precisely what this records - plus a viewport resize,
+   * which is handled where clampIntoView is. */
+  const TOP_LAYER = "top layer";
+  let placedIn = null;
+  // The host too, so a torn-down and rebuilt panel is measured again rather
+  // than inheriting the previous one's placement. See the copy in study.js.
+  let placedHost = null;
+  const settle = (where) => {
+    if (placedIn === where && placedHost === host) return;
+    placedIn = where;
+    placedHost = host;
+    rescale();
+  };
+
   /* Follows the overlay into the fullscreen element, since only that subtree
    * is rendered while fullscreen is active. */
   function reparent(parent, { raise = false } = {}) {
@@ -3467,7 +3504,7 @@
      * us, having switched the fullscreen element away from the <video> if that
      * is what the site fullscreened. See fullscreenHolder there. */
     if (!parent && api.toTopLayer?.(host, { again: raise })) {
-      rescale();
+      settle(TOP_LAYER);
       return;
     }
     api.fromTopLayer?.(host);
@@ -3475,10 +3512,13 @@
     if (target && host.parentElement !== target) target.appendChild(host);
     // The fullscreen element may be scaled; what we have just moved into
     // decides how big the panel renders and where a written position lands.
-    rescale();
+    settle(target);
   }
 
-  window.addEventListener("resize", clampIntoView, { passive: true });
+  /* The other way the scale can change without the panel moving: the container
+   * it is inside is sized against the viewport. reparent no longer re-measures
+   * on every call, so this is where a resize is answered. */
+  window.addEventListener("resize", () => { rescale(); clampIntoView(); }, { passive: true });
 
   /* applySize is exported for the harness, which measures the sync row at both
    * ends of the width the corner grips allow. Driving the grips with synthetic

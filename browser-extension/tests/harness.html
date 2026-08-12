@@ -5197,6 +5197,95 @@
         }
       });
 
+      check("a surface that has not moved is not measured again", async () => {
+        /* What a freeze is actually made of, and it is not script time.
+         *
+         * content.js keeps every surface in the right parent by calling
+         * attachToCorrectParent, from tick() twenty times a second and again
+         * from every pointer event. Each call reached panel.reparent and
+         * study.reparent, and each of those ended in rescale - which removes a
+         * transform and then reads getBoundingClientRect. A write followed by a
+         * read is a forced layout, and the browser does that work whether or
+         * not any script is slow, so a CPU profile shows nothing.
+         *
+         * Measured on the nested-player vehicle with two subtitles attached and
+         * the panel open: 11.4 layouts a second with the mouse still against
+         * 0.8 with the panel shut, and 19.9 with the mouse moving. A hand
+         * raises pointermove AND mousemove about 120 times a second each.
+         *
+         * So the assertion is about the RATIO, not a wall-clock number: sixty
+         * pointer events must not each buy a measurement. One or two are fine -
+         * something genuinely settling - and sixty means it is back on the
+         * per-event path. */
+        await window.__ssoPanel.show();
+        await sleep(200);
+        const host = panelShadow().host;
+        const real = Element.prototype.getBoundingClientRect;
+        let measured = 0;
+        Element.prototype.getBoundingClientRect = function (...args) {
+          if (this === host) measured += 1;
+          return real.apply(this, args);
+        };
+        try {
+          // Settle first: the first event after the panel opens is allowed to
+          // arrange things, and counting that one would test nothing.
+          document.dispatchEvent(new PointerEvent("pointermove",
+            { bubbles: true, clientX: 300, clientY: 300 }));
+          await sleep(60);
+          measured = 0;
+          for (let i = 0; i < 60; i++) {
+            document.dispatchEvent(new PointerEvent("pointermove",
+              { bubbles: true, clientX: 300 + (i % 5), clientY: 300 + (i % 3) }));
+          }
+          await sleep(40);
+          if (measured > 6)
+            throw new Error(`60 pointer events measured the panel ${measured} times`);
+        } finally {
+          Element.prototype.getBoundingClientRect = real;
+        }
+      });
+
+      check("a surface that HAS moved is measured again", async () => {
+        /* The other half, and the reason the case above cannot simply delete
+         * the measurement. rescale is what counter-scales the panel inside a
+         * container the player has scaled - without it the panel renders half
+         * again as large in fullscreen - so "measure only when placement
+         * changed" has to actually measure when it changed. */
+        await window.__ssoPanel.show();
+        await sleep(200);
+        const host = panelShadow().host;
+        const real = Element.prototype.getBoundingClientRect;
+        let measured = 0;
+        Element.prototype.getBoundingClientRect = function (...args) {
+          if (this === host) measured += 1;
+          return real.apply(this, args);
+        };
+        try {
+          // Somewhere else to be: a parent that is not the top layer, which is
+          // the move a fullscreen session makes.
+          const holder = document.createElement("div");
+          document.body.appendChild(holder);
+          try {
+            /* No await between the two calls, on purpose. rescale runs inside
+             * reparent, so there is nothing to wait for - and tick() puts the
+             * panel back in the top layer every 50ms, which would settle the
+             * second move before this case got to make it. Awaiting here
+             * failed exactly that way. */
+            measured = 0;
+            window.__ssoPanel.reparent(holder);
+            if (measured === 0) throw new Error("moved into a new parent and never measured");
+            measured = 0;
+            window.__ssoPanel.reparent(null);
+            if (measured === 0) throw new Error("moved back out and never measured");
+          } finally {
+            holder.remove();
+            window.__ssoPanel.reparent(null);
+          }
+        } finally {
+          Element.prototype.getBoundingClientRect = real;
+        }
+      });
+
       check("the next episode is noticed without a page load", async () => {
         /* Streaming sites are single pages: the next episode swaps the stream
          * and leaves the tab, the frame and the <video> element where they

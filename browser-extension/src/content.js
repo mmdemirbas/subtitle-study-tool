@@ -1782,15 +1782,41 @@
     switchingTo = holder;
     Promise.resolve()
       .then(() => holder.requestFullscreen?.())
-      .then(() => attachToCorrectParent({ raise: true }))
+      .then(() => attachToCorrectParent({ raise: true, force: true }))
       .catch(() => {});
     return null;
   }
 
-  function attachToCorrectParent({ raise = false } = {}) {
+  /* How often a raise is worth repeating.
+   *
+   * Raising means leaving the top layer and re-entering it - hidePopover then
+   * showPopover on every surface - so the browser lays each one out again. It
+   * earns that on a fullscreen change, where the fullscreen element has just
+   * joined the layer in front of us. It does not earn it on a pointer event,
+   * and revealHandle asks for one on every pointermove AND every mousemove,
+   * which a moving hand raises about 120 times a second.
+   *
+   * Measured with two subtitles attached and the panel open, on the nested
+   * player vehicle: the whole arrangement ran 20 times a second with the mouse
+   * still and 250 with it moving, and moving cost 9 layouts a second on a page
+   * with nothing else in it.
+   *
+   * Fullscreen changes pass `force`, so the case the re-raise exists for is
+   * never the case being held back. */
+  const RAISE_MS = 250;
+  let raisedAt = 0;
+
+  function attachToCorrectParent({ raise = false, force = false } = {}) {
+    perf.arranged += 1;
     const holder = fullscreenHolder();
-    if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(holder, { raise });
-    if (window.__ssoStudy?.reparent) window.__ssoStudy.reparent(holder, { raise });
+    const now = Date.now();
+    /* Placement is still checked on every call - a site that removes our host
+     * has to be answered on the next tick, not a quarter second later. Only the
+     * re-raise is held back. */
+    const raising = force || (raise && now - raisedAt >= RAISE_MS);
+    if (raising) raisedAt = now;
+    if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(holder, { raise: raising });
+    if (window.__ssoStudy?.reparent) window.__ssoStudy.reparent(holder, { raise: raising });
     if (!host) return;
 
     /* No fullscreen: the top layer, which is what keeps these above the chrome
@@ -1801,7 +1827,7 @@
       // stays parented to a player container that may clip or transform it.
       if (home && host.parentElement !== home) home.appendChild(host);
       for (const layer of layers) if (home && layer.parentElement !== home) home.appendChild(layer);
-      const raised = [host, ...layers].map((node) => toTopLayer(node, { again: raise }));
+      const raised = [host, ...layers].map((node) => toTopLayer(node, { again: raising }));
       if (raised.every(Boolean)) return;
     }
 
@@ -1810,7 +1836,7 @@
     // A popover cannot be hit-tested inside a fullscreen subtree it is not part
     // of, and moving a showing popover closes it anyway. Leave the layer first.
     if (holder) for (const node of [host, ...layers]) fromTopLayer(node);
-    if (host.parentElement !== parent || (raise && !holder)) parent.appendChild(host);
+    if (host.parentElement !== parent || (raising && !holder)) parent.appendChild(host);
     // Floating layers go too. Fullscreen renders only the fullscreen element's
     // subtree, so one left behind is a menu that silently stops appearing.
     for (const layer of layers) if (layer.parentElement !== parent) parent.appendChild(layer);
@@ -2285,6 +2311,17 @@
   }
 
   function tick() {
+    const tickStarted = performance.now();
+    perf.ticks += 1;
+    try {
+      tickBody();
+    } finally {
+      perf.tickMs += performance.now() - tickStarted;
+      samplePerf();
+    }
+  }
+
+  function tickBody() {
     // Fast while there is something to draw, slow while there is not. Decided
     // here rather than at every call site that attaches or detaches, so it
     // cannot be forgotten at one of them.
@@ -2761,6 +2798,7 @@
    * dialogue that arrived under it, which is where a reader expects context to
    * sit. */
   function renderCues(slot, cues) {
+    perf.cues += 1;
     const { root, cueBox } = views[slot];
     cueBox.replaceChildren();
     /* Where the box sits is one decision for the whole box and the lines in it
@@ -4215,6 +4253,71 @@
   window.addEventListener("error", onWindowError);
   window.addEventListener("unhandledrejection", onRejection);
 
+  /* Where the time goes, measured on the page it goes wrong on.
+   *
+   * The vehicle in tests/frames is one video and three short documents, and the
+   * extension costs single-digit milliseconds a second on it. That says nothing
+   * about a streaming site carrying five frames of player, adverts and its own
+   * scripts, which is where the freezes are reported - so the numbers that
+   * decide anything have to come from there.
+   *
+   * A freeze IS a long task: one turn of the event loop that ran past 50ms and
+   * took the frame, the click and the video's own bookkeeping with it. So long
+   * tasks are what this counts, with the extension's two hot paths timed beside
+   * them, because "the page stalled" and "we stalled it" are different claims
+   * and the second one needs its own number.
+   *
+   * A quiet window sends nothing at all. Ten seconds with no long task in them
+   * produce no line, which is what keeps this from becoming the next thing
+   * filling the log. */
+  const PERF_MS = 10000;
+  const PERF_ZERO = { long: 0, longMs: 0, worst: 0, ticks: 0, tickMs: 0, moves: 0, moveMs: 0, cues: 0, arranged: 0 };
+  const perf = { ...PERF_ZERO };
+  let perfAt = Date.now();
+  try {
+    new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        perf.long += 1;
+        perf.longMs += entry.duration;
+        if (entry.duration > perf.worst) perf.worst = entry.duration;
+      }
+    }).observe({ entryTypes: ["longtask"] });
+  } catch {
+    // Not every engine reports them. The rest of the sample is still worth
+    // having, it just never has a reason to be sent.
+  }
+
+  function samplePerf() {
+    const now = Date.now();
+    if (now - perfAt < PERF_MS) return;
+    const over = (now - perfAt) / 1000;
+    perfAt = now;
+    const seen = { ...perf };
+    Object.assign(perf, PERF_ZERO);
+    if (!seen.long) return;
+    trace("perf", {
+      role,
+      over: Math.round(over),
+      // What the page did: how many turns of the loop ran long, how much of the
+      // window they took between them, and the worst single one.
+      long: seen.long,
+      longMs: Math.round(seen.longMs),
+      worst: Math.round(seen.worst),
+      // What WE did inside that, so the two can be told apart.
+      ticks: seen.ticks,
+      tickMs: Math.round(seen.tickMs),
+      moves: seen.moves,
+      moveMs: Math.round(seen.moveMs),
+      cues: seen.cues,
+      arranged: seen.arranged,
+      attached: anyAttached(),
+      study: Boolean(window.__ssoStudy?.settings?.().enabled),
+      panel: Boolean(window.__ssoPanel),
+      full: Boolean(document.fullscreenElement),
+      frames: window.top === window ? "top" : "nested",
+    });
+  }
+
   function trace(kind, detail, { frames = false } = {}) {
     // Checked here as well as in the worker, so switching it off also stops
     // the messages, not only what is done with them.
@@ -4586,6 +4689,16 @@
   /* The handle only appears where there is something to control, and only
    * while the mouse is moving - so it is never in the way of the film. */
   function onPointerMove() {
+    const moveStarted = performance.now();
+    perf.moves += 1;
+    try {
+      onPointerMoveBody();
+    } finally {
+      perf.moveMs += performance.now() - moveStarted;
+    }
+  }
+
+  function onPointerMoveBody() {
     /* The frame drawing the controls has no video to gate on - it was told
      * there is one, by the frame that has it. */
     if (role === "chrome") {
@@ -4665,7 +4778,10 @@
     // Before the reparent, so the frame that is about to take the controls
     // back is already the one placing them.
     reportFrameRole();
-    attachToCorrectParent({ raise: true });
+    /* Forced past the raise throttle. This is the one moment the re-raise is
+     * not optional: the fullscreen element joined the top layer after us, so
+     * without it every surface stays behind the film. */
+    attachToCorrectParent({ raise: true, force: true });
   };
   document.addEventListener("fullscreenchange", onFullscreenChange);
   document.addEventListener("webkitfullscreenchange", onFullscreenChange);

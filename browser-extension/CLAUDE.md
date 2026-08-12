@@ -303,12 +303,49 @@ Each of these was a reported bug. Undoing one brings the bug back.
 
 ## Cost to keep in mind
 
-`onPointerMove` fires on every `pointermove` **and** `mousemove` and calls
-`revealHandle()` → `attachToCorrectParent({raise: true})`, which does
-`hidePopover()` + `showPopover()` on every host and every floating layer. That
-is several top-layer teardowns per mouse move. It does **not** break clicks
-(measured: the click still fires), but it is not free — don't add work to that
-path.
+**A freeze here is forced layout, not CPU.** Script time on the nested-player
+vehicle is single-digit milliseconds a second; what stalls a frame is the
+browser being asked to lay the page out again, and a CPU profile cannot see
+that work at all. `Performance.getMetrics` over a fixed window is the
+measurement — `LayoutCount`, `RecalcStyleCount`, `LayoutDuration` — never a
+sample profile.
+
+Two paths run hot and both are now guarded. Keep them that way.
+
+- **`attachToCorrectParent` runs on every tick — twenty times a second — and on
+  every pointer event.** `onPointerMove` fires for `pointermove` **and**
+  `mousemove`, so a moving hand raises it about 240 times a second. Placement is
+  still checked on every one of those (a site that removes our host has to be
+  answered on the next tick), but the *re-raise* — `hidePopover()` +
+  `showPopover()` on every host and every floating layer — is throttled to
+  `RAISE_MS`. Fullscreen changes pass `force: true` and are never held back,
+  which matters because that is the one moment the re-raise is not optional: the
+  fullscreen element joins the top layer after us.
+- **`rescale()` is a forced layout every time it runs** — it removes a transform
+  and then reads `getBoundingClientRect`, a write followed by a read. Both
+  `panel.js` and `study.js` gate it behind a `settle()` memo keyed on the
+  destination *and the host*, so it runs when a surface actually moves and not
+  otherwise. The host is part of the key because `turnOff` drops the rail and
+  `turnOn` builds a fresh one. A viewport resize is the other way the scale can
+  change without a move, so `panel.js` answers that where `clampIntoView` is.
+
+Measured with two subtitles attached, on `tests/frames`: panel open and mouse
+still, 11.4 layouts/s against 0.8 with the panel shut. Mouse moving, 19.9
+layouts/s and 49.6ms/s of task time before the two guards, 13.3 and 40.2ms/s
+after. Two harness checks pin it — "a surface that has not moved is not measured
+again" fails at 240 measurements for 60 pointer events without the memo, and its
+companion asserts the other direction so the memo cannot be "fixed" by deleting
+the measurement.
+
+Adding work to either path is how this comes back.
+
+**`samplePerf` in `content.js` is how to measure the real thing.** The vehicle
+is one video and three short documents; the reports are about streaming sites
+carrying five frames of player and adverts. It counts long tasks — one turn of
+the event loop past 50ms, which *is* the freeze — with the tick and the pointer
+handler timed beside them, and traces a `perf` line only for a window that
+actually had one. A quiet ten seconds sends nothing. Read it out of
+`subtitle-daemon/logs/<date>.jsonl` rather than asking anyone to reproduce.
 
 ## Tests
 
