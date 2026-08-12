@@ -3818,8 +3818,20 @@
    * Three parallel arrays rather than an array of objects, because this crosses
    * the frame gap as JSON on every file change and 900 three-key objects cost
    * about four times what three arrays of 900 numbers do. */
+  /* Built once per file, not once per read.
+   *
+   * The strip asks for this on every draw, and draw runs on every status round
+   * - measured at 21.5 times a second per subtitle with a film playing. Three
+   * fresh 1100-element arrays each time is 140,000 numbers a second handed
+   * straight to the collector, for a value that only changes when a different
+   * file is attached. The cues themselves never change under a track: attach
+   * replaces the array, which is exactly what the key notices. */
+  const spansCache = new Map();
+
   function cueSpansFor(slot) {
     const cues = state.tracks[slot]?.cues || [];
+    const cached = spansCache.get(slot);
+    if (cached && cached.cues === cues) return cached.spans;
     const starts = new Array(cues.length);
     const ends = new Array(cues.length);
     const chars = new Array(cues.length);
@@ -3828,7 +3840,9 @@
       ends[i] = cues[i].end;
       chars[i] = (cues[i].text || "").length;
     }
-    return { starts, ends, chars };
+    const spans = { starts, ends, chars };
+    spansCache.set(slot, { cues, spans });
+    return spans;
   }
 
   const NO_SPANS = { starts: [], ends: [], chars: [] };

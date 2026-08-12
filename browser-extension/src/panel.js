@@ -974,6 +974,19 @@
     // rebuildDensity for what binning them cost.
     let spilled = { before: 0, after: 0 };
     let signature = "";
+    // What the canvas is currently showing, as the pixels that decide it.
+    let painted = "";
+    /* The strip's laid-out width, kept by an observer rather than measured on
+     * every draw. null until the first answer arrives. */
+    let cssWidth = null;
+    new ResizeObserver((entries) => {
+      const next = entries[entries.length - 1]?.contentRect?.width ?? 0;
+      if (next === cssWidth) return;
+      cssWidth = next;
+      // A different width is a different picture, whatever else is unchanged.
+      painted = "";
+      inks = null;
+    }).observe(plot);
     let durationMs = 0;
     let width = 0;
     let height = 0;
@@ -1072,8 +1085,7 @@
        * the reader has no way to tell "there is no dialogue here" from "the
        * dialogue is off the end". */
       const edge = Math.max(2, ratio() * 2);
-      context.fillStyle =
-        getComputedStyle(plot).getPropertyValue("--sso-map-spill").trim() || "#f0836f";
+      context.fillStyle = inkOf().spill;
       if (spilled.before) context.fillRect(0, 0, edge, height);
       if (spilled.after) context.fillRect(width - edge, 0, edge, height);
     }
@@ -1104,18 +1116,25 @@
      * on a file with one 300-character sign in it. */
     const FULL_CHARS = 84;
 
-    function paintCues(context) {
-      const { starts, ends, chars } = api.cueSpans(slot);
-      if (!starts.length) return;
+    /* The first cue that could be inside the window, by bisection.
+     *
+     * Against the END, not the start: a line that began before the window
+     * opened is still on screen inside it, and searching on starts alone
+     * clipped the first block of every window at the fifteen-second scale,
+     * where a single cue can be most of what is showing.
+     *
+     * Shared with cuesInWindow, which walked the file from index 0 on every
+     * draw. That is a scan whose length is however many lines the film has
+     * already been through, on a path that runs 21.5 times a second - so it
+     * costs nothing in the opening titles and grows for two hours. It was the
+     * only linear walk left on this path, three lines below a bisection doing
+     * the same job. */
+    function firstInWindow(ends, starts) {
       let low = 0;
       let high = starts.length - 1;
       let first = starts.length;
       while (low <= high) {
         const mid = (low + high) >> 1;
-        /* Against the END, not the start: a line that began before the window
-         * opened is still on screen inside it, and searching on starts alone
-         * clipped the first block of every window at the fifteen-second scale -
-         * where a single cue can be most of what is showing. */
         if (api.toStreamMs(slot, ends[mid] ?? starts[mid]) >= from) {
           first = mid;
           high = mid - 1;
@@ -1123,6 +1142,13 @@
           low = mid + 1;
         }
       }
+      return first;
+    }
+
+    function paintCues(context) {
+      const { starts, ends, chars } = api.cueSpans(slot);
+      if (!starts.length) return;
+      const first = firstInWindow(ends, starts);
       const thin = Math.max(2, ratio() * 2);
       for (let i = first; i < starts.length; i++) {
         const at = api.toStreamMs(slot, starts[i]);
@@ -1153,19 +1179,40 @@
       context.globalAlpha = 1;
     }
 
+    /* The strip's three colours, read from the cascade once.
+     *
+     * getComputedStyle forces a style recalculation, and this was doing it two
+     * or three times per paint to fetch custom properties that are constants in
+     * panel.css - it was the second-hottest thing in the profile at 80 samples,
+     * behind only getBoundingClientRect. Re-read when the strip is resized,
+     * which is the one moment cheap enough to not care and the only one where a
+     * sheet could plausibly have been swapped underneath. */
+    let inks = null;
+    const inkOf = () => {
+      if (inks) return inks;
+      const style = getComputedStyle(plot);
+      const token = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+      inks = {
+        ink: token("--sso-map-ink", "#93b9fb"),
+        head: token("--sso-map-head", "#eef0f3"),
+        spill: token("--sso-map-spill", "#f0836f"),
+      };
+      return inks;
+    };
+
     function paint(status) {
       const context = canvas.getContext("2d");
       if (!context || !width || to <= from) return;
       context.clearRect(0, 0, width, height);
 
-      const style = getComputedStyle(plot);
-      context.fillStyle = style.getPropertyValue("--sso-map-ink").trim() || "#93b9fb";
+      const colour = inkOf();
+      context.fillStyle = colour.ink;
       if (spanMs()) paintCues(context);
       else paintDensity(context);
 
       const at = status.currentTime;
       if (Number.isFinite(at)) {
-        context.fillStyle = style.getPropertyValue("--sso-map-head").trim() || "#eef0f3";
+        context.fillStyle = colour.head;
         const x = Math.min(width - 1, Math.max(0, xOf(at * 1000)));
         context.fillRect(Math.round(x), 0, ratio(), height);
       }
@@ -1180,11 +1227,21 @@
       /* Off-screen means no measurement, and no measurement means no draw. The
        * card is in the DOM while the Find screen is showing and measures 0px
        * wide there; rendering into that would cache a one-pixel histogram
-       * against the signature and hand it back when the screen returns. */
-      const box = plot.getBoundingClientRect();
-      if (box.width < 1) return;
+       * against the signature and hand it back when the screen returns.
+       *
+       * The width comes from a ResizeObserver, not from a getBoundingClientRect
+       * on every draw. That read was the single biggest cost the panel had: it
+       * forces a layout, it happened for both subtitles on every status round -
+       * 43 a second with a film playing - and it was asking a question whose
+       * answer only changes when somebody drags a corner. Measured: 36.3
+       * layouts a second with the panel open against 3.3 with it shut, and
+       * getBoundingClientRect the top entry in the profile at 108 samples.
+       * An observer is told when the box changes and costs nothing when it does
+       * not. */
+      if (cssWidth === null) cssWidth = plot.getBoundingClientRect().width;
+      if (cssWidth < 1) return;
 
-      const nextWidth = Math.max(1, Math.round(box.width * ratio()));
+      const nextWidth = Math.max(1, Math.round(cssWidth * ratio()));
       if (nextWidth !== width) {
         width = nextWidth;
         height = Math.max(1, Math.round(MAP_HEIGHT * ratio()));
@@ -1199,6 +1256,33 @@
       root.dataset.zoomed = scale.ms ? "true" : "false";
 
       setWindow(status);
+
+      /* Nothing is repainted while it would land on the same pixels.
+       *
+       * draw() runs on every status round, not on the 250ms playhead interval
+       * it was written for - refresh() calls it for each attached subtitle, and
+       * refresh runs on every notify. Measured at 21.5 draws a second with the
+       * film playing, against the 4 the interval intends. At the 60s scale a
+       * 254px strip is 236ms of film per pixel, so 50ms of playhead is a
+       * quarter of one pixel and three paints in four produce a picture
+       * identical to the one already on the canvas. Across the whole film it is
+       * a twentieth of a pixel.
+       *
+       * So the window and the playhead are quantised to whole device pixels and
+       * compared with what was last painted, along with everything else the
+       * picture depends on. A skipped paint is not an approximation: it is the
+       * same image. */
+      const perPixel = (to - from) / Math.max(1, width - 1);
+      const at = Number.isFinite(status.currentTime) ? status.currentTime * 1000 : null;
+      const shot = [
+        Math.round(from / Math.max(1, perPixel)), Math.round(perPixel),
+        at === null ? -1 : Math.round(Math.min(width - 1, Math.max(0, xOf(at)))),
+        track.offsetMs, track.rate, track.cueCount, track.fileId,
+        status.adDriftMs, width, spanStep,
+      ].join("|");
+      if (shot === painted) return;
+      painted = shot;
+
       if (!scale.ms) rebuildDensity(status);
       paint(status);
 
@@ -1217,12 +1301,12 @@
      * edge of the strip is drawn and is not something a reader can see. */
     function cuesInWindow() {
       const { starts, ends } = api.cueSpans(slot);
-      for (let i = 0; i < starts.length; i++) {
-        if (api.toStreamMs(slot, starts[i]) > to) return false;
-        // A line that started before the window is still on screen inside it.
-        if (api.toStreamMs(slot, ends[i] ?? starts[i]) >= from) return true;
-      }
-      return false;
+      if (!starts.length) return false;
+      // The first line whose end reaches the window. If its start is past the
+      // far edge, the window falls in a silence and there is nothing to draw.
+      const first = firstInWindow(ends, starts);
+      if (first >= starts.length) return false;
+      return api.toStreamMs(slot, starts[first]) <= to;
     }
 
     /* Drag to move the subtitle.
@@ -3009,14 +3093,34 @@
    * notify() fires on every offset change - twelve times a second while a nudge
    * button is held. Screens that are not on show are skipped: they are redrawn
    * by goTo() on the way in, so nothing can be stale by the time it is seen. */
+  /* What the panel's height depends on. Anything not in here cannot change how
+   * tall the panel wants to be, so it cannot need a re-fit. */
+  let fittedFor = "";
+
   function refresh(status) {
     if (!host) return;
     const settings = status.settings;
     const showing = (name) => atScreen === name;
     /* Attaching a second subtitle adds a whole card, so the panel gets taller
-     * while it is open. Re-fitting on every status round keeps it on the screen
-     * without anything having to remember to ask. */
-    queueMicrotask(fitToViewport);
+     * while it is open, and it has to be re-fitted when that happens.
+     *
+     * WHEN THAT HAPPENS, and not on every status round. refresh() runs on every
+     * notify - measured at 20 a second while a film plays, because the tick is
+     * 50ms - and fitToViewport reads two getBoundingClientRects and then writes
+     * a height, which is a forced layout each time. Measured on the frames
+     * vehicle with two 1100-cue subtitles attached and the film playing: the
+     * page did 3.3 layouts a second with the panel shut and 36 with it open.
+     * Nothing about a nudged offset or a moved playhead changes how tall the
+     * panel is. */
+    const shape = [
+      status.trackCount, status.attached, atScreen, folded,
+      Boolean(api.removedTrack?.()), status.hasVideo,
+      status.trackCount >= api.trackCount, Boolean(status.inAd || status.adDriftMs),
+    ].join("|");
+    if (shape !== fittedFor) {
+      fittedFor = shape;
+      queueMicrotask(fitToViewport);
+    }
 
     const gone = api.removedTrack?.();
     el.undoRow.hidden = !gone;

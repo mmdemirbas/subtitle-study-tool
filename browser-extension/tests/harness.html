@@ -1339,6 +1339,61 @@
         await sleep(100);
       });
 
+      check("the strip keeps up with the playhead, and repaints only when it must", async () => {
+        /* The strip is redrawn on every status round - 21.5 times a second with
+         * a film playing, because refresh() draws every card and refresh runs
+         * on every notify. At the 60s scale a 254px strip is 236ms of film per
+         * pixel, so 50ms of playhead is a quarter of a pixel and three of those
+         * four paints produce a picture identical to the one already there. It
+         * skips those now, which is the whole of why the panel went from 36
+         * layouts a second to 11.
+         *
+         * Both halves are asserted, and the first is the one that matters: the
+         * failure mode of a cache is a picture that stops moving. Nudge the
+         * playhead by less than a pixel and the canvas must NOT change; nudge
+         * it past one and it must. */
+        const was = video.currentTime;
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "TR · keep", fileId: 506, slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        video.currentTime = 2600;
+        await sleep(200);
+
+        const strip = mapStrips()[1];
+        const canvas = strip.querySelector(".sso-map__canvas");
+        const zoom = strip.querySelector(".sso-map__zoom");
+        for (let i = 0; i < MAP_STEPS * 2 && zoom.textContent !== "60s"; i++) {
+          zoom.click();
+          await sleep(40);
+        }
+        await sleep(150);
+
+        const shot = () => canvas.toDataURL();
+        const msPerPixel = 60000 / (canvas.width - 1);
+        const before = shot();
+
+        // A fifth of a pixel: every mark lands where it already is.
+        video.currentTime = 2600 + (msPerPixel / 5) / 1000;
+        await sleep(250);
+        if (shot() !== before)
+          throw new Error(`a ${Math.round(msPerPixel / 5)}ms step repainted an identical picture`);
+
+        // Three pixels: it has to follow.
+        video.currentTime = 2600 + (msPerPixel * 3) / 1000;
+        await sleep(250);
+        if (shot() === before)
+          throw new Error(`a ${Math.round(msPerPixel * 3)}ms step left the strip where it was`);
+
+        // And a timing change must always land, however still the playhead is.
+        const held = shot();
+        window.__ssoApi.setOffset(3000, { slot: 1, quiet: true });
+        await sleep(250);
+        if (shot() === held) throw new Error("moving the subtitle left the strip unchanged");
+
+        video.currentTime = was;
+        window.__ssoApi.detach(1);
+        await sleep(120);
+      });
+
       check("a line's length and how much it says are both in the picture", async () => {
         /* Asked for directly: the strip "shows where a subtitle starts, but it
          * doesn't show where it ends or how many chars/words it have - this
