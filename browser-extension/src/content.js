@@ -1976,6 +1976,8 @@
     let at = { x: null, y: null };
     let size = { width, height };
     let open = false;
+    // Which show() is the current one. See the note on show().
+    let shows = 0;
 
     const place = (x, y) => {
       /* Never off the edge. A window restored from a session on a wider screen
@@ -2050,14 +2052,32 @@
       body,
       isOpen: () => open,
       setTitle(text) { name.textContent = text; },
+      /* Open from the first line, not from the far side of a storage read.
+       *
+       * `open` used to be set after `await chrome.storage.local.get`, so
+       * isOpen() answered "shut" for the whole round trip - and the buttons
+       * that open these windows are toggles that ask isOpen() to decide what a
+       * press means. Two presses inside that window both read "shut", both
+       * called show(), and both ran the placement. That is the "async
+       * programming problems that would cause to create multiple study panes"
+       * report: not two hosts, but one window that could not be closed by the
+       * control that opened it because the control never saw it open.
+       *
+       * The generation counter covers the other half: a hide() or a second
+       * show() arriving during the read must win over the read's own placement,
+       * or a window closed while it was opening comes back on screen. */
       async show(near) {
-        if (!open) {
+        const wasOpen = open;
+        open = true;
+        if (!wasOpen) {
+          const generation = ++shows;
           let stored = null;
           try {
             stored = storeKey ? (await chrome.storage.local.get(storeKey))[storeKey] : null;
           } catch {
             // Defaults are fine.
           }
+          if (generation !== shows || !open) return;
           if (stored?.width) size = { width: stored.width, height: stored.height ?? size.height };
           applySize();
           if (stored?.x != null) place(stored.x, stored.y);
@@ -2075,7 +2095,6 @@
             place((window.innerWidth - size.width) / 2, 80);
           }
         }
-        open = true;
         layer.host.style.setProperty("display", "block", "important");
         attachToCorrectParent();
       },
@@ -3784,6 +3803,36 @@
     return (state.tracks[slot]?.cues || []).map((cue) => cue.start);
   }
 
+  /* The same lines, with the two facts a start cannot carry: how long each one
+   * is on screen, and how much it says.
+   *
+   * The panel's strip drew every cue as a 2px tick at its start, which says
+   * where somebody speaks and nothing about what happens next. Two files cut
+   * differently - one subtitler splitting a long exchange into four lines where
+   * the other keeps two - produce two completely different tick patterns from
+   * the same dialogue, so the eye had nothing to match. A line's DURATION and
+   * its LENGTH survive that split: four short lines still fill the same stretch
+   * of film and still add up to the same amount of text. That is what makes two
+   * strips comparable, which is the whole reason they sit one above the other.
+   *
+   * Three parallel arrays rather than an array of objects, because this crosses
+   * the frame gap as JSON on every file change and 900 three-key objects cost
+   * about four times what three arrays of 900 numbers do. */
+  function cueSpansFor(slot) {
+    const cues = state.tracks[slot]?.cues || [];
+    const starts = new Array(cues.length);
+    const ends = new Array(cues.length);
+    const chars = new Array(cues.length);
+    for (let i = 0; i < cues.length; i++) {
+      starts[i] = cues[i].start;
+      ends[i] = cues[i].end;
+      chars[i] = (cues[i].text || "").length;
+    }
+    return { starts, ends, chars };
+  }
+
+  const NO_SPANS = { starts: [], ends: [], chars: [] };
+
   function notify() {
     pushMirror();
     for (const listener of listeners) {
@@ -3904,7 +3953,7 @@
           // The panel's Study button and the "learning" chip on each card read
           // this, and it lives in the frame the rail is drawn in.
           study: window.__ssoStudy?.settings?.() || null,
-          cueTimes: heavy ? snapshot.tracks.map((_, slot) => cueTimesFor(slot)) : null,
+          cueSpans: heavy ? snapshot.tracks.map((_, slot) => cueSpansFor(slot)) : null,
         },
       })
       .then((reply) => {
@@ -4015,12 +4064,19 @@
    * out to claim again. */
   function takeMirror(message) {
     if (role !== "chrome") return false;
-    mirror = mirror || { status: null, cueTimes: [], removed: null };
+    mirror = mirror || { status: null, cueSpans: [], cueTimes: [], removed: null };
     mirror.status = message.status || null;
     mirror.removed = message.removed || null;
     mirror.study = message.study || null;
     mirrorSeenAt = Date.now();
-    if (message.cueTimes) mirror.cueTimes = message.cueTimes;
+    /* One payload, two readings. The starts are the hot path - the strip's
+     * binary search and the aligner both walk them on the playhead tick - so
+     * they are pulled out once here rather than through a property lookup a
+     * thousand times a second. */
+    if (message.cueSpans) {
+      mirror.cueSpans = message.cueSpans;
+      mirror.cueTimes = message.cueSpans.map((spans) => spans.starts);
+    }
 
     /* The panel reads settings out of the status, but this frame's own keydown
      * handler reads them out of `state`. A binding changed in the panel has to
@@ -4410,6 +4466,9 @@
      * that findCueIndexes depends on. */
     cueTimes(slot) {
       return role === "chrome" ? (mirror?.cueTimes?.[slot] || []).slice() : cueTimesFor(slot);
+    },
+    cueSpans(slot) {
+      return role === "chrome" ? (mirror?.cueSpans?.[slot] || NO_SPANS) : cueSpansFor(slot);
     },
     /* File clock to stream clock, for a track that may not be attached yet.
      *

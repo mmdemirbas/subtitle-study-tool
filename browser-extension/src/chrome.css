@@ -99,6 +99,16 @@
   font-style: normal;
   line-height: 1.45;
   letter-spacing: normal;
+  /* Light type on a dark, translucent surface, which is the one case where the
+   * default subpixel rendering works against the design: it fattens every stem
+   * and leaves colour fringes on the strokes, and at 11.5px that is the
+   * difference between a label and a smudge. Reported as "fonts are not nice,
+   * especially on the buttons and the subtitle names" - the family was fine,
+   * the rasterising was not. Grayscale antialiasing is what every dark UI on
+   * this platform uses, and it is why they look set rather than printed. */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-optical-sizing: auto;
   text-align: left;
   text-transform: none;
   color: var(--sso-ink);
@@ -222,6 +232,32 @@
   cursor: default;
 }
 
+/* A TITLE-BAR button that holds something open, and says so while it does.
+ *
+ * Declared here rather than on each window because both of them have one - the
+ * panel's gear and the rail's - and a toggle that looks pressed in one window
+ * and not in the other is the inconsistency this sheet exists to stop.
+ *
+ * Scoped to the window's own head, and it has to be: `data-on` is not a title
+ * bar's private vocabulary. The eye on every subtitle card carries
+ * data-on="true" to mean "this subtitle is showing", so an unscoped rule drew
+ * every visible subtitle's eye as a held-down button - measured in a 640px
+ * capture, both cards at once. */
+.sso-win__head .sso-icon[data-on="true"] {
+  color: var(--sso-ink);
+  background: var(--sso-fill-hover);
+}
+
+/* Bigger than the glyphs beside it, because it is the only one that opens a
+ * surface rather than moving or closing this one - and because it was reported
+ * as too small to aim at. 28px against 24: still quiet, and past the 24px
+ * pointer target with room to spare. */
+.sso-icon--gear {
+  min-width: 28px;
+  height: 28px;
+  font-size: 15px;
+}
+
 /* The one control that takes the window off the screen says so on hover. */
 .sso-icon--close {
   font-size: 15px;
@@ -277,6 +313,18 @@
  *
  * Height is shared rather than falling out of padding, so a row of mixed tiers
  * lines up and every one of them clears the 24px pointer target.
+ *
+ * HOVER NEVER CHANGES HUE. This is the rule, and it was being broken in four
+ * places: the Undo beside a card's message went solid blue, the linkish button
+ * went a paler blue, and the two danger buttons went red - so "what happens
+ * when I hover" had four different answers on one screen and none of them was
+ * predictable from the one before. Reported as exactly that.
+ *
+ * Hovering means one step up the fill ladder and one step up the ink. Nothing
+ * else. The only exception is a control that DESTROYS something, where the
+ * danger colour on hover is the warning and is the whole point of spending it -
+ * and there are two of those, both marked. An accent fill belongs to a resting
+ * state (the one primary action, a toggle that is on), never to a hover.
  */
 
 button {

@@ -943,7 +943,15 @@
    * only - the same three decisions the panel documents, for the same reasons:
    * page CSS reaches anything in the light DOM, and an adopted stylesheet is
    * not subject to the page's style-src. */
+  /* Which build owns the rail. Bumped by every build and by every teardown, so
+   * a build whose stylesheets were still loading when study was switched off
+   * knows not to put its host on the page. Without it, off-during-build left a
+   * rail nothing held a reference to - undismissable, and joined by a second
+   * one the next time study came on. */
+  let buildToken = 0;
+
   async function build() {
+    const token = ++buildToken;
     host = document.createElement("div");
     /* A press on the rail is not a press on the film - the rail is built
      * inside the player's own element. See keepPointersInside in content.js. */
@@ -962,6 +970,8 @@
 
     shadow = host.attachShadow({ mode: "open" });
     shadow.adoptedStyleSheets = await loadStyles();
+    // Switched off, or rebuilt, while the sheets were being fetched.
+    if (token !== buildToken) return null;
 
     railEl = document.createElement("div");
     railEl.className = "sso-win sso-rail";
@@ -1014,10 +1024,11 @@
      * exist when study is off and a switch you can only reach by first being in
      * the state it turns on is not a switch. */
     gearEl = document.createElement("button");
-    gearEl.className = "sso-icon";
+    gearEl.className = "sso-icon sso-icon--gear";
     gearEl.type = "button";
     gearEl.textContent = "⚙";
     gearEl.title = "How study works";
+    gearEl.setAttribute("aria-pressed", "false");
     gearEl.addEventListener("click", () => api.detached(openRailSettings(), "Study settings"));
 
     head.append(title, countEl, clearEl, gearEl, foldEl, close);
@@ -1065,7 +1076,23 @@
    * as well as between them. */
   let settingsWindow = null;
 
+  /* The button that opens it closes it, the same rule the panel's Aa follows.
+   * A control that opens something and then does nothing when pressed again has
+   * stopped answering, and the reader's next move is to press it harder. */
+  const markGear = () => {
+    const on = Boolean(settingsWindow?.isOpen());
+    if (!gearEl) return;
+    gearEl.dataset.on = on ? "true" : "false";
+    gearEl.setAttribute("aria-pressed", on ? "true" : "false");
+    gearEl.title = on ? "Close the study settings" : "How study works";
+  };
+
   async function openRailSettings() {
+    if (settingsWindow?.isOpen()) {
+      settingsWindow.hide();
+      markGear();
+      return;
+    }
     if (!settingsWindow) {
       settingsWindow = api.makeWindow({
         title: "How study works",
@@ -1077,11 +1104,13 @@
         accent: "#e0a458",
         accentInk: "#d8a86a",
         surface: "rgba(22, 19, 16, 0.98)",
+        onClose: markGear,
       });
       settingsEl = buildRailSettings();
       settingsWindow.body.append(settingsEl);
     }
     await settingsWindow.show(host);
+    markGear();
     refreshRailSettings();
   }
 
@@ -2106,8 +2135,16 @@
     );
   }
 
+  let building = null;
+
   async function turnOn() {
-    if (!host) await build();
+    if (!host) {
+      // One build, however many callers ask at once. The panel's chip, the
+      // keyboard and a settings change arriving from another frame can all land
+      // in the same turn, and each of them used to start a rail of its own.
+      building ||= build().finally(() => { building = null; });
+      await building;
+    }
     /* Into the fullscreen element straight away, not on the next mouse move.
      *
      * A bare reparent() takes the top-layer path and returns without moving the
@@ -2128,6 +2165,9 @@
   }
 
   function turnOff() {
+    // Any build still fetching its stylesheets is now building a rail nobody
+    // asked for. See buildToken.
+    buildToken += 1;
     settingsWindow?.destroy();
     settingsWindow = null;
     /* Dropped, not hidden, and the reference dropped with it. Removing the
