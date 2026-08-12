@@ -3525,7 +3525,12 @@
    * pointer events to get there would be testing the grips, not the row. */
   /* sayOnCard is exported because content.js offers every slot-specific
    * message to it before falling back to a toast. See showToast there. */
-  window.__ssoPanel = { show, hide, toggle, reparent, rescale, applySize, sayOnCard };
+  /* isOpen is for samplePerf in content.js, which reports whether the panel was
+   * up in the window it is describing. Boolean(window.__ssoPanel) cannot answer
+   * that - panel.js runs in every frame and defines this global whether or not
+   * anything is on screen, so the first version of that field said true
+   * everywhere and would have made "panel open" impossible to correlate with. */
+  window.__ssoPanel = { show, hide, toggle, reparent, rescale, applySize, sayOnCard, isOpen: isPanelVisible };
 
   window.__ssoPanelTeardown = () => {
     // Both live on hosts outside this shadow tree, so removing the panel does

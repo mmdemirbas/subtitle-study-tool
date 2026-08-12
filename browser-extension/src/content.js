@@ -4312,7 +4312,7 @@
       arranged: seen.arranged,
       attached: anyAttached(),
       study: Boolean(window.__ssoStudy?.settings?.().enabled),
-      panel: Boolean(window.__ssoPanel),
+      panel: Boolean(window.__ssoPanel?.isOpen?.()),
       full: Boolean(document.fullscreenElement),
       frames: window.top === window ? "top" : "nested",
     });
