@@ -71,7 +71,7 @@
  * panel.js, which covers the players that listen for it on document instead of
  * relying on the scroll actually chaining. */
 .sso-panel__body {
-  padding: 10px 12px 12px;
+  padding: var(--sso-s3);
   max-height: min(70vh, 620px);
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -104,7 +104,7 @@
 
 button.sso-add {
   width: 100%;
-  margin-top: 8px;
+  margin-top: var(--sso-s2);
   color: var(--sso-ink-2);
   background: none;
   border: 1px dashed var(--sso-line);
@@ -117,7 +117,7 @@ button.sso-add:hover:not(:disabled) {
 
 /* Where the next result lands, said as a fact. */
 .sso-find__for {
-  margin: 0 0 8px;
+  margin: 0 0 var(--sso-s2);
   color: var(--sso-ink-2);
 }
 
@@ -129,14 +129,14 @@ button.sso-add:hover:not(:disabled) {
  * without being clicked. The surface is the separator: the window behind is
  * darker than the card, which is what makes a card read as one thing. */
 .sso-sec {
-  padding: 9px 10px 10px;
+  padding: var(--sso-s3);
   background: rgba(255, 255, 255, 0.055);
   border: 0;
   border-radius: 9px;
 }
 
 .sso-sec + .sso-sec {
-  margin-top: 8px;
+  margin-top: var(--sso-s2);
 }
 
 .sso-sec__h {
@@ -155,7 +155,7 @@ button.sso-add:hover:not(:disabled) {
 }
 
 .sso-row + .sso-row {
-  margin-top: 6px;
+  margin-top: var(--sso-s2);
 }
 
 .sso-grow {
@@ -164,7 +164,7 @@ button.sso-add:hover:not(:disabled) {
 }
 
 .sso-note {
-  margin: 6px 0 0;
+  margin: var(--sso-s2) 0 0;
   font-size: var(--sso-t-small);
   color: var(--sso-ink-3);
   overflow-wrap: anywhere;
@@ -188,7 +188,7 @@ button.sso-add:hover:not(:disabled) {
  */
 
 .sso-empty {
-  padding: 14px 12px 15px;
+  padding: var(--sso-s4) var(--sso-s3);
   text-align: center;
   background: var(--sso-surface-2);
   border: 1px dashed var(--sso-line);
@@ -217,9 +217,9 @@ button.sso-add:hover:not(:disabled) {
 .sso-undo {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  padding: 7px 9px;
+  gap: var(--sso-s2);
+  margin-top: var(--sso-s2);
+  padding: var(--sso-s2);
   border: 1px dashed var(--sso-line);
   border-radius: 9px;
 }
@@ -374,14 +374,14 @@ button.sso-quick__move[data-on="true"] {
 }
 
 .sso-track + .sso-track {
-  margin-top: 8px;
+  margin-top: var(--sso-s2);
 }
 
 .sso-track__head {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 7px 9px 5px;
+  gap: var(--sso-s1);
+  padding: var(--sso-s2) var(--sso-s2) 6px;
 }
 
 /* Truncated in the middle, not at the end.
@@ -430,7 +430,7 @@ button.sso-quick__move[data-on="true"] {
 }
 
 .sso-track__body {
-  padding: 0 9px 9px;
+  padding: 0 var(--sso-s2) var(--sso-s2);
 }
 
 /* --- where this subtitle speaks ---------------------------------------------
@@ -454,22 +454,33 @@ button.sso-quick__move[data-on="true"] {
   --sso-map-spill: #f0836f;
 
   display: flex;
-  gap: 5px;
+  gap: var(--sso-s1);
   align-items: stretch;
-  margin: 0 0 6px;
+  margin: 0 0 var(--sso-s2);
 }
 
 /* The steps sit closer to the row above than to the card's edge, because they
  * belong to the subtitle rather than to the gap after it. */
+/* Left, with everything else on the card.
+ *
+ * Centred, they sat in the middle of a row whose right half was empty, aligned
+ * to nothing above or below them - the only centred thing on a surface that is
+ * otherwise a left-aligned column. */
 .sso-row--steps {
-  justify-content: center;
-  gap: 4px;
-  margin-top: 4px;
+  justify-content: flex-start;
+  gap: var(--sso-s1);
+  margin-top: var(--sso-s1);
 }
 
 /* The map is the card's content, so it is a well cut into the surface rather
  * than another bordered control sitting on it. An inset shadow reads as depth
  * where a hairline read as one more box in a screen that had thirteen. */
+/* The well is quieter than it was, and that is a hierarchy fix rather than a
+ * taste one. At 30% black with an inset shadow it was the darkest thing in the
+ * panel - darker than the window behind it - so on a card whose window is
+ * showing no dialogue in this minute, the eye landed first on an empty black
+ * box and read it as something broken. It is a reading, not a control panel;
+ * it should recede until it has bars in it. */
 .sso-map__plot {
   position: relative;
   flex: 1;
@@ -477,12 +488,28 @@ button.sso-quick__move[data-on="true"] {
   height: 30px;
   overflow: hidden;
   cursor: ew-resize;
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(0, 0, 0, 0.18);
   border: 0;
   border-radius: var(--sso-r-ctl);
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5);
+  box-shadow: inset 0 0 0 1px var(--sso-line-soft);
   touch-action: pan-y;
   transition: box-shadow var(--sso-motion) ease;
+}
+
+/* And when there is genuinely nothing in the window, it says so. An empty well
+ * and a well whose lines are all off-screen look identical, and one of those
+ * is a subtitle that needs moving. */
+.sso-map__plot[data-empty="true"]::after {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--sso-t-micro);
+  letter-spacing: 0.04em;
+  color: var(--sso-ink-3);
+  content: "no lines in this stretch";
+  pointer-events: none;
 }
 
 .sso-map__plot:hover {
@@ -533,9 +560,15 @@ button.sso-quick__move[data-on="true"] {
   background: var(--sso-fill-hover);
 }
 
+/* Marked as zoomed by weight, not by the accent.
+ *
+ * It was the only accent-coloured thing on a card, which made a scale toggle
+ * the loudest control there - and the scale is now 60s by default, so every
+ * card opened lit. One accent per surface, spent on the one obvious next
+ * action; on this screen that is "Find a subtitle" when nothing is attached. */
 .sso-map[data-zoomed="true"] .sso-map__zoom {
-  color: var(--sso-accent-ink);
-  border-color: var(--sso-line);
+  color: var(--sso-ink);
+  background: var(--sso-fill-hover);
 }
 
 .sso-map__readout {
@@ -596,17 +629,27 @@ button.sso-quick__move[data-on="true"] {
 /* Which subtitle study reads. Amber, because that is what a marked word is in
  * the subtitle and on the rail - the same colour meaning the same thing in a
  * third place, rather than a second blue meaning something else. */
+/* Quiet, and it has to be. It was a filled amber block in uppercase 700,
+ * measured at 110px of a 372px panel - the loudest thing on the card, spent on
+ * the least important fact about it, and taking that width from the one thing
+ * that says WHICH subtitle this is. The name was rendering as
+ * "1. the.americ… -EN" beside it.
+ *
+ * The word is lower case and the pill is a hairline; on, it fills with amber at
+ * a fifth of the strength it had. It still reads as marked at a glance, and the
+ * name gets its characters back. See the head's own note on hierarchy. */
 button.sso-track__learn {
   flex: none;
-  padding: 1px 6px;
-  font-size: var(--sso-t-micro);
-  font-weight: 700;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  min-height: var(--sso-h-chip);
+  padding: 0 7px;
+  font-size: var(--sso-t-small);
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--sso-ink-3);
   background: none;
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--sso-r-ctl);
 }
 
 button.sso-track__learn:hover:not(:disabled) {
@@ -646,15 +689,16 @@ button.sso-track__learn:hover:not(:disabled) {
  * flat, quieter, and says what it will do in its title. */
 button.sso-track__learn[data-on="true"] {
   color: #d8a86a;
-  background: rgba(216, 168, 106, 0.14);
+  background: rgba(216, 168, 106, 0.13);
 }
 
 button.sso-track__learn[data-on="false"] {
-  opacity: 0.8;
   /* Outlined rather than flat: filled pill against outlined pill is a toggle
    * anybody recognises, and it says "press me" where bare muted text said
-   * nothing. */
-  box-shadow: inset 0 0 0 1px currentColor;
+   * nothing. A hairline of the shared line colour rather than of currentColor -
+   * at full strength it was a second border weight in a row that already has
+   * one. */
+  box-shadow: inset 0 0 0 1px var(--sso-line);
 }
 
 /* Narrow, the pill is a dot: solid when studied, an empty ring when not. */
@@ -768,13 +812,33 @@ button.sso-sync__clear:hover:not(:disabled) {
  * It used to sit in the row below with Again and Next, which are not timing
  * controls at all - they move the picture. So four of the five ways to change
  * the offset were in one row and the fifth was somewhere else. */
+/* In the row's own treatment, not in the accent.
+ *
+ * It was the one accent-coloured control in a row of grey pills, which reads as
+ * the primary action of the row - and it is not: the nudges beside it are what
+ * a reader reaches for, and this is the shortcut that sometimes guesses right.
+ * One accent per surface, spent on the one obvious next action, and on this
+ * screen that is "Find a subtitle" in the empty state. */
 button.sso-sync__align {
   flex: none;
-  padding: 5px 9px;
+  min-height: var(--sso-h-chip);
+  /* Set apart from the four nudges it shares a row with. They are one control
+   * in four sizes and this is a different verb entirely - it works the number
+   * out rather than changing it by a step - so it takes the auto margin and
+   * sits against the card's edge with a hairline between. Undivided, the row
+   * read as five equal pills of which one did something else. */
+  margin-left: auto;
+  padding: 0 var(--sso-s2);
+  border-left: 1px solid var(--sso-line-soft);
+  border-radius: 0 var(--sso-r-ctl) var(--sso-r-ctl) 0;
   font-size: var(--sso-t-small);
   font-weight: 600;
-  color: var(--sso-accent-ink);
+  color: var(--sso-ink-2);
   white-space: nowrap;
+}
+
+button.sso-sync__align:hover:not(:disabled) {
+  color: var(--sso-ink);
 }
 
 /* What a control on this card just did, on this card.

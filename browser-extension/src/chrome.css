@@ -67,10 +67,34 @@
   --sso-t-body: 13px;
   --sso-t-lead: 14.5px;
 
+  /* Space, on a scale, for the same reason the type is.
+   *
+   * The paddings here had been chosen one at a time and ran 5, 6, 7, 9, 10, 11,
+   * 12, 14 - eight values inside 340px, no two of which mean anything different
+   * to a reader. A scale is what makes a gap say something: the same number
+   * twice reads as "these belong together" and the next number up reads as "and
+   * this is a different group". Four-based, because the controls are 22 and 26
+   * tall and half-steps of those land on it. */
+  --sso-s1: 4px;
+  --sso-s2: 8px;
+  --sso-s3: 12px;
+  --sso-s4: 16px;
+
+  /* One height for anything sitting in a row of controls, so a row reads as a
+   * row rather than as things that happen to be adjacent. */
+  --sso-h-ctl: 26px;
+  --sso-h-chip: 22px;
+
   position: relative; /* containing block for the corner grips */
   display: block;
   font-size: var(--sso-t-body);
-  font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  /* system-ui first, then the Apple faces, then the Windows and Linux ones.
+   * The stack named only Apple faces and fell through to Arial everywhere
+   * else - so the windows were set in a different typeface depending on the
+   * machine, which is one of the inconsistencies this is about. */
+  font-family:
+    system-ui, -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI",
+    Inter, Roboto, "Helvetica Neue", Helvetica, Arial, sans-serif;
   font-weight: 400;
   font-style: normal;
   line-height: 1.45;
@@ -298,6 +322,114 @@ button:disabled {
 .sso-quiet:hover:not(:disabled) {
   color: var(--sso-ink);
   background: var(--sso-fill);
+}
+
+/* --- the tick box -----------------------------------------------------------
+ *
+ * Drawn here rather than left to the browser, and declared once rather than in
+ * each sheet. `accent-color` on a native box changes one thing - the fill when
+ * it is on - and leaves the off state as the platform's own heavy hollow
+ * square. So a settings window read as this product's surface with the page's
+ * form controls sitting on it, and the two states did not look like two states
+ * of one control: solid blue against a grey outline twice its visual weight.
+ *
+ * It keeps the real <input>, which is what carries the keyboard, the label
+ * association and the focus ring; only its appearance is taken over.
+ */
+
+.sso-win input[type="checkbox"] {
+  appearance: none;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  background: var(--sso-fill);
+  border: 1px solid var(--sso-line);
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    background var(--sso-motion) ease,
+    border-color var(--sso-motion) ease;
+}
+
+.sso-win input[type="checkbox"]:hover {
+  border-color: var(--sso-ink-3);
+}
+
+.sso-win input[type="checkbox"]:checked {
+  background: var(--sso-accent);
+  border-color: var(--sso-accent);
+}
+
+/* The tick, drawn rather than typed: a "✓" glyph is a different shape in every
+ * face this stack can fall through to, and at 15px the difference is the
+ * difference between a tick and a smudge. */
+.sso-win input[type="checkbox"]:checked::after {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: no-repeat center / 9px 9px
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2 6.4 4.7 9 10 3.2' fill='none' stroke='%23fff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  content: "";
+}
+
+/* --- the slider -------------------------------------------------------------
+ *
+ * Same argument as the tick box, and more visible: `accent-color` leaves the
+ * platform's own thumb, which on this stack is a raised circle with a light
+ * grey ring, sitting on a track twice the height of every hairline in the
+ * window. Six of them in the Style window meant six of the page's controls on
+ * this product's surface.
+ *
+ * The track is drawn on the input itself and the filled part is a gradient set
+ * from JavaScript-free `accent-color`-style maths - which is not available, so
+ * the track is one weight and the thumb carries the accent. That is the honest
+ * trade: a two-tone track needs the value in CSS, and the readout beside every
+ * slider in both windows already says the number.
+ */
+
+.sso-win input[type="range"] {
+  appearance: none;
+  height: 18px;
+  background: none;
+  cursor: pointer;
+}
+
+.sso-win input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px;
+  background: var(--sso-fill-hover);
+  border-radius: 2px;
+}
+
+.sso-win input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  /* Centred on a 3px track: half the thumb less half the track. */
+  margin-top: -5px;
+  background: var(--sso-accent);
+  border: 0;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  transition: transform var(--sso-motion) ease;
+}
+
+.sso-win input[type="range"]:hover::-webkit-slider-thumb {
+  transform: scale(1.15);
+}
+
+.sso-win input[type="range"]::-moz-range-track {
+  height: 3px;
+  background: var(--sso-fill-hover);
+  border-radius: 2px;
+}
+
+.sso-win input[type="range"]::-moz-range-thumb {
+  width: 13px;
+  height: 13px;
+  background: var(--sso-accent);
+  border: 0;
+  border-radius: 50%;
 }
 
 /* --- focus ------------------------------------------------------------------

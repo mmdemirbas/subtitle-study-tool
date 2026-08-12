@@ -1193,6 +1193,28 @@
       setWindow(status);
       if (!scale.ms) rebuildDensity(status);
       paint(status);
+
+      /* And whether anything was drawn, because an empty well and a well whose
+       * lines have all been pushed out of the window look identical - and one
+       * of those is a subtitle that needs moving. It only means anything at a
+       * zoomed scale: across the whole film an empty strip is a file with no
+       * cues at all, which the card already says elsewhere. */
+      plot.dataset.empty = scale.ms && !cuesInWindow(slot) ? "true" : "false";
+    }
+
+    /* Whether this subtitle says anything between `from` and `to`.
+     *
+     * Counted rather than taken from the paint, because paint runs on the
+     * canvas and answers in pixels: a bar one device pixel wide at the very
+     * edge of the strip is drawn and is not something a reader can see. */
+    function cuesInWindow() {
+      const times = api.cueTimes(slot);
+      for (let i = 0; i < times.length; i++) {
+        const at = api.toStreamMs(slot, times[i]);
+        if (at > to) return false;
+        if (at >= from) return true;
+      }
+      return false;
     }
 
     /* Drag to move the subtitle.
