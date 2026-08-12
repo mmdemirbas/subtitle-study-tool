@@ -31,6 +31,17 @@
   --sso-accent: #4c8bf5;
   --sso-accent-ink: #93b9fb;
 
+  /* How wide a row of controls is allowed to get.
+   *
+   * The panel is dragged wide once the maps are worth looking at - reported at
+   * 1290px - and everything on a card except the map is worse for it. At that
+   * width the head put the subtitle's name at the far left and the four
+   * controls that act on it 1200px away at the far right: the proximity rule
+   * broken by dragging a corner. A control that operates on a thing sits near
+   * that thing. The strip is the one element that genuinely reads better
+   * wider, so it alone is full-bleed. */
+  --sso-measure: 560px;
+
   /* The surface and the type scale are on .sso-win in chrome.css: they belong
    * to every window here, and declaring them on this one left the settings
    * window - which is a .sso-win and not a .sso-panel - rendering its headings
@@ -246,7 +257,10 @@ button.sso-add:hover:not(:disabled) {
  * is a layout, and a layout is a thing to look at rather than to read.
  */
 
+/* Same cap, same reason: three icons and two words scattered across 1290px
+ * read as unrelated controls rather than as one row. */
 .sso-quick {
+  max-width: var(--sso-measure);
   /* Wraps rather than clips. At the 280px the corner grips allow, the row is
    * three arrangement icons, Move, Line up all and Study - about 300px of
    * controls. Something has to give, and the choices are dropping a label,
@@ -381,6 +395,7 @@ button.sso-quick__move[data-on="true"] {
   display: flex;
   align-items: center;
   gap: var(--sso-s1);
+  max-width: var(--sso-measure);
   padding: var(--sso-s2) var(--sso-s2) 6px;
 }
 
@@ -399,6 +414,15 @@ button.sso-quick__move[data-on="true"] {
   flex: 1;
   min-width: 0;
   align-items: baseline;
+  /* Left, and it has to be said here.
+   *
+   * This is a <button>, so it inherits justify-content:center from the shared
+   * button rule - and `text-align` does nothing to a flex child, so the
+   * declaration below was never doing the job it looks like it is doing. The
+   * name sat centred in its own row. Invisible at 340px, where the name fills
+   * the row anyway; obvious the moment the panel is dragged wide, which is
+   * what a reader does once the maps are worth looking at. */
+  justify-content: flex-start;
   padding: 0;
   font-family: inherit;
   font-size: var(--sso-t-lead);
@@ -467,6 +491,7 @@ button.sso-quick__move[data-on="true"] {
  * to nothing above or below them - the only centred thing on a surface that is
  * otherwise a left-aligned column. */
 .sso-row--steps {
+  max-width: var(--sso-measure);
   justify-content: flex-start;
   gap: var(--sso-s1);
   margin-top: var(--sso-s1);
@@ -748,9 +773,17 @@ button.sso-track__learn[data-on="false"] {
  *
  * So the row centres its contents and the slack goes to the margins, where it
  * costs nothing. The reading still takes what it needs to show a number. */
+/* Grouped left, and capped.
+ *
+ * The panel is dragged wide once the maps are worth looking at - reported at
+ * 1290px - and a row of six controls with an auto margin in it does not become
+ * a better row at that width, it becomes two clusters a foot apart with a hole
+ * between them. The map WANTS the width; a row of buttons does not. So the
+ * strip is full-bleed and the controls stop at a width a hand can cross. */
 .sso-sync {
-  gap: 4px;
-  justify-content: center;
+  gap: var(--sso-s1);
+  justify-content: flex-start;
+  max-width: var(--sso-measure);
 }
 
 /* The reading with the two fine steps either side of it. Grouped so the row
@@ -846,18 +879,25 @@ button.sso-sync__align:hover:not(:disabled) {
  * It was a toast at the top of the screen, which is the length of the film away
  * from the button that raised it. Worse when the answer is a question - a
  * missed "use it?" reads as nothing having happened at all. */
+/* A sentence, not a banner.
+ *
+ * It was a filled full-width bar with a 2px accent edge, which at a wide panel
+ * is the biggest object on the card - spent on a line that repeats the number
+ * already showing in the field above it. It says the same thing quietly now
+ * and keeps its Undo, which is the part that is actually worth a control. */
 .sso-track__said {
   display: flex;
-  gap: 8px;
+  gap: var(--sso-s2);
   align-items: center;
-  margin: 7px 0 0;
-  padding: 5px 7px;
+  max-width: var(--sso-measure);
+  margin: 6px 0 0;
+  padding: 2px 0 2px 8px;
   font-size: var(--sso-t-small);
   line-height: 1.35;
-  color: var(--sso-ink-2);
-  background: var(--sso-fill);
-  border-left: 2px solid var(--sso-accent);
-  border-radius: var(--sso-r-ctl);
+  color: var(--sso-ink-3);
+  background: none;
+  border-left: 2px solid var(--sso-line);
+  border-radius: 0;
 }
 
 .sso-track__said[data-warn="true"] {
@@ -966,6 +1006,14 @@ button.sso-track__style {
   font-size: 12px;
   font-weight: 620;
   letter-spacing: -0.02em;
+}
+
+/* Held down while its window is open. Without this the second press is a
+ * guess: the reader cannot tell from the button whether the window they can
+ * see belongs to this card or to the other one. */
+button.sso-track__style[data-on="true"] {
+  color: var(--sso-ink);
+  background: var(--sso-fill-hover);
 }
 
 /* Two faces, and the armed one has to be unmistakable.
@@ -1087,9 +1135,15 @@ button.sso-quick__align {
  * to change - was visually subordinate to its own controls. A lead-size,
  * tabular, heavy number is what a reader should find first when they glance
  * down mid-scene. */
+/* Wide enough for the number it has to hold, in the separator the reader's
+ * locale uses. 66px fitted "-12.5" and clipped "4,369" - a Turkish decimal
+ * comma, four significant digits, at lead size and weight 700 - so the one
+ * reading on the card was showing four of its five characters. Reported with a
+ * screenshot of exactly that. Sized for a signed five-digit value plus the
+ * separator, which is more than the offset range can produce. */
 .sso-panel input.sso-sync__field {
   flex: none;
-  width: 66px;
+  width: 86px;
   padding: 4px 6px;
   font-size: var(--sso-t-lead);
   font-variant-numeric: tabular-nums;

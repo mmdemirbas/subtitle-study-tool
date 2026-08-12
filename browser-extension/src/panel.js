@@ -2016,7 +2016,22 @@
   let styleWindow = null;
 
   async function openStyle(slot) {
-    styleSlot = slot >= 0 && slot < api.trackCount ? slot : 0;
+    const wanted = slot >= 0 && slot < api.trackCount ? slot : 0;
+    /* The button that opened it closes it.
+     *
+     * A control that opens something and then does nothing when pressed again
+     * is a control that has stopped answering, and the reader's next move is to
+     * press it harder. Only when it is showing THIS subtitle: pressing Aa on
+     * the other card while the window is open is a request to see that one, not
+     * a request to close - so it switches rather than shutting, which is also
+     * the only way to compare the two without a trip through the close button.
+     */
+    if (styleWindow?.isOpen() && styleSlot === wanted) {
+      styleWindow.hide();
+      refresh(api.status());
+      return;
+    }
+    styleSlot = wanted;
     if (!styleWindow) {
       styleWindow = api.makeWindow({
         title: "Style",
@@ -3037,6 +3052,14 @@
         status.trackCount > 1 && status.keyTrack !== slot
           ? "Click to point the keys and the study rail at this subtitle"
           : "";
+      /* A toggle has to look like one while it is holding something open, or
+       * the second press is a guess. Only the card whose subtitle the window is
+       * actually showing is lit - the other card's Aa switches to that one. */
+      const styling = Boolean(styleWindow?.isOpen()) && styleSlot === slot;
+      card.styleButton.dataset.on = styling ? "true" : "false";
+      card.styleButton.setAttribute("aria-pressed", styling ? "true" : "false");
+      card.styleButton.title = styling ? "Close the style window" : "Colour, font, size, outline";
+
       card.learnChip.dataset.on = learning ? "true" : "false";
       /* "learning" is a state and "learn" is an invitation. The chip carried
        * the state's word in both positions, so an off switch read as a label

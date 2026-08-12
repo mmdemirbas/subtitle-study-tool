@@ -1662,7 +1662,7 @@
          * study on, and a case that asserts against whatever the one before it
          * happened to leave passes or fails by running order. */
         await window.__ssoStudy.setEnabled(false);
-        await sleep(160);
+        await until(() => !window.__ssoStudy.settings().enabled, "study would not switch off");
         if (face.learn.hidden) throw new Error("the learn chip is hidden");
         if (face.learn.dataset.on !== "false")
           throw new Error(`with study off the chip reads ${face.learn.dataset.on}`);
@@ -1679,30 +1679,42 @@
         const on = () => Boolean(window.__ssoStudy?.settings?.().enabled);
         // From a known off, whatever the case before this one left behind.
         await window.__ssoStudy.setEnabled(false);
-        await sleep(160);
-        if (on()) throw new Error("study would not switch off");
+        await until(() => !on(), "study would not switch off");
 
         learn.click();
-        await sleep(260);
-        if (!on()) throw new Error("pressing learn did not switch study on");
+        await until(on, "pressing learn did not switch study on");
         if (learn.dataset.on !== "true")
           throw new Error("study is on and the chip still reads off");
         /* And it built something. A switch that changes a setting without
          * building the rail is the reported failure - "I cannot see the study
-         * panel" - so the assertion is the box, not the flag. */
-        const rail = [...document.querySelectorAll("div")]
-          .find((d) => d.shadowRoot?.querySelector(".sso-rail"));
-        if (!rail) throw new Error("study is on and no rail was built");
-        const railBox = rail.getBoundingClientRect();
-        if (railBox.width === 0 || railBox.height === 0)
-          throw new Error(`the rail is ${Math.round(railBox.width)}\u00d7${Math.round(railBox.height)}`);
+         * panel" - so the assertion is the box, not the flag.
+         *
+         * Polled, because building the rail fetches two stylesheets: a fixed
+         * wait passes on a quiet run and fails on a loaded one, which is the
+         * flaky case this helper exists for. It cost three failures on one run
+         * and none on the next, which is worse than a failure. */
+        const railBox = await until(
+          () => {
+            const host = [...document.querySelectorAll("div")]
+              .find((d) => d.shadowRoot?.querySelector(".sso-rail"));
+            const box = host?.getBoundingClientRect();
+            return box && box.width > 0 && box.height > 0 ? box : null;
+          },
+          "study is on and no rail with a box was built",
+        );
+        if (railBox.width < 100)
+          throw new Error(`the rail is only ${Math.round(railBox.width)}px wide`);
 
         learn.click();
-        await sleep(260);
-        if (on()) throw new Error("unmarking the last subtitle did not switch study off");
-        // And left off, so the cases after this one start where they expect to.
+        await until(() => !on(), "unmarking the last subtitle did not switch study off");
+        /* And left off, with the rail actually gone, so the cases after this
+         * one start where they expect to. Returning before the teardown has
+         * finished is what left "15 word elements with study mode off". */
         await window.__ssoStudy.setEnabled(false);
-        await sleep(120);
+        await until(
+          () => ![...document.querySelectorAll("div")].some((d) => d.shadowRoot?.querySelector(".sso-rail")),
+          "the rail outlived study being switched off",
+        );
       });
 
       check("Remove asks twice, and forgets it was asked", async () => {
@@ -1766,8 +1778,38 @@
         // It says which subtitle it is about, because two windows can be open.
         const title = style.querySelector(".sso-win__title").textContent;
         if (!/subtitle\s*\d/i.test(title)) throw new Error(`the title reads "${title}"`);
-        style.querySelector(".sso-icon--close").click();
-        await sleep(120);
+
+        /* And the button that opened it closes it. A control that opens
+         * something and then does nothing when pressed again has stopped
+         * answering, and the reader's next move is to press it harder. */
+        const aa = card.querySelector(".sso-track__style");
+        if (aa.dataset.on !== "true")
+          throw new Error("the window is open and its button does not look pressed");
+        aa.click();
+        await sleep(200);
+        const shut = sheetNamed("style");
+        if (shut && shut.querySelector(".sso-sheet").getBoundingClientRect().width > 0)
+          throw new Error("pressing Aa again did not close the Style window");
+        if (aa.dataset.on !== "false")
+          throw new Error("it closed and the button still looks pressed");
+
+        /* Two cards, and the second one's Aa is a request to see THAT subtitle
+         * rather than a request to close - otherwise comparing the two means a
+         * trip through the close button every time. */
+        const other = [...panelShadow().querySelectorAll(".sso-track")].filter((c) => !c.hidden)[1];
+        if (other) {
+          aa.click();
+          await sleep(200);
+          other.querySelector(".sso-track__style").click();
+          await sleep(200);
+          const now = sheetNamed("style");
+          if (!now || now.querySelector(".sso-sheet").getBoundingClientRect().width === 0)
+            throw new Error("the other card's Aa closed the window instead of switching it");
+          if (!/subtitle\s*2/i.test(now.querySelector(".sso-win__title").textContent))
+            throw new Error("it switched to the wrong subtitle");
+          now.querySelector(".sso-icon--close").click();
+          await sleep(120);
+        }
       });
 
       check("a double-click on the name asks for a different subtitle", async () => {
