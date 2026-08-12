@@ -316,9 +316,12 @@
           .find((s) => s?.querySelector(".sso-sheet") &&
             new RegExp(word, "i").test(s.querySelector(".sso-win__title")?.textContent || ""));
       const sheetShadow = () => sheetNamed("settings");
+      /* The gear is a toggle, so this asks rather than presses blindly: a case
+       * that opened the settings and did not close them would otherwise have
+       * the next one SHUT them and then look for a window that is not there. */
       const openSettings = async () => {
-        [...panelShadow().querySelectorAll(".sso-win__head button")]
-          .find((b) => b.textContent === "⚙")?.click();
+        const gear = panelShadow().querySelector(".sso-icon--gear");
+        if (gear?.dataset.on !== "true") gear?.click();
         await sleep(220);
         return sheetShadow();
       };
@@ -1069,86 +1072,112 @@
         await sleep(120);
       });
 
-      check("the sync row fits on one line at every width the panel allows", async () => {
+      check("nothing on a card is cut off at any width the panel allows", async () => {
         /* Replaces an assertion that the offset field was under 80px wide -
          * a proxy for this, from when the row overflowed and pushed Reset out
          * of the panel. This measures the thing itself, at both ends of the
-         * range the corner grips allow. */
+         * range the corner grips allow.
+         *
+         * WITH A TIMING SET, which is the part that was missing. The row's
+         * previous check took the first non-hidden card - which has no offset,
+         * so no ⌫ - and passed while the second card rendered "Line u", its
+         * last control 30px past the card's right edge. A row check that only
+         * ever sees the narrower of the two states is not a row check.
+         *
+         * And it asserts the name has not been squeezed away, because that is
+         * the other thing this row's neighbours can do to it: give the name
+         * flex and a fixed-width sibling and it goes to zero, which is what
+         * "1 EN -EXCELLENCE" was. */
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        const row = card.querySelector(".sso-sync");
+        const slot = [...panelShadow().querySelectorAll(".sso-track")].indexOf(card);
         const host = panelShadow().host;
         const was = host.getBoundingClientRect().width;
-        const spans = [];
+        const wasOffset = window.__ssoApi.status().tracks[slot].offsetMs;
+        window.__ssoApi.setOffset(-12500, { slot, quiet: true });
+        await sleep(80);
 
-        for (const width of [280, 340, 640]) {
-          window.__ssoPanel.applySize(width);
-          await sleep(60);
-          if (row.scrollWidth > row.clientWidth + 1)
-            throw new Error(
-              `at ${width}px the row needs ${row.scrollWidth} and has ${row.clientWidth}`);
-          const nudges = row.querySelectorAll(".sso-nudge");
-          if (nudges.length !== 4) throw new Error(`${nudges.length} nudge buttons, want 4`);
-          for (const b of nudges) {
-            const box = b.getBoundingClientRect();
-            // 24px is the smallest comfortable pointer target.
-            if (box.width < 24 || box.height < 24)
-              throw new Error(
-                `at ${width}px a nudge button is ${Math.round(box.width)}×${Math.round(box.height)}`);
-          }
-          /* The words stay, at every width the grips allow. The row costs 232px
-           * against 236px usable at the 280px minimum, so there is no width at
-           * which hiding the only part of this row that says what it does buys
-           * anything. Measured, after an earlier version hid them below 320. */
-          // The fine steps carry an empty span by design; the whole steps are
-          // the ones that must still read as words.
-          const said = [...row.querySelectorAll(".sso-nudge__word")].filter((n) => n.textContent);
-          if (said.length !== 2) throw new Error(`${said.length} words on the row, want 2`);
-          for (const word of said) {
-            if (word.getBoundingClientRect().width === 0)
-              throw new Error(`at ${width}px the buttons lost their words`);
-          }
-          // And the reading is still readable, not squeezed to nothing by the
-          // group that takes the slack.
-          const field = row.querySelector(".sso-sync__field");
-          if (field.getBoundingClientRect().width < 50)
-            throw new Error(
-              `at ${width}px the reading is ${Math.round(field.getBoundingClientRect().width)}px`);
+        try {
+          for (const width of [280, 340, 420, 640]) {
+            window.__ssoPanel.applySize(width);
+            await sleep(80);
+            const edge = card.getBoundingClientRect().right;
 
-          /* How much of the row the five controls actually span. The gap
-           * between a whole step and the fine step beside it is the thing being
-           * held: they are one control at two sizes and have to read as a pair.
-           */
-          const boxes = [...nudges].map((b) => b.getBoundingClientRect());
-          spans.push({
-            width,
-            span: Math.max(...boxes.map((b) => b.right)) - Math.min(...boxes.map((b) => b.left)),
-            pair: boxes[1].left - boxes[0].right,
-          });
+            for (const control of card.querySelectorAll("button, input")) {
+              if (control.hidden || control.offsetParent === null) continue;
+              const box = control.getBoundingClientRect();
+              const what = control.textContent.trim() || control.className;
+              // Past the card's own edge is a control rendered half-drawn.
+              if (box.right > edge + 1)
+                throw new Error(
+                  `at ${width}px "${what}" runs ${Math.round(box.right - edge)}px past the card`);
+              // 24px is the smallest comfortable pointer target.
+              if (box.width < 24 || box.height < 24)
+                throw new Error(
+                  `at ${width}px "${what}" is ${Math.round(box.width)}×${Math.round(box.height)}`);
+            }
+
+            const name = card.querySelector(".sso-track__name").getBoundingClientRect().width;
+            if (name < 40)
+              throw new Error(`at ${width}px the subtitle's name is ${Math.round(name)}px wide`);
+
+            const field = card.querySelector(".sso-sync__field").getBoundingClientRect().width;
+            if (field < 50)
+              throw new Error(`at ${width}px the reading is ${Math.round(field)}px`);
+          }
+        } finally {
+          window.__ssoPanel.applySize(was);
+          window.__ssoApi.setOffset(wasOffset, { slot, quiet: true });
+          await sleep(80);
         }
+      });
 
-        /* The group does not grow with the panel.
+      check("the controls at a right edge are AT the right edge", async () => {
+        /* Reported with a screenshot: "buttons at the right edge should be
+         * aligned to the right edge: Line up all, X, Line up". They were not,
+         * and the cause was a --sso-measure:560px cap this sheet put on every
+         * row - written from a 2x screenshot of a 645px panel read as 1290px,
+         * when MAX_WIDTH is 640. So the cap could never bind on proximity
+         * grounds and only ever held the right-hand controls short of the edge.
          *
-         * It used to: `space-between` on the row with `flex: 1` on the middle
-         * group handed every spare pixel to the middle and then centred inside
-         * it, so « and ‹ drifted apart as the panel widened. Measured before
-         * the fix, the four buttons spanned 236, 296 and 596px at 280, 340 and
-         * 640 - and the gap between a whole step and its fine step went 8, 38,
-         * 188px. After, 229px and 4px at all three. 24px of drift is slack for
-         * rounding and for the reading growing by a digit. */
-        const drift = Math.max(...spans.map((s) => s.span)) - Math.min(...spans.map((s) => s.span));
-        if (drift > 24)
-          throw new Error(
-            `the sync group spreads with the panel: ${spans
-              .map((s) => `${s.width}px→${Math.round(s.span)}`)
-              .join(", ")}`);
-        for (const s of spans) {
-          if (s.pair > 16)
-            throw new Error(
-              `at ${s.width}px the whole step and the fine step are ${Math.round(s.pair)}px apart`);
-        }
+         * Checked at the widest the grips allow, because that is the only width
+         * where a cap of any kind could show. Each control is measured against
+         * the box it belongs to - the card for a card control, the panel body
+         * for a shared one - so this stays true if the paddings change. */
+        await window.__ssoApi.attach({ cues: CUES, label: "TR · edge", fileId: 777, slot: 1 });
+        await window.__ssoPanel.show();
+        const host = panelShadow().host;
+        const was = host.getBoundingClientRect().width;
+        window.__ssoPanel.applySize(640);
+        await sleep(160);
 
-        window.__ssoPanel.applySize(was);
-        await sleep(60);
+        /* Put the panel and the slot back whatever happens. Without the finally
+         * a failure here left a second subtitle attached and the panel at
+         * 640px, and the next case - which asserts that an EMPTY slot draws no
+         * strip - failed too. One defect, two red cases, and the second one
+         * pointing at innocent code. */
+        try {
+          const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+          const quick = panelShadow().querySelector(".sso-quick");
+          const wide = [
+            ["Line up all", panelShadow().querySelector(".sso-quick__align"), quick],
+            ["the card's close", card.querySelector(".sso-track__remove"), card],
+            ["Line up", card.querySelector(".sso-sync__align"), card],
+          ];
+
+          const loose = [];
+          for (const [name, control, within] of wide) {
+            if (!control || control.hidden) throw new Error(`${name} is not on screen`);
+            // The card's own padding is 12px; anything past that is a control
+            // that stopped short of the edge it is meant to sit on.
+            const gap = within.getBoundingClientRect().right - control.getBoundingClientRect().right;
+            if (gap > 14) loose.push(`${name} is ${Math.round(gap)}px short`);
+          }
+          if (loose.length) throw new Error(loose.join(", "));
+        } finally {
+          window.__ssoPanel.applySize(was);
+          window.__ssoApi.detach(1);
+          await sleep(120);
+        }
       });
 
       /* --- the timeline strip --------------------------------------------------
@@ -1177,15 +1206,38 @@
         return out;
       };
 
+      /* Mean-subtracted and normalised by the overlap, which is what a
+       * cross-correlation is and what this was not.
+       *
+       * It multiplied the two signals raw and took the largest sum. On a sparse
+       * strip - every line a 2px tick, the picture this suite was written
+       * against - that works, because a wrong lag lines ticks up with nothing
+       * and scores zero. On a strip where each line is a BLOCK as long as it is
+       * on screen, dialogue fills 74% of a fifteen-second window (measured on
+       * burstyCues), and the raw sum is then dominated by how much of the two
+       * signals overlap at all - which is largest at lag 0 whatever the picture
+       * says. It reported 0ms for a subtitle moved 4200ms, and the same signals
+       * through the form below report 4209ms, one pixel being 59.
+       *
+       * So: subtract the mean, so a solid band contributes nothing and only the
+       * pattern scores; divide by the number of pairs, so a lag is not punished
+       * for the samples that fall off the end; and refuse a lag with less than
+       * a third of the signal left to judge on. */
       const bestLag = (a, b) => {
+        const mean = (v) => v.reduce((sum, x) => sum + x, 0) / v.length;
+        const ma = mean(a);
+        const mb = mean(b);
         let best = 0;
-        let bestScore = -1;
+        let bestScore = -Infinity;
         for (let lag = -a.length + 1; lag < a.length; lag++) {
           let score = 0;
+          let pairs = 0;
           for (let x = 0; x < a.length; x++) {
             const j = x + lag;
-            if (j >= 0 && j < b.length) score += a[x] * b[j];
+            if (j >= 0 && j < b.length) { score += (a[x] - ma) * (b[j] - mb); pairs++; }
           }
+          if (pairs < a.length / 3) continue;
+          score /= pairs;
           if (score > bestScore) { bestScore = score; best = lag; }
         }
         return best;
@@ -1285,6 +1337,84 @@
         video.currentTime = was;
         window.__ssoApi.detach(1);
         await sleep(100);
+      });
+
+      check("a line's length and how much it says are both in the picture", async () => {
+        /* Asked for directly: the strip "shows where a subtitle starts, but it
+         * doesn't show where it ends or how many chars/words it have - this
+         * could help with syncing". It could, and it is the difference between
+         * a matchable picture and an unmatchable one: two subtitlers cutting
+         * the same exchange differently produce two unrelated patterns of
+         * STARTS from identical dialogue, while the stretch of film each line
+         * covers and the amount of text in it survive being cut differently.
+         *
+         * Two cues in one window, far enough apart to read separately: one long
+         * and wordy, one brief and short. The long one has to be wider, and the
+         * wordy one taller. Both are measured off the rendered canvas, so this
+         * fails if the drawing stops carrying either. */
+        const was = video.currentTime;
+        video.currentTime = 600;
+        await sleep(80);
+        await window.__ssoApi.attach({
+          cues: [
+            { start: 596000, end: 600000, text: "A".repeat(90) },
+            { start: 602000, end: 602600, text: "Oh" },
+          ],
+          label: "TR · shapes", fileId: 505, slot: 1,
+        });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        await sleep(200);
+
+        const strip = mapStrips()[1];
+        const canvas = strip.querySelector(".sso-map__canvas");
+        const zoom = strip.querySelector(".sso-map__zoom");
+        for (let i = 0; i < MAP_STEPS * 2 && zoom.textContent !== "15s"; i++) {
+          zoom.click();
+          await sleep(40);
+        }
+        await sleep(150);
+
+        /* Per column: is there ink, and how tall is it. The playhead is drawn
+         * full height in its own colour, so a column reaching the very top is
+         * the playhead and not a line. */
+        const px = canvas.getContext("2d")
+          .getImageData(0, 0, canvas.width, canvas.height).data;
+        const tall = new Array(canvas.width).fill(0);
+        for (let x = 0; x < canvas.width; x++) {
+          let top = canvas.height;
+          for (let y = 0; y < canvas.height; y++) {
+            if (px[(y * canvas.width + x) * 4 + 3] > 0) { top = y; break; }
+          }
+          tall[x] = top === 0 ? 0 : canvas.height - top;
+        }
+
+        // The two runs of ink, left to right.
+        const runs = [];
+        for (let x = 0; x < canvas.width; x++) {
+          if (!tall[x]) continue;
+          const start = x;
+          let peak = 0;
+          while (x < canvas.width && tall[x]) { peak = Math.max(peak, tall[x]); x++; }
+          runs.push({ width: x - start, height: peak });
+        }
+        if (runs.length !== 2)
+          throw new Error(`${runs.length} blocks drawn for two lines`);
+
+        const [long_, brief] = runs;
+        // 4000ms against 600ms in the same window: the wide one has to be
+        // visibly wider, not wider by a rounding.
+        if (long_.width < brief.width * 3)
+          throw new Error(
+            `a 4s line is ${long_.width}px and a 0.6s line ${brief.width}px - the end is not drawn`);
+        // 90 characters against 2.
+        if (long_.height <= brief.height)
+          throw new Error(
+            `a 90-character line is ${long_.height}px tall and a 2-character one ` +
+            `${brief.height}px - how much is said is not drawn`);
+
+        video.currentTime = was;
+        window.__ssoApi.detach(1);
+        await sleep(120);
       });
 
       check("dragging the strip moves the subtitle by what it was dragged", async () => {
@@ -1611,23 +1741,45 @@
           throw new Error(`title-bar controls carrying a fill at rest: ${loud.join(", ")}`);
       });
 
-      check("the nudge buttons say what is wrong, not which way to push", async () => {
-        /* An arrow re-introduces exactly the question the words remove: film
-         * time is stream time minus the offset, so a larger offset shows the
-         * line later, and nobody should have to derive that mid-film. The
-         * chevron is a magnitude and never stands alone. */
+      check("a control with a key on it says which key", async () => {
+        /* The two playback buttons have keyboard bindings that work while the
+         * panel is shut and while the film is fullscreen - which is most of the
+         * time anybody wants them - and the only place that said so was a grid
+         * inside Settings. A shortcut nobody is told about is a shortcut nobody
+         * has. Asked for directly: "if something has a keyboard shortcut, it
+         * should be shown on the button with a smaller dimmed text".
+         *
+         * And the hint is the BINDING, not a printed constant: rebinding the
+         * key has to change what the button says, or it is decoration that goes
+         * stale the first time somebody uses the settings screen. */
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        const words = [...card.querySelectorAll(".sso-nudge__word")]
-          .map((n) => n.textContent).filter(Boolean);
-        // One word per side, on the whole step. Both buttons on a side carrying
-        // it reads as a repeat rather than as two sizes of one thing.
-        if (words.join(",") !== "Early,Late")
-          throw new Error(`the buttons read ${words.join(", ") || "nothing"}`);
-        for (const b of card.querySelectorAll(".sso-nudge")) {
-          if (!b.querySelector(".sso-nudge__step")) throw new Error("a nudge button has no step mark");
-          // The full sentence stays reachable even where the word is hidden.
-          if (!/spoken/.test(b.title)) throw new Error(`no plain-language title on "${b.textContent}"`);
-        }
+        const steps = [...card.querySelectorAll(".sso-line-step")];
+        if (steps.length !== 2) throw new Error(`${steps.length} playback buttons, want 2`);
+
+        const keys = window.__ssoApi.status().settings.keys;
+        window.__ssoApi.updateSettings({ keysEnabled: true, keys: { ...keys, nextLine: "m" } });
+        await sleep(150);
+
+        const next = steps.find((b) => /Next/.test(b.textContent));
+        const hint = next.querySelector(".sso-key-hint");
+        if (!hint || hint.hidden) throw new Error("Next carries no key hint");
+        if (hint.textContent !== "M")
+          throw new Error(`the hint reads "${hint.textContent}" after binding m`);
+        // Smaller and quieter than the label it sits beside, or it competes
+        // with the word that says what the button does.
+        const label = getComputedStyle(next);
+        const mark = getComputedStyle(hint);
+        if (parseFloat(mark.fontSize) >= parseFloat(label.fontSize))
+          throw new Error(`the hint is ${mark.fontSize} against a ${label.fontSize} label`);
+
+        // Unbound means nothing to advertise, and "off" beside a working
+        // control invites the reading that the control is off.
+        window.__ssoApi.updateSettings({ keys: { ...keys, nextLine: "" } });
+        await sleep(150);
+        if (!hint.hidden || hint.textContent)
+          throw new Error(`an unbound control still shows "${hint.textContent}"`);
+        window.__ssoApi.updateSettings({ keys });
+        await sleep(120);
       });
 
       check("every verb a subtitle has is on its own card face", async () => {
@@ -1812,6 +1964,83 @@
         }
       });
 
+      check("every button that opens a window closes it, twice pressed", async () => {
+        /* Asked for on the gear, after the same fix landed on Aa: "convert it
+         * to toggle, so one click opens the settings panel, and second click
+         * closes it". Written against every window-opening button we draw
+         * rather than against the one that was reported, because that is what
+         * makes it a rule instead of a patch - the rail's own gear had the
+         * defect too and nobody had pressed it twice yet. */
+        await window.__ssoPanel.show();
+        /* Study on, so the rail's own gear exists to be pressed. An earlier
+         * version of this skipped that arm when the rail was not up, which is
+         * how it passed against a rail gear that did not toggle at all -
+         * measured, by reverting only that half. A check that quietly covers
+         * less than it claims is worse than one that fails. */
+        const studyWas = Boolean(window.__ssoStudy?.settings?.().enabled);
+        await window.__ssoStudy.setEnabled(true);
+        await until(() => Boolean(railShadow()), "the study rail never appeared");
+        await sleep(150);
+
+        const openers = [
+          ["the panel's settings", () => panelShadow().querySelector(".sso-icon--gear"), "settings"],
+          ["study's settings", () => railShadow().querySelector(".sso-icon--gear"), "study"],
+        ];
+        try {
+        for (const [name, find, word] of openers) {
+          const button = find();
+          if (!button) throw new Error(`${name} has no button to press`);
+          button.click();
+          await sleep(280);
+          const sheet = sheetNamed(word);
+          if (!sheet || sheet.querySelector(".sso-sheet").getBoundingClientRect().width === 0)
+            throw new Error(`${name} did not open`);
+          if (button.dataset.on !== "true")
+            throw new Error(`${name} is open and its button does not look pressed`);
+
+          button.click();
+          await sleep(220);
+          const after = sheetNamed(word);
+          if (after && after.querySelector(".sso-sheet").getBoundingClientRect().width > 0)
+            throw new Error(`pressing ${name} again did not close it`);
+          if (button.dataset.on !== "false")
+            throw new Error(`${name} closed and its button still looks pressed`);
+        }
+        } finally {
+          await window.__ssoStudy.setEnabled(studyWas);
+          await sleep(120);
+        }
+      });
+
+      check("two presses in the same turn do not open two of anything", async () => {
+        /* Reported as a suspicion and it was right: "there are async
+         * programming problems that would cause to create multiple study panes
+         * for example". makeWindow.show() set `open` only AFTER awaiting
+         * chrome.storage for its remembered size, so isOpen() answered "shut"
+         * for the whole round trip - and every one of these buttons is a toggle
+         * that asks isOpen() to decide what a press means. Two presses inside
+         * that window both read "shut" and both opened.
+         *
+         * Pressed with no await between them, which is the only way to be
+         * inside that window on purpose. Two presses is open-then-close, so the
+         * window must end up SHUT - and there must be exactly one of it. */
+        await window.__ssoPanel.show();
+        await sleep(150);
+        const gear = panelShadow().querySelector(".sso-icon--gear");
+        gear.click();
+        gear.click();
+        await sleep(320);
+
+        const sheets = [...document.querySelectorAll("div")]
+          .map((d) => d.shadowRoot?.querySelector(".sso-sheet"))
+          .filter(Boolean)
+          .filter((s) => /settings/i.test(s.querySelector(".sso-win__title")?.textContent || ""));
+        if (sheets.length > 1) throw new Error(`${sheets.length} settings windows exist`);
+        const shown = sheets.filter((s) => s.getBoundingClientRect().width > 0);
+        if (shown.length) throw new Error("open-then-close in one turn left the window open");
+        if (gear.dataset.on !== "false") throw new Error("the button still looks pressed");
+      });
+
       check("a double-click on the name asks for a different subtitle", async () => {
         /* Replacing one is a question about WHICH FILE this is, and the name is
          * that answer already on the card. Double, not single: a single click
@@ -1888,19 +2117,26 @@
         if (track.rate !== 1) throw new Error(`rate left at ${track.rate}`);
       });
 
-      check("the big step moves further than the small one", async () => {
+      check("the reading is rounded to hundredths, whatever the offset is", async () => {
+        /* Reported: "sync diff decimals should be limited, it shouldn't show
+         * something like 1,66666666". The field printed
+         * `String(Math.round(offsetMs) / 1000)` - exact, and therefore ragged:
+         * a drag lands on 8958ms and the card reads 8.958, which in a locale
+         * whose decimal mark is a comma renders as "8,958" and looks like eight
+         * thousand.
+         *
+         * Two places is what content.js already says everywhere else, and a
+         * FIXED two is what stops a tabular figure shuffling sideways under a
+         * drag that rewrites it several times a second - so the check is on the
+         * shape of the string, not merely on its length. */
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        const step = async (selector) => {
-          window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
-          await sleep(30);
-          card.querySelector(selector).click();
-          await sleep(40);
-          return Math.abs(window.__ssoApi.status().tracks[0].offsetMs);
-        };
-        const small = await step(".sso-nudge--small");
-        const large = await step(".sso-nudge--large");
-        if (!(large > small))
-          throw new Error(`a big step moved ${large}ms and a small one ${small}ms`);
+        const field = card.querySelector(".sso-sync__field");
+        for (const [ms, want] of [[8958, "8.96"], [1667, "1.67"], [-12500, "-12.50"], [0, "0.00"]]) {
+          window.__ssoApi.setOffset(ms, { slot: 0, quiet: true });
+          await sleep(60);
+          if (field.value !== want)
+            throw new Error(`${ms}ms reads "${field.value}", want "${want}"`);
+        }
         window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
         await sleep(30);
       });

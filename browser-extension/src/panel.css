@@ -31,16 +31,17 @@
   --sso-accent: #4c8bf5;
   --sso-accent-ink: #93b9fb;
 
-  /* How wide a row of controls is allowed to get.
+  /* There is no measure cap on a row, and the one that was here was a mistake
+   * worth recording.
    *
-   * The panel is dragged wide once the maps are worth looking at - reported at
-   * 1290px - and everything on a card except the map is worse for it. At that
-   * width the head put the subtitle's name at the far left and the four
-   * controls that act on it 1200px away at the far right: the proximity rule
-   * broken by dragging a corner. A control that operates on a thing sits near
-   * that thing. The strip is the one element that genuinely reads better
-   * wider, so it alone is full-bleed. */
-  --sso-measure: 560px;
+   * It read `--sso-measure: 560px` and every row on a card honoured it, on the
+   * argument that the panel gets dragged to 1290px and a control 1200px from
+   * the name it acts on breaks proximity. The panel cannot be dragged to
+   * 1290px: MAX_WIDTH in panel.js is 640, and the screenshot the number came
+   * from was a 2x capture of a 645px window. So the cap never protected
+   * anything - it just held every right-hand control 80px short of the card's
+   * right edge, which is the ragged edge reported next: "buttons at the right
+   * edge should be aligned to the right edge". Rows fill the card. */
 
   /* The surface and the type scale are on .sso-win in chrome.css: they belong
    * to every window here, and declaring them on this one left the settings
@@ -53,22 +54,14 @@
   background: rgba(19, 21, 26, 0.97);
 }
 
-/* --- head ------------------------------------------------------------------- */
-
-/* The count of what is attached, beside the name. The title bar is the one
- * part of a folded panel still on screen, so it carries the state that decides
- * whether it is worth unfolding. */
-.sso-panel__state {
-  flex: none;
-  font-size: var(--sso-t-micro);
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  color: var(--sso-ink-3);
-}
-
-.sso-panel__state[data-on="true"] {
-  color: var(--sso-accent-ink);
-}
+/* --- head -------------------------------------------------------------------
+ *
+ * The name of the window and its three controls, and nothing else. There was a
+ * "2 attached" / "nothing attached" count beside the title; it said in four
+ * quiet words what the body directly beneath says in two named cards or in a
+ * designed empty state, so it was a worse copy of what the reader was already
+ * looking at. See the note in panel.js.
+ */
 
 /* --- sections -------------------------------------------------------------- */
 
@@ -260,7 +253,6 @@ button.sso-add:hover:not(:disabled) {
 /* Same cap, same reason: three icons and two words scattered across 1290px
  * read as unrelated controls rather than as one row. */
 .sso-quick {
-  max-width: var(--sso-measure);
   /* Wraps rather than clips. At the 280px the corner grips allow, the row is
    * three arrangement icons, Move, Line up all and Study - about 300px of
    * controls. Something has to give, and the choices are dropping a label,
@@ -268,19 +260,20 @@ button.sso-add:hover:not(:disabled) {
    * width where it happens and keeps every control named; the other two cost a
    * control or its name at exactly the size where guessing is hardest. */
   flex-wrap: wrap;
-  row-gap: 6px;
-  margin-bottom: 8px;
-  padding-bottom: 8px;
+  row-gap: var(--sso-s2);
+  margin-bottom: var(--sso-s3);
+  padding-bottom: var(--sso-s3);
   border-bottom: 1px solid var(--sso-line-soft);
 }
 
-/* The spacer only earns its keep while everything is on one line; wrapped, it
- * would push Study onto a line of its own with a gap above it. */
-@container (max-width: 330px) {
-  .sso-quick > .sso-grow {
-    display: none;
-  }
-}
+/* The spacer is gone and Line up all takes an auto margin instead.
+ *
+ * It was a `.sso-grow` element, hidden below 330px so it could not push the
+ * last control onto a line of its own - which meant that at the width the
+ * panel opens in, Line up all sat in the middle of the row with 90px of empty
+ * card to its right. Reported: "buttons at the right edge should be aligned to
+ * the right edge". An auto margin does the same job without an element, and
+ * survives the wrap: on a wrapped line it still sits at that line's right. */
 
 .sso-arr-group {
   display: flex;
@@ -391,12 +384,37 @@ button.sso-quick__move[data-on="true"] {
   margin-top: var(--sso-s2);
 }
 
+/* Name, switch, verbs - three things, two gaps, and the gaps say so.
+ *
+ * Everything in here shared one 4px gap, so the name ran into the "learn"
+ * switch and the switch ran into three glyphs, and the top right of a card was
+ * a strip the eye had to take apart before it could aim at one control.
+ * Reported as "too crowded", and separately as "learn button and the subtitle
+ * name is too close to each other". A step of the spacing scale between groups
+ * and the smallest step inside them is what makes a group a group. */
+/* The gap is one step of the scale, not two, and the measurement is why.
+ *
+ * At 12px between the three groups the head was over-subscribed and the name -
+ * the one thing on the card that says which subtitle this is - was the flex
+ * item that gave way. Measured on a 60-character release name: the name
+ * element rendered 0px wide at both 280px and 340px, and 68px at 420. So the
+ * card said "1 EN -EXCELLENCE" at the width it opens in. 8px still reads as a
+ * group boundary against the 4px inside the verb group, and gives the name
+ * back what it needs. */
 .sso-track__head {
   display: flex;
   align-items: center;
+  gap: var(--sso-s2);
+  padding: var(--sso-s3) var(--sso-s3) var(--sso-s2);
+}
+
+/* The three verbs, hard against the card's right edge. Tight inside, because
+ * they are one group; the gap before them belongs to the head. */
+.sso-track__acts {
+  display: flex;
+  flex: none;
   gap: var(--sso-s1);
-  max-width: var(--sso-measure);
-  padding: var(--sso-s2) var(--sso-s2) 6px;
+  margin-left: auto;
 }
 
 /* Truncated in the middle, not at the end.
@@ -411,9 +429,10 @@ button.sso-quick__move[data-on="true"] {
  * exactly as it did - the button is the semantics, not the appearance. */
 .sso-track__label {
   display: flex;
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
   align-items: baseline;
+  gap: 6px;
   /* Left, and it has to be said here.
    *
    * This is a <button>, so it inherits justify-content:center from the shared
@@ -425,15 +444,50 @@ button.sso-quick__move[data-on="true"] {
   justify-content: flex-start;
   padding: 0;
   font-family: inherit;
-  font-size: var(--sso-t-lead);
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  /* Body size, not lead, and 600 rather than 650.
+   *
+   * What goes here is a release name - "The.Americans.2013.S02E06.Behin...
+   * -EXCELLENCE" - and a filename set at headline size and weight is the
+   * "fonts are not nice, especially on the subtitle names" report. It is the
+   * most important thing on the card, and it wins by being the only thing on
+   * its line set in full ink while the number and the language beside it are
+   * small and grey. That is hierarchy done with contrast rather than with
+   * size, which is what a line of machine-generated text wants. */
+  font-size: var(--sso-t-body);
+  font-weight: 600;
+  letter-spacing: 0;
   text-align: left;
   color: var(--sso-ink);
   white-space: nowrap;
   background: none;
   border: 0;
   cursor: pointer;
+}
+
+/* Which card this is. A figure, not "1." - the full stop was doing the work of
+ * a separator in a line that now separates by treatment. Tabular so the two
+ * cards' names start at the same x. */
+.sso-track__no {
+  flex: none;
+  font-size: var(--sso-t-small);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  color: var(--sso-ink-3);
+}
+
+/* What the file is in. The one piece of filing here that is worth reading at a
+ * glance - it is how you tell the two cards apart before you have read either
+ * name - so it is set as a label rather than as text: uppercase, tracked, in a
+ * hairline pill that says "this is a category, not a word in the title". */
+.sso-track__lang {
+  flex: none;
+  padding: 1px 5px;
+  font-size: var(--sso-t-micro);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--sso-ink-2);
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px var(--sso-line);
 }
 
 /* One subtitle is not a choice, so the name stops offering one - without
@@ -443,18 +497,39 @@ button.sso-quick__move[data-on="true"] {
   cursor: default;
 }
 
+/* The name gives way first, but never all the way to nothing.
+ *
+ * Both halves shrink now. The tail used to be `flex: none` on the argument
+ * that the last token is what tells two subtitles apart - true, and it made
+ * the tail the only survivor on a narrow card, because a 90px fixed block in
+ * a 292px row leaves the name whatever is left, which was zero. A card reading
+ * "1 EN -EXCELLENCE" identifies nothing at all.
+ *
+ * So the name keeps a floor of about five characters and the tail truncates
+ * once that floor is reached. Something of both, rather than all of one. */
+/* Sized by its text, and shrinking before the tail does - not growing.
+ *
+ * `flex: 1 1 auto` here made the name take every spare pixel of a wide card
+ * and push the tail to the far right, so a 640px panel read
+ * "the.americans.s02e06.1080p.web            -EXCELLENCE" with a hole in the
+ * middle of one name. The slack belongs to the label as a whole, after both
+ * halves have what they need. */
 .sso-track__name {
-  min-width: 0;
+  flex: 0 1 auto;
+  min-width: 3.4em;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .sso-track__tail {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .sso-track__body {
-  padding: 0 var(--sso-s2) var(--sso-s2);
+  padding: 0 var(--sso-s3) var(--sso-s3);
 }
 
 /* --- where this subtitle speaks ---------------------------------------------
@@ -480,21 +555,7 @@ button.sso-quick__move[data-on="true"] {
   display: flex;
   gap: var(--sso-s1);
   align-items: stretch;
-  margin: 0 0 var(--sso-s2);
-}
-
-/* The steps sit closer to the row above than to the card's edge, because they
- * belong to the subtitle rather than to the gap after it. */
-/* Left, with everything else on the card.
- *
- * Centred, they sat in the middle of a row whose right half was empty, aligned
- * to nothing above or below them - the only centred thing on a surface that is
- * otherwise a left-aligned column. */
-.sso-row--steps {
-  max-width: var(--sso-measure);
-  justify-content: flex-start;
-  gap: var(--sso-s1);
-  margin-top: var(--sso-s1);
+  margin: 0 0 var(--sso-s3);
 }
 
 /* The map is the card's content, so it is a well cut into the surface rather
@@ -510,7 +571,8 @@ button.sso-quick__move[data-on="true"] {
   position: relative;
   flex: 1;
   min-width: 0;
-  height: 30px;
+  /* Must match MAP_HEIGHT in panel.js. */
+  height: 38px;
   overflow: hidden;
   cursor: ew-resize;
   background: rgba(0, 0, 0, 0.18);
@@ -566,7 +628,7 @@ button.sso-quick__move[data-on="true"] {
 .sso-map__zoom {
   flex: none;
   width: 34px;
-  min-height: 30px;
+  min-height: 38px;
   padding: 0;
   font: inherit;
   font-size: var(--sso-t-micro);
@@ -665,8 +727,8 @@ button.sso-quick__move[data-on="true"] {
  * name gets its characters back. See the head's own note on hierarchy. */
 button.sso-track__learn {
   flex: none;
-  min-height: var(--sso-h-chip);
-  padding: 0 7px;
+  min-height: var(--sso-h-ctl);
+  padding: 0 var(--sso-s2);
   font-size: var(--sso-t-small);
   font-weight: 600;
   letter-spacing: 0;
@@ -689,9 +751,22 @@ button.sso-track__learn:hover:not(:disabled) {
  * the card that says which subtitle this is. So the word goes and the mark
  * stays, with its title text. The chip that said which one the keys move is
  * gone entirely: the card says that now, by being the selected one. */
-@container (max-width: 310px) {
+/* 400px, not 310. The threshold was set when the head carried four small
+ * glyphs and no language pill; it now carries a 26px verb group and a 25px
+ * label as well, and the measurement says the word costs 32px the name does
+ * not have below 400. Above it the word is back, because the word is what
+ * makes this control explain itself. */
+@container (max-width: 400px) {
+  /* The WORD goes; the target does not. `padding: 1px 3px` with no text
+   * collapsed the button to 13x26, which is half the smallest comfortable
+   * pointer target and exactly the defect the "every verb is on the face"
+   * check was written to catch - a verb taken out of a menu and drawn as a
+   * sliver is worse than the menu was. The button stays square and the dot
+   * sits in the middle of it. */
   button.sso-track__learn {
-    padding: 1px 3px;
+    justify-content: center;
+    min-width: var(--sso-h-ctl);
+    padding: 0;
     font-size: 0;
   }
 
@@ -726,8 +801,10 @@ button.sso-track__learn[data-on="false"] {
   box-shadow: inset 0 0 0 1px var(--sso-line);
 }
 
-/* Narrow, the pill is a dot: solid when studied, an empty ring when not. */
-@container (max-width: 310px) {
+/* Narrow, the pill is a dot: solid when studied, an empty ring when not. Same
+ * threshold as the rule that drops the word - two different numbers here left
+ * a card between them showing a filled amber pill with no text in it. */
+@container (max-width: 400px) {
   button.sso-track__learn[data-on="true"] {
     background: none;
   }
@@ -755,80 +832,55 @@ button.sso-track__learn[data-on="false"] {
   opacity: 0.5;
 }
 
-/* --- telling the subtitle to move -------------------------------------------
+/* --- one row, two groups ----------------------------------------------------
  *
- * The two buttons state the complaint, so they are the widest things in the
- * row and the readout between them is what changed as a result.
+ * Left: move the picture by this subtitle's lines. Right, against the card's
+ * edge: what this subtitle's timing is, and the control that works it out.
+ * They are unrelated verbs sharing a row, so which half a control belongs to
+ * has to be answerable without reading it - and the answer is which end it
+ * sits at. The four nudge buttons that used to fill this row are gone; the map
+ * above replaced them. See the note in panel.js.
  */
-
-/* One group in the middle of the row, not five things spread across it.
+/* Wraps rather than clips, and the measurement is why.
  *
- * This was `justify-content: space-between` with the fine steps on `flex: 1`,
- * which handed every spare pixel to the middle group and then centred inside
- * it - so the whole step and the fine step next to it drifted apart as the
- * panel widened. Measured, the gap between « and ‹ was 8px at the 280px
- * minimum, 38px at 340 and 188px at the 640px maximum. Two buttons that are
- * the same control at two sizes have to read as a pair at every width the
- * corner grips allow.
- *
- * So the row centres its contents and the slack goes to the margins, where it
- * costs nothing. The reading still takes what it needs to show a number. */
-/* Grouped left, and capped.
- *
- * The panel is dragged wide once the maps are worth looking at - reported at
- * 1290px - and a row of six controls with an auto margin in it does not become
- * a better row at that width, it becomes two clusters a foot apart with a hole
- * between them. The map WANTS the width; a row of buttons does not. So the
- * strip is full-bleed and the controls stop at a width a hand can cross. */
+ * The two groups cost 137px and 185px, against 292px of usable card at the
+ * 340px the panel opens in - so on any subtitle with a timing to clear, the
+ * extra ⌫ pushed Line up past the card's right edge and it rendered as
+ * "Line u". It was invisible to the row's own check, which measured the FIRST
+ * card - the one with no offset and therefore no ⌫. A wrapped second line
+ * costs 34px at the two narrow widths and keeps every control whole; from
+ * 420px up it is one line, which is where the panel is used once the maps are
+ * worth looking at. */
 .sso-sync {
-  gap: var(--sso-s1);
+  gap: var(--sso-s2);
+  row-gap: var(--sso-s2);
+  flex-wrap: wrap;
   justify-content: flex-start;
-  max-width: var(--sso-measure);
 }
 
-/* The reading with the two fine steps either side of it. Grouped so the row
- * reads outward from the number: fine next to it, whole at the edges. Sized by
- * its contents rather than by the row, capped so a long number cannot push the
- * whole steps off the ends. */
-.sso-sync__fine {
+.sso-sync__play,
+.sso-sync__time {
   display: flex;
-  flex: 0 1 auto;
+  flex: none;
   align-items: center;
-  justify-content: center;
-  gap: 3px;
+  gap: var(--sso-s1);
   min-width: 0;
 }
 
-/* Five things across the row and only the reading may grow. The two words are
- * sized by their text, so the row costs the same at 340px and at 280 and the
- * number takes the slack. */
-button.sso-nudge {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 3px;
-  padding: 5px 7px;
-  font-size: var(--sso-t-small);
-  font-weight: 600;
-  white-space: nowrap;
+/* Against the card's right edge on whichever line it lands on. */
+.sso-sync__time {
+  margin-left: auto;
 }
 
-/* The magnitude, never a direction. It sits on the outside of each pair, so
- * the two whole steps are at the two ends of the row and the fine ones flank
- * the number - the row reads outward from the middle in both directions. */
-.sso-nudge__step {
-  font-size: 1.1em;
-  line-height: 1;
-  color: var(--sso-ink-3);
-}
-
-/* Undo the timing, beside the timing. Quiet, and only there when there is
- * something to undo - which is also exactly when the subtitle needs no undo. */
+/* Back to the file's own timing, beside the timing it clears. Quiet, and only
+ * there when there is something to clear - which is also exactly when the
+ * subtitle needs no reset. */
 button.sso-sync__clear {
   flex: none;
-  min-width: 24px;
-  padding: 5px 4px;
-  font-size: var(--sso-t-small);
+  min-width: var(--sso-h-ctl);
+  height: var(--sso-h-ctl);
+  padding: 0 4px;
+  font-size: var(--sso-t-body);
   line-height: 1;
   color: var(--sso-ink-3);
   background: none;
@@ -854,16 +906,8 @@ button.sso-sync__clear:hover:not(:disabled) {
  * screen that is "Find a subtitle" in the empty state. */
 button.sso-sync__align {
   flex: none;
-  min-height: var(--sso-h-chip);
-  /* Set apart from the four nudges it shares a row with. They are one control
-   * in four sizes and this is a different verb entirely - it works the number
-   * out rather than changing it by a step - so it takes the auto margin and
-   * sits against the card's edge with a hairline between. Undivided, the row
-   * read as five equal pills of which one did something else. */
-  margin-left: auto;
-  padding: 0 var(--sso-s2);
-  border-left: 1px solid var(--sso-line-soft);
-  border-radius: 0 var(--sso-r-ctl) var(--sso-r-ctl) 0;
+  min-height: var(--sso-h-ctl);
+  padding: 0 var(--sso-s3);
   font-size: var(--sso-t-small);
   font-weight: 600;
   color: var(--sso-ink-2);
@@ -872,6 +916,7 @@ button.sso-sync__align {
 
 button.sso-sync__align:hover:not(:disabled) {
   color: var(--sso-ink);
+  background: var(--sso-fill-hover);
 }
 
 /* What a control on this card just did, on this card.
@@ -889,7 +934,6 @@ button.sso-sync__align:hover:not(:disabled) {
   display: flex;
   gap: var(--sso-s2);
   align-items: center;
-  max-width: var(--sso-measure);
   margin: 6px 0 0;
   padding: 2px 0 2px 8px;
   font-size: var(--sso-t-small);
@@ -910,21 +954,25 @@ button.sso-sync__align:hover:not(:disabled) {
   min-width: 0;
 }
 
+/* One step up the fill on hover, not a flip to solid blue. It was the loudest
+ * hover on the panel and the only one that changed hue, on a control that
+ * reverses something - and an accent fill belongs to a resting state, never to
+ * a hover. See the note on hover in chrome.css. */
 button.sso-track__said-do {
   flex: none;
-  padding: 4px 9px;
+  min-height: var(--sso-h-chip);
+  padding: 0 var(--sso-s2);
   font-size: var(--sso-t-small);
   font-weight: 600;
   color: var(--sso-ink);
   cursor: pointer;
-  background: var(--sso-fill-hover);
-  border: 1px solid var(--sso-line);
+  background: var(--sso-fill);
+  border: 0;
   border-radius: var(--sso-r-ctl);
 }
 
 button.sso-track__said-do:hover {
-  background: var(--sso-accent);
-  border-color: var(--sso-accent);
+  background: var(--sso-fill-hover);
 }
 
 /* On or off the picture. Reached for mid-scene, when a subtitle covers
@@ -936,12 +984,21 @@ button.sso-track__said-do:hover {
  * studied. Three round marks in a row, each meaning something unrelated, told
  * apart by colour: which is no help at all to eight per cent of men, and not
  * much to anyone else at 13px. */
+/* Every verb on the card's head is this size. They were 22px glyphs beside a
+ * 22px chip in a row whose other controls are 26 - reported as buttons that
+ * "could be bigger and consistent" - and one height across a group is what
+ * makes it read as a group rather than as things that happen to be adjacent. */
+button.sso-track__eye,
+button.sso-track__style,
+button.sso-track__remove {
+  min-width: var(--sso-h-ctl);
+  height: var(--sso-h-ctl);
+}
+
 button.sso-track__eye {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-width: 22px;
-  height: 22px;
 }
 
 .sso-eye {
@@ -1000,11 +1057,9 @@ button.sso-track__eye[data-on="false"] .sso-eye__bar {
  * this row that is letters rather than a shape, which is the point: the two
  * beside it act on the subtitle, and this one acts on its lettering. */
 button.sso-track__style {
-  min-width: 22px;
-  height: 22px;
   padding: 0 4px;
-  font-size: 12px;
-  font-weight: 620;
+  font-size: var(--sso-t-body);
+  font-weight: 600;
   letter-spacing: -0.02em;
 }
 
@@ -1026,10 +1081,8 @@ button.sso-track__style[data-on="true"] {
  * carried by shape, width, colour AND text rather than by any one of them.
  */
 button.sso-track__remove[data-armed="false"] {
-  min-width: 22px;
-  height: 22px;
   padding: 0 4px;
-  font-size: 13px;
+  font-size: var(--sso-t-body);
   opacity: 0.75;
 }
 
@@ -1053,71 +1106,60 @@ button.sso-track__remove[data-armed="true"]:hover:not(:disabled) {
   background: #e4674f;
 }
 
-button.sso-nudge:hover:not(:disabled) .sso-nudge__step {
-  color: var(--sso-ink);
-}
-
-/* The fine step is a chevron beside the number, so it needs the same target as
- * the labelled one next to it. */
-.sso-nudge--small {
-  justify-content: center;
-  min-width: 26px;
-  padding: 5px 4px;
-}
-
-.sso-nudge__word:empty {
-  display: none;
-}
-
-/* Below 320px the words go and the chevrons carry the row. They keep their
- * titles, and the reading is the thing that must not be squeezed. */
-/* There is no narrow variant, and the measurement is why. The row costs 232px
- * with both words on it, against 236px usable at the 280px minimum the corner
- * grips allow - so the words fit everywhere the panel can go. An earlier
- * version dropped them below 320px, which would have hidden the only part of
- * this row that says what it does, to buy space that was already there.
- *
- * The bound this trades against: the reading is 62px, which holds a signed
- * value up to about ±99s. Real offsets are seconds to a minute and a half. */
-
 /* --- moving the film by this subtitle's lines -------------------------------
  *
- * Under the timing row and as loud as it, which is the right way round: the
- * timing row is touched once, when a subtitle turns out to be out of step,
- * while this one is touched every time a line goes past faster than it can be
- * read. Two equal halves, because neither direction is the more likely one and
- * two buttons of different widths read as one control and an afterthought.
+ * At the left end of the timing row rather than in a row of its own, which is
+ * one row fewer per card and costs nothing: they are reached for constantly
+ * while a film runs, and the left end of a row is the easiest place on a card
+ * to find without looking.
  */
-/* Moving the film by this subtitle's lines. Quiet, and no taller than it needs
- * to be: these were two full-width slabs 38px high, which gave the least
- * considered controls on the card the most area on it. */
 button.sso-line-step {
+  display: flex;
   flex: none;
+  gap: 6px;
+  align-items: center;
   min-width: 0;
-  min-height: 24px;
-  padding: 3px 7px;
+  min-height: var(--sso-h-ctl);
+  padding: 0 var(--sso-s2);
   font-size: var(--sso-t-small);
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* The key that does the same thing, on the button that does it.
+ *
+ * Small, dim, and set apart in its own tinted box - the shape a keyboard hint
+ * has everywhere, so it is not read as part of the label. It is a real <kbd>,
+ * which is what stops a screen reader running "Again" and "J" together as one
+ * word. Empty and hidden when the binding is unset: there is nothing to
+ * advertise, and "off" beside a working control invites the wrong reading. */
+.sso-key-hint {
+  flex: none;
+  min-width: 15px;
+  padding: 1px 4px;
+  font-family: inherit;
+  font-size: var(--sso-t-micro);
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: center;
+  color: var(--sso-ink-3);
+  background: rgba(0, 0, 0, 0.28);
+  border-radius: 4px;
 }
 
 /* Every subtitle to agree with the first, from the row that is about all of
- * them rather than about one. */
+ * them rather than about one. Hard against the panel's right edge - the auto
+ * margin on .sso-grow puts it there - which is where the card's own Line up
+ * and its close both sit, so the three read as one column of right-hand
+ * controls rather than three loose ones. */
 button.sso-quick__align {
   flex: none;
-  padding: 5px 9px;
+  margin-left: auto;
+  min-height: var(--sso-h-ctl);
+  padding: 0 var(--sso-s3);
   font-size: var(--sso-t-small);
   font-weight: 600;
   white-space: nowrap;
-}
-
-/* What it did, under what you told it. Two lines rather than one, because
- * three controls and a reading do not fit across the panel - the Reset was
- * rendering past its right edge - and because they are different kinds of
- * thing: above is the instruction, below is the state. */
-.sso-sync__state {
-  margin-top: 5px;
-  gap: 6px;
 }
 
 /* Typed seconds, for when the number is already known. Narrow on purpose: it
@@ -1165,22 +1207,6 @@ button.sso-quick__align {
 
 .sso-panel input.sso-sync__field[data-set="true"] {
   color: var(--sso-accent-ink);
-}
-
-.sso-offset {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--sso-t-small);
-  font-variant-numeric: tabular-nums;
-  color: var(--sso-ink-3);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sso-offset[data-set="true"] {
-  color: var(--sso-ink);
-  font-weight: 600;
 }
 
 /* A button that reads as a link: it undoes something rather than doing it, and

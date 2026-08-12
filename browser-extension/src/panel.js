@@ -185,20 +185,25 @@
     el.back.hidden = true;
     el.back.addEventListener("click", goRoot);
 
-    /* What is attached, in the title bar. Folded, the bar is all that is left
-     * on screen, so it has to carry the one fact that decides whether the panel
-     * is worth opening again. */
-    el.state = document.createElement("span");
-    el.state.className = "sso-panel__state";
+    /* There is no count in the title bar.
+     *
+     * It read "nothing attached" or "2 attached" beside the window's name, and
+     * it was there to give a folded panel one useful fact. It is not one: the
+     * body directly below says the same thing far better - two named cards, or
+     * a designed empty state with the button that ends it - so unfolded it was
+     * a worse copy of what the reader was already looking at, and folded it
+     * said a number about subtitles on a bar that says nothing else about them.
+     * A title bar is the window's name and its controls. */
 
     /* Everything that is not about one subtitle. It was five sections in the
      * column behind a "More settings" button; the sections already fold, so the
      * button was a second fold on top of a fold. */
     el.gear = document.createElement("button");
-    el.gear.className = "sso-icon";
+    el.gear.className = "sso-icon sso-icon--gear";
     el.gear.type = "button";
     el.gear.textContent = "⚙";
     el.gear.title = "Settings";
+    el.gear.setAttribute("aria-pressed", "false");
     el.gear.addEventListener("click", () => api.detached(openSettings(), "Settings"));
 
     /* Folds to the title bar, the same control the study rail has. Different
@@ -215,7 +220,7 @@
     close.textContent = "×";
     close.title = "Close";
     close.addEventListener("click", hide);
-    head.append(el.back, title, el.state, el.gear, el.fold, close);
+    head.append(el.back, title, el.gear, el.fold, close);
 
     /* Double-click the bar to put the panel back under the CC button. A panel
      * dragged somewhere unhelpful - behind the player's own controls, half off
@@ -814,90 +819,16 @@
     refresh(api.status());
   }
 
-  /* Click to nudge, hold to run, and the longer it runs the bigger the steps.
+  /* The nudge ladder is gone with the buttons that used it.
    *
-   * A quarter-second per click is right for the last adjustment and useless for
-   * the first: a subtitle timed against a different release can be seventeen
-   * seconds out, which is sixty-eight clicks. Escalating while held covers both
-   * without a second pair of controls, a units menu, or the reader knowing in
-   * advance how far out it is - hold until it looks right, let go.
-   *
-   * Toasts are suppressed while running, or every repeat would raise one; the
-   * readout in the panel updates live and one toast lands on release.
+   * holdToRepeat lived here: click to nudge, hold to run, escalating from a
+   * quarter-second step to five whole seconds so one pair of controls could
+   * cover both a trim and a seventeen-second correction. It was 70 lines
+   * serving four buttons that the map has replaced - dragging the strip aims
+   * at the position directly, which is what the escalation was approximating.
+   * The keyboard nudges go through api.nudge with a fixed step and never used
+   * any of this.
    */
-  const HOLD_DELAY_MS = 350; // a click stays a click
-  const HOLD_TICK_MS = 80;
-  const FAST_AFTER_MS = 900;
-  const FASTER_AFTER_MS = 2400;
-
-  function holdToRepeat(node, slot, direction, size = "small") {
-    let timer = null;
-    let startedAt = 0;
-    let ranOn = false;
-
-    /* Where on the ladder a button starts. The escalation was the only way to
-     * cover both a quarter-second trim and a seventeen-second correction, and
-     * it works - but it made the first press of every gesture the smallest
-     * possible one, so a reader who already knew the subtitle was seconds out
-     * had to hold a button and wait for it to agree. The large button starts a
-     * rung up and escalates from there; the small one is unchanged. */
-    const stepFor = (heldMs) => {
-      const { smallStepMs, largeStepMs } = api.status().settings;
-      const base = size === "large" ? largeStepMs : smallStepMs;
-      if (heldMs < FAST_AFTER_MS) return base;
-      if (heldMs < FASTER_AFTER_MS) return size === "large" ? largeStepMs * 5 : largeStepMs;
-      return largeStepMs * 5;
-    };
-
-    const apply = (quiet) => {
-      const held = startedAt ? Date.now() - startedAt : 0;
-      // The step, not the sum: see the note on api.nudge.
-      api.nudge(direction * stepFor(held), { slot, quiet });
-    };
-
-    const stop = () => {
-      clearTimeout(timer);
-      timer = null;
-      if (!startedAt) return;
-      startedAt = 0;
-      // One toast for the whole gesture, naming where it ended up. A nudge of
-      // nothing, so the number it names is read where it is kept.
-      api.nudge(0, { slot });
-    };
-
-    const tick = () => {
-      apply(true);
-      timer = setTimeout(tick, HOLD_TICK_MS);
-    };
-
-    node.addEventListener("pointerdown", (event) => {
-      if (event.button !== 0) return;
-      ranOn = true;
-      startedAt = Date.now();
-      apply(true);
-      timer = setTimeout(tick, HOLD_DELAY_MS);
-      node.setPointerCapture?.(event.pointerId);
-    });
-
-    for (const type of ["pointerup", "pointercancel", "pointerleave"]) {
-      node.addEventListener(type, stop);
-    }
-
-    /* Keyboard activation still has to work, and it arrives as a click with no
-     * pointer before it. The flag tells the two apart rather than letting a
-     * mouse press count twice. */
-    node.addEventListener("click", () => {
-      if (ranOn) {
-        ranOn = false;
-        return;
-      }
-      startedAt = Date.now();
-      apply(false);
-      startedAt = 0;
-    });
-
-    return node;
-  }
 
   /* A name, split so the end of it survives being too long for the card.
    *
@@ -908,6 +839,21 @@
    * characters from the end has no tail worth saving, and holding one out would
    * leave nothing for the part that says which film this is. */
   const TAIL_MAX = 12;
+
+  /* The reading, to hundredths and no further.
+   *
+   * It was `Math.round(offsetMs) / 1000` handed straight to String, which is
+   * exact and therefore ragged: a drag lands on 8958ms and the card reads
+   * 8.958, the next one lands on 1667 and it reads 1.667, and in a locale whose
+   * decimal mark is a comma that renders as "8,958" - a number that looks like
+   * eight thousand. Reported as a reading with far too many decimals.
+   *
+   * Two places is what the rest of the extension already says (formatOffset and
+   * describeOffset in content.js both round to two), and a fixed number of
+   * places is what keeps a tabular figure from shuffling sideways under a drag
+   * that is rewriting it several times a second. A hundredth of a second is
+   * four times finer than a film frame. */
+  const offsetSeconds = (ms) => (Math.round(ms) / 1000).toFixed(2);
 
   function splitName(name) {
     let at = -1;
@@ -951,9 +897,15 @@
    * every cue as itself, found by binary search - twenty of them, in their
    * exact places, which is what "the same line, here and there" needs.
    */
-  // Must match .sso-map__plot's height in panel.css: the canvas is sized in
-  // device pixels from it, and a disagreement blurs every bar.
-  const MAP_HEIGHT = 30;
+  /* Must match .sso-map__plot's height in panel.css: the canvas is sized in
+   * device pixels from it, and a disagreement blurs every bar.
+   *
+   * 38 rather than 30, because the height now carries a value. While every line
+   * was a full-height tick the strip only had to be tall enough to see; a bar
+   * whose height says how much is said needs enough of them to tell a stub from
+   * a full exchange, and at 30px the range between the 0.28 floor and the top
+   * was 21 pixels. It is 27 now, and the card gave up a row for it. */
+  const MAP_HEIGHT = 38;
 
   /* A minute, then fifteen seconds, then the whole film. Three steps because
    * they answer three different questions - which line is which, is this
@@ -1066,7 +1018,17 @@
       spilled = { before: 0, after: 0 };
       if (!durationMs || !track.cueCount) return;
       let tallest = 0;
-      for (const fileMs of api.cueTimes(slot)) {
+      /* Weighted by how much is said, not by how many lines say it.
+       *
+       * A bar's height is meant to mean "how much dialogue is here", and
+       * counting cues does not measure that: a subtitler who breaks a long
+       * speech into six lines makes it six times taller than the same speech
+       * kept whole in the other file. Which is exactly the comparison these two
+       * strips exist to support, so the count was working against the one job
+       * the picture has. Characters survive the split. */
+      const { starts, chars } = api.cueSpans(slot);
+      for (let i = 0; i < starts.length; i++) {
+        const fileMs = starts[i];
         const at = api.toStreamMs(slot, fileMs);
         /* Lines pushed off the film are counted at the edge, NOT poured into
          * the edge bucket.
@@ -1082,7 +1044,7 @@
         if (at < 0) { spilled.before += 1; continue; }
         if (at > durationMs) { spilled.after += 1; continue; }
         const bucket = Math.min(width - 1, Math.max(0, Math.round((at / durationMs) * (width - 1))));
-        buckets[bucket] += 1;
+        buckets[bucket] += Math.max(1, chars[i] || 1);
         if (buckets[bucket] > tallest) tallest = buckets[bucket];
       }
       if (tallest > 0) for (let i = 0; i < width; i++) buckets[i] /= tallest;
@@ -1116,31 +1078,77 @@
       if (spilled.after) context.fillRect(width - edge, 0, edge, height);
     }
 
-    /* Every line in the window, where it actually is.
+    /* Every line in the window, as long as it is and as full as it is.
+     *
+     * It was a 2px tick at each start: where somebody speaks, and nothing about
+     * what happens next. Two subtitlers cutting the same exchange differently -
+     * four lines against two - produce two unrelated tick patterns from
+     * identical dialogue, so on the one scale where syncing actually happens
+     * the eye had the least matchable picture available. Reported as exactly
+     * that: the map "shows where a subtitle starts, but it doesn't show where
+     * it ends or how many chars it has".
+     *
+     * So a line is a block from its start to its end, and its height is how
+     * much it says - a full two-line exchange reaches the top of the well, an
+     * interjection is a stub. Both survive being cut differently, which is what
+     * makes one strip comparable with the one above it. Reading the two cards
+     * together: the blocks have the same rhythm and the same profile, displaced
+     * sideways by however far out the subtitle is.
      *
      * Binary search for the first cue in range rather than a scan, because this
-     * runs on the playhead tick and the file is a thousand lines. Bounded by
-     * what fits on screen: a fifteen-second window holds about six lines. */
+     * runs on the playhead tick and the file is a thousand lines. */
+    /* What counts as a full-height line. Two 42-character rows is the classic
+     * subtitling limit and about as much as anybody reads in one cue; longer
+     * ones exist and simply peg at the top rather than flattening everything
+     * else, which is what normalising to the file's own longest line would do
+     * on a file with one 300-character sign in it. */
+    const FULL_CHARS = 84;
+
     function paintCues(context) {
-      const times = api.cueTimes(slot);
-      if (!times.length) return;
+      const { starts, ends, chars } = api.cueSpans(slot);
+      if (!starts.length) return;
       let low = 0;
-      let high = times.length - 1;
-      let first = times.length;
+      let high = starts.length - 1;
+      let first = starts.length;
       while (low <= high) {
         const mid = (low + high) >> 1;
-        if (api.toStreamMs(slot, times[mid]) >= from) {
+        /* Against the END, not the start: a line that began before the window
+         * opened is still on screen inside it, and searching on starts alone
+         * clipped the first block of every window at the fifteen-second scale -
+         * where a single cue can be most of what is showing. */
+        if (api.toStreamMs(slot, ends[mid] ?? starts[mid]) >= from) {
           first = mid;
           high = mid - 1;
         } else {
           low = mid + 1;
         }
       }
-      for (let i = first; i < times.length; i++) {
-        const at = api.toStreamMs(slot, times[i]);
+      const thin = Math.max(2, ratio() * 2);
+      for (let i = first; i < starts.length; i++) {
+        const at = api.toStreamMs(slot, starts[i]);
         if (at > to) break;
-        context.globalAlpha = 0.9;
-        context.fillRect(Math.round(xOf(at)), 2, Math.max(2, ratio() * 2), height - 2);
+        const until = api.toStreamMs(slot, ends[i] ?? starts[i]);
+        const left = Math.round(xOf(at));
+        /* Never thinner than the tick it replaces, and never touching its
+         * neighbour.
+         *
+         * Both bounds were measured on the harness fixture at the 15s scale:
+         * lines 1.8s long with gaps of 0 to 1.6s fill 74% of the strip, and
+         * without the gap a run of dialogue renders as one unbroken slab - the
+         * pattern the eye is supposed to match against the card below is only
+         * there while the lines are separable. At the far end of the same
+         * scales a two-second line is under a pixel, and a line that rounds
+         * away is a line nobody can line up. */
+        const span = Math.max(thin, Math.round(xOf(until)) - left - ratio());
+        const fill = Math.min(1, (chars[i] || 1) / FULL_CHARS);
+        const bar = Math.max(thin, Math.round((0.28 + 0.72 * fill) * (height - 2)));
+        // The body of the line, and a firm edge at the start of it. The start
+        // is the instant being matched against the other card; the block is the
+        // shape that makes the match findable.
+        context.globalAlpha = 0.55;
+        context.fillRect(left, height - bar, span, bar);
+        context.globalAlpha = 0.95;
+        context.fillRect(left, height - bar, thin, bar);
       }
       context.globalAlpha = 1;
     }
@@ -1208,11 +1216,11 @@
      * canvas and answers in pixels: a bar one device pixel wide at the very
      * edge of the strip is drawn and is not something a reader can see. */
     function cuesInWindow() {
-      const times = api.cueTimes(slot);
-      for (let i = 0; i < times.length; i++) {
-        const at = api.toStreamMs(slot, times[i]);
-        if (at > to) return false;
-        if (at >= from) return true;
+      const { starts, ends } = api.cueSpans(slot);
+      for (let i = 0; i < starts.length; i++) {
+        if (api.toStreamMs(slot, starts[i]) > to) return false;
+        // A line that started before the window is still on screen inside it.
+        if (api.toStreamMs(slot, ends[i] ?? starts[i]) >= from) return true;
       }
       return false;
     }
@@ -1290,16 +1298,17 @@
         plot.releasePointerCapture?.(event.pointerId);
       } catch {}
       if (next === was.offsetMs) return;
-      sayOnCard(slot, `Moved · ${api.describeOffset(next)}`, {
-        action: {
-          label: "Undo",
-          onClick: () => {
-            applyTiming(slot, was);
-            sayOnCard(slot, "Back to the timing it had");
-            refresh(api.status());
-          },
-        },
-      });
+      /* No Undo behind a drag.
+       *
+       * It was a button that stood on the card until something else replaced
+       * it, offering to reverse a gesture the reader had just aimed by hand -
+       * and the way back from a drag that went too far is the same drag again,
+       * three pixels the other way, on the picture they are already looking at.
+       * Reported as unnecessary, and it is. The one that is not is the offer
+       * behind Line up, which reverses something the MACHINE decided; that one
+       * stays, and the log reads it as the only honest signal about whether the
+       * aligner was right. */
+      sayOnCard(slot, `Moved · ${api.describeOffset(next)}`);
       refresh(api.status());
     };
     plot.addEventListener("pointerup", finish);
@@ -1337,7 +1346,7 @@
      * the name, which is a real button and says whether it is pressed. */
     root.setAttribute("role", "group");
     root.addEventListener("click", (event) => {
-      if (event.target.closest("button, input, label, .sso-nudge")) return;
+      if (event.target.closest("button, input, label")) return;
       api.setKeyTrack(slot);
     });
 
@@ -1382,11 +1391,24 @@
       // subtitle is also a good reason to be pointing the keys at it.
       openFind(slot);
     });
+    /* Three facts, three treatments.
+     *
+     * It rendered as one string - "1. EN · the.americans.s02e06" - at one size
+     * and one weight, so the two pieces of filing (which slot, which language)
+     * read as the first words of the subtitle's name. Reported as exactly that.
+     * They are not the name: the number is which card this is, the language is
+     * what the file is in, and the name is the only part that identifies the
+     * file. Set the first two small and quiet, and the name is what the eye
+     * finds - which is the whole job of this line. */
+    const labelNo = document.createElement("span");
+    labelNo.className = "sso-track__no";
+    const labelLang = document.createElement("span");
+    labelLang.className = "sso-track__lang";
     const labelHead = document.createElement("span");
     labelHead.className = "sso-track__name";
     const labelTail = document.createElement("span");
     labelTail.className = "sso-track__tail";
-    label.append(labelHead, labelTail);
+    label.append(labelNo, labelLang, labelHead, labelTail);
 
     /* The menu of verbs is gone, and every one of them is on the face.
      *
@@ -1536,31 +1558,39 @@
      * pixels - so folding it saves twenty-six of them and costs the timing row,
      * which is the one thing on this surface that is used while a film runs.
      * A control that hides the only thing worth showing is not worth a click. */
-    head.append(label, learnChip, styleButton, visible, remove);
+    /* The verbs, in a group of their own, with room around them.
+     *
+     * Four controls were sharing one 4px gap with the name and with each other,
+     * so the top right of a card read as a strip of glyphs the eye had to
+     * separate before it could aim at one. Reported as "too crowded". They are
+     * two kinds of thing: "learn" is a switch that says what study does with
+     * this subtitle, and the three beside it are what you can do TO the card.
+     * The group is the boundary, the gap either side of it is the breathing
+     * room, and every one of them is now the same 26px the rest of the panel's
+     * controls are. */
+    const acts = document.createElement("div");
+    acts.className = "sso-track__acts";
+    acts.append(styleButton, visible, remove);
+    head.append(label, learnChip, acts);
 
-    /* One row: say what is wrong, twice as fast or twice as fine, and read what
-     * it did in the middle.
+    /* One row under the map: move the film, or move the text.
      *
-     * Say what is wrong, not which way to push a number. What a viewer
-     * perceives is "the text came up before they spoke". Turning that into a
-     * sign means knowing that film time is stream time minus the offset, so a
-     * larger offset shows the line later - which nobody should have to work out
-     * while a film is playing, and getting it backwards doubles the error and
-     * makes the next guess harder. That is why these are words and not arrows:
-     * an arrow re-introduces exactly the question the words were invented to
-     * remove, and "◀" is doubly ambiguous - does it move the text earlier, or
-     * move it back relative to the speech? The chevron beside each word is a
-     * magnitude, never a direction, and never appears on its own.
+     * The four nudge buttons that used to live here - « Early ‹ › Late » - are
+     * gone. They were the way to sync a subtitle before the map existed: hold
+     * one, watch, let go, judge, hold again. The map replaced that with aiming
+     * at a position, and the reader who asked for it said so plainly: "subtitle
+     * maps become extremely useful to sync the subtitles, I even don't need to
+     * use the buttons to sync anymore". Four controls whose whole job has been
+     * taken over by the picture above them are four controls to delete, not to
+     * shrink. The KEYS still nudge - they are bound in Settings, they work
+     * while the panel is shut and while the film is fullscreen, and that is the
+     * case the buttons never covered anyway.
      *
-     * Two sizes because one was wrong in both directions: a quarter-second is
-     * useless when a subtitle is seventeen seconds out, and a second is too
-     * coarse for the last adjustment. Holding either still escalates.
-     *
-     * The measurement that decides the layout: usable width is the host width
-     * less 46px of borders and padding, so 294px at the default 340 and 234px
-     * at the 280 minimum. Two chevron buttons, two words, a reading and the
-     * gaps come to 208px, which fits both. Keeping the old sentences and adding
-     * a second size needs 306px and fits neither. */
+     * What is left is two groups, because the row does two unrelated things.
+     * Left: move the picture by this subtitle's lines. Right: what this
+     * subtitle's timing is, and the one control that works it out for you.
+     * They sit at the two ends rather than in a queue, so which half a control
+     * belongs to is answered by where it is. */
     const offsets = document.createElement("div");
     offsets.className = "sso-row sso-sync";
 
@@ -1575,7 +1605,9 @@
      * once and gone. */
     const offsetField = document.createElement("input");
     offsetField.type = "number";
-    offsetField.step = "0.25";
+    // Any number of seconds is a valid offset, and the field now shows
+    // hundredths - a 0.25 step would mark three readings in four invalid.
+    offsetField.step = "any";
     offsetField.className = "sso-sync__field";
     offsetField.title = "Seconds. Negative brings the subtitle forward.";
     offsetField.setAttribute("aria-label", "Offset in seconds");
@@ -1589,42 +1621,11 @@
       if (event.key === "Enter") commitField();
     });
 
-    const nudger = (word, chevron, direction, size, why) => {
-      const b = button("", { title: why });
-      b.className = `sso-nudge sso-nudge--${size}`;
-      const mark = document.createElement("span");
-      mark.className = "sso-nudge__step";
-      mark.textContent = chevron;
-      /* The word is an element, not a text node, because below 320px it is the
-       * part that goes and a text node cannot be addressed by a selector. */
-      /* The word belongs to the side, not to each button. Both buttons on a
-       * side carrying it read as "« Early ‹ Early", which looks like a repeat
-       * rather than two sizes of one thing. The whole step carries the word
-       * because it is the one reached for first when something is visibly
-       * wrong, and it sits at the outer edge where it is easiest to hit; the
-       * fine step beside the number takes its meaning from the group. */
-      const said = document.createElement("span");
-      said.className = "sso-nudge__word";
-      said.textContent = size === "large" ? word : "";
-      // Chevron on the outside of the pair, so the two whole steps sit at the
-      // two ends of the row and the fine ones flank the number.
-      b.append(...(direction > 0 ? [mark, said] : [said, mark]));
-      return holdToRepeat(b, slot, direction, size);
-    };
-
-    const early = "The line appears before it is spoken, so hold it back.";
-    const late = "The line appears after it is spoken, so bring it forward.";
-    /* The fine steps travel with the number, not with the edges of the row.
-     * A single flex row put the field between them and let it take the slack,
-     * which pushed each fine chevron up against the whole step it is a smaller
-     * version of and away from the reading it changes. */
-    /* Undo the timing, beside the timing.
+    /* Back to the file's own timing, beside the timing it undoes.
      *
-     * It was a menu item, which is three actions - open the menu, find it,
-     * click it - for the one thing a reader does most often after over-shooting
-     * a nudge. It shows only when there is something to undo, so it costs
-     * nothing on a subtitle that is already right, and that is also honest:
-     * nothing to reset is exactly when the subtitle needs no reset. */
+     * It shows only when there is something to clear, so it costs nothing on a
+     * subtitle that is already right - and that is also honest: nothing to
+     * reset is exactly when the subtitle needs no reset. */
     const offsetReset = document.createElement("button");
     offsetReset.className = "sso-sync__clear";
     offsetReset.type = "button";
@@ -1636,59 +1637,69 @@
       sayOnCard(slot, "Back to the file's own timing");
     });
 
-    const fine = document.createElement("div");
-    fine.className = "sso-sync__fine";
-    fine.append(
-      nudger("Early", "‹", +1, "small", `${early} A fine step. Hold to run.`),
-      offsetField,
-      offsetReset,
-      nudger("Late", "›", -1, "small", `${late} A fine step. Hold to run.`),
-    );
-
-    offsets.append(
-      nudger("Early", "«", +1, "large", `${early} A whole step. Hold to run.`),
-      fine,
-      nudger("Late", "»", -1, "large", `${late} A whole step. Hold to run.`),
-    );
-
     /* Moving the film by this subtitle's lines.
      *
      * Not a timing control - it moves the picture, not the text - but it
-     * belongs on this card all the same, because "a line" means a line of this
-     * file, and the two subtitles are routinely timed and cut differently. It
-     * sits under the sync row and carries the same weight, which is the right
-     * order: the timing is set once when a subtitle turns out to be out of
-     * step, and this is reached for whenever a line goes past too fast.
+     * belongs on this card, because "a line" means a line of THIS file and the
+     * two subtitles are routinely cut differently. It was a row of its own
+     * below the timing; with the four nudges gone there is room for it beside
+     * them, and one row of two groups is one row fewer per card.
      *
      * "Again" and not "Previous": the first press restarts the line being
      * spoken, which is what it is reached for, and it takes a second press to
      * go back one. */
-    const lines = document.createElement("div");
-    lines.className = "sso-row sso-row--steps";
-    const stepper = (text, direction, why) => {
-      const b = button(text, { title: why });
+    /* And each one wears its key.
+     *
+     * These two have keyboard bindings that work while the panel is shut and
+     * while the film is fullscreen, which is most of the time somebody wants
+     * them - and the only place that said so was a grid inside Settings. A
+     * shortcut nobody is told about is a shortcut nobody has. It is set small
+     * and dim beside the label, which is how every application on the machine
+     * says the same thing, and it disappears when the binding is cleared or
+     * the keys are switched off rather than reading "off" at a reader. */
+    const stepper = (text, key, direction, why) => {
+      const b = button("", { title: why });
       b.className = "sso-line-step sso-quiet";
+      const said = document.createElement("span");
+      said.textContent = text;
+      const hint = document.createElement("kbd");
+      hint.className = "sso-key-hint";
+      b.append(said, hint);
       b.addEventListener("click", () => api.stepLine(direction, { slot }));
-      return b;
+      return { b, hint, key };
     };
 
-    lines.append(
-      stepper("‹ Again", -1, "Play this line from its start. Press twice to go back one."),
-      stepper("Next ›", +1, "Skip to where the next line begins."),
-    );
+    const steps = [
+      stepper("Again", "prevLine", -1,
+        "Play this line from its start. Press twice to go back one."),
+      stepper("Next", "nextLine", +1, "Skip to where the next line begins."),
+    ];
 
-    /* Lining up is a timing control, so it sits with the timing controls.
-     *
-     * It was in the row below, next to Again and Next - which are not timing at
-     * all, they move the picture. So the row that changes the offset held four
-     * of the five ways to change the offset, and the fifth was somewhere else
-     * with the playback buttons. Reported as exactly that. */
+    const play = document.createElement("div");
+    play.className = "sso-sync__play";
+    play.append(...steps.map((step) => step.b));
+
+    /* Lining up is a timing control, so it sits with the timing controls - the
+     * reading it produces is the one directly beside it. */
     const lineUpButton = button("Line up", {
       title: "Work out the gap from where the two subtitles say the same things",
       onClick: () => api.detached(lineUp(slot), "Lining it up"),
     });
     lineUpButton.className = "sso-sync__align";
-    offsets.append(lineUpButton);
+
+    /* The timing group, hard against the card's right edge.
+     *
+     * Reported: "buttons at the right edge should be aligned to the right
+     * edge". They were not, and the reason was a 560px cap this sheet put on
+     * every row - written from a screenshot of a 640px panel read as a 1290px
+     * one, because the capture was at 2x. The panel cannot go past 640px, so
+     * the cap did nothing but leave every right-hand control 80px short of the
+     * edge it was meant to sit on. The cap is gone; see panel.css. */
+    const timing = document.createElement("div");
+    timing.className = "sso-sync__time";
+    timing.append(offsetField, offsetReset, lineUpButton);
+
+    offsets.append(play, timing);
 
     /* What lining up did, on the card that did it.
      *
@@ -1708,12 +1719,12 @@
 
     const body = document.createElement("div");
     body.className = "sso-track__body";
-    body.append(timeline.root, offsets, said, lines);
+    body.append(timeline.root, offsets, said);
 
     root.append(head, body);
     return {
-      root, learnChip, label, labelHead, labelTail, styleButton,
-      offsetField, offsetReset, visible, remove, disarm, lineUpButton, timeline, said,
+      root, learnChip, label, labelNo, labelLang, labelHead, labelTail, styleButton,
+      offsetField, offsetReset, visible, remove, disarm, lineUpButton, timeline, said, steps,
     };
   }
 
@@ -1727,14 +1738,31 @@
    * A message stands until something else happens to that card. `clearSaid`
    * below is what stops a stale answer sitting under a subtitle it is no longer
    * about. */
+  /* How long a report stands before it takes itself away.
+   *
+   * A message left on screen until something else happens to the card is a
+   * message that is still there ten minutes later, describing a nudge nobody
+   * remembers making - reported as "keeping a message at the UI always is not a
+   * good practice", and it is not: a permanent element that says something
+   * temporary trains the reader to stop reading that spot. Long enough to be
+   * read twice at a glance, and gone.
+   *
+   * A message carrying an offer does NOT expire. "These look 4.2s apart - use
+   * it?" is a question waiting for an answer, and a question that withdraws
+   * itself while being considered is worse than one never asked. */
+  const SAID_MS = 6000;
+
   function sayOnCard(slot, text, { action = null, warn = false } = {}) {
     const card = el.trackCards[slot];
     if (!card) return false;
     if (!isPanelVisible() || folded || atScreen !== "root" || card.root.hidden) return false;
+    clearTimeout(card.saidTimer);
+    card.saidTimer = null;
     card.said.replaceChildren();
     card.said.hidden = !text;
     card.said.dataset.warn = warn ? "true" : "false";
     if (!text) return true;
+    if (!action) card.saidTimer = setTimeout(() => clearSaid(slot), SAID_MS);
     const words = document.createElement("span");
     words.className = "sso-track__said-text";
     words.textContent = text;
@@ -1761,7 +1789,10 @@
    * offering a shift measured against a subtitle that is no longer there. */
   function clearSaid(slot) {
     const card = el.trackCards[slot];
-    if (!card || card.said.hidden) return;
+    if (!card) return;
+    clearTimeout(card.saidTimer);
+    card.saidTimer = null;
+    if (card.said.hidden) return;
     card.said.hidden = true;
     card.said.replaceChildren();
   }
@@ -1897,8 +1928,6 @@
     for (const [key, node] of Object.entries(el.screens)) node.hidden = key !== name;
     el.back.hidden = name === "root";
     el.title.textContent = SCREEN_TITLES[name] || SCREEN_TITLES.root;
-    // The count belongs to the subtitles, so it goes when they are not on show.
-    el.state.hidden = name !== "root";
     el.panel.scrollTop = 0;
     refresh(api.status());
     fitToViewport();
@@ -1915,6 +1944,14 @@
   let settingsWindow = null;
 
   async function openSettings() {
+    /* The button that opens it closes it, the same rule the card's Aa follows.
+     * Reported against Aa first and fixed there; the gear had the same defect
+     * and the same fix, which is what makes it a rule rather than a patch. */
+    if (settingsWindow?.isOpen()) {
+      settingsWindow.hide();
+      refresh(api.status());
+      return;
+    }
     if (!settingsWindow) {
       settingsWindow = api.makeWindow({
         title: "Settings",
@@ -3013,11 +3050,12 @@
       ? "Drag the stand-in to where the subtitle should be, then press Done"
       : "Drag a subtitle around the picture: the middle moves it, an edge makes it wider";
 
-    // The one fact a folded title bar has to carry.
-    el.state.textContent = status.attached
-      ? `${status.trackCount} attached`
-      : status.hasVideo ? "nothing attached" : "no video";
-    el.state.dataset.on = status.attached ? "true" : "false";
+    // A toggle has to look like one while it is holding something open, or the
+    // second press is a guess.
+    const settingsOpen = Boolean(settingsWindow?.isOpen());
+    el.gear.dataset.on = settingsOpen ? "true" : "false";
+    el.gear.setAttribute("aria-pressed", settingsOpen ? "true" : "false");
+    el.gear.title = settingsOpen ? "Close the settings" : "Settings";
 
     status.tracks.forEach((track, slot) => {
       const card = el.trackCards[slot];
@@ -3027,11 +3065,24 @@
       card.root.hidden = !track.attached;
       if (!track.attached) return;
 
-      const [head, tail] = splitName(`${slot + 1}. ${track.label || "Attached"}`);
+      /* The language comes off the front of the name rather than being printed
+       * twice. attach() builds the label as "EN · release", which was written
+       * when the language had nowhere else to go; it has its own element now,
+       * so the copy inside the name is a repeat in a line with no room for
+       * one. */
+      const language = (track.language || "").toUpperCase();
+      let name = track.label || "Attached";
+      if (language && name.toUpperCase().startsWith(`${language} · `)) {
+        name = name.slice(language.length + 3);
+      }
+      const [head, tail] = splitName(name);
+      card.labelNo.textContent = String(slot + 1);
+      card.labelLang.textContent = language;
+      card.labelLang.hidden = !language;
       card.labelHead.textContent = head;
       card.labelTail.textContent = tail;
-      // Release names are long and the chips beside them are not optional, so
-      // the name is often an ellipsis. Hovering it says the whole thing.
+      // Release names are long and the controls beside them are not optional,
+      // so the name is often an ellipsis. Hovering it says the whole thing.
       card.label.title = track.label || "Attached";
       /* Selected, which is what the keys act on. Marked on the card itself
        * rather than by a chip inside it: the whole card is the thing being
@@ -3081,12 +3132,21 @@
       card.learnChip.setAttribute("aria-pressed", learning ? "true" : "false");
       // Nothing to line up against with one subtitle on screen.
       card.lineUpButton.hidden = status.trackCount < 2;
+      /* What each playback button is bound to, on the button. Cleared rather
+       * than reading "off", because a button whose binding is unset has no
+       * shortcut to advertise and "off" beside a working control invites the
+       * reading that the control is off. */
+      for (const step of card.steps) {
+        const key = settings.keysEnabled ? settings.keys[step.key] : "";
+        step.hint.textContent = key ? describeKey(key) : "";
+        step.hint.hidden = !key;
+      }
       const stretched = track.rate && track.rate !== 1;
       card.offsetField.dataset.set = track.offsetMs ? "true" : "false";
       // Not while it is being typed into, or the value rewrites itself under
       // the cursor between keystrokes.
       if (shadow.activeElement !== card.offsetField) {
-        card.offsetField.value = String(Math.round(track.offsetMs) / 1000);
+        card.offsetField.value = offsetSeconds(track.offsetMs);
       }
       /* A hidden subtitle says so on its card. The menu item it was toggled
        * from is not on screen to carry the state, and a subtitle that has
@@ -3219,10 +3279,22 @@
     playhead = null;
   }
 
+  /* One build, however many presses arrive during it.
+   *
+   * build() assigns `host` in its first statement and then awaits its
+   * stylesheets, so a second press inside that window found a host whose shadow
+   * root was still empty, skipped the build, and went on to reparent it, reveal
+   * it and refresh it - and refresh reaches for el.trackCards, which a
+   * half-built panel does not have. A single flight that every caller awaits is
+   * the whole fix, and it is the same shape study.js needs for its rail. */
+  let starting = null;
+
   async function show() {
     if (!host) {
-      await build();
-      await restorePosition();
+      starting ||= build()
+        .then(() => restorePosition())
+        .finally(() => { starting = null; });
+      await starting;
     }
     reparent();
     startPlayhead();
