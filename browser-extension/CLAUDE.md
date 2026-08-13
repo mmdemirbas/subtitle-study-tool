@@ -101,10 +101,29 @@ a push refused by a top frame that no longer thinks it draws the controls
 next tick claims again; and 3s of silence from the video frame drops the top
 frame back to `solo`, so the button does not outlive the film.
 
-**Still open:** the study rail and clicking a word both need the cue text, so
-they stay in the video's frame and remain behind a parent overlay on a site
-that paints one. The cue overlay is there too, which is right — it only has to
-be seen, and a transparent interceptor does not hide it.
+**Still open, and now observed rather than argued:** the study rail and clicking
+a word both need the cue text, so they stay in the video's frame and remain
+behind a parent overlay on a site that paints one. `tests/frames/run.mjs`
+carries it as `KNOWN GAP - a press on the study rail is still taken by a
+full-viewport page overlay`: a real click at the rail's coordinates, from the
+top document, with the vehicle's interceptor on — the page's counter swallows
+both the pointerdown and the click.
+
+**No user has reported it since streaming-site.example stopped painting that overlay**, so
+the exposure is to the class of page rather than to that page. The check is
+written as "still swallowed" deliberately: it stays green on today's behaviour
+and fails the moment it changes, including when it is fixed, at which point it
+gets inverted and renamed.
+
+**Do not probe this from inside the film's frame.** `describeSurfaces()`
+computes `reachable` with `document.elementsFromPoint`, which knows nothing
+about a box in the PARENT document — so the frame reports itself unobstructed
+while the parent takes every press. That false pass is why the original report
+could establish the mechanism and never observe it. The witness is
+`window.__stolen` in `tests/frames/top.html`, counting what the interceptor ate.
+
+The cue overlay is in the video's frame too, which is right — it only has to be
+seen, and a transparent interceptor does not hide it.
 
 ## The running log — read this before asking anyone to reproduce anything
 

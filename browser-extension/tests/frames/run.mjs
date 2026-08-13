@@ -652,6 +652,77 @@ try {
     Boolean(studyReached),
     JSON.stringify(await studyState()));
 
+  /* And whether a press on it is ours, with the site painting over everything.
+   *
+   * This is the one surface that cannot be moved to the top frame - the rail
+   * needs the cue text, and the cue text is where the film is - so it is the
+   * only one still exposed to a parent-document overlay. docs/reports/
+   * click-blocking-2026-08-08.md established the mechanism and could not
+   * observe it end to end.
+   *
+   * It has to be a real click from the TOP document, and that is the whole
+   * subtlety. Asking the film's frame whether its own rail is reachable gives a
+   * false pass every time: document.elementsFromPoint inside a frame knows
+   * nothing about a box in its PARENT, so the frame reports itself unobstructed
+   * while the parent takes the press. The counter in top.html is the witness -
+   * it counts what the interceptor swallows - so a click that never reaches it
+   * is a click the rail got.
+   */
+  if (studyReached) {
+    const railAt = await (async () => {
+      const film = page.frames().find((f) => f.url().includes("player.html"));
+      const inside = await film.evaluate(() => {
+        for (const node of document.querySelectorAll("*")) {
+          const first = node.shadowRoot?.firstElementChild;
+          if (typeof first?.className === "string" && first.className.includes("sso-rail")) {
+            const box = node.getBoundingClientRect();
+            return { x: box.left + box.width / 2, y: box.top + 8 };
+          }
+        }
+        return null;
+      });
+      if (!inside) return null;
+      // boundingBox resolves through however many frames deep this is, which
+      // the vehicle varies on purpose (?depth=2).
+      const frameBox = await (await film.frameElement()).boundingBox();
+      return frameBox ? { x: frameBox.x + inside.x, y: frameBox.y + inside.y } : null;
+    })();
+
+    await page.evaluate(() => { window.__intercept(true); window.__stolen = 0; });
+    await page.waitForTimeout(200);
+    if (railAt) await page.mouse.click(railAt.x, railAt.y);
+    await page.waitForTimeout(300);
+    const stolen = await page.evaluate(() => window.__stolen);
+    await page.evaluate(() => window.__intercept(false));
+    /* KNOWN GAP, recorded rather than asserted away.
+     *
+     * This press IS swallowed today, and that is the honest state of the
+     * product: every other surface was moved to the top frame, and the rail
+     * cannot follow while it reads cue text out of the frame the film is in.
+     * The report called it open; this is the first time it has been observed
+     * rather than argued from the platform's rules.
+     *
+     * It is written as "still swallowed" so the suite stays green on today's
+     * behaviour AND fails the moment that changes - including when somebody
+     * fixes it, at which point this becomes `stolen === 0` and the name loses
+     * its KNOWN GAP. A check that simply failed would be a red suite nobody
+     * reads, and deleting it would lose the only evidence there is.
+     *
+     * It does not fire on the site that prompted it: streaming-site.example no longer
+     * paints such an overlay, so the reader sees no symptom. The exposure is
+     * to the class of page, not to that page.
+     */
+    t("KNOWN GAP - a press on the study rail is still taken by a full-viewport page overlay",
+      Boolean(railAt) && stolen > 0,
+      railAt
+        ? `swallowed ${stolen} at ${Math.round(railAt.x)},${Math.round(railAt.y)}` +
+          (stolen === 0 ? " - IT IS FIXED: invert this check and rename it" : "")
+        : "could not find the rail to press");
+  } else {
+    t("KNOWN GAP - a press on the study rail is still taken by a full-viewport page overlay",
+      false, "no rail was built to press");
+  }
+
   // And off again, so the ordinary-page section below starts where it expects.
   await sw.evaluate(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
