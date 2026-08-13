@@ -312,6 +312,25 @@ if (process.argv.includes("--json")) {
    * gains elsewhere real. */
   const settled = gains.filter((g) => g.spread <= 1000);
   const drifting = gains.filter((g) => g.spread > 5000);
+  /* A wide spread is two different things and they want opposite fixes.
+   *
+   * A RE-CUT pair agrees everywhere locally: split it and the overlap goes
+   * high, because the material is the same and only the joins moved. A FAILED
+   * pair has no good alignment at any offset, so its segments wander looking
+   * for one and the overlap stays poor however many they are given. The first
+   * argues for per-cue offsets; the second argues for refusing the pair.
+   *
+   * Telling them apart by the overlap splitting actually reaches is what stops
+   * "half the pairs need more than one shift" from counting failures as
+   * evidence for splits. */
+  const wide = gains.filter((g) => g.spread > 5000);
+  const recut = wide.filter((g) => g.piecewise >= 0.85);
+  const failed = wide.filter((g) => g.piecewise < 0.85);
+  console.log(`  of the ${wide.length} with segments more than 5s apart:`);
+  console.log(`     ${recut.length} reach 85%+ overlap once split - re-cuts, and per-cue offsets would fix them` +
+    `${recut.length ? ` (median gain ${(median(recut.map((g) => g.gain)) * 100).toFixed(1)} points)` : ""}`);
+  console.log(`     ${failed.length} never do - no alignment exists to find, and splitting is not the answer` +
+    `${failed.length ? ` (best reaches ${(Math.max(...failed.map((g) => g.piecewise)) * 100).toFixed(0)}%)` : ""}`);
   console.log(`  CONTROL - pairs whose segments agree within 1s (${settled.length}): ` +
     `median gain ${(median(settled.map((g) => g.gain)) * 100).toFixed(1)} points`);
   console.log(`  pairs whose segments want more than 5s apart (${drifting.length}): ` +

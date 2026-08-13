@@ -22,6 +22,21 @@ export const REPO = path.resolve(HERE, "../..");
 const CACHE = path.join(REPO, "subtitle-daemon/cache/subtitles");
 const VIEWER = path.join(REPO, "srt-viewer/subtitles");
 
+/* Identities the bench recorded for itself.
+ *
+ * A subtitle fetched straight from the daemon comes back with `movie_name`
+ * null - the extension fills that in from the search result at attach time, and
+ * there is no attach step here - so the corpus grown by `expand.mjs` carries
+ * its labels in this file instead. Written by the thing that did the searching,
+ * which is the only thing that knows what it was looking for. */
+function recorded() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(HERE, "labels.json"), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
 /* Downloads whose sidecar carries no identity at all. Named here so a new one
  * fails loudly in `check()` rather than quietly becoming a negative pair
  * against all 53 others. */
@@ -64,6 +79,7 @@ const tidy = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
 
 export function load() {
   const files = new Map();
+  const noted = recorded();
 
   for (const name of fs.readdirSync(CACHE).filter((f) => f.endsWith(".srt")).sort()) {
     const id = name.slice(0, -4);
@@ -77,9 +93,9 @@ export function load() {
     files.set(id, {
       id,
       spans,
-      film: NO_METADATA[id] || tidy(sidecar.movie_name) || null,
-      language: sidecar.language || null,
-      release: sidecar.release || sidecar.file_name || null,
+      film: NO_METADATA[id] || tidy(noted[id]?.film) || tidy(sidecar.movie_name) || null,
+      language: noted[id]?.language || sidecar.language || null,
+      release: noted[id]?.release || sidecar.release || sidecar.file_name || null,
       from: "cache",
     });
   }

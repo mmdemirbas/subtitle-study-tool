@@ -1,0 +1,254 @@
+{
+ "527605": {
+  "film": "fargo",
+  "language": "tr",
+  "release": "Fargo.1996.REMASTERED.1080p.BluRay.DTS-HD.MA.5.1.x264-PublicHD",
+  "askedFor": "Fargo",
+  "why": "Turkish, cross-language pair"
+ },
+ "528058": {
+  "film": "fargo",
+  "language": "en",
+  "release": "Fargo.1996.1080p.BluRay.x264.YIFY",
+  "askedFor": "Fargo",
+  "why": "English, best match"
+ },
+ "528701": {
+  "film": "fargo",
+  "language": "en",
+  "release": "Fargo.1996.REMASTERED.1080p.BluRay.x264.anoXmous",
+  "askedFor": "Fargo",
+  "why": "second English release, retiming pair"
+ },
+ "1055045": {
+  "film": "the grand budapest hotel",
+  "language": "tr",
+  "release": "The.Grand.Budapest.Hotel.2014.720p.BluRay.x264-BLOW",
+  "askedFor": "The Grand Budapest Hotel",
+  "why": "Turkish, cross-language pair"
+ },
+ "1055844": {
+  "film": "the grand budapest hotel",
+  "language": "en",
+  "release": "720p.BluRay.x264.YIFY",
+  "askedFor": "The Grand Budapest Hotel",
+  "why": "second English release, retiming pair"
+ },
+ "1057779": {
+  "film": "the grand budapest hotel",
+  "language": "en",
+  "release": "720p.BluRay.X264-BLOW",
+  "askedFor": "The Grand Budapest Hotel",
+  "why": "English, best match"
+ },
+ "1094041": {
+  "film": "interstellar",
+  "language": "en",
+  "release": "Interstellar.2014.720p.BluRay.x264-DAA",
+  "askedFor": "Interstellar",
+  "why": "English, best match"
+ },
+ "1100876": {
+  "film": "interstellar",
+  "language": "tr",
+  "release": "Interstellar (2014) Blu-Ray",
+  "askedFor": "Interstellar",
+  "why": "Turkish, cross-language pair"
+ },
+ "1104143": {
+  "film": "interstellar",
+  "language": "en",
+  "release": "Interstellar.2014.1080p.BluRay.x264.YIFY",
+  "askedFor": "Interstellar",
+  "why": "second English release, retiming pair"
+ },
+ "1167350": {
+  "film": "arrival",
+  "language": "en",
+  "release": "Arrival.2016.720p.BluRay.x264-SPARKS",
+  "askedFor": "Arrival",
+  "why": "English, best match"
+ },
+ "1168496": {
+  "film": "arrival",
+  "language": "tr",
+  "release": "Arrival.2016.WEBRip.x264.AAC-HUD.srt",
+  "askedFor": "Arrival",
+  "why": "Turkish, cross-language pair"
+ },
+ "1258722": {
+  "film": "spirited away",
+  "language": "en",
+  "release": "Spirited Away",
+  "askedFor": "Spirited Away",
+  "why": "second English release, retiming pair"
+ },
+ "1259694": {
+  "film": "spirited away",
+  "language": "tr",
+  "release": "Spirited.Away[2001]DvDrip[Eng]-avi",
+  "askedFor": "Spirited Away",
+  "why": "Turkish, cross-language pair"
+ },
+ "1266087": {
+  "film": "spirited away",
+  "language": "en",
+  "release": "Spirited.Away.2001.1080p.BluRay.X264-AMIABLE",
+  "askedFor": "Spirited Away",
+  "why": "English, best match"
+ },
+ "1811304": {
+  "film": "the wire s1e1",
+  "language": "en",
+  "release": "The Wire S1E01-04",
+  "askedFor": "The Wire",
+  "why": "second English release, retiming pair"
+ },
+ "1811853": {
+  "film": "the wire s1e1",
+  "language": "en",
+  "release": "\"Wire, The\" (2002)",
+  "askedFor": "The Wire",
+  "why": "English, best match"
+ },
+ "1812909": {
+  "film": "the wire s1e1",
+  "language": "tr",
+  "release": "The.Wire.S01E01.The.Target.AC3.DVDRip.XviD-MEDiEVAL",
+  "askedFor": "The Wire",
+  "why": "Turkish, cross-language pair"
+ },
+ "2604488": {
+  "film": "sherlock s1e1",
+  "language": "en",
+  "release": "Sherlock (2010).S01E01.HDTV.XviD-FoV",
+  "askedFor": "Sherlock",
+  "why": "second English release, retiming pair"
+ },
+ "2610474": {
+  "film": "sherlock s1e1",
+  "language": "en",
+  "release": "Sherlock.DVDRip.XviD-HAGGiS",
+  "askedFor": "Sherlock",
+  "why": "English, best match"
+ },
+ "2612168": {
+  "film": "sherlock s1e1",
+  "language": "tr",
+  "release": "Sherlock 1x1",
+  "askedFor": "Sherlock",
+  "why": "Turkish, cross-language pair"
+ },
+ "2616484": {
+  "film": "breaking bad s1e1",
+  "language": "en",
+  "release": "Breaking.Bad.S01.dvdrip.xvid-ORPHEUS",
+  "askedFor": "Breaking Bad",
+  "why": "English, best match"
+ },
+ "2618195": {
+  "film": "breaking bad s1e1",
+  "language": "en",
+  "release": "Breaking.Bad.S01E01.720p.HDTV.x264-BiA",
+  "askedFor": "Breaking Bad",
+  "why": "second English release, retiming pair"
+ },
+ "2622728": {
+  "film": "breaking bad s1e1",
+  "language": "tr",
+  "release": "Breaking Bad.01",
+  "askedFor": "Breaking Bad",
+  "why": "Turkish, cross-language pair"
+ },
+ "4376047": {
+  "film": "arrival",
+  "language": "en",
+  "release": "Arrival.2016.1080p.BluRay.x264.DTS-WiKi",
+  "askedFor": "Arrival",
+  "why": "second English release, retiming pair"
+ },
+ "4472858": {
+  "film": "amélie",
+  "language": "en",
+  "release": "Amelie.2001.720p.BluRay.x264-HD",
+  "askedFor": "Amelie",
+  "why": "second English release, retiming pair"
+ },
+ "4474510": {
+  "film": "amélie",
+  "language": "en",
+  "release": "Amelie.2001.BluRay.720p.x264.DTS-HDChina",
+  "askedFor": "Amelie",
+  "why": "English, best match"
+ },
+ "4476320": {
+  "film": "amélie",
+  "language": "tr",
+  "release": "Sitedeki Gopo sürümü hatalıydı. Sinners sürümünden tekrar senkronize ettim.",
+  "askedFor": "Amelie",
+  "why": "Turkish, cross-language pair"
+ },
+ "4681978": {
+  "film": "the dark knight",
+  "language": "tr",
+  "release": "The.Dark.Knight.1080p.BluRay.x264-HD1080",
+  "askedFor": "The Dark Knight",
+  "why": "Turkish, cross-language pair"
+ },
+ "4682380": {
+  "film": "the dark knight",
+  "language": "en",
+  "release": "The.Dark.Knight.2008.1080p.Bluray.x264.anoXmous",
+  "askedFor": "The Dark Knight",
+  "why": "English, best match"
+ },
+ "4682614": {
+  "film": "the dark knight",
+  "language": "en",
+  "release": "the.dark.knight.2008.720p.bluray.x264-nezu",
+  "askedFor": "The Dark Knight",
+  "why": "second English release, retiming pair"
+ },
+ "4974316": {
+  "film": "chernobyl s1e1",
+  "language": "tr",
+  "release": "Chernobyl.S01E01.XviD-AFG",
+  "askedFor": "Chernobyl",
+  "why": "Turkish, cross-language pair"
+ },
+ "4990801": {
+  "film": "chernobyl s1e1",
+  "language": "en",
+  "release": "Chernobyl.s01e01",
+  "askedFor": "Chernobyl",
+  "why": "English, best match"
+ },
+ "5048018": {
+  "film": "parasite",
+  "language": "en",
+  "release": "Parasite (1982)",
+  "askedFor": "Parasite",
+  "why": "English, best match"
+ },
+ "5076258": {
+  "film": "parasite",
+  "language": "en",
+  "release": "Parasite.1982.1080p.BluRay.H264.AAC-RARBG",
+  "askedFor": "Parasite",
+  "why": "second English release, retiming pair"
+ },
+ "5159659": {
+  "film": "parasite",
+  "language": "tr",
+  "release": "Parasite (1982)",
+  "askedFor": "Parasite",
+  "why": "Turkish, cross-language pair"
+ },
+ "9048167": {
+  "film": "chernobyl s1e1",
+  "language": "en",
+  "release": "Chernobyl S01E01 12345",
+  "askedFor": "Chernobyl",
+  "why": "second English release, retiming pair"
+ }
+}
