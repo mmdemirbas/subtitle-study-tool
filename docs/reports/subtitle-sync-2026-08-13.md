@@ -3,12 +3,31 @@ title: Subtitle sync, and what to change
 summary: How our aligner works, where it fails and why, what ffsubsync and alass do differently, and a measurement on our own corpus that says which change to make first.
 ---
 
+> [!WARNING]
+> **Superseded in part, one day later.** Everything below was measured on 54 files whose same-film pairs were 42/43 one television series. The corpus has since been doubled to 90 files and 38 films, and two of the three headline claims did not survive it. The measurements are left as they were rather than quietly restated; [what changed](#superseded) is the first section.
+
 > [!TLDR]
-> Our aligner votes on the difference between cue **start times**. Both published tools align **intervals** instead. Tested on our own 1,429 pairs, that one change lifts the ranking from AUC 0.950 to 0.9999 and recovers all four same-film pairs we currently refuse.
+> Our aligner votes on the difference between cue **start times**. Both published tools align **intervals** instead. On the narrow corpus that looked decisive — AUC 0.950 to 0.9999. **On the wider corpus it is 0.957 to 0.964, and the incumbent is ahead at the operating point that matters.**
 >
-> - The decision framework — refuse / offer / apply — is sound and should be kept. It is the *evidence* underneath it that is thin.
-> - A joint gate on interval correlation and peak prominence separated the corpus completely: 0 misses of 43 same-film pairs, 0 false accepts of 1,387. Tuned on one corpus, so treat it as a strong lead, not a settled constant.
-> - Intervals do **not** fix a re-cut release. That needs a per-cue offset, which is what alass exists for, and it is a second change rather than the same one.
+> - The decision framework — refuse / offer / apply — is sound and should be kept. That claim survived.
+> - The joint gate that separated the narrow corpus completely fell to AUC 0.949 on the wider one. It was tuned against 43 positives from one series; this is what that costs.
+> - **The finding that survived, and got sharper: 22 of 78 same-film pairs cannot be fixed by any single shift.** Per-cue offsets, not interval scoring, is the change with evidence behind it.
+
+## What changed when the corpus doubled {#superseded}
+
+`bench/align/` now runs every method over every pair and `expand.mjs` grew the corpus deliberately — twelve titles across four decades, film and television, rather than one series. 90 files, 38 films, 78 same-film pairs, 3,925 different-film pairs.
+
+```oku-table
+{"headers":["Measured","54 files, 43 positives","90 files, 78 positives","Held up?"],"rows":[["Intervals, AUC","0.99986","0.96423","No — the gap to the incumbent nearly closed"],["Start points, AUC","0.94989","0.95685","The incumbent got *better*"],["Joint gate, AUC","1.00000","0.94916","**No** — this is the overfitting warned about below"],["Recall at zero false accepts, intervals","95.2%","85.9%","No"],["Recall at zero false accepts, start points","85.7%","**89.7%**","The incumbent now **wins** this"],["Same-film pairs needing more than one shift","—","22 of 78","Yes, and now separable from unalignable pairs"]]}
+```
+
+Three things follow, and they change the recommendation order at the end of this document.
+
+**Do not rush the interval change.** It is still ahead on ranking, by 0.007 rather than 0.05, and it is *behind* on recall at zero false accepts — the operating point this product actually runs at. That is the metric worth optimising, and the incumbent's binomial currently wins it.
+
+**The joint gate is dead.** Its two constants were grid-searched against 43 positives on one series. The report already said to hold them out before shipping; the wider corpus did that and they lost a full point of AUC. Treat it as a worked example of why the AUC was quoted as the untuned number.
+
+**Splits are the real opportunity.** Cutting the timeline into six segments and letting each choose its own offset separates cleanly into three groups: 43 pairs gain 0.1 overlap points (the control — nothing to recover), 22 gain a median 12.5 points and reach 85%+ overlap (genuine re-cuts), and 6 never align at any offset (unalignable, and splitting is not the answer). No amount of better scoring reaches those 22.
 
 This is a **teaching document**: it is meant to be read start to finish, and it is ordered by the question you would ask next, not by topic. The measurements and their scripts are named as they arrive so any of them can be re-run.
 
