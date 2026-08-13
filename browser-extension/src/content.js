@@ -4038,14 +4038,39 @@
     claimedSubject = subject;
     sendToWorker({ type: "sso:frameRole", hasSubject: subject })
       .then((reply) => {
+        const was = role;
         role = reply?.role === "video" ? "video" : "solo";
         // The top frame's button is the one now; take this frame's away
         // rather than leaving two of them on screen until it times out.
         if (role === "video" && handle) handle.dataset.visible = "false";
+        if (role === "video" && was !== "video") handBackPanel();
       })
       .catch(() => {
         role = "solo";
       });
+  }
+
+  /* A panel opened in fullscreen, handed back on the way out.
+   *
+   * Reported as: open the panel while the film is fullscreen, leave fullscreen,
+   * and the panel is trapped inside the player's rectangle and clipped at its
+   * edges, so it cannot be dragged anywhere else.
+   *
+   * It is not a clipping bug. While the film's frame is fullscreen it stops
+   * claiming to hold the subject - see reportFrameRole - which hands the whole
+   * job back to it, so the panel opened in fullscreen is BUILT in the player's
+   * frame. Leaving fullscreen gives the controls back to the top frame, and the
+   * panel stays where it was built: inside an iframe, which is one box in its
+   * parent's layout and cannot paint outside it. No z-index and no top layer
+   * can lift it out, because the top layer is per document.
+   *
+   * So it moves rather than being freed. This frame closes the one it drew and
+   * asks the frame that now draws the controls to open its own. The position is
+   * a stored setting, so it comes back where the reader put it. */
+  function handBackPanel() {
+    if (!window.__ssoPanel?.isOpen?.()) return;
+    window.__ssoPanel.hide();
+    sendToWorker({ type: "sso:toChrome", message: { type: "sso:showPanel" } });
   }
 
   /* How often the video frame's state crosses the gap.
@@ -4526,6 +4551,14 @@
 
       case "sso:togglePanel":
         window.__ssoPanel?.toggle();
+        sendResponse({ ok: Boolean(window.__ssoPanel) });
+        return false;
+
+      /* Show, not toggle. This arrives from the film's frame when it stops
+       * drawing the controls with a panel still open - leaving fullscreen - and
+       * a toggle would close the panel it is asking us to take over. */
+      case "sso:showPanel":
+        window.__ssoPanel?.show();
         sendResponse({ ok: Boolean(window.__ssoPanel) });
         return false;
 

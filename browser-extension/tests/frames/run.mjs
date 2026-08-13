@@ -530,6 +530,45 @@ try {
     t("pressing it opens a panel there that answers its own controls", false, "no button to press");
   }
 
+  /* --- and leaving fullscreen has to bring it back out of the player --------
+   *
+   * Reported as: open the panel in fullscreen, leave fullscreen, and the panel
+   * is stuck inside the player's rectangle and clipped at its edges, so it
+   * cannot be dragged anywhere else.
+   *
+   * The panel above was built in the FILM's frame, which is correct while that
+   * frame is fullscreen - it stops claiming the subject, so it draws its own
+   * controls. Leaving fullscreen hands the controls back to the top frame and
+   * the panel stayed where it was built: inside an iframe, which is one box in
+   * its parent's layout and cannot paint outside it. Nothing about z-index or
+   * the top layer can lift it out, because the top layer is per document.
+   *
+   * So the assertion is WHICH FRAME the panel is in afterwards, not whether one
+   * exists. Before the fix a panel was still pressable here, in frame 2, which
+   * is exactly the complaint rather than the absence of one. */
+  if (ccInFullscreen) {
+    await page.evaluate(() => document.exitFullscreen?.().catch(() => {}));
+    await page.waitForTimeout(1200);
+    const backOut = await until(async () => {
+      await wake();
+      const seen = await pressable("Close");
+      // Wait for it to have MOVED, not merely to exist: the panel the film's
+      // frame drew is still there for a moment while the roles change hands.
+      return seen && seen.frameId === 0 ? seen : null;
+    }, 20000);
+    const stillInside = backOut ? null : await pressable("Close");
+    t("leaving fullscreen brings the panel back out of the player's frame",
+      Boolean(backOut),
+      backOut
+        ? "panel is in the top frame"
+        : stillInside
+          ? `panel is still in frame ${stillInside.frameId}, where it is clipped`
+          : "no panel anywhere after leaving fullscreen");
+  } else {
+    t("leaving fullscreen brings the panel back out of the player's frame", false,
+      "never got a panel in fullscreen to bring back");
+  }
+
   /* --- and the switch that has to reach the film from wherever it is thrown --
    *
    * Reported as "I cannot see the study panel". Study is one setting shared by
