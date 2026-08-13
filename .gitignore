@@ -62,3 +62,6 @@ docs/reports/_oku
 # Logs / Temp
 *.log
 tmp/
+
+# The bake-off writes this; it is derived from the corpus and the code.
+bench/align/results.json
