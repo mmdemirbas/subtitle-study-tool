@@ -264,6 +264,23 @@ export async function pageContextForTab(tab, videoFrameId = null) {
     episodeSource: episode?.source ?? null,
     candidateCount: candidates.length,
     framesAsked: reports.length,
+    /* What the page actually offered, not just how many things it offered.
+     *
+     * The count alone cannot answer the question it gets asked. Recorded on
+     * 2026-08-12: auto-attach refused with `Nothing matched "The Americans Full
+     * Episodes"`, context `candidateCount: 4, episodeSource: null` - four
+     * candidates, and no way to tell whether the page named the episode
+     * somewhere this missed, or genuinely never said. Those are different bugs
+     * and the log could not separate them.
+     *
+     * Capped and trimmed: this rides every autoAttach entry, and the entry
+     * already carries the ranked results. */
+    candidates: candidates.slice(0, 8).map((candidate) => ({
+      source: candidate.source,
+      frameId: candidate.frameId,
+      text: String(candidate.text || "").slice(0, 120),
+      episode: candidate.episode ?? null,
+    })),
   };
 }
 

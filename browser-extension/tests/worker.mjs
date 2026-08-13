@@ -37,12 +37,15 @@ globalThis.fetch = async (url, options) => {
 globalThis.addEventListener = (type, fn) => {
   (listeners.global[type] ||= []).push(fn);
 };
+let frameList = [{ frameId: 0 }];
 const store = {};
 const sentToTab = [];
 // Every scripting call the worker made, so a test can assert the injection
 // happened rather than only that nothing threw.
 const injected = [];
 let tabStatusReply = { ok: true, hasVideo: true, attached: false };
+// What each frame says about the page. Replaced by the pageContext cases.
+let pageInfoReply = () => ({ ok: true });
 // Whether the tab has a content script that answers. False is a tab left open
 // across an extension update, which is the case the self-heal exists for.
 let pingAlive = false;
@@ -108,6 +111,9 @@ globalThis.chrome = {
     async sendMessage(tabId, message) {
       sentToTab.push({ tabId, type: message.type, message });
       if (message.type === "sso:status") return { ...tabStatusReply };
+      // Two frames describing the same page differently, which is the shape
+      // pageContextForTab exists to reconcile. Set per case.
+      if (message.type === "sso:pageInfo") return pageInfoReply(message, arguments[2]);
       if (message.type === "sso:ping") {
         // What Chrome does when nothing is listening in the tab.
         if (!pingAlive) throw new Error("Could not establish connection.");
@@ -143,7 +149,7 @@ globalThis.chrome = {
       return [];
     },
   },
-  webNavigation: { async getAllFrames() { return [{ frameId: 0 }]; } },
+  webNavigation: { async getAllFrames() { return frameList; } },
   action: { async setBadgeText() {}, async setBadgeBackgroundColor() {} },
 };
 
@@ -484,6 +490,57 @@ t(
   JSON.stringify(trace.packTimes(times)).length < JSON.stringify(times).length,
   `${JSON.stringify(trace.packTimes(times)).length} against ${JSON.stringify(times).length}`,
 );
+
+/* --- what the page offered, not just how much of it -------------------------
+ *
+ * auto-attach refused on 2026-08-12 with `Nothing matched "The Americans Full
+ * Episodes"`, and its recorded context said `candidateCount: 4,
+ * episodeSource: null`. Four candidates and no way to tell whether the page
+ * named the episode somewhere the picker missed or never said it at all -
+ * which are different bugs with the same log line.
+ */
+{
+  const { pageContextForTab } = await import("../src/daemon.js");
+  frameList = [{ frameId: 0 }, { frameId: 2 }];
+  pageInfoReply = (message, options) => {
+    const frameId = options?.frameId ?? 0;
+    if (frameId === 0) {
+      return {
+        ok: true,
+        year: null,
+        candidates: [
+          { source: "og:title", text: "Watch The Americans Full Episodes", episode: null },
+          { source: "h1", text: "The Americans", episode: null },
+        ],
+        episode: null,
+      };
+    }
+    return {
+      ok: true,
+      year: null,
+      candidates: [{ source: "frame title", text: "The Americans S01E05", episode: { season: 1, episode: 5 } }],
+      episode: { fromTitle: { season: 1, episode: 5 } },
+    };
+  };
+
+  const context = await pageContextForTab({ id: 1, title: "tab" }, 2);
+  t(
+    "the page context says which episode, from the frame that knew",
+    context.season === 1 && context.episode === 5,
+    JSON.stringify({ season: context.season, episode: context.episode, source: context.episodeSource }),
+  );
+  t(
+    "and it records what every frame offered, not only how many",
+    Array.isArray(context.candidates) &&
+      context.candidates.length === 3 &&
+      context.candidates.some((c) => c.text.includes("Full Episodes") && c.frameId === 0) &&
+      context.candidates.some((c) => c.text.includes("S01E05") && c.frameId === 2),
+    JSON.stringify(context.candidates),
+  );
+
+  frameList = [{ frameId: 0 }];
+  pageInfoReply = () => ({ ok: true });
+}
 
 /* A failure inside the worker is invisible from the page and from the report,
  * and it is exactly what makes a control do nothing. */
