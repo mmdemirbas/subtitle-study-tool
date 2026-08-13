@@ -82,6 +82,13 @@
       window.__stubDaemon = null;
       window.chrome = {
         runtime: {
+          /* Chrome always has one, and its DISAPPEARANCE is the documented
+             signal that the extension has been reloaded under this tab. The
+             stub had no `id` at all, which is the stub being less faithful than
+             the API rather than more: content.js reads it to decide whether it
+             is still attached to a live extension, so an absent one means every
+             copy here would correctly conclude it had been orphaned. */
+          id: "ssoharnessextensionid",
           getManifest: () => ({ version: "0.1.0" }),
           getURL: (p) => EXT + p.split("/").pop(),
           /* Recorded rather than discarded. The worker's half of this is not
@@ -5560,12 +5567,90 @@
         if (count() > 2) throw new Error(`${count()} shadow hosts after re-injection`);
       });
 
+      check("an extension reloaded under the tab stops this copy, quietly", async () => {
+        /* The other half of re-injection, and the one nobody sees.
+         *
+         * Reloading an extension orphans the content scripts still running in
+         * open tabs. Every chrome.* call then throws "Extension context
+         * invalidated" - SYNCHRONOUSLY, which is the whole defect: every call
+         * site is written chrome.something(...).catch(...), and a synchronous
+         * throw happens before there is a promise for that catch to attach to.
+         *
+         * Reported from the extension's own error page as "Uncaught Error:
+         * Extension context invalidated. src/content.js:4326", which was the
+         * sendMessage inside trace(). trace() is reached from the tick, so one
+         * orphaned frame threw it twenty times a second for as long as its tab
+         * stayed open. It could only ever be seen there, because the daemon is
+         * precisely what an invalidated context can no longer reach.
+         *
+         * Two assertions, because going quiet is the remedy and swallowing is
+         * not: nothing may throw, AND the copy has to stop. A frame that merely
+         * caught its failures would hold a video observer and a document full
+         * of listeners for the life of the tab. */
+        const runtime = window.chrome.runtime;
+        const storage = window.chrome.storage.local;
+        const keep = { id: runtime.id, send: runtime.sendMessage, set: storage.set, get: storage.get };
+        const invalidated = () => { throw new Error("Extension context invalidated."); };
+        const thrown = [];
+        const onError = (event) => thrown.push(String(event.message || ""));
+        window.addEventListener("error", onError);
+        try {
+          delete runtime.id;
+          runtime.sendMessage = invalidated;
+          storage.set = invalidated;
+          storage.get = invalidated;
+
+          /* Drive the reported path rather than waiting to see whether anything
+           * happens to take it. trace() is event-driven, so a first version of
+           * this case that only slept proved nothing: the mutation that puts
+           * the defect back still passed, because in 300 quiet milliseconds
+           * nothing called trace at all.
+           *
+           * A page error is the honest driver, and it is also the worst case.
+           * The extension listens for window errors in order to record them, so
+           * an orphaned frame answers the page's error by reaching for the
+           * worker, throwing a SECOND error from inside the error handler. */
+          window.dispatchEvent(new ErrorEvent("error", {
+            message: "the page itself blew up - sso-harness raised this on purpose",
+            filename: "https://example.invalid/player.js",
+            lineno: 1,
+          }));
+          // And several ticks besides, for whatever the timers would have done.
+          await sleep(300);
+          const loud = thrown.filter((m) => /invalidated/i.test(m));
+          if (loud.length) throw new Error(`${loud.length} uncaught, first: ${loud[0]}`);
+          if (shadowOf()) throw new Error("still drawing an overlay after being orphaned");
+        } finally {
+          window.removeEventListener("error", onError);
+          Object.assign(runtime, { id: keep.id, sendMessage: keep.send });
+          Object.assign(storage, { set: keep.set, get: keep.get });
+          // Put a live copy back, or anything after this reports on a corpse.
+          const load = (src) => new Promise((ok, no) => {
+            const s = document.createElement("script");
+            s.src = src + "?v=orphan"; s.onload = ok; s.onerror = no;
+            document.body.append(s);
+          });
+          await load("../src/content.js");
+          await load("../src/panel.js");
+          await load("../src/study.js");
+          await sleep(150);
+        }
+      });
+
       // --- run ------------------------------------------------------------
       /* An error nobody caught is a failure even when every assertion holds.
        * Rejected promises count too: most of this code reports failure by
        * rejecting inside a .catch() that discards it. */
+      /* A case that raises an error ON PURPOSE says so, or the collector reports
+       * the suite's own driver as a failure of the code under test. Exactly one
+       * case does this: the orphaned-context one has to hand the extension a
+       * page error to answer, because answering it is what used to throw. */
+      const DELIBERATE = "sso-harness raised this on purpose";
       const loose = [];
-      window.addEventListener("error", (e) => loose.push(e.message));
+      window.addEventListener("error", (e) => {
+        if (String(e.message || "").includes(DELIBERATE)) return;
+        loose.push(e.message);
+      });
       window.addEventListener("unhandledrejection", (e) => loose.push(String(e.reason?.message ?? e.reason)));
 
       /* Which case is running, readable from outside.

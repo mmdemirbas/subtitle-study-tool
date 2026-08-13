@@ -6,6 +6,12 @@
  * worker, the same way the panel does.
  */
 
+import { reportPageErrors } from "./page-errors.js";
+
+// Everything else records its failures; these pages did not. See page-errors.js.
+reportPageErrors("settings page");
+
+
 /* Never rejects, the same contract content.js gives the panel.
  *
  * sendMessage rejects when the channel fails rather than when the work does -

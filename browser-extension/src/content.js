@@ -28,6 +28,92 @@
     }
   }
 
+  /* A copy of this script that no longer belongs to a live extension.
+   *
+   * Reloading or updating an extension orphans the content scripts already
+   * running in open tabs. The DOM is still there and the code keeps ticking,
+   * but every `chrome.*` call throws "Extension context invalidated" - and it
+   * throws SYNCHRONOUSLY, which is the whole bug. Every call site here is
+   * written `chrome.something(...).catch(...)`, and a synchronous throw happens
+   * before there is a promise for that catch to attach to, so it reaches the
+   * top of the frame uncaught.
+   *
+   * Reported from the extension's own error page: "Uncaught Error: Extension
+   * context invalidated. src/content.js:4326", which is the sendMessage inside
+   * trace(). trace() is reached from the tick, so one orphaned frame threw that
+   * twenty times a second for as long as its tab stayed open - and the error
+   * page is the only place it could be seen, because the daemon is exactly what
+   * an invalidated context can no longer reach.
+   *
+   * `chrome.runtime.id` is undefined once it has happened, and reading it costs
+   * nothing. Everything below goes through these three, so a new call site
+   * cannot reintroduce the throw by forgetting to guard. */
+  let orphaned = false;
+
+  function alive() {
+    if (orphaned) return false;
+    try {
+      if (chrome.runtime?.id) return true;
+    } catch {
+      // Some builds throw on the property read itself rather than answering.
+    }
+    orphan();
+    return false;
+  }
+
+  /* Going quiet is the point, not swallowing the error.
+   *
+   * An orphaned frame that merely caught its failures would go on doing nothing
+   * twenty times a second, holding a video observer and a document full of
+   * listeners, for as long as the tab is open. There is no way to report this:
+   * the worker it would report to is gone. Stopping is the whole remedy. */
+  function orphan() {
+    if (orphaned) return;
+    orphaned = true;
+    try {
+      window.__ssoTeardown?.();
+    } catch {
+      // A teardown that fails must not leave the flag unset.
+    }
+  }
+
+  /** Never throws and never rejects. null means "no answer", as it always did. */
+  function sendToWorker(message) {
+    if (!alive()) return Promise.resolve(null);
+    try {
+      return chrome.runtime.sendMessage(message).catch(() => null);
+    } catch {
+      orphan();
+      return Promise.resolve(null);
+    }
+  }
+
+  /** Reading storage, with "the extension is gone" answering as "nothing kept". */
+  async function readStored(keys) {
+    if (!alive()) return {};
+    try {
+      return (await chrome.storage.local.get(keys)) || {};
+    } catch {
+      if (!alive()) return {};
+      // A real storage failure, not an orphaned context. Defaults are fine.
+      return {};
+    }
+  }
+
+  /** Writing it, which is allowed to be lost but never to throw. */
+  function writeStored(patch, { remove = null } = {}) {
+    if (!alive()) return Promise.resolve(false);
+    try {
+      const done = remove
+        ? chrome.storage.local.remove(remove)
+        : chrome.storage.local.set(patch);
+      return done.then(() => true).catch(() => false);
+    } catch {
+      orphan();
+      return Promise.resolve(false);
+    }
+  }
+
   const VERSION = chrome.runtime.getManifest().version;
   const TICK_MS = 50; // ~20 Hz: below perceptible latency, negligible cost
   /* The speed for having nothing to do.
@@ -1079,7 +1165,7 @@
 
   async function loadSettings() {
     try {
-      const stored = await chrome.storage.local.get(SETTINGS_KEY);
+      const stored = await readStored(SETTINGS_KEY);
       const saved = stored[SETTINGS_KEY];
       if (saved) state.settings = migrate(saved);
     } catch {
@@ -1161,7 +1247,7 @@
 
     state.settings = next;
     applySettings();
-    chrome.storage.local.set({ [SETTINGS_KEY]: state.settings }).catch(() => {});
+    writeStored({ [SETTINGS_KEY]: state.settings });
     notify();
   }
 
@@ -2025,7 +2111,7 @@
 
     const remember = () => {
       if (!storeKey) return;
-      chrome.storage.local.set({ [storeKey]: { ...at, ...size } }).catch(() => {});
+      writeStored({ [storeKey]: { ...at, ...size } });
     };
 
     makeMovable(root, {
@@ -2099,7 +2185,7 @@
           const generation = ++shows;
           let stored = null;
           try {
-            stored = storeKey ? (await chrome.storage.local.get(storeKey))[storeKey] : null;
+            stored = storeKey ? (await readStored(storeKey))[storeKey] : null;
           } catch {
             // Defaults are fine.
           }
@@ -2311,6 +2397,12 @@
   }
 
   function tick() {
+    /* The soonest anything notices that the extension has been reloaded under
+     * this tab. Nothing else in an orphaned frame runs on its own - the pointer
+     * handlers and the message listener all wait to be called - so the tick is
+     * what turns "every chrome call throws" into "this copy has stopped",
+     * within one tick of it becoming true. */
+    if (!alive()) return;
     const tickStarted = performance.now();
     perf.ticks += 1;
     try {
@@ -2684,7 +2776,7 @@
      * twenty times a second and this is a round trip; without it, twenty
      * requests go out before the first one is back. */
     programme.told = mark;
-    chrome.runtime.sendMessage({ type: "sso:programme", mark }).catch(() => {
+    sendToWorker({ type: "sso:programme", mark }).catch(() => {
       // No worker listening is not this frame's problem to report.
     });
   }
@@ -2896,7 +2988,7 @@
     const pending = pendingOffsets.get(fileId);
     if (pending) return { ...pending, known: true };
     try {
-      const stored = await chrome.storage.local.get(offsetKey(fileId));
+      const stored = await readStored(offsetKey(fileId));
       const saved = stored[offsetKey(fileId)];
       if (typeof saved === "number") return { offsetMs: saved, rate: 1, known: true };
       if (!saved) return nothing;
@@ -2945,7 +3037,7 @@
     const patch = {};
     for (const [fileId, timing] of pendingOffsets) patch[offsetKey(fileId)] = timing;
     pendingOffsets.clear();
-    chrome.storage.local.set(patch).catch(() => {});
+    writeStored(patch);
   }
 
   /* The correction, carried to the next episode.
@@ -2999,7 +3091,7 @@
     const family = timingFamily(track.label);
     if (!family) return;
     try {
-      const stored = await chrome.storage.local.get(USED_TIMING_KEY);
+      const stored = await readStored(USED_TIMING_KEY);
       const list = Array.isArray(stored[USED_TIMING_KEY]) ? stored[USED_TIMING_KEY] : [];
       const mine = (entry) =>
         entry?.family === family && (entry?.language || "") === (track.language || "");
@@ -3017,7 +3109,7 @@
         offsetMs: track.offsetMs,
         rate: track.rate,
       });
-      await chrome.storage.local.set({ [USED_TIMING_KEY]: kept.slice(0, TIMING_MEMORY_MAX) });
+      await writeStored({ [USED_TIMING_KEY]: kept.slice(0, TIMING_MEMORY_MAX) });
     } catch {
       // A timing that fails to be remembered leaves things as they were before
       // any of this existed, which is a working extension.
@@ -3038,7 +3130,7 @@
     const family = timingFamily(track.label);
     if (!family) return null;
     try {
-      const stored = await chrome.storage.local.get(USED_TIMING_KEY);
+      const stored = await readStored(USED_TIMING_KEY);
       const list = Array.isArray(stored[USED_TIMING_KEY]) ? stored[USED_TIMING_KEY] : [];
       const found = list.find(
         (entry) =>
@@ -3457,7 +3549,7 @@
      * hand on a page whose mark had not been reported yet would be followed by
      * the worker attaching over the top of it a second later. */
     programme.told = programmeMark() || programme.told;
-    chrome.runtime.sendMessage({ type: "sso:attached" }).catch(() => {});
+    sendToWorker({ type: "sso:attached" });
     // Show the handle on attach, so it is discoverable without knowing that
     // moving the mouse summons it.
     revealHandle();
@@ -3567,7 +3659,7 @@
   function rememberLanguages() {
     const used = state.tracks.map((track) => (track.cues.length > 0 ? track.language || "" : ""));
     if (!used.some(Boolean)) return;
-    chrome.storage.local.set({ [USED_LANGUAGES_KEY]: used }).catch(() => {});
+    writeStored({ [USED_LANGUAGES_KEY]: used });
   }
 
   /* Line one subtitle up against the other.
@@ -3944,8 +4036,7 @@
     const subject = isPageSubject(pickVideoCached()) && !inFullscreenHere();
     if (subject === claimedSubject) return;
     claimedSubject = subject;
-    chrome.runtime
-      .sendMessage({ type: "sso:frameRole", hasSubject: subject })
+    sendToWorker({ type: "sso:frameRole", hasSubject: subject })
       .then((reply) => {
         role = reply?.role === "video" ? "video" : "solo";
         // The top frame's button is the one now; take this frame's away
@@ -3995,19 +4086,18 @@
     const heavy = signature !== mirrorSignature;
     mirrorSignature = signature;
 
-    chrome.runtime
-      .sendMessage({
-        type: "sso:toChrome",
-        message: {
-          type: "sso:mirror",
-          status: snapshot,
-          removed: lastRemoved() || null,
-          // The panel's Study button and the "learning" chip on each card read
-          // this, and it lives in the frame the rail is drawn in.
-          study: window.__ssoStudy?.settings?.() || null,
-          cueSpans: heavy ? snapshot.tracks.map((_, slot) => cueSpansFor(slot)) : null,
-        },
-      })
+    sendToWorker({
+      type: "sso:toChrome",
+      message: {
+        type: "sso:mirror",
+        status: snapshot,
+        removed: lastRemoved() || null,
+        // The panel's Study button and the "learning" chip on each card read
+        // this, and it lives in the frame the rail is drawn in.
+        study: window.__ssoStudy?.settings?.() || null,
+        cueSpans: heavy ? snapshot.tracks.map((_, slot) => cueSpansFor(slot)) : null,
+      },
+    })
       .then((reply) => {
         /* A top frame that no longer thinks it draws the controls.
          *
@@ -4037,9 +4127,7 @@
     const now = Date.now();
     if (now - pokedAt < POKE_MS) return;
     pokedAt = now;
-    chrome.runtime
-      .sendMessage({ type: "sso:toChrome", message: { type: "sso:pointerAlive" } })
-      .catch(() => {});
+    sendToWorker({ type: "sso:toChrome", message: { type: "sso:pointerAlive" } });
   }
 
   // --- being the frame that draws the controls ------------------------------
@@ -4106,9 +4194,7 @@
 
   function askForMirror() {
     if (role !== "chrome") return;
-    chrome.runtime
-      .sendMessage({ type: "sso:toVideo", message: { type: "sso:mirrorPlease" } })
-      .catch(() => {});
+    sendToWorker({ type: "sso:toVideo", message: { type: "sso:mirrorPlease" } });
   }
 
   /* Answers whether it was taken, and the answer is load-bearing: a push that
@@ -4200,8 +4286,7 @@
    * as null, which is what the two callers that read one already treat as "no
    * answer". */
   function callVideoFrame(method, args) {
-    return chrome.runtime
-      .sendMessage({ type: "sso:toVideo", message: { type: "sso:call", method, args } })
+    return sendToWorker({ type: "sso:toVideo", message: { type: "sso:call", method, args } })
       .then(
         (reply) => {
           if (reply?.ok) return reply.value ?? null;
@@ -4232,22 +4317,48 @@
    * A page's console is not evidence: nobody has it open during a film, it is
    * per frame, and on a nested player the interesting frame is not the one
    * anybody would think to open it on. */
+  /* Whose error it is.
+   *
+   * A window listener catches the PAGE's errors as well as ours - the two share
+   * a window even though the scripts do not share a world - and the log has no
+   * way to tell them apart once they are written down. One day's log held
+   * twelve, of which the ones that read most alarmingly ("ResizeObserver loop
+   * completed with undelivered notifications") were chat.google.com's own, from
+   * a tab with no film in it. Reading them as the extension's cost real time.
+   *
+   * An extension script's filename is under the extension's own origin, which
+   * nothing on the page can be. Captured once at load, because getURL is a
+   * chrome call and would itself throw in the case that matters most. */
+  const OUR_FILES = (() => {
+    try {
+      return chrome.runtime.getURL("");
+    } catch {
+      return "chrome-extension://";
+    }
+  })();
+  const oursByFile = (file) => Boolean(file) && String(file).startsWith(OUR_FILES);
+
   const onWindowError = (event) => {
+    const file = String(event.filename || "");
     trace("error", {
       where: window === window.top ? "top frame" : "frame",
+      mine: oursByFile(file) || oursByFile(event.error?.stack),
       url: location.href,
       message: String(event.message || event.error?.message || event.error || "error"),
       stack: String(event.error?.stack || "").slice(0, 2000),
-      file: `${event.filename || ""}:${event.lineno || 0}`,
+      file: `${file}:${event.lineno || 0}`,
     });
   };
   const onRejection = (event) => {
+    const stack = String(event.reason?.stack || "");
     trace("error", {
       where: window === window.top ? "top frame" : "frame",
+      // A rejection carries no filename, so the stack is the only witness.
+      mine: stack.includes(OUR_FILES),
       url: location.href,
       unhandledRejection: true,
       message: String(event.reason?.message || event.reason || "rejection"),
-      stack: String(event.reason?.stack || "").slice(0, 2000),
+      stack: stack.slice(0, 2000),
     });
   };
   window.addEventListener("error", onWindowError);
@@ -4295,6 +4406,20 @@
     const seen = { ...perf };
     Object.assign(perf, PERF_ZERO);
     if (!seen.long) return;
+    /* Not from a tab nobody is looking at.
+     *
+     * A background tab has its timers clamped to about one a minute, so the
+     * window is sixty seconds rather than ten and the long task in it is mostly
+     * the tab waking up and doing a minute of deferred work in one go. That is
+     * a fact about throttling, not about this extension, and it drowns the
+     * question the sample was added to answer.
+     *
+     * Measured over the first day of samples: 405 of 505 windows reported
+     * over:60, and 495 of 505 had nothing attached - so the probe was almost
+     * entirely describing tabs with no film in them. The counters are still
+     * reset, so a tab that comes back to the front starts from zero rather than
+     * reporting the whole time it spent hidden. */
+    if (document.visibilityState === "hidden") return;
     trace("perf", {
       role,
       over: Math.round(over),
@@ -4322,9 +4447,7 @@
     // Checked here as well as in the worker, so switching it off also stops
     // the messages, not only what is done with them.
     if (state.settings.diagnostics === false) return;
-    chrome.runtime
-      .sendMessage({ type: "sso:daemon", op: "trace", args: { kind, detail, frames } })
-      .catch(() => {});
+    sendToWorker({ type: "sso:daemon", op: "trace", args: { kind, detail, frames } });
   }
 
   // --- messaging ------------------------------------------------------------
@@ -4645,10 +4768,30 @@
      * Answering in the same shape the worker uses means no caller has to learn
      * a second failure mode, and the ones that already check transportError -
      * search, fetch, diagnose, deckSave - report it without changing. */
+    /* The guarded chrome APIs, for the two scripts sharing this isolated world.
+     *
+     * They have their own storage keys and their own messages, so they had
+     * their own unguarded `chrome.*` calls and the same synchronous throw
+     * waiting in each of them. Exposing the guards rather than letting each
+     * file grow a copy keeps the rule in one place: see `alive` at the top. */
+    alive,
+    toWorker: sendToWorker,
+    readStored,
+    writeStored,
     daemon(op, args) {
-      return chrome.runtime
-        .sendMessage({ type: "sso:daemon", op, args })
-        .catch((error) => ({ transportError: String(error?.message || error) }));
+      /* The { transportError } shape is load-bearing - every caller checks it
+       * and none of them can catch, being click handlers. An orphaned context
+       * has to answer in the same shape rather than in a rejection or a null,
+       * or the reader gets a control that silently does nothing. */
+      if (!alive()) return Promise.resolve({ transportError: "Extension context invalidated" });
+      try {
+        return chrome.runtime
+          .sendMessage({ type: "sso:daemon", op, args })
+          .catch((error) => ({ transportError: String(error?.message || error) }));
+      } catch (error) {
+        orphan();
+        return Promise.resolve({ transportError: String(error?.message || error) });
+      }
     },
     /* Start work from somewhere that cannot await it.
      *
@@ -4819,7 +4962,15 @@
     document.removeEventListener("mousemove", onPointerMove, { capture: true });
     document.removeEventListener("fullscreenchange", onFullscreenChange);
     document.removeEventListener("webkitfullscreenchange", onFullscreenChange);
-    chrome.runtime.onMessage.removeListener(onMessage);
+    /* Guarded, because the commonest reason to be tearing down is that the
+     * extension has just been reloaded - and reaching into chrome.runtime is
+     * then the very thing that throws. A teardown that threw here left every
+     * listener below it still attached. */
+    try {
+      chrome.runtime.onMessage.removeListener(onMessage);
+    } catch {
+      // Already gone with the context it belonged to.
+    }
     window.removeEventListener("error", onWindowError);
     window.removeEventListener("unhandledrejection", onRejection);
     toastLayer?.remove();

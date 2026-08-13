@@ -141,8 +141,12 @@
     if (sheets) return sheets;
     const files = ["src/chrome.css", "src/panel.css"];
     const texts = await Promise.all(
+      /* getURL is a chrome call, so it throws on an orphaned context before
+       * fetch is ever reached - and an unstyled surface is the least of the
+       * problems at that point. Answering "" builds nothing and says nothing. */
       files.map((file) =>
-        fetch(chrome.runtime.getURL(file))
+        Promise.resolve()
+          .then(() => fetch(chrome.runtime.getURL(file)))
           .then((r) => r.text())
           .catch(() => ""),
       ),
@@ -231,7 +235,7 @@
       host.style.setProperty("left", "auto", "important");
       host.style.setProperty("right", `${HANDLE_RIGHT}px`, "important");
       host.style.setProperty("top", `${HANDLE_TOP + HANDLE_HEIGHT + GAP}px`, "important");
-      chrome.storage.local.remove(POSITION_KEY).catch(() => {});
+      api.writeStored(null, { remove: POSITION_KEY });
       api.showToast("Panel back to the corner");
     });
 
@@ -380,14 +384,12 @@
       if (!from) return;
       from = null;
       grip.releasePointerCapture?.(event.pointerId);
-      chrome.storage.local
-        .set({
-          [SIZE_KEY]: {
-            width: host.getBoundingClientRect().width,
-            body: body.getBoundingClientRect().height,
-          },
-        })
-        .catch(() => {});
+      api.writeStored({
+        [SIZE_KEY]: {
+          width: host.getBoundingClientRect().width,
+          body: body.getBoundingClientRect().height,
+        },
+      });
     };
     grip.addEventListener("pointerup", end);
     grip.addEventListener("pointercancel", end);
@@ -482,7 +484,7 @@
 
   async function restoreSize() {
     try {
-      const stored = await chrome.storage.local.get([SIZE_KEY, FOLD_KEY]);
+      const stored = await api.readStored([SIZE_KEY, FOLD_KEY]);
       const size = stored[SIZE_KEY];
       if (size?.width) {
         applySize(size.width, size.body ?? null, { byHand: false });
@@ -547,7 +549,7 @@
      * reason: a panel that comes back on a screen you left is a panel you have
      * to work out. */
     if (folded && atScreen !== "root") goRoot();
-    chrome.storage.local.set({ [FOLD_KEY]: folded }).catch(() => {});
+    api.writeStored({ [FOLD_KEY]: folded });
     // Folding frees the space the body was holding; unfolding needs it back,
     // and near the bottom of the screen there may be less of it than there was.
     fitToViewport();
@@ -2985,7 +2987,7 @@
       button("Open the log", {
         title: "What the extension has recorded while you were using it, including every attempt to line two subtitles up",
         onClick: () =>
-          api.detached(chrome.runtime.sendMessage({ type: "sso:openReport" }), "The log"),
+          api.detached(api.toWorker({ type: "sso:openReport" }), "The log"),
       }),
     );
 
@@ -3010,7 +3012,7 @@
       }
       el.diagnoseNote.textContent = `Captured ${report.frames?.length ?? 0} frame(s). Opening…`;
       // The page cannot open an extension page itself; the worker can.
-      await chrome.runtime.sendMessage({ type: "sso:openReport" });
+      await api.toWorker({ type: "sso:openReport" });
     } finally {
       el.diagnose.disabled = false;
     }
@@ -3044,9 +3046,7 @@
       // Dragging down the screen leaves less room beneath.
       onMove: fitToViewport,
       onEnd: () =>
-        chrome.storage.local
-          .set({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } })
-          .catch(() => {}),
+        api.writeStored({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } }),
     });
   }
 
@@ -3079,7 +3079,7 @@
 
   async function restorePosition() {
     try {
-      const stored = await chrome.storage.local.get(POSITION_KEY);
+      const stored = await api.readStored(POSITION_KEY);
       const saved = stored[POSITION_KEY];
       if (saved?.left && saved?.top) setPosition(saved.left, saved.top);
     } catch {

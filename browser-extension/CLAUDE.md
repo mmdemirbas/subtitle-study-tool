@@ -344,8 +344,16 @@ is one video and three short documents; the reports are about streaming sites
 carrying five frames of player and adverts. It counts long tasks — one turn of
 the event loop past 50ms, which *is* the freeze — with the tick and the pointer
 handler timed beside them, and traces a `perf` line only for a window that
-actually had one. A quiet ten seconds sends nothing. Read it out of
-`subtitle-daemon/logs/<date>.jsonl` rather than asking anyone to reproduce.
+actually had one. A quiet ten seconds sends nothing, and neither does a hidden
+tab: background timers are clamped to about one a minute, so the "long task"
+there is the tab waking up. Read it out of `subtitle-daemon/logs/<date>.jsonl`
+rather than asking anyone to reproduce.
+
+What the first day of it said, over 505 windows: **our share of long-task time
+was 0.0% to 0.3% on every host**, including the two the freezes were reported
+on. The worst tasks, around 3.4s, arrived at the same instant across unrelated
+tabs — machine-wide, not per-page and not ours. Read that as the extension
+being ruled out, not as the sites being fine.
 
 ## Tests
 

@@ -172,7 +172,7 @@
 
   async function loadSettings() {
     try {
-      const stored = await chrome.storage.local.get(SETTINGS_KEY);
+      const stored = await api.readStored(SETTINGS_KEY);
       settings = { ...DEFAULT_SETTINGS, ...migrate(stored[SETTINGS_KEY] || {}) };
     } catch {
       // Defaults are fine.
@@ -340,9 +340,9 @@
     // Counted before the write, so the event it raises is spent on the way
     // back in rather than being mistaken for another frame's.
     selfWrites += 1;
-    chrome.storage.local.set({ [SETTINGS_KEY]: settings }).catch(() => {
+    api.writeStored({ [SETTINGS_KEY]: settings }).then((written) => {
       // No write, no event to spend.
-      selfWrites = Math.max(0, selfWrites - 1);
+      if (!written) selfWrites = Math.max(0, selfWrites - 1);
     });
     applySettings();
     if (studiedSlots().join(",") !== was) followedSubtitlesChanged();
@@ -1233,7 +1233,7 @@
     deck.textContent = "Saved words";
     deck.title = "Open the deck on the options page";
     deck.addEventListener("click", () =>
-      chrome.runtime.sendMessage({ type: "sso:openOptions", hash: "#deck" }),
+      api.toWorker({ type: "sso:openOptions", hash: "#deck" }),
     );
     wrap.append(deck);
     return wrap;
@@ -1299,8 +1299,12 @@
     if (sheets) return sheets;
     const files = ["src/chrome.css", "src/study.css"];
     const texts = await Promise.all(
+      /* getURL is a chrome call, so it throws on an orphaned context before
+       * fetch is ever reached - and an unstyled surface is the least of the
+       * problems at that point. Answering "" builds nothing and says nothing. */
       files.map((file) =>
-        fetch(chrome.runtime.getURL(file))
+        Promise.resolve()
+          .then(() => fetch(chrome.runtime.getURL(file)))
           .then((r) => r.text())
           .catch(() => ""),
       ),
@@ -1863,14 +1867,12 @@
     host.style.setProperty("left", "auto", "important");
     host.style.setProperty("right", `${PARK_RIGHT}px`, "important");
     host.style.setProperty("top", `${PARK_TOP}px`, "important");
-    chrome.storage.local.remove(POSITION_KEY).catch(() => {});
+    api.writeStored(null, { remove: POSITION_KEY });
     api.showToast?.("Rail parked");
   }
 
   function savePosition() {
-    chrome.storage.local
-      .set({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } })
-      .catch(() => {});
+    api.writeStored({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } });
   }
 
   /* All four corners, like the panel and for the same reason: the rail can be
@@ -1954,9 +1956,7 @@
       if (!from) return;
       from = null;
       grip.releasePointerCapture?.(event.pointerId);
-      chrome.storage.local
-        .set({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } })
-        .catch(() => {});
+      api.writeStored({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } });
     };
     grip.addEventListener("pointerup", end);
     grip.addEventListener("pointercancel", end);
@@ -1971,7 +1971,7 @@
 
   async function restorePosition() {
     try {
-      const stored = await chrome.storage.local.get(POSITION_KEY);
+      const stored = await api.readStored(POSITION_KEY);
       const saved = stored[POSITION_KEY];
       if (saved?.left && saved?.top) setPosition(saved.left, saved.top);
     } catch {
@@ -2269,7 +2269,14 @@
      * this file reacting to every settings write - and its `settings` and its
      * `host` are the previous instance's, which is how a rail that was torn
      * down comes back. */
-    chrome.storage.onChanged.removeListener(onStorageChanged);
+    /* Guarded: the commonest reason to be tearing down is that the extension
+     * has just been reloaded, and reaching into chrome.storage is then the very
+     * thing that throws - which would leave everything below still standing. */
+    try {
+      chrome.storage.onChanged.removeListener(onStorageChanged);
+    } catch {
+      // Gone with the context that owned it.
+    }
     clearTimeout(hoverTimer);
     host?.remove();
     host = null;

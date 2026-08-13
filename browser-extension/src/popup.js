@@ -6,6 +6,12 @@
  * a second search UI here would also mean maintaining two of everything.
  */
 
+import { reportPageErrors } from "./page-errors.js";
+
+// Everything else records its failures; these pages did not. See page-errors.js.
+reportPageErrors("popup");
+
+
 import { DaemonDownError, health, tabStatus } from "./daemon.js";
 
 const ui = {
