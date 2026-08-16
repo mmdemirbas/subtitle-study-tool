@@ -476,6 +476,355 @@
     };
   }
 
+  /* --- when one shift is the wrong SHAPE of answer ----------------------------
+   *
+   * `align` above returns a rate and one offset, and for about half of the
+   * pairs in bench/align that is what the two files differ by. For thirty per
+   * cent of them it is not. Two releases of one broadcast episode keep
+   * different amounts of black around the advertising breaks, so they agree
+   * over each act and jump between them - The Americans S02E09 runs 1.00,
+   * 5.30, 11.85, 18.81, 24.78 and 30.57 seconds apart over its six acts,
+   * measured from cue text rather than from any clock. No offset and no rate
+   * exists for such a pair. Across 41 of them the single best shift puts a
+   * median of 50 per cent of the film inside 250ms; per-act offsets put 90 per
+   * cent there.
+   *
+   * This finds the acts. It is a refinement of `align` rather than a rival to
+   * it: same identification, same refusal, seeded from the same rate, and it
+   * returns `steps` of length one whenever there is nothing to find - which,
+   * on the 91 pairs whose truth is a single shift or a single rate, is every
+   * time. That control is the point. An invented break moves lines that were
+   * already in the right place, which is worse than the problem.
+   *
+   * The whole design, and where each number came from, is in
+   * docs/reports/auto-sync-2026-08-16.md; bench/align/regress.mjs is the gate
+   * that says it makes no pair worse.
+   */
+  const STEP_WINDOW_MS = 90000;   // enough cues to answer, short enough to sit inside one act
+  const STEP_HOP_MS = 45000;
+  const STEP_REACH_MS = 45000;    // how far a window may sit from the window before it
+  const STEP_SEARCH_MS = 40;
+  const STEP_MIN_CUES = 8;
+  const STEP_TOL_MS = 300;        // a cue counts as landing on one of B's
+  const STEP_MIN_SHARE = 0.4;     // ... and this many of the window's must land
+  const STEP_MARGIN = 1.3;        // over the best offset more than 2s away
+  const STEP_MERGE_MS = 250;      // a jump smaller than this is not a jump
+  const STEP_MIN_SPAN_MS = 30000; // an act is at least this long
+  const STEP_WORTH = 0.02;        // a break must buy this share of the film's cues
+  const STEP_WORTH_CUES = 8;      // ... and never fewer than this many
+  const STEP_PENALTY_SIGMAS = 12; // how many times the noise a break must explain
+  const STEP_RATE_WORTH_MS = 400; // a re-measured rate worth a second pass
+
+  const landed = (times, at) => Math.abs(nearestOffset(times, at)) <= STEP_TOL_MS;
+
+  /* Robust noise scale from CONSECUTIVE differences rather than deviations
+   * around a middle. A step changes exactly one consecutive difference, so this
+   * reads the jitter and not the staircase - which a spread around the median
+   * cannot do, since to it the staircase IS the spread. */
+  function scaleOf(values) {
+    if (values.length < 8) return 0;
+    const steps = [];
+    for (let i = 1; i < values.length; i++) steps.push(Math.abs(values[i] - values[i - 1]));
+    return (median(steps) * 1.4826) / Math.SQRT2;
+  }
+
+  /* Piecewise-constant fit by dynamic programming, paying for every extra
+   * piece. Squared deviation rather than absolute so a prefix sum answers the
+   * cost of any run in constant time. */
+  function segment(values, penalty) {
+    const n = values.length;
+    if (!n) return [];
+    const sum = new Float64Array(n + 1);
+    const squares = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) {
+      sum[i + 1] = sum[i] + values[i];
+      squares[i + 1] = squares[i] + values[i] * values[i];
+    }
+    const cost = (i, j) => squares[j] - squares[i] - ((sum[j] - sum[i]) ** 2) / (j - i);
+    const best = new Float64Array(n + 1).fill(Infinity);
+    const cameFrom = new Int32Array(n + 1).fill(-1);
+    best[0] = 0;
+    for (let j = 1; j <= n; j++) {
+      for (let i = 0; i < j; i++) {
+        if (!Number.isFinite(best[i])) continue;
+        const price = best[i] + cost(i, j) + (i === 0 ? 0 : penalty);
+        if (price < best[j]) { best[j] = price; cameFrom[j] = i; }
+      }
+    }
+    const cuts = [];
+    for (let j = n; j > 0; j = cameFrom[j]) cuts.push(j);
+    cuts.push(0);
+    cuts.reverse();
+    const out = [];
+    for (let k = 0; k + 1 < cuts.length; k++) {
+      out.push({ from: cuts[k], to: cuts[k + 1], level: median(values.slice(cuts[k], cuts[k + 1])) });
+    }
+    return out;
+  }
+
+  /* What the squared-error fit cannot know: what an act break IS. It moves the
+   * clock by something a reader would see, and it keeps it moved for a scene
+   * rather than an exchange. Without these two rules the fit separates runs of
+   * the 40ms frame grid - Sherlock's DVDRip pair came back as 105 pieces whose
+   * levels ran 1376, 1418, 1376, 1418. */
+  function joinTrivial(pieces, values, timeAt) {
+    let current = pieces;
+    while (current.length > 1) {
+      let worst = -1;
+      let worstScore = Infinity;
+      for (let k = 0; k + 1 < current.length; k++) {
+        const jump = Math.abs(current[k + 1].level - current[k].level);
+        const shortest = Math.min(
+          timeAt(current[k].to - 1) - timeAt(current[k].from),
+          timeAt(current[k + 1].to - 1) - timeAt(current[k + 1].from),
+        );
+        const score = jump < STEP_MERGE_MS ? jump
+          : shortest < STEP_MIN_SPAN_MS ? STEP_MERGE_MS + shortest
+          : Infinity;
+        if (score < worstScore) { worstScore = score; worst = k; }
+      }
+      if (worst < 0 || !Number.isFinite(worstScore)) return current;
+      const joined = { from: current[worst].from, to: current[worst + 1].to };
+      joined.level = median(values.slice(joined.from, joined.to));
+      current = [...current.slice(0, worst), joined, ...current.slice(worst + 2)];
+    }
+    return current;
+  }
+
+  /* The offset one window of A wants, or null when it cannot tell.
+   *
+   * Counted rather than correlated, because a window holds a dozen cues and a
+   * correlation over a dozen samples is mostly noise. Counting inside a
+   * tolerance has a flat top, though - every offset within STEP_TOL_MS of the
+   * right one matches the same cues - so the count picks the plateau and the
+   * median of what actually landed picks the place inside it. Without that
+   * second half three staircase pairs came back 282, 287 and 300ms out, in the
+   * same direction on every window: the half-width, not noise. */
+  function windowOffset(xs, b, mapped, around) {
+    const steps = Math.floor((2 * STEP_REACH_MS) / STEP_SEARCH_MS) + 1;
+    const hits = new Int32Array(steps);
+    for (const want of mapped) {
+      for (let s = 0; s < steps; s++) {
+        if (landed(b, want + around - STEP_REACH_MS + s * STEP_SEARCH_MS)) hits[s]++;
+      }
+    }
+    let bestAt = 0;
+    for (let s = 1; s < steps; s++) if (hits[s] > hits[bestAt]) bestAt = s;
+    const apart = Math.ceil(2000 / STEP_SEARCH_MS);
+    let runnerUp = 0;
+    for (let s = 0; s < steps; s++) {
+      if (Math.abs(s - bestAt) > apart && hits[s] > runnerUp) runnerUp = hits[s];
+    }
+    /* Both gates. A window where nothing lands has no answer, and a window
+     * where as much lands at three different offsets has three. */
+    if (hits[bestAt] < Math.max(3, xs.length * STEP_MIN_SHARE)) return null;
+    if (hits[bestAt] < runnerUp * STEP_MARGIN) return null;
+
+    const coarse = around - STEP_REACH_MS + bestAt * STEP_SEARCH_MS;
+    const gaps = [];
+    for (const want of mapped) {
+      const gap = nearestOffset(b, want + coarse);
+      if (Math.abs(gap) <= STEP_TOL_MS) gaps.push(gap);
+    }
+    gaps.sort((p, q) => p - q);
+    return { shiftMs: coarse + (gaps.length ? middle(gaps) : 0), hit: hits[bestAt] };
+  }
+
+  /** The offset a whole act wants, from every cue inside it rather than a window's. */
+  function actLevel(a, b, map, from, to, start) {
+    const gaps = [];
+    for (const x of a) {
+      if (x < from || x >= to) continue;
+      const gap = nearestOffset(b, map(x) + start);
+      if (Math.abs(gap) <= STEP_TOL_MS) gaps.push(gap);
+    }
+    if (gaps.length < 4) return start;
+    gaps.sort((p, q) => p - q);
+    return start + middle(gaps);
+  }
+
+  const actAt = (acts, x) => {
+    let found = acts[0].level;
+    for (const act of acts) if (x >= act.fromMs) found = act.level;
+    return found;
+  };
+
+  function actMatches(acts, a, b, map) {
+    let hit = 0;
+    for (const x of a) if (landed(b, map(x) + actAt(acts, x))) hit++;
+    return hit;
+  }
+
+  /* Every break earns itself against the whole film, not against the squared
+   * error of the windows that suggested it. Cheapest first, recomputing after
+   * each removal, because two breaks that each look worth keeping alone are
+   * sometimes one break placed twice. Without this, four pairs the plain
+   * aligner already put 100 per cent right came back at 59 to 65. */
+  function pruneActs(acts, a, b, map) {
+    let current = acts;
+    while (current.length > 1) {
+      const before = actMatches(current, a, b, map);
+      let cheapest = -1;
+      let cheapestGain = Infinity;
+      for (let k = 1; k < current.length; k++) {
+        const gain = before - actMatches(withoutAct(current, k), a, b, map);
+        if (gain < cheapestGain) { cheapestGain = gain; cheapest = k; }
+      }
+      if (cheapestGain >= Math.max(STEP_WORTH_CUES, a.length * STEP_WORTH)) return current;
+      current = withoutAct(current, cheapest);
+    }
+    return current;
+
+    function withoutAct(list, k) {
+      const joined = { fromMs: list[k - 1].fromMs, toMs: list[k].toMs, level: list[k - 1].level };
+      joined.level = actLevel(a, b, map, joined.fromMs, joined.toMs, joined.level);
+      return [...list.slice(0, k - 1), joined, ...list.slice(k + 1)];
+    }
+  }
+
+  /* The rate, measured rather than chosen from RATES.
+   *
+   * Short baselines on purpose. A staircase accumulates its steps into every
+   * long baseline, so a slope taken over the whole file reads the steps as a
+   * slope; over one to three minutes only the few spans that straddle a step
+   * are wrong, which is what a median is for. Then it is snapped back to a
+   * known ratio when it is within 200ms of one at the far end of the film,
+   * because a measured 1.00002 against a true 1 leaves a ramp, and a segmenter
+   * handed a ramp reports a staircase. */
+  function measureRate(points, spanMs) {
+    const slopes = [];
+    for (let i = 0, j = 0; i < points.length; i++) {
+      while (j < points.length && points[j].x - points[i].x < 60000) j++;
+      for (let k = j; k < points.length && points[k].x - points[i].x <= 180000; k++) {
+        slopes.push((points[k].y - points[i].y) / (points[k].x - points[i].x));
+      }
+    }
+    if (!slopes.length) return 1;
+    const free = median(slopes);
+    let best = free;
+    let bestAway = 200;
+    for (const candidate of RATES) {
+      const away = Math.abs(free - candidate) * Math.max(spanMs, 1);
+      if (away < bestAway) { bestAway = away; best = candidate; }
+    }
+    return best;
+  }
+
+  /**
+   * Where each act of A lands in B, when one offset will not do.
+   *
+   * Returns `{ ...align(), steps: [{ fromMs, offsetMs }], settled }`, where
+   * `fromMs` is a time in A and `offsetMs` the shift that act wants. One entry
+   * means one shift was the right answer after all. `steps` is null when the
+   * pair was refused, exactly as `align` refused it.
+   */
+  function alignSteps(aTimes, bTimes, options = {}) {
+    const answer = align(aTimes, bTimes, options);
+    if (!answer.ok) return { ...answer, steps: null, settled: 0 };
+    const a = (aTimes || []).filter(Number.isFinite).sort((x, y) => x - y);
+    const b = (bTimes || []).filter(Number.isFinite).sort((x, y) => x - y);
+    const spanMs = a[a.length - 1] - a[0];
+
+    const pass = (rate, shiftMs) => {
+      const map = (x) => rate * x + shiftMs;
+      const centres = [];
+      const offsets = [];
+      for (let from = a[0]; from < a[a.length - 1]; from += STEP_HOP_MS) {
+        const xs = a.filter((x) => x >= from && x < from + STEP_WINDOW_MS);
+        if (xs.length < STEP_MIN_CUES) continue;
+        /* Each window searches from where the one before it landed, so a
+         * staircase is walked up a step at a time instead of being asked to
+         * jump its whole height from the global answer at once. */
+        const found = windowOffset(xs, b, xs.map(map), offsets.length ? offsets[offsets.length - 1] : 0);
+        if (!found) continue;
+        centres.push(xs[xs.length >> 1]);
+        offsets.push(found.shiftMs);
+      }
+      if (centres.length < 3) return null;
+
+      const pieces = joinTrivial(
+        segment(offsets, STEP_PENALTY_SIGMAS * Math.max(scaleOf(offsets), 100) ** 2),
+        offsets,
+        (i) => centres[i],
+      );
+
+      /* Windows hop 45 seconds, so the fit can only place a break to the
+       * nearest one - and the window straddling a break answers with a blend
+       * of both acts, which drags it early. Measured: a true break at 5:41
+       * placed at 5:15. The cues between the neighbouring windows say where it
+       * really is. */
+      const bounds = pieces.map((piece, k) => ({
+        fromMs: k === 0 ? -Infinity : centres[piece.from],
+        toMs: k + 1 < pieces.length ? centres[pieces[k + 1].from] : Infinity,
+        level: piece.level,
+      }));
+      for (let k = 1; k < bounds.length; k++) {
+        const candidates = a.filter((x) => x >= centres[pieces[k].from] - STEP_HOP_MS * 2
+          && x <= centres[pieces[k].from] + STEP_HOP_MS);
+        if (candidates.length < 2) continue;
+        let bestAt = bounds[k].fromMs;
+        let bestScore = -1;
+        for (const boundary of candidates) {
+          let score = 0;
+          for (const x of candidates) {
+            if (landed(b, map(x) + (x < boundary ? bounds[k - 1].level : bounds[k].level))) score++;
+          }
+          if (score > bestScore) { bestScore = score; bestAt = boundary; }
+        }
+        bounds[k].fromMs = bestAt;
+        bounds[k - 1].toMs = bestAt;
+      }
+
+      for (const bound of bounds) bound.level = actLevel(a, b, map, bound.fromMs, bound.toMs, bound.level);
+      const acts = pruneActs(bounds, a, b, map);
+      let settled = 0;
+      for (const piece of pieces) {
+        for (let i = piece.from; i < piece.to; i++) if (Math.abs(offsets[i] - piece.level) <= 250) settled++;
+      }
+      return { acts, map, rate, shiftMs, settled: settled / centres.length, windows: centres.length };
+    };
+
+    let found = pass(answer.rate, answer.shiftMs);
+    if (!found) return { ...answer, steps: [{ fromMs: 0, offsetMs: 0 }], settled: 0 };
+
+    /* RATES covers how two releases usually differ and not the whole of it.
+     * The Americans S02E09's Turkish pair differs by 1.00425, which is nobody's
+     * framerate ratio; the nearest hypothesis leaves 9 seconds across the
+     * episode, and the first pass answered that by inventing 13 acts for an
+     * episode with six. Once the acts are known the rate is visible in the
+     * cues inside them. */
+    const anchored = [];
+    for (const x of a) {
+      const want = found.map(x) + actAt(found.acts, x);
+      const gap = nearestOffset(b, want);
+      if (Math.abs(gap) <= STEP_TOL_MS) anchored.push({ x, y: want + gap });
+    }
+    if (anchored.length >= 40) {
+      const measured = measureRate(anchored, spanMs);
+      if (Math.abs(measured - answer.rate) * spanMs > STEP_RATE_WORTH_MS) {
+        const better = pass(measured, answer.shiftMs);
+        if (better && better.acts.length <= found.acts.length) found = better;
+      }
+    }
+
+    /* Reported against the pair's own base offset, so `steps[0].offsetMs` is
+     * always 0 and every other entry is how much further that act has moved.
+     * A reader correcting the whole subtitle by hand then moves the base and
+     * the staircase travels with it. */
+    const base = found.acts[0].level;
+    return {
+      ...answer,
+      rate: found.rate,
+      shiftMs: Math.round(found.shiftMs + base),
+      steps: found.acts.map((act, k) => ({
+        fromMs: k === 0 ? 0 : Math.round(act.fromMs),
+        offsetMs: Math.round(act.level - base),
+      })),
+      settled: Number(found.settled.toFixed(3)),
+      windows: found.windows,
+    };
+  }
+
   /* --- snapping a correction to where the two files agree ---------------------
    *
    * A reader dragging the map is aiming at a position, and a hand on a 180px
@@ -616,7 +965,7 @@
    * rate measured over eight minutes extrapolates to nonsense by the end" is
    * true of both. One number, one reason, one place to change it. */
   const API = {
-    align, proposeAnchors, snapNear,
+    align, alignSteps, proposeAnchors, snapNear,
     RATES, ACCEPT, AUTO, MAX_OFFSET_MS, RATE_MIN_SPAN_MS, SNAP_RADIUS_MS,
   };
 

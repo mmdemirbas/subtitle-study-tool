@@ -457,6 +457,22 @@
     // How fast this file's clock runs against the film's. 1 is the same speed;
     // a framerate mismatch is a fraction of a per cent either side.
     rate: 1,
+    /* Extra offset per ACT, on top of offsetMs, when one number will not do.
+     *
+     * Two releases of one broadcast episode keep different amounts of black
+     * around the advertising breaks, so they agree within an act and jump
+     * between them. Measured over 41 such pairs in bench/align: one shift puts
+     * a median of 50% of the film inside 250ms and per-act offsets put 90%
+     * there. This is what "I had to correct the sync four times in one
+     * episode" is, and correcting it four times is what the reader was doing
+     * instead.
+     *
+     * Sorted by fromMs, the first entry always at 0 with offset 0, so a track
+     * that needs one shift carries a one-entry list and every expression below
+     * reduces to what it was. Hand corrections move offsetMs and leave these
+     * alone, so the staircase travels with the correction rather than being
+     * flattened by it. */
+    steps: [],
     // Which of this file's lines are on screen, in document order. Usually one;
     // several when a sign or a lyric is held across the dialogue under it.
     activeIndexes: [],
@@ -2544,7 +2560,28 @@
    * Rate defaults to 1, where this is exactly the expression it replaced. */
   function filmTimeMs(track) {
     const stream = state.video.currentTime * 1000 - state.adDriftMs - track.offsetMs;
-    return track.rate && track.rate !== 1 ? stream / track.rate : stream;
+    const plain = track.rate && track.rate !== 1 ? stream / track.rate : stream;
+    if (!track.steps?.length) return plain;
+    /* Inverted by trying each act's own offset and keeping the one whose
+     * answer actually falls inside that act. The mapping is monotone, so at
+     * most one can - except at a break, where the two releases disagree about
+     * whether the moment exists at all. There the LATER act wins, which is the
+     * one the picture on screen belongs to: material was inserted before it, so
+     * the playhead has already passed the join. */
+    let best = plain;
+    for (const step of track.steps) {
+      const shifted = plain - step.offsetMs / (track.rate || 1);
+      if (shifted >= step.fromMs) best = shifted;
+    }
+    return best;
+  }
+
+  /** The act offset that applies at a moment of this file. */
+  function stepOffsetMs(track, fileMs) {
+    if (!track.steps?.length) return 0;
+    let found = track.steps[0].offsetMs;
+    for (const step of track.steps) if (fileMs >= step.fromMs) found = step.offsetMs;
+    return found;
   }
 
   /* Stop when a line finishes, once per line.
@@ -2668,7 +2705,7 @@
    * only one that matters is the one that came across in the mirror. */
   function streamTimeMs(track, fileMs, driftMs = state.adDriftMs) {
     const scaled = track.rate && track.rate !== 1 ? fileMs * track.rate : fileMs;
-    return scaled + track.offsetMs + driftMs;
+    return scaled + track.offsetMs + stepOffsetMs(track, fileMs) + driftMs;
   }
 
   // --- moving by line ---------------------------------------------------------
@@ -3047,16 +3084,36 @@
     try {
       const stored = await readStored(offsetKey(fileId));
       const saved = stored[offsetKey(fileId)];
-      if (typeof saved === "number") return { offsetMs: saved, rate: 1, known: true };
+      if (typeof saved === "number") return { offsetMs: saved, rate: 1, steps: [], known: true };
       if (!saved) return nothing;
       return {
         offsetMs: Number(saved.offsetMs) || 0,
         rate: Number(saved.rate) || 1,
+        /* Absent for every installation that predates acts, which reads back as
+         * the empty list and behaves exactly as it did. */
+        steps: tidySteps(saved.steps),
         known: true,
       };
     } catch {
       return nothing;
     }
+  }
+
+  /* Anything read from storage or handed over by another frame, made safe.
+   *
+   * The list is load-bearing for every time conversion on screen, so a
+   * malformed one is a film with no subtitles rather than a logged warning. It
+   * must be sorted, must start at zero, and a single entry is the same thing as
+   * none. */
+  function tidySteps(value) {
+    if (!Array.isArray(value)) return [];
+    const kept = value
+      .map((step) => ({ fromMs: Math.round(Number(step?.fromMs)), offsetMs: Math.round(Number(step?.offsetMs)) }))
+      .filter((step) => Number.isFinite(step.fromMs) && Number.isFinite(step.offsetMs))
+      .sort((a, b) => a.fromMs - b.fromMs);
+    if (kept.length < 2) return [];
+    kept[0].fromMs = 0;
+    return kept;
   }
 
   /* How long a correction has to settle before it is written down.
@@ -3081,7 +3138,7 @@
   function saveOffset(track) {
     if (track.fileId == null) return;
     // Per file, so nudging one subtitle does not discard the other's write.
-    pendingOffsets.set(track.fileId, { offsetMs: track.offsetMs, rate: track.rate });
+    pendingOffsets.set(track.fileId, { offsetMs: track.offsetMs, rate: track.rate, steps: track.steps });
     if (offsetWriteTimer !== null) return;
     offsetWriteTimer = setTimeout(flushOffsets, SAVE_OFFSET_MS);
   }
@@ -3281,6 +3338,26 @@
       traceCorrection(track, slot, { how, wasOffsetMs, wasRate: track.rate });
       noteCorrection(track, slot);
     }
+  }
+
+  /* Replace this file's per-act offsets, or clear them.
+   *
+   * Separate from setOffset because the two mean different things and want
+   * different gestures. `offsetMs` is what the reader corrects - a nudge moves
+   * the whole subtitle and the acts travel with it, which is right, because a
+   * staircase between two releases does not stop existing because the reader
+   * moved both files. `steps` is what the aligner found, and clearing it is
+   * part of "back to the file's own timing" for the same reason clearing the
+   * rate is: a subtitle that has been cut into acts is not back to its own
+   * timing while the cuts are still there. */
+  function setSteps(steps, { slot = state.keyTrack, quiet = true } = {}) {
+    const track = state.tracks[slot];
+    if (!track) return;
+    track.steps = tidySteps(steps);
+    track.activeIndexes = NEEDS_REDRAW;
+    saveOffset(track);
+    notify();
+    if (!quiet) showToast(track.steps.length ? `${track.steps.length} acts` : "One timing for the whole film", { slot });
   }
 
   /* Steady the hand that just made a correction.
@@ -3667,9 +3744,10 @@
     } else if (event.key === "Escape" && seen.placing) {
       api.setPlacing(false);
     } else if (isKey(typed, keys.reset)) {
-      // Both, because a subtitle that has been stretched is not back to the
-      // file's own timing until the stretch goes too.
+      // All three, because a subtitle that has been stretched, or cut into
+      // acts, is not back to the file's own timing until those go too.
       api.setRate(1, { quiet: true, how: "reset" });
+      api.setSteps([]);
       api.setOffset(0, { quiet: true, how: "reset" });
       showToast("Subtitle back to the file's own timing");
     } else if (isKey(typed, keys.toggleOverlay)) {
@@ -3708,6 +3786,7 @@
     const timing = await loadOffset(track.fileId);
     track.offsetMs = timing.offsetMs;
     track.rate = timing.rate;
+    track.steps = timing.steps ?? [];
     track.activeIndexes = NEEDS_REDRAW;
     track.visible = true;
     /* Ad time is NOT cleared here, and that is the whole point of it being on
@@ -3934,7 +4013,13 @@
 
     const referenceTimes = reference.cues.map((cue) => cue.start);
     const targetTimes = target.cues.map((cue) => cue.start);
-    const answer = aligner.align(referenceTimes, targetTimes);
+    /* `alignSteps` rather than `align`, which is the same answer plus where
+     * each ACT of the target lands. Two releases of one broadcast episode keep
+     * different amounts of black around the advertising breaks, so they agree
+     * within an act and jump between them, and one shift cannot fit both sides
+     * of a jump. It returns a one-entry list whenever one shift is right, which
+     * over 91 such pairs in bench/align it did every time. */
+    const answer = aligner.alignSteps(referenceTimes, targetTimes);
 
     /* The attempt, whichever way it went, with the two things that decided it.
      *
@@ -3966,16 +4051,37 @@
      * nothing else, which is the case worth reading. */
     const rate = reference.rate / answer.rate;
     const offsetMs = Math.round(reference.offsetMs - (reference.rate * answer.shiftMs) / answer.rate);
+
+    /* The same composition again for the acts.
+     *
+     * A break the aligner reports sits at a moment of the REFERENCE file, and
+     * the target's list is indexed by the target's own clock, so each one is
+     * carried across the mapping it came from: `tB = rate * tA + shift + s`.
+     * The offset each act needs is the reference's own act offset less the
+     * gap's, scaled by the target's rate - which is the offset line above with
+     * the per-act terms left in rather than dropped.
+     *
+     * The first entry falls out as zero, because the aligner reports its acts
+     * against its own base and `offsetMs` has already absorbed that base. */
+    const steps = (answer.steps ?? []).length > 1
+      ? answer.steps.map((step) => ({
+        fromMs: Math.round(answer.rate * step.fromMs + answer.shiftMs + step.offsetMs),
+        offsetMs: Math.round(stepOffsetMs(reference, step.fromMs) - rate * step.offsetMs),
+      }))
+      : [];
+
     const applied = answer.verdict === "apply";
     if (applied) {
       if (rate !== 1) setRate(rate, { slot, quiet: true, byHand: false });
+      // Before setOffset, which is what writes the timing down.
+      target.steps = tidySteps(steps);
       setOffset(offsetMs, { slot, quiet: true, byHand: false });
     }
     /* `applied` rather than each caller re-deriving it from the verdict. Two of
      * them did, and the one that decides whether to fall back to the release
      * memory has to agree with the one that writes the toast - or the reader is
      * told a correction was carried over and shown a different one. */
-    return { ...answer, referenceSlot, offsetMs, trackRate: rate, applied };
+    return { ...answer, referenceSlot, offsetMs, trackRate: rate, steps, applied };
   }
 
   /** Drop one track, or every track when no slot is named. */
@@ -4098,6 +4204,7 @@
         cueCount: track.cues.length,
         offsetMs: track.offsetMs,
         rate: track.rate,
+        steps: track.steps ?? [],
         label: track.label,
         fileId: track.fileId,
         language: track.language,
@@ -4131,6 +4238,11 @@
     cueCount: track.cues.length,
     offsetMs: track.offsetMs,
     rate: track.rate,
+    /* Whole numbers, not a count. "The reader corrected at 22 minutes" and
+     * "the third act starts at 21:40 and is 6.9 seconds further out" are the
+     * same fact from two sides, and only one of them is in the trace unless
+     * the acts are written down with their times. */
+    steps: track.steps ?? [],
     times: packTimes(track.cues.map((cue) => cue.start)),
     ends: packTimes(track.cues.map((cue) => cue.end)),
   });
@@ -4503,6 +4615,7 @@
     "setVisible",
     "setOffset",
     "setRate",
+    "setSteps",
     "nudge",
     "snapTiming",
     "stepLine",
@@ -4856,6 +4969,7 @@
     setVisible,
     setOffset,
     setRate,
+    setSteps,
     nudge,
     snapTiming,
     stepLine,

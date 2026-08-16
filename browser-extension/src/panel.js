@@ -2007,6 +2007,8 @@
     offsetReset.title = "Back to the file's own timing";
     offsetReset.addEventListener("click", () => {
       api.setRate(1, { slot, quiet: true, how: "reset" });
+      // Acts too. A subtitle cut into acts is not back to its own timing.
+      api.setSteps([], { slot });
       api.setOffset(0, { slot, quiet: true, how: "reset" });
       sayOnCard(slot, "Back to the file's own timing");
     });
