@@ -11,22 +11,27 @@
  *
  * WHAT IT PICKS, AND WHY
  *
- * The corpus's weakness is not its size, it is its shape: 42 of its 43
- * same-film pairs are one television series, so everything measured about
- * cross-language behaviour is really measured about that show. Diversity per
- * download therefore beats volume.
+ * Originally three files per title - one English, one Turkish, one second
+ * English release - which buys one retiming pair and two cross-language pairs.
+ * That was the right shape when the question was "can the aligner tell two
+ * films apart".
  *
- * Three files per title, which is the smallest set that produces all three
- * kinds of pair worth having:
+ * The question has changed. truth.mjs derives a ground truth from cue TEXT,
+ * which means it can only settle pairs that SHARE text: same language, and in
+ * practice one file descended from the other. Cross-language pairs are 70 of
+ * the corpus's 99 same-film pairs and the oracle refuses every one of them.
+ * So the download that buys the most measurable truth is another release in a
+ * language we already have.
  *
- *   English + Turkish            a cross-language pair, the hard case
- *   English + another English    a RETIMING pair, from a different release
- *   Turkish + that English       another cross-language pair, free
+ * Releases of one title grow the settled pairs quadratically - k English files
+ * are k(k-1)/2 pairs the oracle can label - where a new title grows them
+ * linearly. Four English releases per title is the shape now: six labelled
+ * pairs for four downloads, against one pair for two.
  *
- * Three downloads buy three positive pairs and one negative pair against every
- * other title in the corpus. The second English release is chosen to have a
- * different release name, because two files from the same release are the same
- * timing and prove nothing.
+ * The Turkish file is still fetched, because it is what the reader actually
+ * watches with and the cross-language pairs are what the aligner meets in
+ * production. It is measured against the referees rather than the oracle, and
+ * the report says which is which.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -37,11 +42,23 @@ const REPO = path.resolve(HERE, "../..");
 const CACHE = path.join(REPO, "subtitle-daemon/cache/subtitles");
 const DAEMON = "http://127.0.0.1:8791";
 
-/* Chosen for spread rather than taste: film and television, four decades,
- * several original languages, and titles popular enough that a Turkish
- * subtitle exists. A corpus of one genre from one decade would answer a
- * narrower question than the one being asked. */
+/* Chosen for the two shapes the corpus is short of, not for taste.
+ *
+ * STAIRCASES come from advertising. A 47-minute episode cut into five acts for
+ * broadcast carries a different amount of black between the acts in every
+ * release, and that is the six-plateau staircase measured on The Americans.
+ * So the television half is deliberately ad-break television - AMC, ABC, Fox,
+ * Sci-Fi - and not HBO, which has no breaks to differ about.
+ *
+ * RATES come from PAL. A film released on DVD in Europe at 25fps against the
+ * same film at 23.976 differs by a 4 percent stretch, which is what Amelie and
+ * Sherlock turned out to be. That is a property of the DVD era, so the film
+ * half leans on titles old enough to have had one.
+ *
+ * The rest is spread: several decades, several original languages, and nothing
+ * so obscure that only one subtitle exists for it. */
 const WANTED = [
+  // Already in the corpus at two English releases; deepened to four.
   { title: "Chernobyl", season: 1, episode: 1 },
   { title: "Breaking Bad", season: 1, episode: 1 },
   { title: "The Wire", season: 1, episode: 1 },
@@ -54,15 +71,36 @@ const WANTED = [
   { title: "Amelie", year: 2001 },
   { title: "Spirited Away", year: 2001 },
   { title: "Fargo", year: 1996 },
+  // Broadcast television, for the ad breaks.
+  { title: "Lost", season: 1, episode: 1 },
+  { title: "Mad Men", season: 1, episode: 1 },
+  { title: "24", season: 1, episode: 1 },
+  { title: "Battlestar Galactica", season: 1, episode: 1 },
+  { title: "House", season: 1, episode: 1 },
+  { title: "Buffy the Vampire Slayer", season: 1, episode: 1 },
+  // The DVD era, for the framerate ratios.
+  { title: "Blade Runner", year: 1982 },
+  { title: "Aliens", year: 1986 },
+  { title: "Back to the Future", year: 1985 },
+  { title: "Die Hard", year: 1988 },
+  { title: "The Matrix", year: 1999 },
+  { title: "Pulp Fiction", year: 1994 },
+  { title: "Se7en", year: 1995 },
+  { title: "The Godfather", year: 1972 },
+  { title: "Heat", year: 1995 },
 ];
 
-const QUOTA_FLOOR = 20;
+/* What is left for the reader after the bench has had its turn. Fifteen is
+ * three evenings' worth of attaching subtitles to something, which is the
+ * point: a corpus is worth less than being able to watch tonight. */
+const QUOTA_FLOOR = 15;
 const argOf = (name, fallback) => {
   const at = process.argv.indexOf(name);
   return at === -1 ? fallback : process.argv[at + 1];
 };
 const DRY = process.argv.includes("--dry");
 const BUDGET = Number(argOf("--budget", 30));
+const RELEASES = Number(argOf("--releases", 4));
 
 const call = async (path_, body) => {
   const response = await fetch(DAEMON + path_, body
@@ -97,20 +135,25 @@ const releaseKey = (r) =>
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 
-function choose(results) {
+function choose(results, releases) {
   const usable = results.filter((r) => r.file_id);
   const by = (language) => usable
     .filter((r) => (r.language || "").toLowerCase() === language)
     .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0) || (b.download_count ?? 0) - (a.download_count ?? 0));
 
-  const english = by("en");
-  const turkish = by("tr");
   const picked = [];
-  if (english[0]) picked.push({ ...english[0], why: "English, best match" });
-  if (turkish[0]) picked.push({ ...turkish[0], why: "Turkish, cross-language pair" });
-  // A second English from a DIFFERENT release: same words, different clock.
-  const second = english.find((r) => english[0] && releaseKey(r) !== releaseKey(english[0]));
-  if (second) picked.push({ ...second, why: "second English release, retiming pair" });
+  /* One per distinct release name. Two files from the same release carry the
+   * same clock, so the pair they form has nothing in it to align. */
+  const seen = new Set();
+  for (const result of by("en")) {
+    const key = releaseKey(result);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    picked.push({ ...result, why: `English release ${seen.size}` });
+    if (seen.size >= releases) break;
+  }
+  const turkish = by("tr")[0];
+  if (turkish) picked.push({ ...turkish, why: "Turkish, cross-language pair" });
   return picked;
 }
 
@@ -141,7 +184,7 @@ for (const want of WANTED) {
     console.log(`  ${want.title}: search failed - ${error.message}`);
     continue;
   }
-  const picked = choose(found.results || []);
+  const picked = choose(found.results || [], RELEASES);
   const label = `${want.title}${want.season ? ` S0${want.season}E0${want.episode}` : ""}`;
   console.log(`${label}  resolved=${found.resolved?.title ?? "?"} (${found.results?.length ?? 0} results) -> ${picked.length} to fetch`);
 
@@ -165,7 +208,12 @@ for (const want of WANTED) {
     try {
       const got = await call("/fetch", { file_id: pick.file_id });
       spent++;
-      if (typeof got.remaining_quota === "number") quota = got.remaining_quota;
+      /* Under `meta`, not at the top level. It was read from the top level for
+       * as long as this script has existed, which made `quota` permanently
+       * null - so the floor below never fired and the only thing standing
+       * between a run and the reader's whole day of downloads was --budget. */
+      const left = got.meta?.remaining_quota;
+      if (typeof left === "number") quota = left;
       have.add(String(pick.file_id));
       console.log(`      cached${quota === null ? "" : `, quota ${quota}`}`);
     } catch (error) {
