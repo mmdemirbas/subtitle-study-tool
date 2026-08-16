@@ -3739,7 +3739,100 @@
           throw new Error(`not side by side: ${a.posX}% and ${b.posX}%`);
       });
 
+      /* An episode cut into acts, and the two things that have to be true of it.
+       *
+       * A broadcast episode keeps a different amount of black around each
+       * advertising break in each release, so two subtitles for it agree inside
+       * an act and jump between them, and no single shift fits both sides of a
+       * jump. Measured over 41 such pairs in bench/align: one shift puts a
+       * median of 50% of the film in the right place and per-act offsets put
+       * 90%. It is what "I needed to correct the sync multiple times" was.
+       *
+       * The staircase used here is the one measured on The Americans S02E09
+       * from cue text, in bench/align/shapes.mjs.
+       *
+       * The control is the check after it, and it is the one that matters. A
+       * method free to invent acts always fits better, so finding five in a
+       * five-act staircase says nothing until the same method has been shown
+       * finding NONE where there are none - an invented break moves lines that
+       * were already right, on a subtitle nobody complained about. */
+      const ACT_BREAKS = [[0, 0], [175000, 4300], [544000, 10850], [1152000, 17810], [1713000, 23780]];
+      const inActs = (cues) => cues.map((cue) => {
+        let shift = 0;
+        for (const [from, by] of ACT_BREAKS) if (cue.start >= from) shift = by;
+        return { ...cue, start: cue.start + shift, end: cue.end + shift, text: cue.text };
+      });
+
+      check("an episode cut into acts is lined up act by act", async () => {
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "EN · acts", fileId: 940, slot: 0 });
+        await window.__ssoApi.attach({ cues: inActs(burstyCues(0)), label: "TR · acts", fileId: 941, slot: 1 });
+        await sleep(200);
+        const answer = await window.__ssoApi.autoAlign(1);
+        await sleep(150);
+
+        if (!answer?.ok) throw new Error(`a copy of the same file in acts was refused: ${answer?.reason}`);
+        const steps = window.__ssoApi.status().tracks[1].steps || [];
+        if (steps.length < 4)
+          throw new Error(`a five-act episode came back as ${steps.length} acts: ${JSON.stringify(steps)}`);
+
+        /* The picture, not the numbers. At each sample both subtitles should be
+         * showing a line or both showing none; a subtitle that is 20 seconds
+         * out in the third act shows one where the other shows nothing, which
+         * is exactly what the reader sees. */
+        let apart = 0;
+        const at = [200, 400, 700, 900, 1100, 1300, 1600, 1900, 2100, 2400, 2700, 3000];
+        for (const seconds of at) {
+          video.currentTime = seconds;
+          await sleep(60);
+          const roots = [...shadowOf().querySelectorAll(".sso-root")];
+          const showing = roots.map((root) => root.querySelectorAll(".sso-cue").length > 0);
+          if (showing[0] !== showing[1]) apart++;
+        }
+        if (apart > 2)
+          throw new Error(`the two subtitles disagreed about whether anyone was talking at ` +
+            `${apart} of ${at.length} points across the film`);
+      });
+
+      check("two subtitles on one timing are not cut into acts", async () => {
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "EN · flat", fileId: 942, slot: 0 });
+        await window.__ssoApi.attach({ cues: burstyCues(2500), label: "TR · flat", fileId: 943, slot: 1 });
+        await sleep(200);
+        await window.__ssoApi.autoAlign(1);
+        await sleep(150);
+        const track = window.__ssoApi.status().tracks[1];
+        const steps = track.steps || [];
+        if (steps.length > 1)
+          throw new Error(`a plain 2500ms shift was answered with ${steps.length} acts: ` +
+            JSON.stringify(steps));
+        if (Math.abs(track.offsetMs + 2500) > 150)
+          throw new Error(`a 2500ms shift came back as ${track.offsetMs}ms`);
+      });
+
+      check("back to the file's own timing takes the acts with it", async () => {
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "EN · clear", fileId: 944, slot: 0 });
+        await window.__ssoApi.attach({ cues: inActs(burstyCues(0)), label: "TR · clear", fileId: 945, slot: 1 });
+        await sleep(200);
+        await window.__ssoApi.autoAlign(1);
+        await sleep(150);
+        if ((window.__ssoApi.status().tracks[1].steps || []).length < 2)
+          throw new Error("the acts were not found, so clearing them proves nothing");
+
+        window.__ssoApi.setRate(1, { slot: 1, quiet: true, how: "reset" });
+        window.__ssoApi.setSteps([], { slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true, how: "reset" });
+        await sleep(120);
+        const track = window.__ssoApi.status().tracks[1];
+        if ((track.steps || []).length)
+          throw new Error(`${track.steps.length} acts survived the reset`);
+        if (track.offsetMs !== 0) throw new Error(`offset survived the reset at ${track.offsetMs}ms`);
+      });
+
       check("each subtitle keeps its own offset", async () => {
+        // The three checks above put their own files in both slots; put the
+        // pair the rest of this section is written against back.
+        await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1, language: "en", slot: 0 });
+        await attachSecond();
+        await showSpeakerCue();
         window.__ssoApi.setOffset(0, { slot: 0 });
         window.__ssoApi.nudge(1000, { slot: 1 });
         await sleep(50);

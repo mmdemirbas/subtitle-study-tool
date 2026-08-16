@@ -2505,14 +2505,20 @@
    * so taking one without the other lines the film up at the start and lets it
    * drift for the rest of the run. Which is exactly what the offer path did: it
    * applied the offset and dropped the rate, so a subtitle that needed the 4%
-   * PAL stretch was announced as lined up and was seconds out by the end. */
+   * PAL stretch was announced as lined up and was seconds out by the end.
+   *
+   * A timing is now three things, and the third goes the same way. `steps` is
+   * one offset per act, for the pairs where a broadcast episode's advertising
+   * breaks fall in different places in the two releases - and dropping it does
+   * the same thing the dropped rate did, on the 30% of pairs that have one. */
   const timingOf = (slot) => {
     const track = api.status().tracks[slot];
-    return { offsetMs: track?.offsetMs ?? 0, rate: track?.rate ?? 1 };
+    return { offsetMs: track?.offsetMs ?? 0, rate: track?.rate ?? 1, steps: track?.steps ?? [] };
   };
 
-  const applyTiming = (slot, { offsetMs, rate }) => {
+  const applyTiming = (slot, { offsetMs, rate, steps }) => {
     api.setRate(rate ?? 1, { slot, quiet: true });
+    api.setSteps(steps ?? [], { slot });
     api.setOffset(offsetMs ?? 0, { slot, quiet: true });
   };
 
@@ -2539,8 +2545,17 @@
      * error attached, and says it for the readers who fixed it by hand instead
      * of pressing the button. `taken` is still recorded, because accepting an
      * offer is a decision and not an absence of one. */
+    /* Naming the acts when there are any, because the number beside them is
+     * the FIRST act's and the reader would otherwise check it against the last
+     * one and conclude the tool had got it wrong. Also because it is the news:
+     * "these two releases are cut differently and it has been handled" is a
+     * thing worth being told once, and the correction the reader would
+     * otherwise be making at every break is the thing it saves. */
     const lined = () => {
-      sayOnCard(slot, `Lined up · ${api.describeOffset(answer.offsetMs)}`);
+      const acts = answer.steps?.length ?? 1;
+      sayOnCard(slot, acts > 1
+        ? `Lined up in ${acts} acts · ${api.describeOffset(answer.offsetMs)} at the start`
+        : `Lined up · ${api.describeOffset(answer.offsetMs)}`);
     };
     if (answer.verdict === "apply") {
       lined();
@@ -2560,8 +2575,10 @@
         action: {
           label: "Use it",
           onClick: () => {
-            applyTiming(slot, { offsetMs: answer.offsetMs, rate: answer.trackRate });
-            api.trace?.("alignOutcome", { slot, outcome: "taken", offsetMs: answer.offsetMs });
+            applyTiming(slot, { offsetMs: answer.offsetMs, rate: answer.trackRate, steps: answer.steps });
+            api.trace?.("alignOutcome", {
+              slot, outcome: "taken", offsetMs: answer.offsetMs, acts: answer.steps?.length ?? 1,
+            });
             lined();
             refresh(api.status());
           },
@@ -3534,12 +3551,25 @@
       // Nothing to line up against with one subtitle on screen.
       card.lineUpButton.hidden = status.trackCount < 2;
       const stretched = track.rate && track.rate !== 1;
+      const acts = track.steps?.length ?? 0;
       card.offsetField.dataset.set = track.offsetMs ? "true" : "false";
       // Not while it is being typed into, or the value rewrites itself under
       // the cursor between keystrokes.
       if (shadow.activeElement !== card.offsetField) {
         card.offsetField.value = offsetSeconds(track.offsetMs);
       }
+      /* The reading is this subtitle's BASE offset, and when the file has been
+       * cut into acts that is not the offset in force right now - the last act
+       * of a broadcast episode can be thirty seconds further out than the
+       * first. Nudging still moves the base and the acts travel with it, so
+       * the number is the right one to show and edit; what would be wrong is
+       * showing it with nothing saying the rest exists. The title says it, on
+       * the control the number is in. */
+      card.offsetField.title = acts > 1
+        ? `Seconds, for the whole subtitle. This file is lined up in ${acts} acts - `
+          + `the advertising breaks fall in different places in the two releases - `
+          + `and nudging moves all of them together.`
+        : "Seconds. Negative brings the subtitle forward.";
       /* A hidden subtitle says so on its card. The menu item it was toggled
        * from is not on screen to carry the state, and a subtitle that has
        * vanished from the picture with nothing in the panel saying why is the
@@ -3549,7 +3579,10 @@
       card.visible.setAttribute("aria-label", card.visible.title);
       card.visible.dataset.on = track.visible ? "true" : "false";
       // Nothing to undo, no undo. Which is also when the subtitle is right.
-      card.offsetReset.hidden = !track.offsetMs && !stretched;
+      // Acts count: clearing them is part of "back to the file's own timing",
+      // so a subtitle that has only been cut into acts still has something to
+      // clear even with its base offset at zero.
+      card.offsetReset.hidden = !track.offsetMs && !stretched && acts < 2;
       /* A message is an answer about the subtitle that was in this card. When a
        * different one arrives the answer is about a file that is no longer
        * there, so it goes rather than sitting under its replacement. */

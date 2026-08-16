@@ -3897,7 +3897,7 @@
       showToast("Subtitle back to the file's own timing");
     };
 
-    if (aligned?.applied && !track.offsetMs && track.rate === 1) {
+    if (aligned?.applied && !track.offsetMs && track.rate === 1 && track.steps.length < 2) {
       /* The aligner ran, agreed with the file, and changed nothing. Saying
        * "lined up matching the file" - which is what the sentence below prints
        * for an offset of zero - reads as a correction that was not made, and
@@ -3905,9 +3905,16 @@
        * release, which is the ordinary case for a pair downloaded together. */
       showToast(`${said}, already in step`);
     } else if (aligned?.applied) {
+      /* The acts get named, because the number in the sentence is the FIRST
+       * act's and the last one can be half a minute further out. A reader told
+       * "+1.0s" who then checks the closing scene finds it thirty seconds off
+       * and concludes the tool is broken, when what it did was handle exactly
+       * that. Undo still clears the base offset only; the acts go with the
+       * reset key or the card's clear, which say what they are. */
+      const acts = track.steps.length > 1 ? ` in ${track.steps.length} acts` : "";
       showToast(
-        `${said}, lined up with subtitle ${aligned.referenceSlot + 1} · ` +
-        `${describeOffset(track.offsetMs)}`,
+        `${said}, lined up${acts} with subtitle ${aligned.referenceSlot + 1} · ` +
+        `${describeOffset(track.offsetMs)}${acts ? " at the start" : ""}`,
         { action: { label: "Undo", onClick: () => setOffset(0, { slot: index }) } },
       );
     } else if (carried) {
