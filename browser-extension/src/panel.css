@@ -345,6 +345,33 @@ button.sso-arr:hover .sso-arr__i {
   left: 5px;
 }
 
+/* Two short lines against one edge, one above the other - the picture of what
+ * the button does, drawn the way the other three are. Ragged on the free side
+ * and flush on the anchored one, because that difference IS the feature. */
+.sso-arr__i--left::before {
+  bottom: 6px;
+  left: 2px;
+  width: 9px;
+}
+
+.sso-arr__i--left::after {
+  bottom: 2px;
+  left: 2px;
+  width: 6px;
+}
+
+.sso-arr__i--right::before {
+  right: 2px;
+  bottom: 6px;
+  width: 9px;
+}
+
+.sso-arr__i--right::after {
+  right: 2px;
+  bottom: 2px;
+  width: 6px;
+}
+
 /* Placing is a mode - it changes what a click on the film does - so the button
  * that turns it on is lit while it is on, and says Done rather than Move. */
 button.sso-quick__move[data-on="true"] {

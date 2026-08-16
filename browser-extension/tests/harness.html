@@ -1014,6 +1014,60 @@
         }
       });
 
+      check("a subtitle can be put against an edge, text and all", async () => {
+        /* Reported as missing: "I cannot place the subtitles aligned to the
+         * left or right of the screen." Dragging could always put a BOX near an
+         * edge, and that is not the same thing - the text inside stays centred,
+         * so a short line sits in the middle of the box and the margin against
+         * the frame changes from line to line.
+         *
+         * So both halves are asserted: the box moved, and the text inside it
+         * moved with it. The second is the one a refactor would drop, because
+         * the geometry is the visible part and the alignment is one CSS
+         * property nobody would miss until they watched something. */
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "TR · edges", fileId: 508, slot: 1 });
+        await sleep(200);
+        const roots = [...shadowOf().querySelectorAll(".sso-root")];
+        if (roots.length < 2) throw new Error(`${roots.length} subtitles drawn, want 2`);
+
+        try {
+          for (const [where, want] of [["left", "left"], ["right", "right"]]) {
+            window.__ssoApi.arrange(where);
+            await sleep(150);
+            const tracks = window.__ssoApi.status().settings.tracks;
+            for (const [slot, track] of tracks.entries()) {
+              if (track.align !== want)
+                throw new Error(`${where}: subtitle ${slot + 1} is ranged "${track.align}"`);
+              const seen = getComputedStyle(roots[slot]).textAlign;
+              if (seen !== want)
+                throw new Error(`${where}: subtitle ${slot + 1} renders text-align ${seen}`);
+              const edge = where === "left" ? track.posX : 100 - track.posX;
+              if (edge > 30)
+                throw new Error(`${where}: subtitle ${slot + 1} is ${edge}% from that edge`);
+            }
+            // Stacked, or they are on top of each other against the edge.
+            if (tracks[0].posY === tracks[1].posY)
+              throw new Error(`${where}: both subtitles are at the same height`);
+          }
+
+          /* And back. An arrangement is a complete statement about where the
+           * subtitles are, so going back to side-by-side has to undo the
+           * ranging as well as the geometry - a button that moves the box and
+           * leaves the text ranged left looks like it half worked. */
+          window.__ssoApi.arrange("side");
+          await sleep(150);
+          for (const [slot, track] of window.__ssoApi.status().settings.tracks.entries()) {
+            if (track.align !== "center")
+              throw new Error(`back to side by side, subtitle ${slot + 1} is still ranged "${track.align}"`);
+            if (getComputedStyle(roots[slot]).textAlign !== "center")
+              throw new Error(`back to side by side, subtitle ${slot + 1} still renders ranged`);
+          }
+        } finally {
+          window.__ssoApi.detach(1);
+          await sleep(120);
+        }
+      });
+
       check("double-clicking the bar folds the panel, and again unfolds it", async () => {
         /* Asked for: "double click on the subtitle panel should collapse /
          * expand it". The button in the corner stays, because a gesture nobody

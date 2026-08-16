@@ -178,6 +178,15 @@
     // and attaching a second subtitle may arrange both.
     placed: false,
 
+    /* Which edge of its own box the text is ranged against.
+     *
+     * Only meaningful for a box that is not in the middle of the picture, and
+     * that is exactly what it is for: a box pushed to the left edge with its
+     * text still centred has a left margin that changes with every line, so it
+     * reads as drifting rather than as placed. "center" is what the stylesheet
+     * has always done and what every existing installation gets. */
+    align: "center",
+
     /* How this one looks.
      *
      * Per track, not shared, because the whole point of two subtitles is that
@@ -253,6 +262,29 @@
   const STACKED = [
     { posX: 50, posY: 88, widthPercent: 80 },
     { posX: 50, posY: 96, widthPercent: 80 },
+  ];
+
+  /* Both against one edge of the picture, stacked.
+   *
+   * Reported as missing: "I cannot place the subtitles aligned to the left or
+   * right of the screen." Dragging could always put a BOX near an edge, and
+   * that is not the same thing - the text inside it stays centred, so a box
+   * pushed left renders its short lines in the middle of itself and the left
+   * margin visibly breathes in and out from line to line. What makes an edge
+   * placement read as one is the text being aligned to that edge too, which is
+   * why these carry `align` and the other two do not.
+   *
+   * It is also the placement that leaves the middle of the frame clear, which
+   * is where faces are. 44% at 24 leaves a two percent margin outside the box
+   * and the whole right half of the picture untouched. */
+  const LEFT_EDGE = [
+    { posX: 24, posY: 88, widthPercent: 44, align: "left" },
+    { posX: 24, posY: 96, widthPercent: 44, align: "left" },
+  ];
+
+  const RIGHT_EDGE = [
+    { posX: 76, posY: 88, widthPercent: 44, align: "right" },
+    { posX: 76, posY: 96, widthPercent: 44, align: "right" },
   ];
 
   /* Named looks, because the two subtitles want opposite treatments and setting
@@ -1291,9 +1323,23 @@
    * the next drag - in which case it is not a mode - or defended against it, in
    * which case dragging stops working. So this writes the two geometries once
    * and then gets out of the way. */
+  const ARRANGEMENTS = {
+    side: SIDE_BY_SIDE,
+    stacked: STACKED,
+    left: LEFT_EDGE,
+    right: RIGHT_EDGE,
+  };
+
+  /* Every arrangement writes `align`, including the two that want it centred.
+   * Without that, going from Left back to Side by side would leave both boxes
+   * still ranged left - the geometry would move and the text would not, which
+   * looks like the button half worked. An arrangement is a complete statement
+   * about where the subtitles are, not a patch on top of the last one. */
   function arrange(name) {
-    const preset = name === "stacked" ? STACKED : SIDE_BY_SIDE;
-    updateSettings({ tracks: preset.map((geometry) => ({ ...geometry, placed: true })) });
+    const preset = ARRANGEMENTS[name] || SIDE_BY_SIDE;
+    updateSettings({
+      tracks: preset.map((geometry) => ({ align: "center", ...geometry, placed: true })),
+    });
   }
 
   /* Subtitles are sized against the picture, not the window.
@@ -1346,6 +1392,17 @@
       // every installation that predates per-track styling has.
       const alpha = track.backdrop == null ? background : track.backdrop;
       root.style.setProperty("--sso-bg", `rgba(0, 0, 0, ${alpha})`);
+      /* Both, because the box and the lines inside it are two different
+       * questions. `justify-content` puts the CUE against an edge of the box
+       * when the cue is narrower than the box; `text-align` puts each LINE
+       * against an edge of the cue when a cue has two lines of different
+       * lengths. A subtitle ranged left needs both or it still wanders. */
+      const align = track.align === "left" || track.align === "right" ? track.align : "center";
+      root.style.setProperty("--sso-align", align);
+      root.style.setProperty(
+        "--sso-justify",
+        align === "center" ? "center" : align === "left" ? "flex-start" : "flex-end",
+      );
       writePosition(root, track.posX, track.posY);
       root.style.setProperty("--sso-width", `${track.widthPercent}vw`);
       root.style.setProperty("--sso-color", track.color || DEFAULT_TRACK.color);

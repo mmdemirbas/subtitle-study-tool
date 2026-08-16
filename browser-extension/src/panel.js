@@ -723,6 +723,12 @@
       return b;
     };
 
+    /* Four places to put a pair of subtitles, and the two new ones are the
+     * answer to "I cannot place the subtitles aligned to the left or right of
+     * the screen". They stack both boxes against one edge of the picture and
+     * range the text against that edge, which is what makes an edge placement
+     * read as placed rather than as drifting - and it leaves the middle of the
+     * frame, where the faces are, clear. */
     el.arrangeGroup = document.createElement("div");
     el.arrangeGroup.className = "sso-arr-group";
     el.arrangeGroup.append(
@@ -732,6 +738,8 @@
       arranger("stack", "Stacked - one above the other, along the bottom", () =>
         api.arrange("stacked"),
       ),
+      arranger("left", "Both against the left edge, ranged left", () => api.arrange("left")),
+      arranger("right", "Both against the right edge, ranged right", () => api.arrange("right")),
     );
 
     el.centreButton = arranger(

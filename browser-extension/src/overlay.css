@@ -37,11 +37,16 @@
   width: var(--sso-width, 80vw);
   z-index: 2147483647; /* above player chrome, which often sits near 2^31 */
   display: flex;
-  justify-content: center;
+  /* Centre unless the subtitle has been placed against an edge of the picture,
+   * where the text has to be ranged against that edge too or the margin
+   * between it and the frame changes with every line. Two properties because
+   * they answer two questions: where the CUE sits inside its box, and where
+   * each LINE sits inside a cue that has two of unequal length. */
+  justify-content: var(--sso-justify, center);
   pointer-events: none; /* never intercept clicks meant for the player */
   margin: 0;
   padding: 0;
-  text-align: center;
+  text-align: var(--sso-align, center);
 }
 
 .sso-root[hidden] {
