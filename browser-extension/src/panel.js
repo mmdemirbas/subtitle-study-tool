@@ -1219,14 +1219,74 @@
         ink: token("--sso-map-ink", "#93b9fb"),
         head: token("--sso-map-head", "#eef0f3"),
         spill: token("--sso-map-spill", "#f0836f"),
+        grid: token("--sso-map-grid", "rgba(238, 240, 243, 0.22)"),
       };
       return inks;
     };
+
+    /* The clock, on the strip.
+     *
+     * Two patterns matched by eye need something to be matched AGAINST, and
+     * until now the only landmark either strip carried was the playhead - one
+     * mark, in the same place on both cards, which says nothing about whether
+     * the bar under it on this card is the bar under it on that one. Asked for
+     * directly: "subtitle maps should show time ticks. That would make it
+     * easier to match multiple points by eye."
+     *
+     * The ladder rather than a fixed division, because this strip shows a
+     * minute, fifteen seconds or two hours depending on which the reader asked
+     * for, and one division cannot serve all three. The first step that leaves
+     * enough room for a label wins. */
+    const TICK_STEPS = [
+      1000, 2000, 5000, 10000, 15000, 30000,
+      60000, 120000, 300000, 600000, 900000, 1800000,
+    ];
+
+    const clock = (ms) => {
+      const total = Math.max(0, Math.round(ms / 1000));
+      const hours = Math.floor(total / 3600);
+      const minutes = Math.floor(total / 60) % 60;
+      const seconds = total % 60;
+      const mm = hours ? String(minutes).padStart(2, "0") : String(minutes);
+      return `${hours ? `${hours}:` : ""}${mm}:${String(seconds).padStart(2, "0")}`;
+    };
+
+    function paintTicks(context) {
+      const span = to - from;
+      if (!(span > 0)) return;
+      /* Far enough apart for the label to fit with room to spare. A grid whose
+       * numbers touch is a grid nobody reads, and the whole point of the
+       * numbers is being read at a glance from one card to the other. */
+      const room = 58 * ratio();
+      const step = TICK_STEPS.find((ms) => (ms / span) * width >= room)
+        ?? TICK_STEPS[TICK_STEPS.length - 1];
+
+      context.fillStyle = inkOf().grid;
+      context.font = `${Math.round(9 * ratio())}px system-ui, -apple-system, sans-serif`;
+      context.textBaseline = "top";
+      for (let at = Math.ceil(from / step) * step; at <= to; at += step) {
+        const x = Math.round(xOf(at));
+        // The line quieter than its label: the label is the fact, the line is
+        // only there to say which column the fact belongs to.
+        context.globalAlpha = 0.55;
+        context.fillRect(x, 0, ratio(), height);
+        context.globalAlpha = 1;
+        // Right of the line, and never off the end of the strip.
+        const text = clock(at);
+        const room = width - x - 3 * ratio();
+        if (context.measureText(text).width <= room) {
+          context.fillText(text, x + 3 * ratio(), ratio());
+        }
+      }
+    }
 
     function paint(status) {
       const context = canvas.getContext("2d");
       if (!context || !width || to <= from) return;
       context.clearRect(0, 0, width, height);
+
+      // Behind the dialogue, which is what the strip is actually about.
+      paintTicks(context);
 
       const colour = inkOf();
       context.fillStyle = colour.ink;

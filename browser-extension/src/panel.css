@@ -610,6 +610,10 @@ button.sso-quick__move[data-on="true"] {
 .sso-map {
   --sso-map-ink: #93b9fb;
   --sso-map-head: #eef0f3;
+  /* The clock behind the dialogue. Faint on purpose: it is what the bars are
+   * measured against, not something to read on its own, and a grid as loud as
+   * the data turns the strip into graph paper. */
+  --sso-map-grid: rgba(238, 240, 243, 0.3);
   /* Lines pushed off the end of the film. The danger ink, because it is not a
    * feature of the subtitle - it is a warning that part of it is unreachable. */
   --sso-map-spill: #f0836f;
@@ -641,7 +645,14 @@ button.sso-quick__move[data-on="true"] {
   /* Must match MAP_HEIGHT in panel.js. */
   height: 38px;
   overflow: hidden;
-  cursor: ew-resize;
+  /* A hand, not a resize arrow.
+   *
+   * `ew-resize` is what you show over an edge that changes a size, and nothing
+   * here changes size - the gesture takes hold of the pattern and slides it
+   * along the film. Reported as exactly that: "pan icon would be a better fit
+   * than resize icon". An open hand that closes on the press is what every
+   * map on the machine does for the same gesture. */
+  cursor: grab;
   background: rgba(0, 0, 0, 0.18);
   border: 0;
   border-radius: var(--sso-r-ctl);
@@ -672,6 +683,7 @@ button.sso-quick__move[data-on="true"] {
 
 .sso-map__plot[data-dragging="true"] {
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 0 0 1px var(--sso-accent);
+  cursor: grabbing;
 }
 
 /* The canvas is sized in device pixels by the script and laid out in CSS

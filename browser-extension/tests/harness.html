@@ -1501,14 +1501,23 @@
 
         /* Per column: is there ink, and how tall is it. The playhead is drawn
          * full height in its own colour, so a column reaching the very top is
-         * the playhead and not a line. */
+         * the playhead and not a line.
+         *
+         * INK, the threshold, is what separates a line from the clock behind
+         * it. The time grid is drawn faint on purpose and spans the full
+         * height, so counting any alpha at all counted every gridline as a
+         * block - 13 of them for two lines. A cue is drawn at 0.55 alpha and
+         * its leading edge at 0.95, both in an opaque ink; the grid lands
+         * around 40. Halfway between is a threshold that cannot be reached by
+         * the grid and cannot be missed by a line. */
+        const INK = 90;
         const px = canvas.getContext("2d")
           .getImageData(0, 0, canvas.width, canvas.height).data;
         const tall = new Array(canvas.width).fill(0);
         for (let x = 0; x < canvas.width; x++) {
           let top = canvas.height;
           for (let y = 0; y < canvas.height; y++) {
-            if (px[(y * canvas.width + x) * 4 + 3] > 0) { top = y; break; }
+            if (px[(y * canvas.width + x) * 4 + 3] > INK) { top = y; break; }
           }
           tall[x] = top === 0 ? 0 : canvas.height - top;
         }
@@ -1678,6 +1687,67 @@
 
         window.__ssoApi.detach(1);
         await sleep(100);
+      });
+
+      check("the map carries a clock, evenly spaced, at every scale", async () => {
+        /* Two patterns matched by eye need something to be matched against. The
+         * only landmark either strip carried was the playhead, which is in the
+         * same place on both cards and therefore says nothing about whether the
+         * bar under it here is the bar under it there. Asked for: "subtitle
+         * maps should show time ticks. That would make it easier to match
+         * multiple points by eye."
+         *
+         * A tick is a full-height column - a cue bar can reach at most
+         * height-2, so nothing else in the picture spans the whole well - and
+         * the playhead is told apart from a tick by being opaque where the grid
+         * is faint. Even spacing is the property worth asserting: a grid that
+         * is not evenly spaced is not a clock. */
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "TR · map", fileId: 506, slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        video.currentTime = 2600;
+        await sleep(150);
+
+        const strip = mapStrips()[1];
+        const canvas = strip.querySelector(".sso-map__canvas");
+        const zoom = strip.querySelector(".sso-map__zoom");
+
+        try {
+          for (let scale = 0; scale < 3; scale++) {
+            const label = zoom.textContent;
+            const context = canvas.getContext("2d");
+            const top = context.getImageData(0, 0, canvas.width, 1).data;
+            const bottom = context.getImageData(0, canvas.height - 1, canvas.width, 1).data;
+            const ticks = [];
+            for (let x = 0; x < canvas.width; x++) {
+              const a = top[x * 4 + 3];
+              const b = bottom[x * 4 + 3];
+              // Ink at both ends of the column, and faint - the playhead is
+              // opaque, and a cue bar never reaches the top.
+              if (a > 8 && b > 8 && a < 200) ticks.push(x);
+            }
+            if (ticks.length < 3)
+              throw new Error(`the ${label} scale draws ${ticks.length} time ticks`);
+
+            const gaps = [];
+            for (let i = 1; i < ticks.length; i++) {
+              // Adjacent columns are one tick two device pixels wide.
+              if (ticks[i] - ticks[i - 1] > 2) gaps.push(ticks[i] - ticks[i - 1]);
+            }
+            const wide = Math.max(...gaps);
+            const narrow = Math.min(...gaps);
+            if (wide - narrow > 2)
+              throw new Error(`the ${label} scale's ticks are ${narrow}px to ${wide}px apart`);
+            // Far enough apart to carry a legible label.
+            if (narrow < 40)
+              throw new Error(`the ${label} scale's ticks are ${narrow}px apart, too close to label`);
+
+            zoom.click();
+            await sleep(180);
+          }
+        } finally {
+          window.__ssoApi.detach(1);
+          await sleep(100);
+        }
       });
 
       check("moving the mouse over the strip without pressing changes nothing", async () => {
