@@ -1123,9 +1123,26 @@
                   `at ${width}px "${what}" is ${Math.round(box.width)}×${Math.round(box.height)}`);
             }
 
-            const name = card.querySelector(".sso-track__name").getBoundingClientRect().width;
-            if (name < 40)
-              throw new Error(`at ${width}px the subtitle's name is ${Math.round(name)}px wide`);
+            /* The identity, not the name. The name is set small and quiet now
+             * - what tells the two cards apart at a glance is the number and
+             * the language tag, and those are the things that must never be
+             * squeezed out. Reported as "the subtitle number and the language
+             * tag would be discriminative enough in practical use", which is
+             * also what this check should be asserting. */
+            const ident = card.querySelector(".sso-track__label").getBoundingClientRect().width;
+            if (ident < 40)
+              throw new Error(`at ${width}px the whole identity is ${Math.round(ident)}px wide`);
+            /* Present and not clipped, rather than a width in pixels: a single
+             * digit at the small size measures about seven, so any threshold
+             * generous enough for "1" is too small to catch a squeeze anyway.
+             * What matters is that the glyphs fit the box they are in. */
+            for (const part of [".sso-track__no", ".sso-track__lang"]) {
+              const box = card.querySelector(part);
+              if (box.getBoundingClientRect().width < 4)
+                throw new Error(`at ${width}px ${part} has been squeezed away`);
+              if (box.scrollWidth > box.clientWidth + 1)
+                throw new Error(`at ${width}px ${part} is cut off`);
+            }
 
             const field = card.querySelector(".sso-sync__field").getBoundingClientRect().width;
             if (field < 50)
@@ -1135,6 +1152,52 @@
           window.__ssoPanel.applySize(was);
           window.__ssoApi.setOffset(wasOffset, { slot, quiet: true });
           await sleep(80);
+        }
+      });
+
+      check("a card is two rows, and the two maps are close enough to compare", async () => {
+        /* The card was head, map, controls - three rows, and with two subtitles
+         * attached the two maps were 100px apart. Matching one pattern against
+         * the other is done by eye, and the eye has to carry the pattern across
+         * that gap, so the request was for two rows: "this will make the
+         * subtitle maps closer to each other, so it would be easier to match
+         * them by eye".
+         *
+         * Both halves are asserted, because the cheap way to close the gap is
+         * to shrink the map and that would pay for the goal with the goal. The
+         * first attempt did exactly that - all three timing controls on the
+         * map's line left it 82px wide at the width the panel opens at. */
+        const host = panelShadow().host;
+        const was = host.getBoundingClientRect().width;
+        await window.__ssoApi.attach({
+          cues: burstyCues(0), label: "TR · The.Americans.2013.S02E09.HDTV.x264-2HD",
+          fileId: 605, slot: 1, language: "tr",
+        });
+        window.__ssoPanel.applySize(340);
+        await sleep(150);
+        try {
+          const cards = [...panelShadow().querySelectorAll(".sso-track")].filter((c) => !c.hidden);
+          if (cards.length < 2) throw new Error(`${cards.length} cards showing, want 2`);
+
+          for (const card of cards) {
+            const rows = new Set(
+              [...card.querySelectorAll(".sso-track__head, .sso-sync")]
+                .map((row) => Math.round(row.getBoundingClientRect().top)),
+            );
+            if (rows.size !== 2) throw new Error(`a card is ${rows.size} rows at 340px`);
+          }
+
+          const map = cards[1].querySelector(".sso-map__plot").getBoundingClientRect().width;
+          if (map < 150) throw new Error(`the map is ${Math.round(map)}px wide at 340px`);
+
+          const gap =
+            cards[1].querySelector(".sso-map__plot").getBoundingClientRect().top -
+            cards[0].querySelector(".sso-map__plot").getBoundingClientRect().bottom;
+          if (gap > 80) throw new Error(`${Math.round(gap)}px between the two maps`);
+        } finally {
+          window.__ssoPanel.applySize(was);
+          window.__ssoApi.detach(1);
+          await sleep(120);
         }
       });
 
@@ -1911,9 +1974,14 @@
          * And the hint is the BINDING, not a printed constant: rebinding the
          * key has to change what the button says, or it is decoration that goes
          * stale the first time somebody uses the settings screen. */
-        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        const steps = [...card.querySelectorAll(".sso-line-step")];
+        /* On the quick row, not on a card. They move the PICTURE by a line
+         * boundary and there is one picture, so drawing them per card drew the
+         * same control twice and made the reader choose a card before they
+         * could press either. */
+        const steps = [...panelShadow().querySelectorAll(".sso-quick__play .sso-line-step")];
         if (steps.length !== 2) throw new Error(`${steps.length} playback buttons, want 2`);
+        if (panelShadow().querySelector(".sso-track .sso-line-step"))
+          throw new Error("a card is still drawing its own copy of the playback buttons");
 
         const keys = window.__ssoApi.status().settings.keys;
         window.__ssoApi.updateSettings({ keysEnabled: true, keys: { ...keys, nextLine: "m" } });

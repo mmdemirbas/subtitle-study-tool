@@ -759,10 +759,51 @@
     });
     el.lineUpAll.className = "sso-quick__align sso-quiet";
 
+    /* Again and Next, once for the film rather than once per subtitle.
+     *
+     * They move the PICTURE to a line boundary, and there is one picture. Drawn
+     * on each card they were the same control twice, asking the reader to
+     * choose a card before they could press either - and the choice does not
+     * matter, because both cards move the same playhead. The keyed subtitle
+     * decides whose line boundaries are counted, which is what api.stepLine
+     * does with no slot and what the keyboard bindings have always done.
+     *
+     * "Again" and not "Previous": the first press restarts the line being
+     * spoken, which is what it is reached for, and it takes a second press to
+     * go back one.
+     *
+     * A group of its own with room either side, because these two are the only
+     * controls on this row that touch the FILM. Everything to their left
+     * arranges the subtitles on the picture; Line up all, on the right, changes
+     * their timing. Three kinds of thing, three groups, and the gaps say so. */
+    const stepper = (text, key, direction, why) => {
+      const b = button("", { title: why });
+      b.className = "sso-line-step sso-quiet";
+      const said = document.createElement("span");
+      said.textContent = text;
+      const hint = document.createElement("kbd");
+      hint.className = "sso-key-hint";
+      b.append(said, hint);
+      b.addEventListener("click", () => api.stepLine(direction));
+      return { b, hint, key };
+    };
+
+    el.steps = [
+      stepper("Again", "prevLine", -1,
+        "Play this line from its start. Press twice to go back one."),
+      stepper("Next", "nextLine", +1, "Skip to where the next line begins."),
+    ];
+    el.playGroup = document.createElement("div");
+    el.playGroup.className = "sso-quick__play";
+    el.playGroup.append(...el.steps.map((step) => step.b));
+
     const spacer = document.createElement("span");
     spacer.className = "sso-grow";
 
-    el.quick.append(el.arrangeGroup, el.centreButton, el.moveButton, spacer, el.lineUpAll);
+    el.quick.append(
+      el.arrangeGroup, el.centreButton, el.moveButton,
+      el.playGroup, spacer, el.lineUpAll,
+    );
     return el.quick;
   }
 
@@ -784,13 +825,8 @@
     for (const [slot] of status.tracks.entries()) clearSaid(slot);
     const moved = [];
     const unsure = [];
-    /* What each one was, before the aligner is allowed to overwrite it. Undo
-     * used to set rate 1 and offset 0, which throws away a timing the reader
-     * had set by hand rather than putting it back. */
-    const before = new Map();
     for (const [slot, track] of status.tracks.entries()) {
       if (!track.attached || slot === first) continue;
-      before.set(slot, timingOf(slot));
       const answer = await api.autoAlign?.(slot, { against: first });
       if (answer?.applied) moved.push(slot + 1);
       else if (answer?.verdict === "offer") unsure.push(slot + 1);
@@ -800,24 +836,9 @@
       moved.length ? `${moved.length === 1 ? `Subtitle ${moved[0]}` : `${moved.length} subtitles`} lined up with subtitle ${first + 1}` : "",
       unsure.length ? `subtitle ${unsure.join(" and ")} not certain - use Line up on its card` : "",
     ].filter(Boolean);
-    api.showToast(
-      said.length ? said.join(" · ") : "Nothing needed moving",
-      moved.length
-        ? {
-            action: {
-              label: "Undo",
-              onClick: () => {
-                for (const number of moved) {
-                  applyTiming(number - 1, before.get(number - 1) || { offsetMs: 0, rate: 1 });
-                }
-                api.trace?.("alignOutcome", { slots: moved.map((n) => n - 1), outcome: "undone" });
-                api.showToast("Back to the timing each one had");
-                refresh(api.status());
-              },
-            },
-          }
-        : {},
-    );
+    // No Undo, for the reason given in lineUp: it went unused, and the sync
+    // trace now carries the signal it was the only source of.
+    api.showToast(said.length ? said.join(" · ") : "Nothing needed moving");
     refresh(api.status());
   }
 
@@ -1666,10 +1687,36 @@
      * The group is the boundary, the gap either side of it is the breathing
      * room, and every one of them is now the same 26px the rest of the panel's
      * controls are. */
+    /* The reading, and the way back from it, on the identity line.
+     *
+     * The ask was for all three timing controls to join the map's line, and
+     * they do not fit: measured at the 340px the panel opens at, the field, the
+     * clear and Line up take 185px of a 316px row and leave the map 82 pixels.
+     * The map is the instrument - the whole reason for making the card shorter
+     * was to bring the two of them closer together - so shrinking it by two
+     * thirds to save a row would have paid for the goal with the goal.
+     *
+     * So the number and its clear sit here instead, which is a row they fit in
+     * and a place they belong: this line already says which subtitle this is,
+     * and where it has been moved to is part of that. Line up stays with the
+     * map below, at the card's right edge and directly under "Line up all".
+     * The card is two rows either way, and the map keeps 224px at the opening
+     * width instead of 82. */
     const acts = document.createElement("div");
     acts.className = "sso-track__acts";
     acts.append(styleButton, visible, remove);
-    head.append(label, learnChip, acts);
+
+    /* Everything that is not the name, as one flex item.
+     *
+     * The head wraps at the narrowest widths the grips allow, and what has to
+     * wrap is the whole right-hand side in one piece. As separate items the
+     * browser drops whichever one happens not to fit - the three verbs alone on
+     * a second line, under a reading that stayed up on the first - which is
+     * three groups arranged by arithmetic rather than by meaning. */
+    const right = document.createElement("div");
+    right.className = "sso-track__right";
+    right.append(learnChip, acts);
+    head.append(label, right);
 
     /* One row under the map: move the film, or move the text.
      *
@@ -1735,47 +1782,17 @@
       sayOnCard(slot, "Back to the file's own timing");
     });
 
-    /* Moving the film by this subtitle's lines.
+    /* Again and Next are not here any more. They are on the quick row.
      *
-     * Not a timing control - it moves the picture, not the text - but it
-     * belongs on this card, because "a line" means a line of THIS file and the
-     * two subtitles are routinely cut differently. It was a row of its own
-     * below the timing; with the four nudges gone there is room for it beside
-     * them, and one row of two groups is one row fewer per card.
-     *
-     * "Again" and not "Previous": the first press restarts the line being
-     * spoken, which is what it is reached for, and it takes a second press to
-     * go back one. */
-    /* And each one wears its key.
-     *
-     * These two have keyboard bindings that work while the panel is shut and
-     * while the film is fullscreen, which is most of the time somebody wants
-     * them - and the only place that said so was a grid inside Settings. A
-     * shortcut nobody is told about is a shortcut nobody has. It is set small
-     * and dim beside the label, which is how every application on the machine
-     * says the same thing, and it disappears when the binding is cleared or
-     * the keys are switched off rather than reading "off" at a reader. */
-    const stepper = (text, key, direction, why) => {
-      const b = button("", { title: why });
-      b.className = "sso-line-step sso-quiet";
-      const said = document.createElement("span");
-      said.textContent = text;
-      const hint = document.createElement("kbd");
-      hint.className = "sso-key-hint";
-      b.append(said, hint);
-      b.addEventListener("click", () => api.stepLine(direction, { slot }));
-      return { b, hint, key };
-    };
-
-    const steps = [
-      stepper("Again", "prevLine", -1,
-        "Play this line from its start. Press twice to go back one."),
-      stepper("Next", "nextLine", +1, "Skip to where the next line begins."),
-    ];
-
-    const play = document.createElement("div");
-    play.className = "sso-sync__play";
-    play.append(...steps.map((step) => step.b));
+     * They move the PICTURE by a line of this subtitle, which made them look
+     * like a per-subtitle control, and they were drawn once per card. But a
+     * film has one playhead: pressing Again on card 2 does exactly what
+     * pressing it on card 1 does, give or take which file's line boundaries
+     * are counted, and two identical buttons on two cards is a choice the
+     * reader has to make before they can press either. Reported as exactly
+     * that. One pair, on the row that already holds the things that act on the
+     * whole picture, and the keyed subtitle decides whose lines are counted -
+     * which is the same rule the keyboard bindings have always followed. */
 
     /* Lining up is a timing control, so it sits with the timing controls - the
      * reading it produces is the one directly beside it. */
@@ -1792,12 +1809,38 @@
      * every row - written from a screenshot of a 640px panel read as a 1290px
      * one, because the capture was at 2x. The panel cannot go past 640px, so
      * the cap did nothing but leave every right-hand control 80px short of the
-     * edge it was meant to sit on. The cap is gone; see panel.css. */
+     * edge it was meant to sit on. The cap is gone; see panel.css.
+     *
+     * And it is on the map's own line now, which is what took the card from
+     * three rows to two. The reading these controls produce IS the picture
+     * beside them, and Line up ends the line directly under "Line up all" on
+     * the quick row - the same verb, one about this subtitle and one about all
+     * of them, in one column. The two maps end up a row closer together, which
+     * is the point: matching one against the other is done by eye. */
+    /* The reading, and the way back from it, on the identity line above.
+     *
+     * The ask was for all three timing controls to join the map's line, and
+     * they do not fit. Measured at the 340px the panel opens at: the field, the
+     * clear and Line up take 185px of a 316px row and leave the map 82 pixels
+     * wide. The map is the instrument - bringing the two of them closer
+     * together is the whole reason for making the card shorter - so shrinking
+     * it by two thirds to save a row would have paid for the goal with the
+     * goal.
+     *
+     * So the number and its clear go up one line, which is a row they fit in
+     * and a place they belong: that line already says which subtitle this is,
+     * and how far it has been moved is part of the same sentence. Line up stays
+     * with the map, at the card's right edge and directly under "Line up all".
+     * The card is two rows either way, and the map keeps 181px at the opening
+     * width instead of 82. Measured with two subtitles attached: the card went
+     * from 130px tall to 96, and the gap between the two maps - which is the
+     * distance the eye has to carry a pattern across - from 100px to 66. */
+    right.insertBefore(offsetField, learnChip);
+    right.insertBefore(offsetReset, learnChip);
+
     const timing = document.createElement("div");
     timing.className = "sso-sync__time";
-    timing.append(offsetField, offsetReset, lineUpButton);
-
-    offsets.append(play, timing);
+    timing.append(lineUpButton);
 
     /* What lining up did, on the card that did it.
      *
@@ -1811,18 +1854,18 @@
     said.className = "sso-track__said";
     said.hidden = true;
 
-    /* The map goes above the controls that move it, not below them: it is the
-     * reading those controls change, and it is also one of them. */
+    /* The map, and the controls that move it, on one line. */
     const timeline = buildTimeline(slot);
+    offsets.append(timeline.root, timing);
 
     const body = document.createElement("div");
     body.className = "sso-track__body";
-    body.append(timeline.root, offsets, said);
+    body.append(offsets, said);
 
     root.append(head, body);
     return {
       root, learnChip, label, labelNo, labelLang, labelHead, labelTail, styleButton,
-      offsetField, offsetReset, visible, remove, disarm, lineUpButton, timeline, said, steps,
+      offsetField, offsetReset, visible, remove, disarm, lineUpButton, timeline, said,
     };
   }
 
@@ -2243,35 +2286,33 @@
   };
 
   async function lineUp(slot) {
-    /* Read before the aligner runs, because the confident band applies itself
-     * inside autoAlign and after the call there is nothing left to remember.
-     * Undo used to put back rate 1 and offset 0, which is where a file starts
-     * out and not where the reader was if they had already timed it by hand. */
-    const was = timingOf(slot);
     const answer = await api.autoAlign?.(slot);
     if (!answer) {
       sayOnCard(slot, "Nothing to line this up against", { warn: true });
       return;
     }
-    const lined = (undoTo) => {
-      sayOnCard(slot, `Lined up · ${api.describeOffset(answer.offsetMs)}`, {
-        action: {
-          label: "Undo",
-          onClick: () => {
-            applyTiming(slot, undoTo);
-            /* The only ground truth there is about an alignment: the reader
-             * looked at it and put it back. Recorded next to the attempt it
-             * refers to, so a log of attempts is a log of right and wrong
-             * answers rather than a log of answers. */
-            api.trace?.("alignOutcome", { slot, outcome: "undone", offsetMs: answer.offsetMs });
-            sayOnCard(slot, "Back to the timing it had");
-            refresh(api.status());
-          },
-        },
-      });
+    /* No Undo behind this any more.
+     *
+     * It was here for two reasons and neither survives. The first was the
+     * reader's: a way back from something the machine decided. Reported as
+     * unused - "I never use the undo functionality during sync" - and it is
+     * easy to see why, because the way back from a timing you can see is wrong
+     * is the map you are already looking at, three pixels the other way.
+     *
+     * The second was ours: `alignOutcome` recorded whether the answer was put
+     * back, and the note beside it called that the only honest signal about
+     * whether the aligner was right. That is no longer true. Every by-hand
+     * correction now writes a `sync` line carrying where it was made, by how
+     * much, and which line was on screen - so a correction arriving shortly
+     * after an align says the same thing the Undo said, with the size of the
+     * error attached, and says it for the readers who fixed it by hand instead
+     * of pressing the button. `taken` is still recorded, because accepting an
+     * offer is a decision and not an absence of one. */
+    const lined = () => {
+      sayOnCard(slot, `Lined up · ${api.describeOffset(answer.offsetMs)}`);
     };
     if (answer.verdict === "apply") {
-      lined(was);
+      lined();
     } else if (answer.verdict === "offer") {
       /* Two reasons a subtitle is only offered, and they want different words.
        *
@@ -2290,7 +2331,7 @@
           onClick: () => {
             applyTiming(slot, { offsetMs: answer.offsetMs, rate: answer.trackRate });
             api.trace?.("alignOutcome", { slot, outcome: "taken", offsetMs: answer.offsetMs });
-            lined(was);
+            lined();
             refresh(api.status());
           },
         },
@@ -3162,6 +3203,15 @@
     el.moveButton.dataset.on = status.placing ? "true" : "false";
     // One subtitle has nothing to agree with.
     el.lineUpAll.hidden = status.trackCount < 2;
+    /* What each playback button is bound to, on the button. Cleared rather
+     * than reading "off", because a button whose binding is unset has no
+     * shortcut to advertise and "off" beside a working control invites the
+     * reading that the control is off. */
+    for (const step of el.steps) {
+      const key = settings.keysEnabled ? settings.keys[step.key] : "";
+      step.hint.textContent = key ? describeKey(key) : "";
+      step.hint.hidden = !key;
+    }
     el.moveButton.title = status.placing
       ? "Drag the stand-in to where the subtitle should be, then press Done"
       : "Drag a subtitle around the picture: the middle moves it, an edge makes it wider";
@@ -3248,15 +3298,6 @@
       card.learnChip.setAttribute("aria-pressed", learning ? "true" : "false");
       // Nothing to line up against with one subtitle on screen.
       card.lineUpButton.hidden = status.trackCount < 2;
-      /* What each playback button is bound to, on the button. Cleared rather
-       * than reading "off", because a button whose binding is unset has no
-       * shortcut to advertise and "off" beside a working control invites the
-       * reading that the control is off. */
-      for (const step of card.steps) {
-        const key = settings.keysEnabled ? settings.keys[step.key] : "";
-        step.hint.textContent = key ? describeKey(key) : "";
-        step.hint.hidden = !key;
-      }
       const stretched = track.rate && track.rate !== 1;
       card.offsetField.dataset.set = track.offsetMs ? "true" : "false";
       // Not while it is being typed into, or the value rewrites itself under

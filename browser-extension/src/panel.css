@@ -404,8 +404,24 @@ button.sso-quick__move[data-on="true"] {
 .sso-track__head {
   display: flex;
   align-items: center;
+  /* At the narrowest width the grips allow there is not room for the name, the
+   * reading and the four controls on one line. The right-hand side drops to a
+   * second line there rather than crushing the name to nothing, which is what
+   * "1 EN -EXCELLENCE" was. It fits on one line from the width the panel opens
+   * at upwards, which is every width anybody syncs at. */
+  flex-wrap: wrap;
   gap: var(--sso-s2);
   padding: var(--sso-s3) var(--sso-s3) var(--sso-s2);
+}
+
+/* The reading, the study mark and the three verbs - one item, so they wrap
+ * together or not at all. */
+.sso-track__right {
+  display: flex;
+  flex: none;
+  gap: var(--sso-s2);
+  align-items: center;
+  margin-left: auto;
 }
 
 /* The three verbs, hard against the card's right edge. Tight inside, because
@@ -414,7 +430,18 @@ button.sso-quick__move[data-on="true"] {
   display: flex;
   flex: none;
   gap: var(--sso-s1);
-  margin-left: auto;
+}
+
+/* Narrower here than it was in a row of its own. It shares this line with the
+ * name and four controls, and what it has to show is a signed number of
+ * seconds to two places - "-12.50" is six characters.
+ *
+ * Written with `.sso-panel` and the element name in front of it because the
+ * base rule below is (0,2,1) and a shorter selector here would silently lose
+ * the width and the size to it. */
+.sso-panel .sso-track__right input.sso-sync__field {
+  width: 58px;
+  font-size: var(--sso-t-body);
 }
 
 /* Truncated in the middle, not at the end.
@@ -427,10 +454,23 @@ button.sso-quick__move[data-on="true"] {
 /* It is a <button> now, so it needs the reset: it is the selection control,
  * and the whole card cannot be one while it contains twelve of them. Looks
  * exactly as it did - the button is the semantics, not the appearance. */
+/* `flex: 1 1 0`, and the basis is the load-bearing part.
+ *
+ * The head wraps now, and a wrapping flex line is broken up using each item's
+ * UNSHRUNK size - shrinking only happens afterwards, within a line. So with
+ * `auto` the label measured its full 372px of release name, the right-hand
+ * group could not fit beside it at any width under 600, and the head was two
+ * lines from 280px to 420px: it wrapped instead of shrinking, which is exactly
+ * backwards. From zero the label never forces a break and simply takes
+ * whatever is left over. */
 .sso-track__label {
   display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
+  flex: 1 1 0;
+  /* A floor, not zero. With the reading on this line too, `min-width: 0` let
+   * the whole identity - number, language tag and name - be squeezed out of
+   * existence at the narrowest width: measured at 0px by 26 with "1ENEN"
+   * inside it. Past this the head wraps instead. */
+  min-width: 4.5em;
   align-items: baseline;
   gap: 6px;
   /* Left, and it has to be said here.
@@ -514,15 +554,37 @@ button.sso-quick__move[data-on="true"] {
  * "the.americans.s02e06.1080p.web            -EXCELLENCE" with a hole in the
  * middle of one name. The slack belongs to the label as a whole, after both
  * halves have what they need. */
-.sso-track__name {
+/* And quiet, because the number and the language tag already did the job.
+ *
+ * The name was body size at weight 600, which made a release filename the
+ * loudest thing on the card - "the.americans.2013.s02e09.hdtv.x264-2hd" set
+ * like a headline, above the picture that is the reason the card exists.
+ * Reported as exactly that. What a reader needs from this line is which of the
+ * two cards they are looking at, and "2" in a tabular figure beside "TR" in a
+ * pill answers that from across the room. The name is what they read when they
+ * want to know which download this is, which is rarely and deliberately, so it
+ * is set at micro and in the third ink - present, legible, and no longer
+ * competing with the map. The full name is still on hover.
+ *
+ * Both halves shrink. The tail used to be `flex: none` on the argument that
+ * the last token is what tells two subtitles apart - true, and it made the
+ * tail the only survivor on a narrow card, because a 90px fixed block in a
+ * 292px row leaves the name whatever is left, which was zero. */
+.sso-track__name,
+.sso-track__tail {
   flex: 0 1 auto;
+  font-size: var(--sso-t-micro);
+  font-weight: 500;
+  color: var(--sso-ink-3);
+}
+
+.sso-track__name {
   min-width: 3.4em;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .sso-track__tail {
-  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -553,9 +615,14 @@ button.sso-quick__move[data-on="true"] {
   --sso-map-spill: #f0836f;
 
   display: flex;
+  flex: 1 1 auto;
   gap: var(--sso-s1);
   align-items: stretch;
-  margin: 0 0 var(--sso-s3);
+  /* It shares its line with the timing controls now, so it needs a floor: a
+   * strip narrower than this cannot be aimed at, and the whole card exists to
+   * be aimed at. Below it the panel scrolls rather than the map vanishing. */
+  min-width: 120px;
+  margin: 0;
 }
 
 /* The map is the card's content, so it is a well cut into the surface rather
@@ -851,24 +918,31 @@ button.sso-track__learn[data-on="false"] {
  * costs 34px at the two narrow widths and keeps every control whole; from
  * 420px up it is one line, which is where the panel is used once the maps are
  * worth looking at. */
+/* The map and the controls that move it, on one line.
+ *
+ * This row used to sit under the map and hold two groups of buttons; the card
+ * was head, map, controls - three rows, and with two subtitles attached the
+ * two maps were 60px apart. They are the instrument for syncing by eye, and
+ * comparing one against the other is easier the closer together they are. So
+ * the controls moved onto the map's own line and the card is two rows.
+ *
+ * No wrapping. A wrapped row would put the timing controls under the map and
+ * give back the row this change removes. */
 .sso-sync {
   gap: var(--sso-s2);
-  row-gap: var(--sso-s2);
-  flex-wrap: wrap;
+  align-items: center;
+  flex-wrap: nowrap;
   justify-content: flex-start;
 }
 
-.sso-sync__play,
 .sso-sync__time {
   display: flex;
   flex: none;
   align-items: center;
   gap: var(--sso-s1);
   min-width: 0;
-}
-
-/* Against the card's right edge on whichever line it lands on. */
-.sso-sync__time {
+  /* Against the card's right edge, which is the column "Line up all" ends in
+   * on the row above and the close button ends in on the row above that. */
   margin-left: auto;
 }
 
@@ -1124,6 +1198,24 @@ button.sso-line-step {
   font-size: var(--sso-t-small);
   font-weight: 600;
   white-space: nowrap;
+}
+
+/* Again and Next, as their own group on the quick row.
+ *
+ * They were per-card, which drew them twice for one playhead. Here they are
+ * the only two controls on the row that touch the film rather than the
+ * subtitles, so the group has to READ as separate - the arrangement icons and
+ * Place are to its left and Line up all is at the far right. A hairline down
+ * the left edge and a step of space either side is what says "different kind
+ * of thing" without adding a label or a box. */
+.sso-quick__play {
+  display: flex;
+  flex: none;
+  gap: var(--sso-s1);
+  align-items: center;
+  margin-left: var(--sso-s2);
+  padding-left: calc(var(--sso-s2) + 1px);
+  border-left: 1px solid var(--sso-line-soft);
 }
 
 /* The key that does the same thing, on the button that does it.
