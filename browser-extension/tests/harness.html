@@ -1898,6 +1898,64 @@
         }
       });
 
+      check("a correction is snapped to where the two subtitles agree", async () => {
+        /* Asked for: "some level of smart snapping could be a great help while
+         * syncing subtitles". A hand on a 180px strip showing a minute of film
+         * is accurate to about a fifth of a second; the right answer is usually
+         * a few tens of milliseconds away and can be looked up rather than
+         * guessed.
+         *
+         * The second half is the one that keeps it usable: a correction the
+         * reader aimed somewhere else entirely must be left alone. A snap that
+         * reaches far enough to "fix" a deliberate two-second move is not help,
+         * it is the extension taking the wheel - and the measurement behind all
+         * of this says two releases of one episode really can be six seconds
+         * apart in one act and twelve in the next, so a large move is often the
+         * correct one. */
+        /* The same dialogue in both slots, so the two agree exactly at zero and
+         * any offset put on one of them is an error of a known size. The page's
+         * own fixture is nine lines across two hours, which is not a stretch of
+         * dialogue anything could snap against. */
+        const cues = burstyCues(0);
+        const was = video.currentTime;
+        await window.__ssoApi.attach({ cues, label: "EN · snap", fileId: 510, slot: 0 });
+        await window.__ssoApi.attach({ cues, label: "TR · snap", fileId: 509, slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
+        video.currentTime = 2600;
+        await sleep(250);
+
+        try {
+          // The same file in both slots, so they agree exactly at zero and any
+          // offset put on one of them is a known error.
+          window.__ssoApi.setOffset(140, { slot: 1, quiet: true });
+          const near = window.__ssoApi.snapTiming(1);
+          if (!near) throw new Error("a 140ms error was not snapped out");
+          if (Math.abs(near.deltaMs + 140) > 20)
+            throw new Error(`snapped by ${near.deltaMs}ms, want about -140`);
+          const landed = window.__ssoApi.status().tracks[1].offsetMs;
+          if (Math.abs(landed) > 20) throw new Error(`landed on ${landed}ms, want 0`);
+
+          window.__ssoApi.setOffset(2000, { slot: 1, quiet: true });
+          const far = window.__ssoApi.snapTiming(1);
+          if (far) throw new Error(`a deliberate 2s move was pulled back by ${far.deltaMs}ms`);
+          if (window.__ssoApi.status().tracks[1].offsetMs !== 2000)
+            throw new Error("a correction outside the snap's reach was moved anyway");
+
+          // And with nothing to agree with, it says nothing rather than
+          // inventing an answer from one file.
+          window.__ssoApi.detach(1);
+          await sleep(120);
+          if (window.__ssoApi.snapTiming(0))
+            throw new Error("it snapped a lone subtitle against nothing");
+        } finally {
+          window.__ssoApi.detach(1);
+          await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1, slot: 0 });
+          window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
+          video.currentTime = was;
+          await sleep(150);
+        }
+      });
+
       check("moving the mouse over the strip without pressing changes nothing", async () => {
         /* Reported: "I'm not clicking and dragging over a timeline bar but it
          * still behaves like I'm adjusting it to sync." The drag state was only

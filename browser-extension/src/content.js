@@ -3283,6 +3283,47 @@
     }
   }
 
+  /* Steady the hand that just made a correction.
+   *
+   * A drag on a 180px strip showing a minute of film is accurate to about a
+   * fifth of a second, and the right answer is usually a few tens of
+   * milliseconds away from where the hand let go - a value that can be looked
+   * up rather than guessed, because it is the shift at which the most lines of
+   * this subtitle land on a line of the other one. Asked for as "some level of
+   * smart snapping could be a great help while syncing subtitles".
+   *
+   * Only after a gesture that was AIMED, which is the map drag. A keyboard
+   * nudge is a deliberate step of a known size, and snapping it would mean the
+   * key stopped doing the same thing every time it was pressed - press, snap
+   * back, press again, snap back. The reader would be fighting it.
+   *
+   * The search is in align.js and is deliberately local; see the note there
+   * about why the whole file is the wrong thing to consult. Returns what it
+   * did, so the panel can say so - a correction that moves after the hand has
+   * let go must not be silent, or the reader learns the drag is imprecise. */
+  function snapTiming(slot = state.keyTrack, { atMs } = {}) {
+    const track = state.tracks[slot];
+    if (!track?.cues.length || !globalThis.__ssoAlign?.snapNear) return null;
+    const otherSlot = state.tracks.findIndex((t, i) => i !== slot && t.cues.length > 0);
+    if (otherSlot === -1) return null;
+
+    const at = Number.isFinite(atMs) ? atMs : (state.video?.currentTime || 0) * 1000;
+    if (!Number.isFinite(at)) return null;
+
+    // Both on the video's clock, which is the only one they share.
+    const streamStarts = (which) => {
+      const it = state.tracks[which];
+      return it.cues.map((cue) => streamTimeMs(it, cue.start, state.adDriftMs));
+    };
+    const found = globalThis.__ssoAlign.snapNear(
+      streamStarts(slot), streamStarts(otherSlot), { atMs: at },
+    );
+    if (!found) return null;
+
+    setOffset(track.offsetMs + found.deltaMs, { slot, quiet: true, how: "snap" });
+    return found;
+  }
+
   /* Relative, and that is the point of it existing beside setOffset.
    *
    * The held nudge buttons repeat every 80ms, and the panel drawing them may
@@ -4463,6 +4504,7 @@
     "setOffset",
     "setRate",
     "nudge",
+    "snapTiming",
     "stepLine",
     "updateSettings",
     "updateTrackSettings",
@@ -4815,6 +4857,7 @@
     setOffset,
     setRate,
     nudge,
+    snapTiming,
     stepLine,
     formatOffset,
     describeOffset,

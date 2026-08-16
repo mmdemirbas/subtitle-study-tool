@@ -476,6 +476,114 @@
     };
   }
 
+  /* --- snapping a correction to where the two files agree ---------------------
+   *
+   * A reader dragging the map is aiming at a position, and a hand on a 180px
+   * strip showing a minute of film is accurate to about a fifth of a second at
+   * best. The right answer is almost always a few tens of milliseconds from
+   * where they let go, and it is a value that can be looked up rather than
+   * guessed: it is the shift at which the most lines of this subtitle land on a
+   * line of the other one.
+   *
+   * LOCAL, and that is the whole design. The measurement in
+   * docs/reports/sync-the-americans-2026-08-16.md is that two releases of one
+   * episode can differ by a staircase - six plateaus and five jumps totalling
+   * 30.55 seconds - so there is often no single shift that is right for the
+   * film, and a snap that consulted the whole file would drag a correction made
+   * in the third act towards the answer for the first. Two minutes around the
+   * playhead is a stretch the reader can hear, and a stretch inside which the
+   * relationship is a constant even when it is not one across the film.
+   *
+   * It may only move a correction a little. Past half a second the reader was
+   * not aiming at this peak, and moving them there would be taking the wheel
+   * rather than steadying it. It also has to WIN, not tie: a delta that lines
+   * up the same number of lines as the reader's own aim is not an improvement,
+   * it is a different way of saying the same thing.
+   */
+  const SNAP_RADIUS_MS = 500;
+  const SNAP_SPAN_MS = 120000;
+  const SNAP_MIN_LINES = 4;
+  /* How much the lines that pair are allowed to disagree with each other.
+   *
+   * This is the whole test, and it is a test of AGREEMENT rather than of count.
+   * Counting is what a first version did - "which shift lines up the most
+   * lines, within 250ms" - and it cannot see anything smaller than its own
+   * tolerance: at a 140ms error every line already counts as matched, so no
+   * shift can beat doing nothing, and the errors a hand actually makes are all
+   * inside that blind spot.
+   *
+   * Counting also cannot be the test for these files. Measured on The
+   * Americans, English against Turkish: a quarter of the lines pair at all,
+   * because 12% of the English file is sound description the Turkish does not
+   * carry and a quarter of what remains is two English lines merged into one
+   * Turkish. A rule needing half the window to pair would never fire on a real
+   * cross-language pair. What IS true of a real pair is that the lines which do
+   * pair agree with each other about the size of the error; a wrong shift pairs
+   * lines by accident, and accidents disagree. */
+  const SNAP_MAX_SPREAD_MS = 150;
+  // Below this there is nothing worth doing, and moving anyway would make the
+  // reader's own aim look wrong.
+  const SNAP_MIN_MOVE_MS = 15;
+
+  /** Signed distance from `at` to the nearest value in the sorted `times`. */
+  function nearestOffset(times, at) {
+    let low = 0;
+    let high = times.length - 1;
+    let best = Infinity;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      const gap = times[mid] - at;
+      if (Math.abs(gap) < Math.abs(best)) best = gap;
+      if (gap === 0) return 0;
+      if (gap < 0) low = mid + 1;
+      else high = mid - 1;
+    }
+    return best;
+  }
+
+  const middle = (sorted) => sorted[sorted.length >> 1];
+
+  /**
+   * The small correction the two subtitles agree on near `atMs`, or null.
+   *
+   * Both arrays are in the same clock - the video's - so the answer is a number
+   * of milliseconds to add to the first subtitle's offset. The median rather
+   * than a search: it is the robust estimator for exactly this shape, half the
+   * points may be nonsense without moving it, and it answers to the
+   * millisecond instead of to a step size.
+   */
+  function snapNear(aTimes, bTimes, {
+    atMs,
+    radiusMs = SNAP_RADIUS_MS,
+    spanMs = SNAP_SPAN_MS,
+  } = {}) {
+    if (!Number.isFinite(atMs)) return null;
+    const from = atMs - spanMs / 2;
+    const to = atMs + spanMs / 2;
+
+    const a = (aTimes || []).filter((t) => Number.isFinite(t) && t >= from && t <= to);
+    const b = (bTimes || [])
+      .filter((t) => Number.isFinite(t) && t >= from - radiusMs && t <= to + radiusMs)
+      .sort((x, y) => x - y);
+    if (a.length < SNAP_MIN_LINES || b.length < SNAP_MIN_LINES) return null;
+
+    const paired = [];
+    for (const t of a) {
+      const gap = nearestOffset(b, t);
+      if (Math.abs(gap) <= radiusMs) paired.push(gap);
+    }
+    if (paired.length < SNAP_MIN_LINES) return null;
+
+    paired.sort((x, y) => x - y);
+    const shift = middle(paired);
+    const spread = middle(paired.map((gap) => Math.abs(gap - shift)).sort((x, y) => x - y));
+    if (spread > SNAP_MAX_SPREAD_MS) return null;
+
+    const deltaMs = Math.round(shift);
+    if (Math.abs(deltaMs) < SNAP_MIN_MOVE_MS) return null;
+    return { deltaMs, lines: paired.length, spreadMs: Math.round(spread) };
+  }
+
   /**
    * Which line is being spoken right now, ranked.
    *
@@ -507,7 +615,10 @@
    * the reader's own corrections rather than from a second subtitle, and "a
    * rate measured over eight minutes extrapolates to nonsense by the end" is
    * true of both. One number, one reason, one place to change it. */
-  const API = { align, proposeAnchors, RATES, ACCEPT, AUTO, MAX_OFFSET_MS, RATE_MIN_SPAN_MS };
+  const API = {
+    align, proposeAnchors, snapNear,
+    RATES, ACCEPT, AUTO, MAX_OFFSET_MS, RATE_MIN_SPAN_MS, SNAP_RADIUS_MS,
+  };
 
   /* globalThis rather than `window` plus a CommonJS export.
    *

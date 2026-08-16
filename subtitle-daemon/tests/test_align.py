@@ -60,6 +60,20 @@ NO_METADATA = {
     "12466148": "crime 101 2026",  # Crime.101.2026.1080p.WEB.H264-ETHEL-HI.srt
 }
 
+# What a download was SEARCHED for, which the download itself does not record.
+#
+# `/fetch` stores what OpenSubtitles returned for one file id, and for a large
+# part of the catalogue that response carries `movie_name: null` - so a file can
+# be perfectly good and still say nothing about which film it is of. Every
+# download made deliberately, by `bench/align/expand.mjs` or by hand, is
+# recorded here with the title it was asked for.
+#
+# One file, read by both sides. When the bench corpus was doubled, the fix for
+# this went into the JavaScript reader and not into this one, and 36 unlabelled
+# downloads turned three assertions here red while every JS check stayed green.
+# A second copy of the answer is how that happens.
+LABELS = REPO / "bench" / "align" / "labels.json"
+
 # Same episode, but a cut that no single offset can fix.
 #
 # 3637194 is a differently-cut release: against 12574865 the divergence runs
@@ -94,17 +108,37 @@ def _same(name: str | None) -> str | None:
     return re.sub(r"\s+", " ", name.strip().lower())
 
 
-def _identity(stem: str, sidecar: dict | None) -> str | None:
-    """What film a cached download is of, as the download itself says."""
+def _noted() -> dict[str, str]:
+    """What each deliberate download was asked for, if the file is there."""
+    try:
+        rows = json.loads(LABELS.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {
+        stem: film
+        for stem, row in rows.items()
+        if isinstance(row, dict) and (film := _same(row.get("film")))
+    }
+
+
+def _identity(stem: str, sidecar: dict | None, noted: dict[str, str]) -> str | None:
+    """What film a cached download is of.
+
+    Its own sidecar first, because that is the download speaking about itself.
+    Then what it was searched for, for the large part of the catalogue whose
+    `movie_name` comes back null. Hand-written names last and only for the two
+    files that have neither.
+    """
     if stem in NO_METADATA:
         return NO_METADATA[stem]
-    return _same((sidecar or {}).get("movie_name"))
+    return _same((sidecar or {}).get("movie_name")) or noted.get(stem)
 
 
 def _corpus() -> tuple[dict[str, list[int]], dict[str, str | None]]:
     """Cue starts and, beside them, which film each file belongs to."""
     starts: dict[str, list[int]] = {}
     films: dict[str, str | None] = {}
+    noted = _noted()
     for path in sorted(CACHE.glob("*.srt")):
         times = _starts(path)
         if len(times) < 12:
@@ -117,7 +151,7 @@ def _corpus() -> tuple[dict[str, list[int]], dict[str, str | None]]:
             except (OSError, ValueError):
                 sidecar = None
         starts[path.stem] = times
-        films[path.stem] = _identity(path.stem, sidecar)
+        films[path.stem] = _identity(path.stem, sidecar, noted)
     for path in sorted(VIEWER.glob("*.srt")):
         times = _starts(path)
         if len(times) < 12:
@@ -220,13 +254,22 @@ def test_every_file_says_what_it_is(films: dict[str, str | None]) -> None:
 # makes the aligner meeker, without demanding it match files that do not.
 APPLIED_SHARE_FLOOR = 0.5
 
-# Wrong pairs the aligner is willing to OFFER. One, out of 1387 different-film
-# pairs. Recorded rather than asserted to zero because it is a real property of
-# the corpus and pretending otherwise would mean deleting the pair that shows
-# it - see test_a_different_film_is_refused for which one and why it is only an
-# offer. Lower it when the algorithm improves; never raise it without saying
-# what got worse.
-WRONG_OFFERS_CEILING = 1
+# Wrong pairs the aligner is willing to OFFER, as a share of the different-film
+# pairs it was shown.
+#
+# It was a count - one, out of the 1387 different-film pairs the corpus had when
+# it was written - and a count over a corpus that grows is a ratchet that
+# tightens on its own. Adding thirty-six files took the pairs to 3925 and adding
+# six more to 4557, and each of those additions was mostly more episodes of one
+# television series, which is precisely the material that produces a near miss:
+# same cast, same show, same subtitler, a different hour of film. Three wrong
+# offers now, and the algorithm has not changed.
+#
+# So the bound is a rate, and the rate is what it is today with no headroom
+# rounded in: 3 of 4557 is 0.00066, and a fourth wrong offer at this size fails
+# this. Lower it when the algorithm improves; never raise it without saying what
+# got worse.
+WRONG_OFFER_RATE_CEILING = 0.0007
 
 
 def test_the_same_film_is_usually_lined_up(
@@ -278,14 +321,18 @@ def test_a_different_film_is_refused(
     }
     assert not applied, f"a different film was shifted without asking: {applied}"
 
+    different = [
+        name for name in verdicts if _relation(*name.split("|"), films) == "different"
+    ]
     offered = {
-        name: (answer["confidence"], answer.get("shiftMs"))
-        for name, answer in verdicts.items()
-        if _relation(*name.split("|"), films) == "different" and answer["ok"]
+        name: (verdicts[name]["confidence"], verdicts[name].get("shiftMs"))
+        for name in different
+        if verdicts[name]["ok"]
     }
-    assert len(offered) <= WRONG_OFFERS_CEILING, (
-        f"{len(offered)} different-film pairs were offered, ceiling is "
-        f"{WRONG_OFFERS_CEILING}: {offered}"
+    rate = len(offered) / max(1, len(different))
+    assert rate <= WRONG_OFFER_RATE_CEILING, (
+        f"{len(offered)} of {len(different)} different-film pairs were offered "
+        f"({rate:.5f}), ceiling is {WRONG_OFFER_RATE_CEILING}: {offered}"
     )
 
 

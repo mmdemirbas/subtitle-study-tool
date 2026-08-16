@@ -1639,8 +1639,25 @@
        * behind Line up, which reverses something the MACHINE decided; that one
        * stays, and the log reads it as the only honest signal about whether the
        * aligner was right. */
-      sayOnCard(slot, `Moved · ${api.describeOffset(next)}`);
-      refresh(api.status());
+      /* And then the drag is steadied. A hand on a 180px strip showing a minute
+       * of film is accurate to about a fifth of a second, and the answer is
+       * usually a few tens of milliseconds away - so the drag aims and this
+       * lands. Said out loud rather than done quietly, because a correction
+       * that moves after the hand has let go with nothing saying why teaches
+       * the reader that their own drag was imprecise.
+       *
+       * Through a promise because snapTiming is forwarded: with the film in
+       * another frame it answers with one, and reading `.deltaMs` off a promise
+       * would have snapped nothing and said so confidently. */
+      api.detached(
+        Promise.resolve(api.snapTiming?.(slot)).then((snapped) => {
+          sayOnCard(slot, snapped
+            ? `Snapped · ${api.describeOffset(next + snapped.deltaMs)} · ${snapped.lines} lines agree`
+            : `Moved · ${api.describeOffset(next)}`);
+          refresh(api.status());
+        }),
+        "Steadying the correction",
+      );
     };
     plot.addEventListener("pointerup", finish);
     plot.addEventListener("pointercancel", finish);
