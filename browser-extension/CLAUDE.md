@@ -243,14 +243,28 @@ episode, by different subtitlers, give the same six to within 250ms - which
 makes it a property of the video releases rather than of any subtitle. S02E04
 does it again in two more pairs.
 
-`align.js` answers that pair with 11.85s at confidence 61 and verdict **apply**.
-That is right to within a second over 15 of the 50 minutes where a shift can be
-measured, and out by more than two seconds over 35 of them. The search is not at
-fault and the coverage gate is not at fault: 11.85s is the correct shift for the
-third plateau. **Before adding another gate, read
-`docs/reports/sync-the-americans-2026-08-16.md`** - the full measurement, what
-was ruled out, and what to change in what order. `bench/align/piecewise.mjs`
-re-runs it on any two cached files and prints flat / sloped / stepped.
+`align()` alone answers that pair with one number, which is right over one
+plateau and wrong over the other five. The search is not at fault and the
+coverage gate is not at fault: 11.85s is the correct shift for the third act.
+
+**`alignSteps()` is what to call, and `autoAlign` does.** Same identification,
+same refusal, seeded from the same rate, plus one offset per act - and a track
+carries them as `steps`, which both time conversions read. Measured over 137
+pairs whose truth comes from cue text rather than from any clock: 94.6% of the
+film inside 250ms against `align()`'s 86.4%, and on the 41 pairs whose truth is
+a staircase the median goes from 50% of its film in the right place to 90%.
+
+**The property that let it ship is that it makes no pair worse**, and the first
+version did not have it - it invented a second act on four pairs `align()`
+already put 100% right. `bench/align/regress.mjs` is the standing gate and exits
+non-zero on any pair that loses ground. Run it before touching any of the
+constants in the acts section of `align.js`.
+
+**Before adding another gate, read `docs/reports/auto-sync-2026-08-16.md`** -
+how the truth is derived, how often each shape occurs, what every method scores,
+and the four wrong answers that had to be found on the way.
+`bench/align/shapes.mjs` prints the shape census; `bench/align/piecewise.mjs`
+re-runs the original measurement on any two cached files.
 
 **`snapNear` in `align.js` is the piece of that which shipped.** After a map
 drag - and only after a drag - the correction is moved to the median of the
