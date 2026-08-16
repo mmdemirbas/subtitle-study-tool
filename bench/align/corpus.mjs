@@ -16,6 +16,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readCues, normalise } from "./srt.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO = path.resolve(HERE, "../..");
@@ -57,22 +58,23 @@ export const DIFFERENT_CUT = [
   ["3637194", "8036186"],
 ];
 
-const TIME = /(\d+):(\d+):(\d+)[,.](\d+)\s*-->\s*(\d+):(\d+):(\d+)[,.](\d+)/;
 const MIN_CUES = 12;
 
+/* Timings, the text each timing carries, and the language the text is in.
+ *
+ * This used to read latin-1 and keep only the timestamps, which is all the
+ * scoring needs. The words are here now because the bench acquired a ground
+ * truth that is derived from them (truth.mjs) and because the sidecars turned
+ * out to carry `language: null` for every file downloaded while watching - so
+ * "is this pair cross-language?" was a question the corpus could not answer
+ * about most of itself. Reading 96 files properly costs about a second. */
 function read(file) {
-  const spans = [];
-  // latin-1 never throws on a byte, and only the timestamps are read.
-  for (const line of fs.readFileSync(file, "latin1").split(/\r?\n/)) {
-    const m = TIME.exec(line);
-    if (!m) continue;
-    const at = (h, mi, s, ms) => ((+h * 60 + +mi) * 60 + +s) * 1000 + +ms;
-    const start = at(m[1], m[2], m[3], m[4]);
-    const end = at(m[5], m[6], m[7], m[8]);
-    if (end > start) spans.push([start, end]);
-  }
-  spans.sort((a, b) => a[0] - b[0]);
-  return spans;
+  const { cues, language } = readCues(file);
+  return {
+    spans: cues.map((cue) => [cue.start, cue.end]),
+    cues: cues.map((cue) => ({ start: cue.start, end: cue.end, key: normalise(cue.text) })),
+    language,
+  };
 }
 
 const tidy = (s) => String(s || "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -83,7 +85,7 @@ export function load() {
 
   for (const name of fs.readdirSync(CACHE).filter((f) => f.endsWith(".srt")).sort()) {
     const id = name.slice(0, -4);
-    const spans = read(path.join(CACHE, name));
+    const { spans, cues, language } = read(path.join(CACHE, name));
     if (spans.length < MIN_CUES) continue;
     let sidecar = {};
     const beside = path.join(CACHE, `${id}.json`);
@@ -93,21 +95,25 @@ export function load() {
     files.set(id, {
       id,
       spans,
+      cues,
       film: NO_METADATA[id] || tidy(noted[id]?.film) || tidy(sidecar.movie_name) || null,
-      language: noted[id]?.language || sidecar.language || null,
+      /* Whoever wrote it down beats whatever the words look like, but the
+       * words beat nothing at all - and nothing at all is what the sidecar
+       * holds for every file the reader downloaded while watching. */
+      language: noted[id]?.language || sidecar.language || language,
       release: noted[id]?.release || sidecar.release || sidecar.file_name || null,
       from: "cache",
     });
   }
 
   for (const name of fs.readdirSync(VIEWER).filter((f) => f.endsWith(".srt")).sort()) {
-    const spans = read(path.join(VIEWER, name));
+    const { spans, cues } = read(path.join(VIEWER, name));
     if (spans.length < MIN_CUES) continue;
     const episode = name.includes("S00E01") ? "S00E01" : "S00E02";
     const language = name.includes("-EN") ? "en" : "tr";
     const id = `BSG.${episode}-${language.toUpperCase()}`;
     // No sidecar here; the filename is the metadata.
-    files.set(id, { id, spans, film: `bsg ${episode.toLowerCase()}`, language, release: name, from: "viewer" });
+    files.set(id, { id, spans, cues, film: `bsg ${episode.toLowerCase()}`, language, release: name, from: "viewer" });
   }
 
   return files;
