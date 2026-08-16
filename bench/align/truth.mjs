@@ -228,7 +228,8 @@ export function scaleOf(residuals) {
 
 export function segment(residuals, {
   penalty = PENALTY_SIGMAS * Math.max(scaleOf(residuals), 10) ** 2,
-  at = null,   // index -> the time in file A that anchor sits at, for span rules
+  at = null,        // index -> the time in file A that observation sits at
+  ...rules          // minAnchors / minSpanMs / mergeMs, see tidy
 } = {}) {
   const n = residuals.length;
   if (!n) return [];
@@ -265,7 +266,7 @@ export function segment(residuals, {
     const from = cuts[k], to = cuts[k + 1];
     out.push({ from, to, level: median(residuals.slice(from, to)) });
   }
-  return tidy(out, residuals, at);
+  return tidy(out, residuals, at, rules);
 }
 
 /* What the squared-error DP cannot know: what a CUT is.
@@ -284,11 +285,28 @@ export function segment(residuals, {
  *
  * So a break has to move the clock by something a reader would notice and
  * keep it moved for long enough to be a scene rather than an exchange. */
-const MERGE_MS = 250;
-const MIN_SEGMENT_MS = 30_000;
+export const MERGE_MS = 250;
+export const MIN_SEGMENT_MS = 30_000;
+
+/* How many observations a segment must rest on.
+ *
+ * Eight is right when an observation is one matched cue and wrong when it is a
+ * whole window's worth of them - methods.mjs feeds this function one offset
+ * per 90 seconds, where eight observations is six minutes and every opening
+ * plateau shorter than that got merged into the one after it. The Americans
+ * S02E09 lost its first step that way: three windows agreed on it, the rule
+ * wanted eight, and the first two and a half minutes came out 4.3 seconds
+ * wrong while every other minute of the episode was exact.
+ *
+ * So the caller says what an observation is worth. The span rule below is what
+ * actually decides whether something is a cut. */
 const MIN_SEGMENT_ANCHORS = 8;
 
-function tidy(pieces, residuals, at) {
+function tidy(pieces, residuals, at, {
+  minAnchors = MIN_SEGMENT_ANCHORS,
+  minSpanMs = MIN_SEGMENT_MS,
+  mergeMs = MERGE_MS,
+} = {}) {
   let current = pieces;
   for (;;) {
     if (current.length < 2) return current;
@@ -298,7 +316,7 @@ function tidy(pieces, residuals, at) {
       const short = Math.min(spanOf(current[k]), spanOf(current[k + 1]));
       const thin = Math.min(current[k].to - current[k].from, current[k + 1].to - current[k + 1].from);
       // Merge the least defensible join first, and only if it is indefensible.
-      const score = gap < MERGE_MS ? gap : short < MIN_SEGMENT_MS || thin < MIN_SEGMENT_ANCHORS ? MERGE_MS + short : Infinity;
+      const score = gap < mergeMs ? gap : short < minSpanMs || thin < minAnchors ? mergeMs + short : Infinity;
       if (score < worstScore) { worstScore = score; worst = k; }
     }
     if (worst < 0 || !Number.isFinite(worstScore)) return current;
@@ -312,14 +330,23 @@ function tidy(pieces, residuals, at) {
   }
 }
 
-/* How much better a model has to fit before its extra freedom is earned.
+/* How much better a model has to fit before its extra freedom is earned, and
+ * in what units.
  *
- * A rate and a set of breaks are both things a reader would have to be told
- * about, so the simplest model that fits about as well is the honest answer.
- * 150ms is under the 250ms a sync is called tight at and well under the 100ms
- * nudge step the overlay offers, so a model bought for less than this is
- * buying nothing the reader could perceive. */
-const PARSIMONY_MS = 150;
+ * The units are the part that took a wrong answer to get right. This compared
+ * MEDIAN residuals first, and a median cannot see a large minority: on two
+ * Amelie releases that agree to 200ms for 57 minutes and then jump 770ms for
+ * the remaining 54, sixty percent of anchors sit on the first plateau, so the
+ * median absolute residual of the one-shift model is 40ms and the model was
+ * declared flat. The pair is a staircase with one step. The bench then
+ * recorded the method that found that step as a regression, because it
+ * disagreed with a truth that was wrong.
+ *
+ * So the statistic is the SHARE of anchors a model puts inside 250ms, which is
+ * the same quantity the accuracy table reports and cannot be quietly carried
+ * by a majority. Two points of share is the margin: below that the extra rate
+ * or the extra break is buying a fiftieth of the film. */
+const PARSIMONY_SHARE = 0.02;
 
 /* A segmented model that needs a break every few anchors has stopped
  * describing the pair and started tracing it. Past this density the answer is
@@ -336,7 +363,11 @@ export function shapeOf(points) {
     for (const piece of pieces) {
       for (let i = piece.from; i < piece.to; i++) errs.push(Math.abs(residuals[i] - piece.level));
     }
-    return { p50: median(errs), p95: quantile(errs, 0.95), worst: Math.max(...errs) };
+    return {
+      p50: median(errs),
+      p95: quantile(errs, 0.95),
+      tight: errs.filter((e) => e <= TIGHT_MS).length / errs.length,
+    };
   };
   const one = (residuals) => [{ from: 0, to: residuals.length, level: median(residuals) }];
 
@@ -356,11 +387,11 @@ export function shapeOf(points) {
    * against what was available rather than against zero. */
   const jitterMs = scaleOf(rateRes);
 
-  const best = Math.min(flat.p50, line.p50, steps.p50);
+  const best = Math.max(flat.tight, line.tight, steps.tight);
   const overfit = pieces.length > Math.max(2, points.length / MIN_ANCHORS_PER_SEGMENT);
   const kind =
-    flat.p50 <= best + PARSIMONY_MS ? "flat" :
-    line.p50 <= best + PARSIMONY_MS ? "linear" :
+    flat.tight >= best - PARSIMONY_SHARE ? "flat" :
+    line.tight >= best - PARSIMONY_SHARE ? "linear" :
     overfit ? "messy" : "stepped";
 
   const model = kind === "flat" ? { rate: 1, pieces: one(flatRes) }
@@ -372,8 +403,8 @@ export function shapeOf(points) {
     anchors: points.length,
     spanMs: points[points.length - 1].x - points[0].x,
     jitterMs: Math.round(jitterMs),
-    shift: { offsetMs: Math.round(median(flatRes)), p50: Math.round(flat.p50), p95: Math.round(flat.p95) },
-    line: { rate, offsetMs: Math.round(median(rateRes)), p50: Math.round(line.p50), p95: Math.round(line.p95) },
+    shift: { offsetMs: Math.round(median(flatRes)), p50: Math.round(flat.p50), p95: Math.round(flat.p95), tight: flat.tight },
+    line: { rate, offsetMs: Math.round(median(rateRes)), p50: Math.round(line.p50), p95: Math.round(line.p95), tight: line.tight },
     steps: {
       count: pieces.length,
       rate,
@@ -381,6 +412,7 @@ export function shapeOf(points) {
       levels: pieces.map((piece) => Math.round(piece.level)),
       p50: Math.round(steps.p50),
       p95: Math.round(steps.p95),
+      tight: steps.tight,
     },
     /* The true mapping, as a function, so a method's answer can be scored at
      * every point of the film rather than at one. Outside the anchored range

@@ -1,49 +1,62 @@
 /* Run every method over every pair and print numbers that can be compared.
  *
- *   node bench/align/run.mjs            # the table
+ *   node bench/align/run.mjs            # the tables
  *   node bench/align/run.mjs --json     # results.json for a report to read
+ *   node bench/align/run.mjs --same     # skip the different-film pairs (fast)
  *
- * Three metrics, because they answer different questions and a method can win
- * one while losing another.
+ * Three questions, because a method can answer one well and another badly.
  *
- * ROC AUC is the ranking, and it is the number that survives having no
- * threshold chosen yet. Useful precisely because nothing is tuned to produce
- * it.
+ * CAN IT TELL TWO FILMS APART? ROC AUC is the ranking, and it is the number
+ * that survives having no threshold chosen yet - nothing is tuned to produce
+ * it. Recall at zero false accepts is the operating point this product has: a
+ * wrong shift applied without asking is the failure the aligner exists to
+ * prevent, so with the threshold pushed to wherever it must go to admit not
+ * one wrong pair, how many right pairs are still recognised?
  *
- * RECALL AT ZERO FALSE ACCEPTS is the operating point this product actually
- * has. A wrong shift applied without asking is the failure the whole aligner
- * exists to prevent, so the honest question is: with the threshold pushed to
- * wherever it must go to admit not one wrong pair, how many right pairs are
- * still recognised? A method with a better AUC and a worse answer here is the
- * wrong trade for us.
+ * HOW RIGHT IS THE ANSWER? Against truth.mjs, which derives the true mapping
+ * from cue TEXT and so owes nothing to any method here. Scored at every cue of
+ * the film rather than as one number, because a method that is exact for eight
+ * minutes and twenty seconds out for the other forty is not 71 percent right.
+ * The oracle settles about half the same-film pairs and refuses the rest out
+ * loud; the refused half is measured by referees below and labelled as such.
  *
- * SHIFT ERROR, because a score that ranks perfectly and times badly is
- * useless. There is no labelled truth for the shifts, so a consensus is built
- * from the methods that agree and every pair where they do not is reported
- * rather than averaged away.
+ * WHAT DOES IT COST? Last, and it only matters against the other two.
  */
 import fs from "node:fs";
 import { load, pairs, check, REPO } from "./corpus.mjs";
 import { METHODS, prepare, loadShipped } from "./methods.mjs";
+import { anchorsFor, shapeOf } from "./truth.mjs";
 
-const AGREE_MS = 250;
+const TIGHT_MS = 250;
+const SAME_ONLY = process.argv.includes("--same");
 
 const files = load();
 const shape = check(files);
 await loadShipped(REPO);
 prepare(files);
 
-const all = pairs(files);
+const all = pairs(files).filter((p) => !SAME_ONLY || p.label !== "different");
 const judged = all.filter((p) => p.label !== "cut");
 
 console.log(`corpus: ${shape.files} files, ${shape.films} distinct films, ` +
   `${shape.withCompany} of them with more than one file, ${shape.languages} languages`);
 console.log(`pairs: ${all.length} (${judged.filter((p) => p.label === "same").length} same, ` +
   `${judged.filter((p) => p.label === "different").length} different, ` +
-  `${all.length - judged.length} different-cut, judged separately)\n`);
+  `${all.length - judged.length} different-cut, judged separately)`);
+
+// --- the truth, before any method runs ---------------------------------------
+const truth = new Map();
+for (const p of all) {
+  if (p.label === "different") continue;
+  const points = anchorsFor(p.a, p.b);
+  const found = points && shapeOf(points);
+  if (found) truth.set(p.key, { shape: found, from: points[0].x, to: points[points.length - 1].x });
+}
+console.log(`truth: ${truth.size} pairs settled from cue text, ` +
+  `${all.filter((p) => p.label !== "different").length - truth.size} refused (mostly cross-language)\n`);
 
 // --- run ---------------------------------------------------------------------
-const results = new Map();   // method -> pair key -> answer
+const results = new Map();
 const timing = new Map();
 for (const method of METHODS) {
   const answers = new Map();
@@ -53,7 +66,7 @@ for (const method of METHODS) {
   results.set(method.name, answers);
 }
 
-// --- metrics -----------------------------------------------------------------
+// --- discrimination ----------------------------------------------------------
 function auc(values, positive) {
   const order = values.map((v, i) => [v, positive[i]]).sort((a, b) => a[0] - b[0]);
   let sumPos = 0, pos = 0, neg = 0;
@@ -78,145 +91,147 @@ function recallAtZeroFalseAccepts(values, positive) {
 }
 
 const rows = [];
-for (const method of METHODS) {
-  const answers = results.get(method.name);
-  const names = new Set();
-  for (const p of judged) for (const k of Object.keys(answers.get(p.key).scores || {})) names.add(k);
-  for (const score of names) {
-    const values = judged.map((p) => answers.get(p.key).scores[score] ?? 0);
-    const positive = judged.map((p) => p.label === "same");
-    const zero = recallAtZeroFalseAccepts(values, positive);
-    rows.push({ method: method.name, score, auc: auc(values, positive), ...zero });
+if (!SAME_ONLY) {
+  for (const method of METHODS) {
+    const answers = results.get(method.name);
+    const names = new Set();
+    for (const p of judged) for (const k of Object.keys(answers.get(p.key).scores || {})) names.add(k);
+    for (const score of names) {
+      const values = judged.map((p) => answers.get(p.key).scores[score] ?? 0);
+      const positive = judged.map((p) => p.label === "same");
+      const zero = recallAtZeroFalseAccepts(values, positive);
+      rows.push({ method: method.name, score, auc: auc(values, positive), ...zero });
+    }
+  }
+  console.log("DISCRIMINATION - can it tell the same film from a different one?\n");
+  console.log(`${"method".padEnd(9)} ${"score".padEnd(12)} ${"AUC".padStart(8)}   ` +
+    `${"recall at zero false accepts".padStart(28)}`);
+  for (const r of rows.sort((a, b) => b.auc - a.auc)) {
+    console.log(`${r.method.padEnd(9)} ${r.score.padEnd(12)} ${r.auc.toFixed(5).padStart(8)}   ` +
+      `${`${(r.share * 100).toFixed(1)}%`.padStart(7)}  (${r.hit}/${r.total}, threshold must clear ${r.ceiling.toFixed(3)})`);
   }
 }
 
-console.log("DISCRIMINATION - can it tell the same film from a different one?\n");
-console.log(`${"method".padEnd(9)} ${"score".padEnd(12)} ${"AUC".padStart(8)}   ` +
-  `${"recall at zero false accepts".padStart(28)}`);
-for (const r of rows.sort((a, b) => b.auc - a.auc)) {
-  console.log(`${r.method.padEnd(9)} ${r.score.padEnd(12)} ${r.auc.toFixed(5).padStart(8)}   ` +
-    `${`${(r.share * 100).toFixed(1)}%`.padStart(7)}  (${r.hit}/${r.total}, threshold must clear ${r.ceiling.toFixed(3)})`);
-}
-
-// --- shift accuracy, against a consensus -------------------------------------
-/* No labelled truth exists for the shifts, so one is built from agreement: a
- * same-film pair whose methods land within 250ms of each other is taken as
- * settled at their median. Pairs where they disagree are NOT averaged into a
- * truth - they are counted and listed, because those are exactly the pairs
- * where a single global shift may not be the right answer at all. */
-const truth = new Map();
-const disputed = [];
-for (const p of judged.filter((x) => x.label === "same")) {
-  const said = METHODS.map((m) => results.get(m.name).get(p.key).shiftMs).filter((v) => v !== null);
-  if (said.length < 2) continue;
-  const sorted = [...said].sort((a, b) => a - b);
-  const mid = sorted[sorted.length >> 1];
-  if (said.every((v) => Math.abs(v - mid) <= AGREE_MS)) truth.set(p.key, mid);
-  else disputed.push({ key: p.key, said });
-}
-
-console.log(`\nTIMING - how far off is the shift, where the methods agree on one?`);
-console.log(`(${truth.size} of ${judged.filter((x) => x.label === "same").length} same-film pairs settled; ` +
-  `${disputed.length} disputed and excluded rather than averaged)\n`);
-console.log(`${"method".padEnd(9)} ${"within 250ms".padStart(13)} ${"median error".padStart(13)} ${"worst".padStart(10)}`);
-for (const method of METHODS) {
-  const answers = results.get(method.name);
+// --- accuracy, against the oracle -------------------------------------------
+/* Scored at every cue START in file A that falls inside the anchored range,
+ * which is the closest thing to "what the reader sees" the bench can compute:
+ * each of those is a line that appears on screen, and the error is how far off
+ * it appears. Sampling at fixed intervals instead would weight the silences
+ * equally with the dialogue. */
+function errorsFor(answer, key) {
+  const known = truth.get(key);
+  if (!known || !answer?.at) return null;
+  const p = all.find((x) => x.key === key);
   const errs = [];
-  for (const [key, want] of truth) {
-    const got = answers.get(key).shiftMs;
-    if (got !== null) errs.push(Math.abs(got - want));
+  for (const [x] of p.a.spans) {
+    if (x < known.from || x > known.to) continue;
+    errs.push(Math.abs(answer.at(x) - known.shape.at(x)));
   }
-  errs.sort((a, b) => a - b);
-  const close = errs.filter((e) => e <= AGREE_MS).length;
-  console.log(`${method.name.padEnd(9)} ${`${close}/${errs.length}`.padStart(13)} ` +
-    `${`${errs.length ? errs[errs.length >> 1] : "-"}ms`.padStart(13)} ${`${errs.length ? errs[errs.length - 1] : "-"}ms`.padStart(10)}`);
+  if (errs.length < 20) return null;
+  errs.sort((u, v) => u - v);
+  return errs;
 }
 
-/* Who is right when they disagree.
- *
- * "Disputed" is not an answer, and neither method's own score can settle it -
- * each one prefers the shift its own objective was built to maximise. So the
- * candidates are judged by two referees that belong to neither: how many cue
- * STARTS line up after the shift, and how much of the two files' speech
- * OVERLAPS after it. One referee favours the point methods by construction and
- * the other favours the interval methods, so a shift that wins both is winning
- * on the other side's terms as well.
- */
-function refereePoints(a, b, shift) {
-  const A = a.spans.map((s) => s[0]);
+const share = (errs, bar) => errs.filter((e) => e <= bar).length / errs.length;
+const mid = (v) => { const s = [...v].sort((a, b) => a - b); return s.length ? s[s.length >> 1] : NaN; };
+const at = (errs, f) => errs[Math.min(errs.length - 1, Math.floor(f * errs.length))];
+
+const KINDS = ["flat", "linear", "stepped", "messy"];
+const perMethod = new Map();
+for (const method of METHODS) {
+  const answers = results.get(method.name);
+  const rowsFor = [];
+  for (const [key] of truth) {
+    const errs = errorsFor(answers.get(key), key);
+    rowsFor.push({ key, kind: truth.get(key).shape.kind, errs });
+  }
+  perMethod.set(method.name, rowsFor);
+}
+
+console.log("\nACCURACY - how much of the film does the answer put in the right place?");
+console.log(`(${truth.size} pairs with a text-derived truth; "within 250ms" is pooled over every cue of every pair)\n`);
+console.log(`${"method".padEnd(9)} ${"pairs".padStart(6)} ${"within 250ms".padStart(13)} ${"within 1s".padStart(10)} ` +
+  `${"median err".padStart(11)} ${"p95 err".padStart(10)} ${"refused".padStart(8)}`);
+for (const method of METHODS) {
+  const got = perMethod.get(method.name);
+  const answered = got.filter((r) => r.errs);
+  const pooled = answered.flatMap((r) => r.errs);
+  if (!pooled.length) { console.log(`${method.name.padEnd(9)} ${"-".padStart(6)}`); continue; }
+  pooled.sort((a, b) => a - b);
+  console.log(`${method.name.padEnd(9)} ${String(answered.length).padStart(6)} ` +
+    `${`${(share(pooled, TIGHT_MS) * 100).toFixed(1)}%`.padStart(13)} ` +
+    `${`${(share(pooled, 1000) * 100).toFixed(1)}%`.padStart(10)} ` +
+    `${`${Math.round(at(pooled, 0.5))}ms`.padStart(11)} ` +
+    `${`${Math.round(at(pooled, 0.95))}ms`.padStart(10)} ` +
+    `${String(got.length - answered.length).padStart(8)}`);
+}
+
+console.log("\n  by what the truth turned out to be:\n");
+console.log(`  ${"kind".padEnd(9)} ${"pairs".padStart(6)}  ` +
+  METHODS.map((m) => `${m.name} within 250ms`.padStart(22)).join(" "));
+for (const kind of KINDS) {
+  const keys = [...truth].filter(([, v]) => v.shape.kind === kind).map(([k]) => k);
+  if (!keys.length) continue;
+  const cells = METHODS.map((m) => {
+    const got = perMethod.get(m.name).filter((r) => keys.includes(r.key) && r.errs);
+    const pooled = got.flatMap((r) => r.errs);
+    return pooled.length ? `${(share(pooled, TIGHT_MS) * 100).toFixed(1)}%`.padStart(22) : "-".padStart(22);
+  });
+  console.log(`  ${kind.padEnd(9)} ${String(keys.length).padStart(6)}  ${cells.join(" ")}`);
+}
+
+// --- the pairs with no oracle ------------------------------------------------
+/* Cross-language pairs share no text, so there is nothing to derive a truth
+ * from and the referees are all there is. Neither belongs to any method: one
+ * counts matched cue STARTS after the mapping and the other measures shared
+ * SPEECH, so a method winning both is winning on the other side's terms too.
+ * They are objectives, not truth, and this table is read accordingly. */
+function refereePoints(a, b, map) {
   const B = b.spans.map((s) => s[0]);
   const taken = new Uint8Array(B.length);
-  let hit = 0, j = 0;
-  for (const x of A) {
-    const want = x + shift;
-    while (j < B.length && B[j] < want - 250) j++;
-    for (let k = j; k < B.length && B[k] <= want + 250; k++) {
+  let hit = 0;
+  for (const [x] of a.spans) {
+    const want = map(x);
+    let lo = 0, hi = B.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (B[m] < want - TIGHT_MS) lo = m + 1; else hi = m; }
+    for (let k = lo; k < B.length && B[k] <= want + TIGHT_MS; k++) {
       if (taken[k]) continue;
       taken[k] = 1; hit++; break;
     }
   }
-  return hit / Math.min(A.length, B.length);
+  return hit / Math.min(a.spans.length, B.length);
 }
 
-function refereeOverlap(a, b, shift) {
+function refereeOverlap(a, b, map) {
+  /* The mapping is monotone, so applying it to A's spans and sweeping against
+   * B's is the same linear merge a constant shift allowed. */
+  const A = a.spans.map(([s, e]) => [map(s), map(e)]);
   let i = 0, j = 0, both = 0;
-  const A = a.spans;
-  const B = b.spans.map(([s, e]) => [s - shift, e - shift]);
-  while (i < A.length && j < B.length) {
-    both += Math.max(0, Math.min(A[i][1], B[j][1]) - Math.max(A[i][0], B[j][0]));
-    if (A[i][1] < B[j][1]) i++; else j++;
+  while (i < A.length && j < b.spans.length) {
+    both += Math.max(0, Math.min(A[i][1], b.spans[j][1]) - Math.max(A[i][0], b.spans[j][0]));
+    if (A[i][1] < b.spans[j][1]) i++; else j++;
   }
   const span = (list) => list.reduce((t, [s, e]) => t + (e - s), 0);
-  return both / Math.min(span(A), span(B));
+  return both / Math.min(span(A), span(b.spans));
 }
 
-if (disputed.length) {
-  console.log("\nDISPUTED - the methods do not agree on one shift, so two referees judge the candidates.");
-  console.log("(points = matched cue starts; overlap = shared speech. Neither belongs to any method.)\n");
-  const wins = new Map(METHODS.map((m) => [m.name, { points: 0, overlap: 0 }]));
-  for (const d of disputed) {
-    const pair = judged.find((p) => p.key === d.key);
-    const scored = METHODS.map((m) => {
-      const shift = results.get(m.name).get(d.key).shiftMs;
-      return shift === null ? null : {
-        name: m.name, shift,
-        points: refereePoints(pair.a, pair.b, shift),
-        overlap: refereeOverlap(pair.a, pair.b, shift),
-      };
-    }).filter(Boolean);
-    for (const referee of ["points", "overlap"]) {
-      const best = scored.reduce((x, y) => (y[referee] > x[referee] ? y : x));
-      // A tie is nobody's win.
-      if (scored.filter((s) => Math.abs(s[referee] - best[referee]) < 1e-9).length === 1) {
-        wins.get(best.name)[referee]++;
-      }
+const noOracle = all.filter((p) => p.label !== "different" && !truth.has(p.key));
+if (noOracle.length) {
+  console.log(`\nNO ORACLE - ${noOracle.length} same-film pairs whose text cannot settle them, judged by two referees`);
+  console.log("(these are objectives, not truth. Every method is scored on the same two.)\n");
+  console.log(`${"method".padEnd(9)} ${"answered".padStart(9)} ${"median matched starts".padStart(22)} ${"median shared speech".padStart(21)}`);
+  for (const method of METHODS) {
+    const answers = results.get(method.name);
+    const points = [], overlaps = [];
+    for (const p of noOracle) {
+      const answer = answers.get(p.key);
+      if (!answer?.at) continue;
+      points.push(refereePoints(p.a, p.b, answer.at));
+      overlaps.push(refereeOverlap(p.a, p.b, answer.at));
     }
-    d.scored = scored;
+    console.log(`${method.name.padEnd(9)} ${String(points.length).padStart(9)} ` +
+      `${`${(mid(points) * 100).toFixed(1)}%`.padStart(22)} ${`${(mid(overlaps) * 100).toFixed(1)}%`.padStart(21)}`);
   }
-  console.log(`${"method".padEnd(9)} ${"wins on points".padStart(15)} ${"wins on overlap".padStart(16)}   of ${disputed.length} disputed`);
-  for (const [name, w] of wins) {
-    console.log(`${name.padEnd(9)} ${String(w.points).padStart(15)} ${String(w.overlap).padStart(16)}`);
-  }
-  console.log("\n  the six widest disagreements:");
-  for (const d of disputed.sort((x, y) =>
-    (Math.max(...y.said) - Math.min(...y.said)) - (Math.max(...x.said) - Math.min(...x.said))).slice(0, 6)) {
-    console.log(`  ${d.key}`);
-    for (const s of d.scored) {
-      console.log(`      ${s.name.padEnd(9)} ${String(s.shift).padStart(8)}ms   ` +
-        `points ${(s.points * 100).toFixed(1).padStart(5)}%   overlap ${(s.overlap * 100).toFixed(1).padStart(5)}%`);
-    }
-  }
-}
-
-// --- the pairs that are supposed to be hard ----------------------------------
-console.log("\nDIFFERENT CUT - same episode, and no single shift can fix it:");
-for (const p of all.filter((x) => x.label === "cut")) {
-  const said = METHODS.map((m) => {
-    const r = results.get(m.name).get(p.key);
-    const first = Object.entries(r.scores || {})[0];
-    return `${m.name} ${first ? `${first[0]}=${(+first[1]).toFixed(2)}` : "-"} shift=${r.shiftMs}`;
-  });
-  console.log(`  ${p.key}\n    ${said.join("\n    ")}`);
 }
 
 console.log("\nCOST - whole corpus, one process:");
@@ -225,120 +240,33 @@ for (const method of METHODS) {
   console.log(`  ${method.name.padEnd(9)} ${ms.toFixed(0).padStart(7)}ms total   ${(ms / all.length).toFixed(2)}ms per pair`);
 }
 
+console.log("\nWhat SHAPE the truth is, and how often, is a separate question with its own");
+console.log("script: node bench/align/shapes.mjs\n");
+
 if (process.argv.includes("--json")) {
   const out = { shape, rows, generatedFrom: "bench/align/run.mjs", pairs: [] };
   for (const p of all) {
-    const row = { key: p.key, label: p.label, a: p.a.id, b: p.b.id,
-      languages: [p.a.language, p.b.language], methods: {} };
-    for (const m of METHODS) row.methods[m.name] = results.get(m.name).get(p.key);
+    const known = truth.get(p.key);
+    const row = {
+      key: p.key, label: p.label, a: p.a.id, b: p.b.id,
+      languages: [p.a.language, p.b.language],
+      truth: known ? { kind: known.shape.kind, rate: known.shape.line.rate, segments: known.shape.steps.count } : null,
+      methods: {},
+    };
+    for (const m of METHODS) {
+      const answer = results.get(m.name).get(p.key);
+      const errs = errorsFor(answer, p.key);
+      row.methods[m.name] = {
+        rate: answer?.at?.rate ?? null,
+        shiftMs: answer?.at?.shiftMs ?? null,
+        segments: answer?.at?.pieces ?? (answer?.at ? 1 : 0),
+        scores: answer?.scores ?? {},
+        within250: errs ? share(errs, TIGHT_MS) : null,
+        p50: errs ? Math.round(at(errs, 0.5)) : null,
+      };
+    }
     out.pairs.push(row);
   }
   fs.writeFileSync(`${REPO}/bench/align/results.json`, JSON.stringify(out));
-  console.log(`\nwrote bench/align/results.json (${out.pairs.length} pairs)`);
-}
-
-/* --- is one shift even the right model? ------------------------------------
- *
- * The disputed pairs above share a shape: about a fifth of cue starts line up
- * while nearly all of the speech overlaps. That is what a re-cut release looks
- * like - the two files agree everywhere locally and nowhere globally, so each
- * method locks onto a different locally-good alignment and the referees split.
- *
- * The direct test is to stop insisting on one shift. Cut the timeline into
- * segments, let each pick its own offset, and see how much that buys. If it
- * buys little, a global shift is the right model and alass's split penalty is
- * a solution to somebody else's problem. If it buys a lot, it is ours too.
- */
-{
-  const SEGMENTS = 6;
-  const STEP = 100;
-  const REACH = 30_000;   // how far a segment may wander from the global answer
-
-  const bestShiftFor = (aSpans, bSpans, around) => {
-    let best = { shift: around, score: -1 };
-    for (let s = around - REACH; s <= around + REACH; s += STEP) {
-      let i = 0, j = 0, both = 0;
-      while (i < aSpans.length && j < bSpans.length) {
-        const bs = bSpans[j][0] - s, be = bSpans[j][1] - s;
-        both += Math.max(0, Math.min(aSpans[i][1], be) - Math.max(aSpans[i][0], bs));
-        if (aSpans[i][1] < be) i++; else j++;
-      }
-      if (both > best.score) best = { shift: s, score: both };
-    }
-    return best;
-  };
-
-  const gains = [];
-  for (const p of judged.filter((x) => x.label === "same")) {
-    const global = results.get("overlap").get(p.key).shiftMs;
-    if (global === null) continue;
-    const span = (l) => l.reduce((t, [s, e]) => t + (e - s), 0);
-    const floor = Math.min(span(p.a.spans), span(p.b.spans));
-    const whole = bestShiftFor(p.a.spans, p.b.spans, global).score / floor;
-
-    const from = p.a.spans[0][0];
-    const to = p.a.spans[p.a.spans.length - 1][1];
-    const width = (to - from) / SEGMENTS;
-    let piecewise = 0;
-    const shifts = [];
-    for (let k = 0; k < SEGMENTS; k++) {
-      const lo = from + k * width, hi = lo + width;
-      const aPart = p.a.spans.filter(([s]) => s >= lo && s < hi);
-      if (aPart.length < 8) continue;
-      const found = bestShiftFor(aPart, p.b.spans, global);
-      piecewise += found.score;
-      shifts.push(Math.round(found.shift));
-    }
-    if (shifts.length < SEGMENTS - 1) continue;
-    gains.push({ key: p.key, whole, piecewise: piecewise / floor,
-      gain: piecewise / floor - whole, spread: Math.max(...shifts) - Math.min(...shifts), shifts });
-  }
-
-  gains.sort((a, b) => b.spread - a.spread);
-  const median = (v) => { const s = [...v].sort((x, y) => x - y); return s[s.length >> 1]; };
-  console.log(`\nONE SHIFT OR MANY - ${SEGMENTS} segments, each free to pick its own offset (${gains.length} same-film pairs)\n`);
-  console.log(`  median spread between segment offsets: ${median(gains.map((g) => g.spread))}ms`);
-  console.log(`  pairs whose segments want offsets more than 1s apart:  ${gains.filter((g) => g.spread > 1000).length}/${gains.length}`);
-  console.log(`  pairs whose segments want offsets more than 5s apart:  ${gains.filter((g) => g.spread > 5000).length}/${gains.length}`);
-  console.log(`  median overlap gained by splitting: ${(median(gains.map((g) => g.gain)) * 100).toFixed(1)} points\n`);
-  /* The control this needs, and the reason it is trustworthy.
-   *
-   * Six free segments with 30 seconds of reach each can always find SOMETHING
-   * better than one shift, so a gain on its own proves nothing - it could be
-   * the method fitting noise. The calibration is the pairs that should gain
-   * nothing: two files already sharing a timeline have no drift to recover, so
-   * if splitting helps them too, the number is measuring the freedom rather
-   * than the drift. Splitting them and finding nothing is what makes the large
-   * gains elsewhere real. */
-  const settled = gains.filter((g) => g.spread <= 1000);
-  const drifting = gains.filter((g) => g.spread > 5000);
-  /* A wide spread is two different things and they want opposite fixes.
-   *
-   * A RE-CUT pair agrees everywhere locally: split it and the overlap goes
-   * high, because the material is the same and only the joins moved. A FAILED
-   * pair has no good alignment at any offset, so its segments wander looking
-   * for one and the overlap stays poor however many they are given. The first
-   * argues for per-cue offsets; the second argues for refusing the pair.
-   *
-   * Telling them apart by the overlap splitting actually reaches is what stops
-   * "half the pairs need more than one shift" from counting failures as
-   * evidence for splits. */
-  const wide = gains.filter((g) => g.spread > 5000);
-  const recut = wide.filter((g) => g.piecewise >= 0.85);
-  const failed = wide.filter((g) => g.piecewise < 0.85);
-  console.log(`  of the ${wide.length} with segments more than 5s apart:`);
-  console.log(`     ${recut.length} reach 85%+ overlap once split - re-cuts, and per-cue offsets would fix them` +
-    `${recut.length ? ` (median gain ${(median(recut.map((g) => g.gain)) * 100).toFixed(1)} points)` : ""}`);
-  console.log(`     ${failed.length} never do - no alignment exists to find, and splitting is not the answer` +
-    `${failed.length ? ` (best reaches ${(Math.max(...failed.map((g) => g.piecewise)) * 100).toFixed(0)}%)` : ""}`);
-  console.log(`  CONTROL - pairs whose segments agree within 1s (${settled.length}): ` +
-    `median gain ${(median(settled.map((g) => g.gain)) * 100).toFixed(1)} points`);
-  console.log(`  pairs whose segments want more than 5s apart (${drifting.length}): ` +
-    `median gain ${(median(drifting.map((g) => g.gain)) * 100).toFixed(1)} points\n`);
-
-  console.log("  widest, with each segment's own offset:");
-  for (const g of gains.slice(0, 6)) {
-    console.log(`    ${g.key.padEnd(22)} spread ${String(g.spread).padStart(7)}ms  ` +
-      `overlap ${(g.whole * 100).toFixed(1)}% -> ${(g.piecewise * 100).toFixed(1)}%   [${g.shifts.join(", ")}]`);
-  }
+  console.log(`wrote bench/align/results.json (${out.pairs.length} pairs)`);
 }
