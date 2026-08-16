@@ -146,6 +146,24 @@ questions kept being answered by guesswork:
   `alignOutcome` records what the reader then did (`taken`, `undone`), which is
   the only ground truth there is about whether an answer was right.
 
+- **Where did the reader correct the sync, and by how much?** Every by-hand
+  correction writes a `sync` line: how it was made (`key`, `drag`, `typed`,
+  `reset`, `command`, `snap`), where in the stream and where in the file, the
+  offset before and after, the rate, and for **every** attached subtitle the cue
+  under the playhead — its index, its time in its own file, how far the playhead
+  was from it, and its first 90 characters. The text is what makes the record
+  checkable against a copy of the file on another machine; the numbers alone
+  cannot be replayed. Whether the *other* subtitle was already right at that
+  moment is what separates "this file is out" from "these two disagree".
+
+  A correction is the only ground truth this extension ever gets — a human ear
+  deciding a line is late by this much, at this point in the film — and until
+  2026-08-16 every one of them was thrown away by the next one. **One gesture is
+  one record**: a drag calls `setOffset` on every pointermove, so the moves pass
+  `note: false` and the release carries `fromMs`, the offset the gesture started
+  from. Do not undo that; it also stops sixty points at one instant filling the
+  drift estimator's eight-deep memory.
+
 It also records every message shown to the reader (`said` — that is the
 extension's entire error surface), every attach and detach, every keyboard or
 toolbar command with the frame it addressed, every auto-attach plan, and every
@@ -208,6 +226,50 @@ Cross-language pairs for this series are the worst in the corpus: coverage
 0.25, confidence 3.8 to 6.1, because the two subtitlers cut the dialogue into
 different lines (1173 English cues against 915 Turkish, median gap between
 nearest starts 505ms against a 250ms tolerance). That is content, not a defect.
+Measured on S02E09, where the two files share a timeline exactly: 88 of 725
+English lines are sound description (`[ Brakes hiss ]`) with no Turkish
+counterpart, and 114 Turkish lines merge two English ones.
+
+## One shift is often the wrong SHAPE of answer
+
+`align()` returns one number, and the drift estimator returns one line. Two
+releases of one episode can be neither.
+
+Measured on The Americans S02E09 - two Turkish files carrying the same 533-line
+translation re-timed for two releases, every window matching 100% of its lines:
+**1.00s, 5.30s, 11.85s, 18.80s, 24.80s, 30.55s.** Six plateaus, five jumps of
+four to seven seconds, at scene boundaries. The two English files for the same
+episode, by different subtitlers, give the same six to within 250ms - which
+makes it a property of the video releases rather than of any subtitle. S02E04
+does it again in two more pairs.
+
+`align.js` answers that pair with 11.85s at confidence 61 and verdict **apply**.
+That is right to within a second over 15 of the 50 minutes where a shift can be
+measured, and out by more than two seconds over 35 of them. The search is not at
+fault and the coverage gate is not at fault: 11.85s is the correct shift for the
+third plateau. **Before adding another gate, read
+`docs/reports/sync-the-americans-2026-08-16.md`** - the full measurement, what
+was ruled out, and what to change in what order. `bench/align/piecewise.mjs`
+re-runs it on any two cached files and prints flat / sloped / stepped.
+
+**`snapNear` in `align.js` is the piece of that which shipped.** After a map
+drag - and only after a drag - the correction is moved to the median of the
+nearest-neighbour differences between the two subtitles, over two minutes around
+the playhead. Three things about it are load-bearing:
+
+- **Local.** Consulting the whole file would drag a third-act correction towards
+  the first act's answer, because of the staircase above.
+- **A median, not a count of matches.** Counting within a tolerance cannot see
+  an error smaller than that tolerance, and every error a hand makes on a 180px
+  strip is inside it. Counting also fails on a real cross-language pair, where a
+  quarter of the lines coincide at all.
+- **The test is the spread, at 150ms.** Genuine snaps on pairs by different
+  subtitlers measured 67 to 139ms of spread, so a tighter-looking limit would
+  refuse most of them. Injected errors from -480 to +480ms come back to within a
+  millisecond of the truth.
+
+Not on a keyboard nudge: a fixed step that snaps somewhere else is a key that
+does not do the same thing twice.
 
 ## The search pipeline exists twice, and the copy that runs is the quiet one
 
@@ -279,6 +341,25 @@ Each of these was a reported bug. Undoing one brings the bug back.
   This is safe precisely because every one of our own document listeners is
   capture-phase. Apply it to any new host — including non-interactive ones; the
   toast is `interactive: false` and its Undo button is the thing people press.
+- **A subtitle card is two rows, and the map's width is the reason.** Head with
+  the identity, the reading and the verbs; then the map with Line up at the
+  card's right edge, under "Line up all". The ask was for the reading, its clear
+  and Line up all to share the map's line, and all three do not fit: measured at
+  the 340px the panel opens at they take 185px of a 316px row and leave the map
+  82 pixels. The map is the instrument, so the reading went up a line instead
+  and the map keeps 181px. Anything added to either row is measured against
+  that. The head wraps below 340px, and the name is `flex: 1 1 0` because a
+  wrapping flex line breaks on items at their **unshrunk** size - with `auto` a
+  372px release name pushed everything else onto a second line at every width
+  under 600.
+- **Again and Next are on the quick row, once, not on each card.** They move the
+  picture by a line boundary and there is one picture; drawn per card they were
+  the same control twice and made the reader choose a card before pressing
+  either. The keyed subtitle decides whose boundaries are counted.
+- **The panel's title bar carries two double-click gestures.** The bar folds and
+  unfolds; the **name** parks the panel back under the CC button. Tests that
+  park it must aim at `.sso-win__title`, or they fold it and everything after
+  them measures 0×0.
 - **Nothing may overlap a control in a `.sso-win__head`.** The corner resize
   grips sit above the head, so the head clears them with `--sso-grip`-derived
   padding. Measured before that: the NE grip covered 169 of the close button's
