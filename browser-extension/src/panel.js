@@ -1364,18 +1364,26 @@
        * dragging but it still behaves like I'm adjusting it" is. makeMovable
        * has carried this guard all along; this did not. */
       if (event.buttons === 0) {
-        finish(event);
+        /* Ended, but not committed. The press was lost somewhere this never
+         * heard about, so the position under the pointer is not an aim - it is
+         * wherever the hand happened to be. Whatever the live moves already
+         * applied stands, because it was applied while the button was down;
+         * nothing new is written, said, or recorded. */
+        finish(event, { commit: false });
         return;
       }
       const next = movedTo(event);
       if (next === null) return;
       readout.textContent = api.describeOffset(next);
-      api.setOffset(next, { slot, quiet: true });
+      /* Silent, deliberately: the drag is one correction and this fires sixty
+       * times inside it. finish() commits the same value once with `note`, so
+       * the drift estimator and the log see the gesture, not its samples. */
+      api.setOffset(next, { slot, quiet: true, note: false });
     });
 
-    function finish(event) {
+    function finish(event, { commit = true } = {}) {
+      if (!drag) return;
       const next = movedTo(event);
-      if (next === null) return;
       const was = drag.was;
       drag = null;
       delete plot.dataset.dragging;
@@ -1383,7 +1391,11 @@
       try {
         plot.releasePointerCapture?.(event.pointerId);
       } catch {}
-      if (next === was.offsetMs) return;
+      if (!commit || next === null || next === was.offsetMs) return;
+      // The gesture, once, now that it has ended: this is the correction the
+      // reader made, and `fromMs` is where they started from rather than where
+      // the last pointermove left it.
+      api.setOffset(next, { slot, quiet: true, how: "drag", fromMs: was.offsetMs });
       /* No Undo behind a drag.
        *
        * It was a button that stood on the card until something else replaced
@@ -1699,7 +1711,7 @@
     offsetField.setAttribute("aria-label", "Offset in seconds");
     const commitField = () => {
       const seconds = Number(offsetField.value);
-      if (Number.isFinite(seconds)) api.setOffset(Math.round(seconds * 1000), { slot });
+      if (Number.isFinite(seconds)) api.setOffset(Math.round(seconds * 1000), { slot, how: "typed" });
     };
     offsetField.addEventListener("change", commitField);
     offsetField.addEventListener("keydown", (event) => {
@@ -1718,8 +1730,8 @@
     offsetReset.textContent = "⌫";
     offsetReset.title = "Back to the file's own timing";
     offsetReset.addEventListener("click", () => {
-      api.setRate(1, { slot, quiet: true });
-      api.setOffset(0, { slot, quiet: true });
+      api.setRate(1, { slot, quiet: true, how: "reset" });
+      api.setOffset(0, { slot, quiet: true, how: "reset" });
       sayOnCard(slot, "Back to the file's own timing");
     });
 

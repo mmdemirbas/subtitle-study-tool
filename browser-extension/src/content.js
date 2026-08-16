@@ -3161,8 +3161,9 @@
    * storing it would be recollection standing in for evidence; a carried timing
    * is already the recollection. Not the same question as `quiet`, which is
    * only about whether to say so. */
-  function setRate(rate, { slot = state.keyTrack, quiet = false, byHand = true } = {}) {
+  function setRate(rate, { slot = state.keyTrack, quiet = false, byHand = true, how = "set" } = {}) {
     const track = state.tracks[slot];
+    const wasRate = track.rate;
     const next = Number(rate);
     track.rate = Number.isFinite(next) && next > 0 ? next : 1;
     track.activeIndexes = NEEDS_REDRAW;
@@ -3174,6 +3175,9 @@
     saveOffset(track);
     if (byHand) rememberTimingSoon(track);
     notify();
+    if (byHand && track.rate !== wasRate) {
+      traceCorrection(track, slot, { how, wasOffsetMs: track.offsetMs, wasRate });
+    }
     if (!quiet) {
       showToast(
         track.rate === 1
@@ -3184,8 +3188,23 @@
     }
   }
 
-  function setOffset(ms, { quiet = false, slot = state.keyTrack, byHand = true } = {}) {
+  /* `note` is what separates one correction from one gesture.
+   *
+   * A map drag calls this on every pointermove - about sixty times for a
+   * deliberate aim - and each of those used to count as a separate correction:
+   * eight of them fill the drift estimator's whole memory with points at the
+   * same instant, and traced, one drag would be sixty lines in the log saying
+   * the same thing. The moves are silent now and the release is the correction,
+   * which is also what the reader means by having made one. */
+  function setOffset(
+    ms,
+    { quiet = false, slot = state.keyTrack, byHand = true, how = "set", note = true, fromMs } = {},
+  ) {
     const track = state.tracks[slot];
+    /* `fromMs` is where the GESTURE started, for the one caller whose gesture is
+     * longer than one call: the map drag has already moved the offset sixty
+     * times by the point it commits, so the value it is replacing is its own. */
+    const wasOffsetMs = Number.isFinite(fromMs) ? Math.round(fromMs) : track.offsetMs;
     track.offsetMs = Math.round(ms);
     track.activeIndexes = NEEDS_REDRAW; // force a re-render at the new offset
     saveOffset(track);
@@ -3201,7 +3220,10 @@
      * toast at a time, and of the two the reader already knows what they just
      * pressed - the drift is the news. Before it, this was written and then
      * immediately overwritten by the line above. */
-    if (byHand) noteCorrection(track, slot);
+    if (byHand && note) {
+      traceCorrection(track, slot, { how, wasOffsetMs, wasRate: track.rate });
+      noteCorrection(track, slot);
+    }
   }
 
   /* Relative, and that is the point of it existing beside setOffset.
@@ -3212,8 +3234,8 @@
    * first computes from the number before the previous one. Asking for the
    * step instead of the sum has no such window: the addition happens where the
    * value is. */
-  const nudge = (deltaMs, { slot = state.keyTrack, quiet = false } = {}) =>
-    setOffset(state.tracks[slot].offsetMs + deltaMs, { slot, quiet });
+  const nudge = (deltaMs, { slot = state.keyTrack, quiet = false, how = "nudge" } = {}) =>
+    setOffset(state.tracks[slot].offsetMs + deltaMs, { slot, quiet, how });
 
   /* --- drift ----------------------------------------------------------------
    *
@@ -3238,6 +3260,107 @@
   // Two is all the arithmetic needs. The rest are kept so a reader who nudges
   // several times early still has an early point to measure from.
   const DRIFT_MAX_NOTES = 8;
+
+  /* --- what a correction was made against ------------------------------------
+   *
+   * Reported after an episode of The Americans: "I needed to correct the sync
+   * multiple times". Nothing in this extension could say where those
+   * corrections were made, by how much, or what was on screen when they were -
+   * the offset is a single number that the next correction overwrites, and the
+   * corrections list above is in memory and dies with the tab. So the one
+   * measurement that matters most was the one thing never recorded.
+   *
+   * A correction IS a measurement: at this moment of the film, this subtitle
+   * was this many milliseconds out, by the ear of somebody watching it. A
+   * session of them is the true offset sampled as a function of film time,
+   * which is the shape neither the aligner (one number for the whole file, from
+   * the other subtitle) nor the drift estimator (a straight line through two
+   * points) can see. Several corrections that do not fall on one line say the
+   * file was cut, and where.
+   *
+   * What makes each sample checkable afterwards is the LINE it was made
+   * against. The numbers alone cannot be replayed against files that may not
+   * even be on this machine; a cue index, its time in its own file, and the
+   * first words of it can be matched to any copy of that subtitle. */
+  function cueUnder(track, fileMs) {
+    const cues = track.cues || [];
+    if (!cues.length || !Number.isFinite(fileMs)) return null;
+
+    // The last line that has started, by bisection - this runs from a pointer
+    // gesture on a file of a thousand lines.
+    let low = 0;
+    let high = cues.length - 1;
+    let started = -1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (cues[mid].start <= fileMs) {
+        started = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    /* Whichever of the line just gone and the line coming is nearer. A
+     * correction made in a silence - which is most of them, because a reader
+     * notices the gap between hearing and reading - still names the exchange it
+     * was about, and `awayMs` says how far from it they were. */
+    const awayFrom = (i) => {
+      if (i < 0 || i >= cues.length) return Infinity;
+      const cue = cues[i];
+      return fileMs < cue.start ? cue.start - fileMs : Math.max(0, fileMs - cue.end);
+    };
+    const i = awayFrom(started) <= awayFrom(started + 1) ? started : started + 1;
+    if (i < 0 || i >= cues.length) return null;
+    const cue = cues[i];
+    return {
+      i,
+      startMs: Math.round(cue.start),
+      endMs: Math.round(cue.end),
+      awayMs: Math.round(awayFrom(i)),
+      // Enough to find the same line in another copy of the file, not the whole
+      // script: the log is read by somebody who has the file.
+      text: String(cue.text || "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim().slice(0, 90),
+    };
+  }
+
+  function traceCorrection(track, slot, { how, wasOffsetMs, wasRate }) {
+    const streamMs = (state.video?.currentTime || 0) * 1000;
+    if (!Number.isFinite(streamMs)) return;
+    trace("sync", {
+      how,
+      slot,
+      // Where in the film, and where in this file - two different clocks, and
+      // the gap between them is the thing being corrected.
+      streamMs: Math.round(streamMs),
+      fileMs: Math.round(filmTimeMs(track)),
+      fromMs: Math.round(wasOffsetMs),
+      toMs: track.offsetMs,
+      byMs: track.offsetMs - Math.round(wasOffsetMs),
+      rate: track.rate,
+      wasRate,
+      adDriftMs: Math.round(state.adDriftMs || 0),
+      duration: state.video?.duration ?? null,
+      /* Every attached subtitle, not only the one that moved. Whether the other
+       * one was already right at that moment is the difference between "this
+       * file is out" and "these two files disagree", and only one of those is
+       * something an aligner comparing them could ever have found. */
+      tracks: state.tracks.map((other, index) => (
+        other.cues.length
+          ? {
+            slot: index,
+            fileId: other.fileId,
+            language: other.language,
+            label: other.label,
+            offsetMs: other.offsetMs,
+            rate: other.rate,
+            cueCount: other.cues.length,
+            cue: cueUnder(other, filmTimeMs(other)),
+          }
+          : null
+      )).filter(Boolean),
+    });
+  }
 
   function noteCorrection(track, slot) {
     const durationMs = (state.video?.duration || 0) * 1000;
@@ -3434,9 +3557,9 @@
     } else if (!seen.attached) {
       handled = false; // the rest only make sense with something attached
     } else if (isKey(typed, keys.earlier)) {
-      api.nudge(-step);
+      api.nudge(-step, { how: "key" });
     } else if (isKey(typed, keys.later)) {
-      api.nudge(step);
+      api.nudge(step, { how: "key" });
     } else if (isKey(typed, keys.prevLine)) {
       // Forwarded it answers with a promise rather than "there was a line to
       // step to", so the key counts as handled either way.
@@ -3448,8 +3571,8 @@
     } else if (isKey(typed, keys.reset)) {
       // Both, because a subtitle that has been stretched is not back to the
       // file's own timing until the stretch goes too.
-      api.setRate(1, { quiet: true });
-      api.setOffset(0, { quiet: true });
+      api.setRate(1, { quiet: true, how: "reset" });
+      api.setOffset(0, { quiet: true, how: "reset" });
       showToast("Subtitle back to the file's own timing");
     } else if (isKey(typed, keys.toggleOverlay)) {
       api.setVisible(!seen.visible);
@@ -4531,7 +4654,7 @@
           return false;
         }
         const slot = message.slot ?? state.keyTrack;
-        nudge(Number(message.deltaMs) || 0, { slot });
+        nudge(Number(message.deltaMs) || 0, { slot, how: "command" });
         sendResponse({ ok: true, offsetMs: state.tracks[slot].offsetMs });
         return false;
       }

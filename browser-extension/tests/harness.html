@@ -1520,6 +1520,103 @@
         await sleep(100);
       });
 
+      /* Collect what the frame told the worker about, for the two checks below.
+       * The daemon stub is the only place a trace can be seen from here - the
+       * worker's half is not loaded in this page. */
+      const tracing = async (body) => {
+        const seen = [];
+        const was = window.__stubDaemon;
+        window.__stubDaemon = {
+          trace: (args) => { seen.push(args); return { ok: true }; },
+        };
+        try {
+          await body(seen);
+        } finally {
+          window.__stubDaemon = was ?? null;
+        }
+        return seen;
+      };
+      const syncTraces = (seen) => seen.filter((a) => a.kind === "sync").map((a) => a.detail);
+
+      check("a correction is recorded with the line it was made against", async () => {
+        /* Reported after an episode: "I needed to correct the sync multiple
+         * times". Nothing recorded where, by how much, or against what - so the
+         * one measurement the reader makes with their own ears, which is the
+         * only ground truth this extension ever gets, was thrown away each time
+         * the next correction overwrote the offset. */
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "TR · sync", fileId: 601, slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        video.currentTime = 2600;
+        await sleep(150);
+
+        const seen = await tracing(async () => {
+          window.__ssoApi.nudge(-1500, { slot: 1, quiet: true, how: "key" });
+          await sleep(80);
+        });
+
+        const [made, ...extra] = syncTraces(seen);
+        if (!made) throw new Error("a correction by hand traced nothing");
+        if (extra.length) throw new Error(`one correction traced ${extra.length + 1} times`);
+        if (made.how !== "key") throw new Error(`recorded as "${made.how}", not the way it was made`);
+        if (made.byMs !== -1500) throw new Error(`recorded a move of ${made.byMs}ms, not -1500`);
+        if (made.fromMs !== 0 || made.toMs !== -1500)
+          throw new Error(`recorded ${made.fromMs} to ${made.toMs}, not 0 to -1500`);
+        if (!Number.isFinite(made.streamMs) || !Number.isFinite(made.fileMs))
+          throw new Error("recorded no position in the film");
+        const moved = made.tracks.find((t) => t.slot === 1);
+        if (!moved) throw new Error("the subtitle that moved is not in the record");
+        if (!moved.cue || !moved.cue.text)
+          throw new Error("recorded no line - the number alone cannot be checked afterwards");
+        if (!Number.isFinite(moved.cue.startMs) || !Number.isFinite(moved.cue.i))
+          throw new Error("the line has no place in its own file");
+
+        window.__ssoApi.detach(1);
+        await sleep(100);
+      });
+
+      check("one drag is one correction, however many moves it took", async () => {
+        /* A drag calls setOffset on every pointermove. Each of those used to
+         * count as a correction: sixty of them for one deliberate aim, filling
+         * the drift estimator's eight-deep memory with points at a single
+         * instant and - once corrections were traced - writing the same line
+         * sixty times. The gesture is the correction, not its samples. */
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "TR · sync", fileId: 602, slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        video.currentTime = 2600;
+        await sleep(150);
+        await zoomToFilm();
+
+        const plot = mapStrips()[1].querySelector(".sso-map__plot");
+        const box = plot.getBoundingClientRect();
+        const at = (x) => ({
+          pointerId: 93, button: 0, buttons: 1, clientX: x,
+          clientY: box.top + box.height / 2, bubbles: true, cancelable: true,
+        });
+        plot.setPointerCapture = () => {};
+        plot.releasePointerCapture = () => {};
+        plot.hasPointerCapture = () => false;
+
+        const seen = await tracing(async () => {
+          plot.dispatchEvent(new PointerEvent("pointerdown", at(box.left + 20)));
+          for (let x = 22; x <= 60; x += 2) {
+            plot.dispatchEvent(new PointerEvent("pointermove", at(box.left + x)));
+          }
+          plot.dispatchEvent(new PointerEvent("pointerup", at(box.left + 60)));
+          await sleep(120);
+        });
+
+        const made = syncTraces(seen);
+        if (made.length !== 1) throw new Error(`a drag of 20 moves traced ${made.length} corrections`);
+        if (made[0].how !== "drag") throw new Error(`recorded as "${made[0].how}", not a drag`);
+        // From where the gesture started, not from where its last move left it.
+        if (made[0].fromMs !== 0) throw new Error(`the drag says it started at ${made[0].fromMs}ms, not 0`);
+        if (made[0].byMs !== made[0].toMs)
+          throw new Error(`moved by ${made[0].byMs} but landed on ${made[0].toMs}`);
+
+        window.__ssoApi.detach(1);
+        await sleep(100);
+      });
+
       check("moving the mouse over the strip without pressing changes nothing", async () => {
         /* Reported: "I'm not clicking and dragging over a timeline bar but it
          * still behaves like I'm adjusting it to sync." The drag state was only
