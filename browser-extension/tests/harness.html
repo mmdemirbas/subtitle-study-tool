@@ -980,9 +980,12 @@
        * the middle of the screen expecting to reach the player, and a panel
        * left where it was dragged is over that point - which cost a run and
        * presented as study mode eating a click it never saw. */
+      /* On the NAME, not on the bar. The bar's double-click folds the panel
+       * now - the gesture every window on the machine has - and parking moved
+       * onto the one element in that bar that says which window this is. */
       const parkPanel = () => {
         panelShadow()
-          .querySelector(".sso-win__head")
+          .querySelector(".sso-win__title")
           .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true }));
       };
 
@@ -1008,6 +1011,97 @@
         } finally {
           document.body.style.transform = "";
           parkPanel();
+        }
+      });
+
+      check("double-clicking the bar folds the panel, and again unfolds it", async () => {
+        /* Asked for: "double click on the subtitle panel should collapse /
+         * expand it". The button in the corner stays, because a gesture nobody
+         * is told about is not a control - this is the one you reach for while
+         * a film runs, where the bar is a far larger target than a 26px icon.
+         *
+         * And the two gestures the bar now carries are checked against each
+         * other: the name parks, everything else folds. Getting that backwards
+         * is the failure that matters, because parking a folded panel looks
+         * like nothing happening. */
+        const panel = panelShadow().querySelector(".sso-panel");
+        const head = panelShadow().querySelector(".sso-win__head");
+        const bar = () => panel.dataset.folded === "true";
+        const was = bar();
+        try {
+          const dbl = (el) => el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true }));
+          if (was) { dbl(head); await sleep(150); }
+          if (bar()) throw new Error("could not get the panel unfolded to begin with");
+
+          dbl(head);
+          await sleep(150);
+          if (!bar()) throw new Error("a double-click on the bar did not fold it");
+
+          dbl(head);
+          await sleep(150);
+          if (bar()) throw new Error("a second double-click did not unfold it");
+
+          // The name is the other gesture, and it must not fold.
+          dbl(panelShadow().querySelector(".sso-win__title"));
+          await sleep(150);
+          if (bar()) throw new Error("double-clicking the name folded the panel instead of parking it");
+        } finally {
+          if (bar() !== was) {
+            head.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true }));
+            await sleep(150);
+          }
+        }
+      });
+
+      check("the title bar shows the sync at a glance, and stays quiet about it", async () => {
+        /* Asked for: a preview of the maps in the header "so we can see the
+         * sync status at a glance even when the panel is collapsed. Since it
+         * will be always visible, make sure it is not annoying or attractive,
+         * but just visible when you look at it."
+         *
+         * Three properties, and the third is the one a redesign would break:
+         * it draws something, it survives folding, and it is quieter than the
+         * window's own name. A picture in a title bar that is louder than the
+         * title is the definition of annoying. */
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "TR · peek", fileId: 507, slot: 1 });
+        video.currentTime = 2600;
+        await sleep(250);
+
+        const panel = panelShadow().querySelector(".sso-panel");
+        const peek = panelShadow().querySelector(".sso-peek");
+        try {
+          if (!peek || peek.hidden) throw new Error("no preview in the title bar with two subtitles attached");
+          const canvas = peek.querySelector("canvas");
+          const px = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
+          let ink = 0;
+          for (let i = 3; i < px.length; i += 4) if (px[i] > 8) ink += 1;
+          if (!ink) throw new Error("the preview drew nothing");
+          // A row per subtitle, so two subtitles are twice as tall as one.
+          const twoRows = canvas.height;
+
+          // Folded, the body goes and this must not.
+          panelShadow().querySelector(".sso-win__head")
+            .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true }));
+          await sleep(200);
+          if (panel.dataset.folded !== "true") throw new Error("could not fold it to check");
+          if (peek.getBoundingClientRect().height === 0)
+            throw new Error("the preview goes away exactly when it is the only thing left");
+
+          panelShadow().querySelector(".sso-win__head")
+            .dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true }));
+          await sleep(200);
+
+          window.__ssoApi.detach(1);
+          await sleep(200);
+          if (canvas.height >= twoRows)
+            throw new Error("the preview is the same height for one subtitle as for two");
+
+          // Quieter than the name beside it, at rest.
+          const quiet = parseFloat(getComputedStyle(peek).opacity);
+          if (!(quiet < 1)) throw new Error(`the preview sits at opacity ${quiet}`);
+        } finally {
+          window.__ssoApi.detach(1);
+          await sleep(120);
         }
       });
 
@@ -4793,7 +4887,12 @@
           await sleep(80);
           const moved = host.getBoundingClientRect();
 
-          head.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+          /* On the name where there is one. The panel's bar now folds on a
+           * double-click and parks on a double-click of its title; the rail
+           * still parks from anywhere on the bar, and dispatching on an
+           * element inside it bubbles there either way. */
+          (head.querySelector(".sso-win__title") ?? head)
+            .dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
           await sleep(150);
           const parked = host.getBoundingClientRect();
           if (Math.abs(parked.left - moved.left) < 20 && Math.abs(parked.top - moved.top) < 20)

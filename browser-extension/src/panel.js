@@ -224,14 +224,34 @@
     close.textContent = "×";
     close.title = "Close";
     close.addEventListener("click", hide);
-    head.append(el.back, title, el.gear, el.fold, close);
 
-    /* Double-click the bar to put the panel back under the CC button. A panel
-     * dragged somewhere unhelpful - behind the player's own controls, half off
-     * a screen that has since been resized - otherwise has to be dragged back
-     * from wherever it went, which is the situation that made it unhelpful. */
+    el.preview = buildPreview();
+    head.append(el.back, title, el.preview.root, el.gear, el.fold, close);
+
+    /* Double-click the bar to fold it away, and again to bring it back.
+     *
+     * The gesture every window on the machine has for exactly this, asked for
+     * directly: "double click on the subtitle panel should collapse / expand
+     * it". The button in the corner stays - a gesture nobody is told about is
+     * not a control - and this is the version you reach for while a film is
+     * running, because the bar is a much larger target than a 26px icon and
+     * you are not aiming at anything when you take the panel out of the way.
+     *
+     * The NAME keeps the older gesture: double-clicking it puts the panel back
+     * under the CC button, for a panel dragged somewhere unhelpful - behind the
+     * player's own controls, half off a screen that has since been resized -
+     * which otherwise has to be dragged back from wherever it went. Two
+     * behaviours in one bar is a smell, and the split is deliberate: the name
+     * is where a window says which window it is, so "put this window where it
+     * belongs" is its gesture, and both say which they are on hover. */
     head.addEventListener("dblclick", (event) => {
-      if (event.target.closest("button")) return;
+      if (event.target.closest("button, .sso-win__title")) return;
+      setFolded(!folded);
+    });
+
+    title.title = "Double-click to put the panel back under the CC button";
+    title.addEventListener("dblclick", (event) => {
+      event.stopPropagation();
       host.style.setProperty("left", "auto", "important");
       host.style.setProperty("right", `${HANDLE_RIGHT}px`, "important");
       host.style.setProperty("top", `${HANDLE_TOP + HANDLE_HEIGHT + GAP}px`, "important");
@@ -948,6 +968,130 @@
     { ms: 15000, label: "15s", title: "Showing 15 seconds around the playhead. Click for the whole film." },
     { ms: 0, label: "film", title: "Showing the whole film. Click to come back to a minute." },
   ];
+
+  /* The sync, in the title bar, at a glance.
+   *
+   * Asked for: "put a preview of the subtitle maps to the header bar of the
+   * subtitle panel, so we can see the sync status at a glance even when the
+   * panel is collapsed. Since it will be always visible, make sure it is not
+   * annoying or attractive, but just visible when you look at it."
+   *
+   * So it is a minute of film around the playhead, not the whole film, and
+   * that is the one decision here that carries the feature. Across a two-hour
+   * axis a four-second error is a third of one pixel - the measurement that
+   * put a zoom control on the cards in the first place - so a whole-film
+   * preview would be a picture that says "in sync" whatever the truth is. Over
+   * a minute the same error is a fifth of the strip.
+   *
+   * One row per subtitle, one above the other, on a shared axis. Being out of
+   * sync looks like exactly what it is: the same pattern in both rows, one of
+   * them slid sideways. Nothing else is drawn - no scale, no labels, no
+   * border. It is not a control and it must not read as one.
+   *
+   * Quiet is a requirement rather than a preference here, because unlike every
+   * other picture in this panel it is on screen the whole time the panel is,
+   * folded or not. Low contrast, no fill behind it, and the playhead the same
+   * ink as the bars rather than the bright one the cards use. */
+  const PREVIEW_SPAN_MS = 60000;
+  const PREVIEW_ROW = 7;
+
+  function buildPreview() {
+    const root = document.createElement("div");
+    root.className = "sso-peek";
+    root.title = "Where each subtitle speaks, around the playhead. Out of step shows as one row slid sideways.";
+
+    const canvas = document.createElement("canvas");
+    canvas.className = "sso-peek__canvas";
+    root.append(canvas);
+
+    let cssWidth = null;
+    new ResizeObserver((entries) => {
+      const next = entries[entries.length - 1]?.contentRect?.width ?? 0;
+      if (next === cssWidth) return;
+      cssWidth = next;
+      painted = "";
+    }).observe(root);
+
+    let painted = "";
+
+    function draw(status) {
+      const attached = status.tracks
+        .map((track, slot) => ({ track, slot }))
+        .filter((each) => each.track.attached);
+      root.hidden = attached.length === 0;
+      if (root.hidden) return;
+      if (cssWidth === null) cssWidth = root.getBoundingClientRect().width;
+      if (cssWidth < 1) return;
+
+      const dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
+      const width = Math.max(1, Math.round(cssWidth * dpr));
+      const height = Math.max(1, Math.round(PREVIEW_ROW * dpr) * attached.length);
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+        painted = "";
+      }
+
+      const now = Number.isFinite(status.currentTime) ? status.currentTime * 1000 : 0;
+      const from = now - PREVIEW_SPAN_MS / 2;
+      const to = now + PREVIEW_SPAN_MS / 2;
+
+      /* Nothing is repainted while it would land on the same pixels - the same
+       * rule the cards' strips follow, and it matters more here: this draws on
+       * every status round whether or not anybody has opened the panel body. */
+      const perPixel = PREVIEW_SPAN_MS / Math.max(1, width - 1);
+      const shot = [
+        Math.round(from / perPixel), width, height,
+        ...attached.map((each) => `${each.track.fileId}:${each.track.offsetMs}:${each.track.rate}:${each.track.cueCount}`),
+      ].join("|");
+      if (shot === painted) return;
+      painted = shot;
+
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      context.clearRect(0, 0, width, height);
+      const style = getComputedStyle(root);
+      context.fillStyle = style.getPropertyValue("--sso-peek-ink").trim() || "#93b9fb";
+
+      const row = Math.round(PREVIEW_ROW * dpr);
+      attached.forEach((each, index) => {
+        const { starts, ends } = api.cueSpans(each.slot);
+        const top = index * row;
+        const tall = Math.max(1, row - dpr);
+        // The first line whose end reaches the window, by bisection: this runs
+        // on the status round and the file is a thousand lines.
+        let low = 0;
+        let high = starts.length - 1;
+        let first = starts.length;
+        while (low <= high) {
+          const mid = (low + high) >> 1;
+          if (api.toStreamMs(each.slot, ends[mid] ?? starts[mid]) >= from) {
+            first = mid;
+            high = mid - 1;
+          } else {
+            low = mid + 1;
+          }
+        }
+        context.globalAlpha = 0.85;
+        for (let i = first; i < starts.length; i++) {
+          const at = api.toStreamMs(each.slot, starts[i]);
+          if (at > to) break;
+          const until = api.toStreamMs(each.slot, ends[i] ?? starts[i]);
+          const left = Math.round(((at - from) / (to - from)) * (width - 1));
+          const span = Math.max(dpr, Math.round(((until - at) / (to - from)) * (width - 1)));
+          context.fillRect(left, top, span, tall);
+        }
+      });
+
+      // The playhead, in the same ink as everything else. A brighter mark here
+      // would be the loudest thing in a title bar that is always on screen.
+      context.globalAlpha = 0.55;
+      context.fillRect(Math.round((width - 1) / 2), 0, dpr, height);
+      context.globalAlpha = 1;
+    }
+
+    return { root, draw };
+  }
 
   function buildTimeline(slot) {
     const root = document.createElement("div");
@@ -3254,6 +3398,10 @@
     // Both slots full means the plus has nowhere to put anything; replacing one
     // is what a double-click on a card's name is for.
     el.add.hidden = !status.attached || status.trackCount >= api.trackCount;
+
+    // In the title bar, so it is drawn whether or not the body is showing -
+    // being visible while folded is the whole point of it.
+    el.preview.draw(status);
 
     /* The shared row. Nothing attached means nothing to arrange, and the empty
      * state below owns that screen on its own. */

@@ -607,6 +607,41 @@ button.sso-quick__move[data-on="true"] {
  * has to give up horizontal panning or a touch drag scrolls the panel body
  * instead, and `cursor` says so before the reader tries.
  */
+/* --- the sync, in the title bar ---------------------------------------------
+ *
+ * A minute of film around the playhead, one row per subtitle. It is on screen
+ * for as long as the panel is - folded or not - which is why every decision
+ * here is about NOT being noticed: no border, no fill behind it, an ink at a
+ * third of the panel's contrast, and a fixed 84px so it can never grow into
+ * the space the window's name needs. It brightens a little on hover, which is
+ * the only moment somebody is actually looking at it.
+ *
+ * `flex: none` and a width in pixels rather than a share of the bar: the title
+ * beside it is `flex: 1` and would otherwise hand this whatever was left over,
+ * so the picture would change scale as the panel is resized and the same sync
+ * error would look different at two window sizes. */
+.sso-peek {
+  --sso-peek-ink: rgba(147, 185, 251, 0.5);
+
+  display: flex;
+  flex: none;
+  align-items: center;
+  width: 84px;
+  height: 16px;
+  margin-right: 2px;
+  transition: opacity var(--sso-motion) ease;
+  opacity: 0.75;
+}
+
+.sso-win__head:hover .sso-peek {
+  opacity: 1;
+}
+
+.sso-peek__canvas {
+  width: 100%;
+  height: auto;
+}
+
 .sso-map {
   --sso-map-ink: #93b9fb;
   --sso-map-head: #eef0f3;
