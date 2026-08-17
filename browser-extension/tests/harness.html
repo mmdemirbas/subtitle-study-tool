@@ -222,6 +222,10 @@
         frankly: 14200, get: 55, down: 120, fine: 500, did: 45, see: 70,
         that: 5, saw: 300, nothing: 250, at: 20, all: 35, ormon: null,
         sighs: 8800,
+        /* Only the pairing case uses this one, and that is the point: a lookup
+         * is cached for the session, so a check that hovers a word another
+         * check hovers later leaves that one with nothing to observe. */
+        reckoning: 16400, is: 18, upon: 2200, us: 90,
       };
       const lookupCalls = [];
       const lookupTargets = [];
@@ -3963,6 +3967,68 @@
         } finally {
           window.__ssoStudy.updateSettings({ studySlots: was });
           await sleep(120);
+        }
+      });
+
+      check("the paired line is the one covering the same stretch, not the one under the playhead", async () => {
+        /* Reported as "the study panel could match wrong EN-TR sentence pairs".
+         *
+         * The pair used to be whatever the other subtitle was SHOWING at the
+         * instant the word was marked, which is a different question from which
+         * line says the same thing. Two subtitlers cut the dialogue into
+         * different lines, so at the moment an English line begins the Turkish
+         * one on screen is very often still the sentence before it.
+         *
+         * The times below are the case in its simplest form: the playhead sits
+         * inside the English line and in the GAP between the two Turkish ones,
+         * so "what is on screen in Turkish" is nothing at all while "what
+         * covers this line" is unambiguous. Against the old code the card comes
+         * back with no paired line; against the fix it quotes the second. */
+        const was = window.__ssoStudy.settings().studySlots;
+        const wasAttached = window.__ssoApi.status().tracks.map((t) => t.attached);
+        try {
+          await window.__ssoApi.attach({
+            cues: [{ start: 1300000, end: 1310000, text: "The reckoning is upon us." }],
+            label: "EN · pairing", fileId: 9101, language: "en", slot: 0,
+          });
+          await window.__ssoApi.attach({
+            cues: [
+              { start: 1290000, end: 1299900, text: "Bundan haberim yok." },
+              { start: 1300100, end: 1310000, text: "Hesaplaşma kapımızda." },
+            ],
+            label: "TR · pairing", fileId: 9102, language: "tr", slot: 1,
+          });
+          window.__ssoStudy.updateSettings({ studySlots: [0], rarityRank: 4000, auto: false });
+          await window.__ssoStudy.setEnabled(true);
+
+          // Inside the English line, between the two Turkish ones.
+          video.currentTime = 1300.05;
+          await sleep(280);
+
+          const word = wordsIn(0).find((w) => w.dataset.w === "reckoning");
+          if (!word)
+            throw new Error(`nothing to hover: ${wordsIn(0).map((w) => w.dataset.w).join(", ")}`);
+          word.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
+          await sleep(450);
+
+          const card = railShadow()?.querySelector(".sso-card");
+          if (!card) throw new Error("hovering the word made no card");
+          const paired = [...card.querySelectorAll(".sso-card__paired")]
+            .map((e) => e.textContent).join(" | ");
+          if (!paired.includes("Hesaplaşma"))
+            throw new Error(`the paired line is ${JSON.stringify(paired)}, not the line that covers the English one`);
+          if (paired.includes("haberim"))
+            throw new Error(`the paired line is the previous sentence: ${JSON.stringify(paired)}`);
+        } finally {
+          window.__ssoStudy.updateSettings({ studySlots: was });
+          if (wasAttached[0]) {
+            await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
+          } else {
+            window.__ssoApi.detach(0);
+          }
+          if (wasAttached[1]) await attachSecond();
+          else window.__ssoApi.detach(1);
+          await sleep(150);
         }
       });
 

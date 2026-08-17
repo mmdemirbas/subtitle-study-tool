@@ -1376,7 +1376,7 @@
       auto,
       slot: from,
       sentence: cue?.text || "",
-      paired: pairedLines(from),
+      paired: pairedLines(from, cue),
       timeMs: api.filmTimeMs(),
       lookup: null,
       saved: savedTerms.has(`${language}:${term}`),
@@ -1446,22 +1446,27 @@
     return "";
   }
 
-  /* Every other subtitle's line at this exact moment. For a learner this is the
-   * single most useful thing on the screen and it costs nothing to fetch: the
-   * sentence, already translated by a human, already timed to the same frame.
+  /* Every other subtitle's line for this stretch of the film. For a learner
+   * this is the single most useful thing on the screen: the sentence, already
+   * translated by a human, already timed to the same frame.
    *
    * A list rather than "the other one", because with two subtitles being
    * studied there is no such thing as the other one. Whether a line is itself
    * being studied does not come into it - the same moment in another language
-   * is worth keeping either way. */
-  function pairedLines(slot) {
-    const out = [];
-    for (let other = 0; other < (api.trackCount || 0); other++) {
-      if (other === slot) continue;
-      const text = api.cueAt(other)?.text;
-      if (text) out.push({ text, language: api.trackInfo(other).language || "" });
-    }
-    return out;
+   * is worth keeping either way.
+   *
+   * It asks for the line covering this cue's SPAN, not the line under the
+   * playhead. Reported as "the study panel could match wrong EN-TR sentence
+   * pairs"; the mechanism, the measurements and the fallback are in
+   * `pairedCues` in content.js. `near` is that fallback: nothing overlapped and
+   * this is the closest line, so it is shown as an approximate pairing rather
+   * than quoted as the translation. */
+  function pairedLines(slot, cue) {
+    return (api.pairedCues?.(slot, cue) || []).map((each) => ({
+      text: each.text,
+      language: each.language,
+      near: each.overlapMs === 0,
+    }));
   }
 
   function promote(card) {
@@ -1684,7 +1689,16 @@
       // from a three-language screen reads down the languages the same way the
       // screen does.
       for (const line of card.paired || []) {
-        node.append(sentenceLine(line.text, "", "sso-card__paired", line.language));
+        const quoted = sentenceLine(line.text, "", "sso-card__paired", line.language);
+        /* Nothing in that language actually covered this line, so this is the
+         * nearest one. Said rather than styled away: an approximate pair is
+         * still worth reading, and a reader who is not told will take it for a
+         * translation of the words above it. */
+        if (line.near) {
+          quoted.dataset.near = "true";
+          quoted.title = "Nothing in this subtitle covers that line - this is the nearest one.";
+        }
+        node.append(quoted);
       }
     }
 

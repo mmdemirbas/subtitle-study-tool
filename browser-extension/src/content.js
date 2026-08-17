@@ -3457,6 +3457,81 @@
    * against. The numbers alone cannot be replayed against files that may not
    * even be on this machine; a cue index, its time in its own file, and the
    * first words of it can be matched to any copy of that subtitle. */
+  /* --- which line in the other subtitle says the same thing --------------------
+   *
+   * Reported as "the study panel could match wrong EN-TR sentence pairs", and
+   * it did, because the pair was whatever the other track happened to be
+   * SHOWING at the instant a word was marked. That is the wrong question. The
+   * two subtitlers cut the dialogue into different lines - measured on this
+   * corpus: 1173 English cues against 915 Turkish, 114 Turkish lines merging
+   * two English ones, and a median 505ms between the nearest starts - so at the
+   * moment an English line begins, the Turkish line on screen is very often
+   * still the previous sentence. A word marked in the first half-second of a
+   * line got the sentence before it, quoted with no hedge.
+   *
+   * The right question is which lines cover the same STRETCH of the film, so
+   * this takes the marked line's whole span and returns every line of the other
+   * track that overlaps it, in order. A Turkish line that merges two English
+   * ones is the answer to both of them; an English line spanning two Turkish
+   * ones gets both, joined.
+   *
+   * Both sides are converted to the stream clock rather than compared in their
+   * own file clocks, because two tracks with different offsets, rates or acts
+   * do not share a timeline until they are.
+   */
+  /* How far off a line may be and still be offered when NOTHING overlaps. A
+   * gap between two lines is ordinary - one speaker stops, the translation of
+   * the next has not started - and the nearest line is nearly always the right
+   * one. It is returned with `overlapMs: 0` so the caller can say so; quoting
+   * it as confidently as a real overlap is the defect this is fixing. */
+  const PAIR_NEAR_MS = 1500;
+  /* The file-clock window to search before converting anything. Offsets and
+   * acts move a track by seconds, so a generous slack around the plain inverse
+   * cannot miss a line, and it keeps this a scan of a few cues rather than of
+   * the file. */
+  const PAIR_SLACK_MS = 45000;
+
+  function cuesOverlappingStream(track, fromStreamMs, toStreamMs) {
+    const cues = track.cues || [];
+    if (!cues.length) return [];
+
+    const rate = track.rate || 1;
+    const plainFrom = (fromStreamMs - track.offsetMs - state.adDriftMs) / rate - PAIR_SLACK_MS;
+    const plainTo = (toStreamMs - track.offsetMs - state.adDriftMs) / rate + PAIR_SLACK_MS;
+
+    let low = 0;
+    let high = cues.length - 1;
+    let first = cues.length;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (cues[mid].end >= plainFrom) {
+        first = mid;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+
+    const found = [];
+    let nearest = null;
+    for (let index = first; index < cues.length && cues[index].start <= plainTo; index++) {
+      const start = streamTimeMs(track, cues[index].start);
+      const end = streamTimeMs(track, cues[index].end);
+      const overlap = Math.min(toStreamMs, end) - Math.max(fromStreamMs, start);
+      if (overlap > 0) {
+        found.push({ cue: cues[index], overlapMs: Math.round(overlap) });
+        continue;
+      }
+      // How far outside the span it sits, for the fallback below.
+      const away = start > toStreamMs ? start - toStreamMs : fromStreamMs - end;
+      if (away <= PAIR_NEAR_MS && (!nearest || away < nearest.away)) {
+        nearest = { cue: cues[index], overlapMs: 0, away };
+      }
+    }
+    if (found.length) return found;
+    return nearest ? [{ cue: nearest.cue, overlapMs: 0 }] : [];
+  }
+
   function cueUnder(track, fileMs) {
     const cues = track.cues || [];
     if (!cues.length || !Number.isFinite(fileMs)) return null;
@@ -5065,6 +5140,37 @@
      * reason a word is worth saving at all. */
     cueAt(slot) {
       return lastCue(state.tracks[slot]);
+    },
+    /* The same moment in every other language, paired by overlap rather than by
+     * the playhead. See cuesOverlappingStream. `overlapMs: 0` means nothing
+     * actually covered this line and the nearest one is being offered instead -
+     * the caller is expected to say so rather than quote it as a translation.
+     *
+     * Empty in a mirrored frame: the mirror carries cue TIMES, not text, and
+     * study runs where the film is. */
+    pairedCues(slot, cue) {
+      if (role === "chrome" || !cue) return [];
+      const own = state.tracks[slot];
+      if (!own) return [];
+      const from = streamTimeMs(own, cue.start);
+      const to = streamTimeMs(own, cue.end);
+      const out = [];
+      for (let other = 0; other < state.tracks.length; other++) {
+        if (other === slot) continue;
+        const track = state.tracks[other];
+        if (!track?.cues?.length) continue;
+        const found = cuesOverlappingStream(track, from, to);
+        if (!found.length) continue;
+        out.push({
+          slot: other,
+          language: track.language || "",
+          label: track.label || "",
+          text: found.map((each) => each.cue.text).join(" "),
+          overlapMs: found.reduce((sum, each) => sum + each.overlapMs, 0),
+          lines: found.length,
+        });
+      }
+      return out;
     },
     trackInfo(slot) {
       const track = state.tracks[slot];

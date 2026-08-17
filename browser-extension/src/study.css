@@ -457,6 +457,19 @@ button.sso-set__action:hover {
   color: #8fa397;
 }
 
+/* Nothing in that language covered this line and the nearest one is being
+ * shown. A dashed edge rather than a fainter colour: fainter reads as "less
+ * important", and this is the same information with a caveat on it. */
+.sso-card__paired[data-near="true"] {
+  border-left-style: dashed;
+  border-left-color: rgba(159, 211, 180, 0.5);
+}
+
+.sso-card__paired[data-near="true"] .sso-card__lang::after {
+  content: "~";
+  margin-left: 0.15em;
+}
+
 .sso-card__lang {
   flex: none;
   padding-top: 0.1em;
