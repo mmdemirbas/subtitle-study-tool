@@ -643,30 +643,86 @@ button.sso-quick__move[data-on="true"] {
  * the space the window's name needs. It brightens a little on hover, which is
  * the only moment somebody is actually looking at it.
  *
- * `flex: none` and a width in pixels rather than a share of the bar: the title
- * beside it is `flex: 1` and would otherwise hand this whatever was left over,
- * so the picture would change scale as the panel is resized and the same sync
- * error would look different at two window sizes. */
+ * It gets a line of its own inside the title bar, edge to edge, which is the
+ * second version of this. It was pinned at 84px beside the name, on the
+ * argument that a fixed scale keeps the same sync error looking the same at two
+ * window sizes - true, and worth less than being able to see anything at all:
+ * "the map-preview on the pane header bar should be justified to the both sides
+ * to become useful, otherwise it is too narrow and doesn't mean anything". At
+ * 84px a minute of film is 714ms per pixel, so a one-second error - the
+ * smallest worth correcting - was a pixel and a half of displacement between
+ * the two rows.
+ *
+ * Sharing the bar could not fix it. Measured at the 342px the panel opens at:
+ * the name takes 125px, the four controls and their gaps take 96, and the
+ * padding takes 31, so the widest the preview can be on that line is 90px - and
+ * the name only gives that up by ellipsising, which spends the panel's
+ * identity on 35 pixels. On its own line it gets about 300, which is 200ms per
+ * pixel: the same one-second error is five pixels, and the two rows can be read
+ * against each other.
+ *
+ * Inside the head rather than under it, and that is load-bearing. The
+ * requirement was that this stays visible when the panel is folded, and a
+ * folded window is exactly `.sso-win__head` - chrome.css hides every other
+ * child. A sibling row would need that rule to grow an exception, and the rule
+ * is written the way it is so a window that grows a second child later cannot
+ * forget to hide it. A second line of the bar needs no exception at all. */
 .sso-peek {
   --sso-peek-ink: rgba(147, 185, 251, 0.5);
 
   display: flex;
-  flex: none;
+  /* A 100% basis is what puts it on its own line; the head wraps for it. It
+   * must also be allowed to SHRINK to that line, and `min-width: 0` is what
+   * allows it: with the automatic minimum in place the row was sized by the
+   * canvas's own intrinsic ratio and came out 339px inside a 309px line, so
+   * the map ran ten pixels past the panel and under the corner grip. */
+  flex: 1 1 100%;
+  min-width: 0;
   align-items: center;
-  width: 84px;
-  height: 16px;
-  margin-right: 2px;
+  margin-top: 3px;
   transition: opacity var(--sso-motion) ease;
   opacity: 0.75;
+}
+
+.sso-win__head:has(.sso-peek) {
+  flex-wrap: wrap;
 }
 
 .sso-win__head:hover .sso-peek {
   opacity: 1;
 }
 
+/* `flex: 1 1 0` and a height set from script, not `width: 100%; height: auto`.
+ *
+ * The pair of them is a feedback loop: the intrinsic ratio comes from the
+ * backing store, which is sized from the measured CSS width, which `height:
+ * auto` then feeds back into the layout. It settled at 77x10 inside a 163px
+ * box - a preview a third of the width it had been given, which is the
+ * opposite of what this change is for. A zero basis makes the width purely the
+ * flex answer, and the height is a number of rows, which is a thing script
+ * knows and CSS does not. */
 .sso-peek__canvas {
-  width: 100%;
-  height: auto;
+  flex: 1 1 0;
+  min-width: 0;
+  align-self: center;
+}
+
+/* Where in the film, in words, beside the same thing drawn. Tabular figures
+ * because it changes every second and a clock whose digits change width makes
+ * the whole title bar twitch. */
+.sso-peek__clock {
+  flex: none;
+  padding-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  color: var(--sso-ink-3);
+  white-space: nowrap;
+}
+
+.sso-peek__clock:empty {
+  display: none;
 }
 
 .sso-map {

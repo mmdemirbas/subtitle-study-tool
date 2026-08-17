@@ -1163,6 +1163,66 @@
         }
       });
 
+      check("the map in the title bar spans it, and keeps saying where in the film", async () => {
+        /* Asked for, both halves: the preview "should be justified to the both
+         * sides to become useful, otherwise it is too narrow and doesn't mean
+         * anything", and "it should show the current location as well".
+         *
+         * Three properties, and two of them were real defects on the way here.
+         * The map asks for a whole flex line, so DOM ORDER decides whether the
+         * gear, the fold and the close keep the first line or get pushed 22px
+         * down onto one of their own - which is where the reachability check
+         * found them, under the study rail beside the panel. And the clock only
+         * moves if the picture is drawn on the playhead's own tick: refresh()
+         * runs when something is done to a subtitle, which is never while a
+         * film is simply playing. */
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "TR · peek", fileId: 508, slot: 1 });
+        // Put back, because this one moves the playhead a long way and the
+        // maps below read whatever it is left at.
+        const wasAt = video.currentTime;
+        video.currentTime = 600;
+        await sleep(400);
+
+        const head = panelShadow().querySelector(".sso-win__head");
+        const peek = panelShadow().querySelector(".sso-peek");
+        const clock = panelShadow().querySelector(".sso-peek__clock");
+        try {
+          const pad = getComputedStyle(head);
+          const line = head.clientWidth - parseFloat(pad.paddingLeft) - parseFloat(pad.paddingRight);
+          const map = peek.getBoundingClientRect();
+          if (map.width < line - 4)
+            throw new Error(`the map is ${Math.round(map.width)}px of a ${Math.round(line)}px line`);
+          if (head.scrollWidth > head.clientWidth)
+            throw new Error(`the map runs ${head.scrollWidth - head.clientWidth}px past the panel, under the corner grip`);
+
+          const gear = panelShadow().querySelector(".sso-icon--gear").getBoundingClientRect();
+          if (gear.bottom > map.top + 1)
+            throw new Error(
+              `the map took the first line: the gear ends at ${Math.round(gear.bottom)} and the map starts at ${Math.round(map.top)}`);
+
+          if (clock.textContent !== "10:00")
+            throw new Error(`the clock reads ${JSON.stringify(clock.textContent)} ten minutes into the film`);
+
+          /* Folded, and with nothing done to any subtitle - which is the only
+           * way a film ever actually plays. */
+          head.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true }));
+          await sleep(200);
+          video.currentTime = 3600;
+          await sleep(400);
+          if (clock.textContent !== "1:00:00")
+            throw new Error(
+              `the folded clock stayed at ${JSON.stringify(clock.textContent)} while the film moved to 1:00:00`);
+        } finally {
+          if (panelShadow().querySelector(".sso-panel").dataset.folded === "true") {
+            head.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, composed: true }));
+            await sleep(150);
+          }
+          window.__ssoApi.detach(1);
+          video.currentTime = wasAt;
+          await sleep(120);
+        }
+      });
+
       check("double-clicking the title bar parks the panel back in the corner", async () => {
         await dragPanelTo(500, 420);
         parkPanel();

@@ -226,7 +226,14 @@
     close.addEventListener("click", hide);
 
     el.preview = buildPreview();
-    head.append(el.back, title, el.preview.root, el.gear, el.fold, close);
+    /* The preview goes LAST, after the three buttons, and the order is
+     * load-bearing. It asks for a whole line (`flex: 1 0 100%`), so a flex
+     * line breaks before it - placed between the name and the buttons it took
+     * the first line for itself and pushed the gear, the fold and the close
+     * onto a second one, 22px lower. That is what the harness saw as
+     * "Settings at [870,113] covered by the study rail": the button had moved
+     * down out of the panel's own head and under the rail beside it. */
+    head.append(el.back, title, el.gear, el.fold, close, el.preview.root);
 
     /* Double-click the bar to fold it away, and again to bring it back.
      *
@@ -1002,23 +1009,57 @@
    * ink as the bars rather than the bright one the cards use. */
   const PREVIEW_SPAN_MS = 60000;
   const PREVIEW_ROW = 7;
+  /* And where in the FILM that minute is.
+   *
+   * Asked for as "it should show the current location as well", and the reason
+   * it was missing is built into the picture above: the window is centred on
+   * the playhead, so the playhead is always in the middle and the rows say
+   * nothing whatever about whether this is the first scene or the last. Two
+   * marks answer it - a rule the width of the film with the part already
+   * watched drawn brighter, and the clock beside it. The rule is two pixels
+   * tall and the same ink as everything else here, because a progress bar is
+   * the one thing on this surface a reader can already read without being
+   * taught, and it does not need to shout to be read. */
+  const PREVIEW_FILM_ROW = 5;
+
+  const PREVIEW_TITLE =
+    "Where each subtitle speaks, around the playhead. Out of step shows as one row slid sideways. " +
+    "The rule underneath is the whole film, and where in it you are.";
+
+  const clockText = (ms) => {
+    if (!Number.isFinite(ms) || ms < 0) return "";
+    const all = Math.floor(ms / 1000);
+    const hours = Math.floor(all / 3600);
+    const minutes = Math.floor((all % 3600) / 60);
+    const seconds = all % 60;
+    const pad = (n) => String(n).padStart(2, "0");
+    return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
+  };
 
   function buildPreview() {
     const root = document.createElement("div");
     root.className = "sso-peek";
-    root.title = "Where each subtitle speaks, around the playhead. Out of step shows as one row slid sideways.";
+    root.title = PREVIEW_TITLE;
 
     const canvas = document.createElement("canvas");
     canvas.className = "sso-peek__canvas";
-    root.append(canvas);
 
+    /* The clock is text, not something drawn into the canvas: it has to stay
+     * crisp at any device pixel ratio and inherit the panel's own numerals. */
+    const clock = document.createElement("span");
+    clock.className = "sso-peek__clock";
+
+    root.append(canvas, clock);
+
+    // The canvas rather than the root: the clock is a sibling now, so the two
+    // are no longer the same width and the row scale comes from the canvas.
     let cssWidth = null;
     new ResizeObserver((entries) => {
       const next = entries[entries.length - 1]?.contentRect?.width ?? 0;
       if (next === cssWidth) return;
       cssWidth = next;
       painted = "";
-    }).observe(root);
+    }).observe(canvas);
 
     let painted = "";
 
@@ -1028,15 +1069,26 @@
         .filter((each) => each.track.attached);
       root.hidden = attached.length === 0;
       if (root.hidden) return;
-      if (cssWidth === null) cssWidth = root.getBoundingClientRect().width;
+      /* Measured rather than trusted whenever the cache says nothing, and the
+       * hidden case is why. The observer reports 0 while nothing is attached -
+       * the row is display:none then - and reports the real width only after
+       * the layout that follows the round which un-hides it. Trusting the 0
+       * cost that round, so the picture appeared one status behind the
+       * subtitle that asked for it. */
+      if (cssWidth === null || cssWidth < 1) cssWidth = canvas.getBoundingClientRect().width;
       if (cssWidth < 1) return;
 
       const dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
       const width = Math.max(1, Math.round(cssWidth * dpr));
-      const height = Math.max(1, Math.round(PREVIEW_ROW * dpr) * attached.length);
+      const filmRow = Math.round(PREVIEW_FILM_ROW * dpr);
+      const height = Math.max(1, Math.round(PREVIEW_ROW * dpr) * attached.length + filmRow);
+      const cssHeight = PREVIEW_ROW * attached.length + PREVIEW_FILM_ROW;
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
+        // In CSS pixels too, or the box has no height of its own. See the
+        // stylesheet: letting it come from the intrinsic ratio is circular.
+        canvas.style.height = `${cssHeight}px`;
         painted = "";
       }
 
@@ -1048,8 +1100,14 @@
        * rule the cards' strips follow, and it matters more here: this draws on
        * every status round whether or not anybody has opened the panel body. */
       const perPixel = PREVIEW_SPAN_MS / Math.max(1, width - 1);
+      const durationMs = Number.isFinite(status.duration) ? status.duration * 1000 : 0;
+      /* The second is in the key because the clock is: the rows only need
+       * repainting when they would land on different pixels, but a clock that
+       * repaints four times a second and a clock that repaints once a second
+       * look the same and only one of them is honest about the film's length
+       * arriving late. */
       const shot = [
-        Math.round(from / perPixel), width, height,
+        Math.round(from / perPixel), width, height, Math.floor(now / 1000), Math.round(durationMs),
         ...attached.map((each) => `${each.track.fileId}:${each.track.offsetMs}:${each.track.rate}:${each.track.cueCount}`),
       ].join("|");
       if (shot === painted) return;
@@ -1093,9 +1151,42 @@
 
       // The playhead, in the same ink as everything else. A brighter mark here
       // would be the loudest thing in a title bar that is always on screen.
+      const rows = Math.round(PREVIEW_ROW * dpr) * attached.length;
       context.globalAlpha = 0.55;
-      context.fillRect(Math.round((width - 1) / 2), 0, dpr, height);
+      context.fillRect(Math.round((width - 1) / 2), 0, dpr, rows);
+
+      /* The whole film underneath, and where in it this minute is.
+       *
+       * Drawn in three weights of the one ink rather than a second colour: the
+       * unwatched remainder faintest, the part already played over it, and the
+       * position itself as a full-height tick so it can be found at a glance
+       * without being the brightest thing in the bar. Nothing is drawn at all
+       * without a duration - a live stream has no "where in the film", and a
+       * bar that pretends otherwise would sit pinned at one end. */
+      if (durationMs > 0) {
+        const top = rows + Math.round(dpr);
+        const tall = Math.max(1, filmRow - 2 * Math.round(dpr));
+        context.globalAlpha = 0.22;
+        context.fillRect(0, top, width, tall);
+        const played = Math.max(0, Math.min(1, now / durationMs));
+        context.globalAlpha = 0.5;
+        context.fillRect(0, top, Math.round(width * played), tall);
+        context.globalAlpha = 0.95;
+        context.fillRect(
+          Math.min(width - dpr, Math.round(width * played)), rows, dpr, filmRow,
+        );
+      }
       context.globalAlpha = 1;
+
+      /* Elapsed only. "15:00 / 2:00:00" is 86 pixels of a head that has about
+       * 139 to give, so printing the length took more from the picture than it
+       * gave: the rule underneath already says what fraction of the film this
+       * is, which is the part a glance wants, and the length goes in the title
+       * for the reader who wants the number. */
+      clock.textContent = clockText(now);
+      root.title = durationMs > 0
+        ? `${PREVIEW_TITLE} ${clockText(now)} of ${clockText(durationMs)}.`
+        : PREVIEW_TITLE;
     }
 
     return { root, draw };
@@ -3690,8 +3781,15 @@
   function startPlayhead() {
     if (playhead) return;
     playhead = setInterval(() => {
-      if (!isPanelVisible() || folded || atScreen !== "root") return;
+      if (!isPanelVisible()) return;
       const status = api.status();
+      /* The head's picture is drawn ahead of every guard below, because it is
+       * in the title bar precisely so that it survives a fold, and a mark that
+       * stops moving the moment the panel is folded away says nothing at all.
+       * It is also on every screen - the head does not change when the body
+       * goes to search or settings - so `atScreen` must not gate it either. */
+      el.preview.draw(status);
+      if (folded || atScreen !== "root") return;
       if (!status.attached) return;
       for (const [slot, track] of status.tracks.entries()) {
         if (track.attached) el.trackCards[slot].timeline.draw(status);
