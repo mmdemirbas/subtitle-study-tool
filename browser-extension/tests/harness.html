@@ -2290,7 +2290,7 @@
         const clear = (value) =>
           !value || value === "transparent" || /rgba\(0, 0, 0, 0\)/.test(value);
         const loud = [];
-        for (const shadow of [panelShadow(), railShadow()].filter(Boolean)) {
+        for (const shadow of [panelShadow(), focusShadow()].filter(Boolean)) {
           for (const icon of shadow.querySelectorAll(".sso-win__head .sso-icon")) {
             // The one word button is deliberately filled: an unbordered word in
             // a title bar reads as a second title rather than as a control.
@@ -2415,7 +2415,7 @@
         const railBox = await until(
           () => {
             const host = [...document.querySelectorAll("div")]
-              .find((d) => d.shadowRoot?.querySelector(".sso-rail"));
+              .find((d) => d.shadowRoot?.querySelector(".sso-focus"));
             const box = host?.getBoundingClientRect();
             return box && box.width > 0 && box.height > 0 ? box : null;
           },
@@ -2431,7 +2431,7 @@
          * finished is what left "15 word elements with study mode off". */
         await window.__ssoStudy.setEnabled(false);
         await until(
-          () => ![...document.querySelectorAll("div")].some((d) => d.shadowRoot?.querySelector(".sso-rail")),
+          () => ![...document.querySelectorAll("div")].some((d) => d.shadowRoot?.querySelector(".sso-focus")),
           "the rail outlived study being switched off",
         );
       });
@@ -2546,12 +2546,12 @@
          * less than it claims is worse than one that fails. */
         const studyWas = Boolean(window.__ssoStudy?.settings?.().enabled);
         await window.__ssoStudy.setEnabled(true);
-        await until(() => Boolean(railShadow()), "the study rail never appeared");
+        await until(() => Boolean(focusShadow()), "the study focus box never appeared");
         await sleep(150);
 
         const openers = [
           ["the panel's settings", () => panelShadow().querySelector(".sso-icon--gear"), "settings"],
-          ["study's settings", () => railShadow().querySelector(".sso-icon--gear"), "study"],
+          ["study's settings", () => focusShadow().querySelector(".sso-icon--gear"), "study"],
         ];
         try {
         for (const [name, find, word] of openers) {
@@ -3954,8 +3954,8 @@
        * that is happening. The last two cases are the second half - they are
        * the ones that would catch study mode eating a click meant for the film.
        */
-      const railShadow = () =>
-        [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(".sso-rail"))?.shadowRoot;
+      const focusShadow = () =>
+        [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(".sso-focus"))?.shadowRoot;
       const wordsIn = (slot) => [...cueOf(slot).querySelectorAll(".sso-w")];
       const wordEl = (text) => wordsIn(0).find((w) => w.dataset.w === text);
       // Same cue as showLongCue, held for longer: marking a word is a round
@@ -4014,7 +4014,7 @@
           word.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
           await sleep(450);
 
-          const card = railShadow().querySelector(".sso-card");
+          const card = focusShadow().querySelector(".sso-card");
           if (!card) throw new Error("hovering a word in the second subtitle made no card");
           const line = card.querySelector(".sso-card__line")?.textContent || "";
           const paired = [...card.querySelectorAll(".sso-card__paired")].map((e) => e.textContent);
@@ -4071,7 +4071,7 @@
           word.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
           await sleep(450);
 
-          const card = railShadow()?.querySelector(".sso-card");
+          const card = focusShadow()?.querySelector(".sso-card");
           if (!card) throw new Error("hovering the word made no card");
           const paired = [...card.querySelectorAll(".sso-card__paired")]
             .map((e) => e.textContent).join(" | ");
@@ -4108,18 +4108,25 @@
         await sleep(400);
         if (!lookupCalls.includes("frankly"))
           throw new Error(`looked up ${JSON.stringify(lookupCalls)} instead`);
-        const terms = [...railShadow().querySelectorAll(".sso-card__term")].map((n) => n.textContent);
+        const terms = [...focusShadow().querySelectorAll(".sso-card__term")].map((n) => n.textContent);
         if (!terms.includes("frankly")) throw new Error(`rail holds ${terms.join(", ") || "nothing"}`);
       });
 
       check("the card carries the line the word was said in", () => {
-        const line = railShadow().querySelector(".sso-card__line");
+        const line = focusShadow().querySelector(".sso-card__line");
         if (!line?.textContent.includes("frankly I do not care"))
           throw new Error(`the card's line reads "${line?.textContent || "nothing"}"`);
         if (!line.querySelector("mark")) throw new Error("the word is not marked inside its line");
       });
 
+      /* Off the words first, because study correctly ignores a hover of the
+       * word already under the pointer - so a case that hovers what the case
+       * before it hovered was measuring nothing, silently. */
       const hover = async (word) => {
+        document.body.dispatchEvent(
+          new PointerEvent("pointerover", { bubbles: true, composed: true }),
+        );
+        await sleep(30);
         wordEl(word).dispatchEvent(
           new PointerEvent("pointerover", { bubbles: true, composed: true }),
         );
@@ -4137,31 +4144,107 @@
           throw new Error(`every lookup asked for target ${JSON.stringify(lookupTargets)}`);
       });
 
-      check("only the word being read is shown in full", async () => {
-        // The complaint: words stayed while new ones arrived under them, so
-        // nothing in the rail was ever the thing being looked at.
+      check("one word is in the focus box, and it is the newest", async () => {
+        /* The complaint the two surfaces answer: words stayed while new ones
+         * arrived under them, so nothing was ever the thing being looked at.
+         * The box holds exactly one entry, and the film decides which until the
+         * reader says otherwise. */
         await hover("talking");
         await sleep(200);
-        const cards = [...railShadow().querySelectorAll(".sso-card")];
-        const full = cards.filter((c) => c.dataset.focused === "true");
-        if (full.length !== 1)
-          throw new Error(`${full.length} of ${cards.length} cards are shown in full, want 1`);
-        const collapsed = cards.find((c) => c.dataset.focused === "false");
-        if (collapsed?.querySelector(".sso-card__line"))
-          throw new Error("a collapsed card still quotes its whole line");
+        const cards = [...focusShadow().querySelectorAll(".sso-card")];
+        if (cards.length !== 1)
+          throw new Error(`${cards.length} entries in the focus box, want 1`);
+        if (cards[0].querySelector(".sso-card__term")?.textContent !== "talking")
+          throw new Error(`the box holds "${cards[0].querySelector(".sso-card__term")?.textContent}"`);
+        if (!cards[0].querySelector(".sso-card__line"))
+          throw new Error("the entry does not quote the line the word was said in");
       });
 
-      check("a collapsed card still says what the word means", () => {
-        const collapsed = [...railShadow().querySelectorAll(".sso-card")].find(
-          (c) => c.dataset.focused === "false",
+      check("the word goes into the trail under its own subtitle", async () => {
+        /* Asked for: "the words should be scrolling slowly and while new words
+         * appear, older ones should be slightly disappearing... instead of
+         * using a panel, maybe we can use another subtitle-like overlay area."
+         *
+         * The trail is inside the subtitle's own root rather than in a floating
+         * host, which is what makes it move with the subtitle - so this looks
+         * for it there, and would fail if it were ever built somewhere else. */
+        const trail = cueOf(0).parentElement.querySelector(".sso-trail");
+        if (!trail) throw new Error("no trail under the subtitle");
+        const words = [...trail.querySelectorAll(".sso-trail__word")];
+        const terms = words.map((w) => w.dataset.term);
+        if (!terms.includes("talking"))
+          throw new Error(`the trail holds ${JSON.stringify(terms)}`);
+        // Newest last, which is the end a new word arrives at.
+        if (terms[terms.length - 1] !== "talking")
+          throw new Error(`the newest word is not at the end: ${JSON.stringify(terms)}`);
+      });
+
+      check("a word in the trail says what it means, and older ones stay readable", async () => {
+        const trail = cueOf(0).parentElement.querySelector(".sso-trail");
+        const words = [...trail.querySelectorAll(".sso-trail__word")];
+        const newest = words[words.length - 1];
+        if (!newest.querySelector(".sso-trail__gloss")?.textContent)
+          throw new Error("the newest word in the trail carries no meaning");
+        /* The fade is a hint about which word is newest and never the reason a
+         * word cannot be read. Reported against a first version: the strip
+         * "doesn't need to fade out that much aggresively" - at 0.19 a step the
+         * third word back was already unreadable over a moving picture. */
+        const faintest = Math.min(...words.map((w) => Number(w.style.opacity || 1)));
+        if (faintest < 0.5)
+          throw new Error(`the oldest word in the trail is at opacity ${faintest}`);
+      });
+
+      check("the trail holds a bounded number of words", async () => {
+        const trail = cueOf(0).parentElement.querySelector(".sso-trail");
+        const words = trail.querySelectorAll(".sso-trail__word").length;
+        if (words > 8) throw new Error(`${words} words in one trail`);
+      });
+
+      check("a word arriving does not move the strip it arrives in", async () => {
+        /* The fault that ended the first design, reported as "the animation in
+         * the rails is not stable, it makes the rest of the rails drift". A
+         * strip that hugs its words grows when one arrives, and because it is
+         * centred under the subtitle both of its edges move - instantly, while
+         * the words inside it slide over 380ms in the other direction.
+         *
+         * So the box is a fixed width and only the words inside it move. This
+         * measures the box, not the words: the words are supposed to move. */
+        const trail = () => cueOf(0).parentElement.querySelector(".sso-trail");
+        const box = () => {
+          const r = trail().getBoundingClientRect();
+          return `${Math.round(r.x)},${Math.round(r.width)}`;
+        };
+        const held = new Set(
+          [...trail().querySelectorAll(".sso-trail__word")].map((w) => w.dataset.term),
         );
-        if (collapsed && !collapsed.querySelector(".sso-card__gloss")?.textContent)
-          throw new Error("collapsed to the word alone, with no translation");
+        // A word the strip does not already hold, or nothing arrives and the
+        // check passes by measuring nothing happening.
+        const fresh = wordsIn(0).map((w) => w.dataset.w).find((w) => !held.has(w));
+        if (!fresh) throw new Error("every marked word is already in the strip");
+        const before = box();
+        await hover(fresh);
+        await sleep(60);
+        const during = box();
+        await sleep(500);
+        const after = box();
+        if (before !== during || before !== after)
+          throw new Error(`the strip was at ${before}, then ${during}, then ${after}`);
       });
 
-      check("the rail holds only a few words at a time", () => {
-        const cards = railShadow().querySelectorAll(".sso-card").length;
-        if (cards > 3) throw new Error(`${cards} cards in the rail`);
+      check("nothing is faded out while every word still fits", async () => {
+        /* The mask exists for words leaving the left edge, and while nothing is
+         * leaving it does to the oldest word exactly what the age fade is
+         * forbidden to do. Measured on the first version: 14% of a 578px strip
+         * put 81px of gradient over the first word, which no opacity check
+         * could see because the fade is not opacity. */
+        const trail = cueOf(0).parentElement.querySelector(".sso-trail");
+        const track = trail.querySelector(".sso-trail__track");
+        const fits = track.scrollWidth <= trail.clientWidth + 1;
+        const masked = getComputedStyle(trail).maskImage;
+        if (fits && masked && masked !== "none")
+          throw new Error(`the strip fits in ${trail.clientWidth}px and is still masked: ${masked}`);
+        if (fits && trail.dataset.over === "true")
+          throw new Error("the strip says it is overflowing and is not");
       });
 
       check("hovering answers beside the word, leading with the translation", async () => {
@@ -4173,78 +4256,127 @@
           throw new Error(`the popup reads "${pop.textContent}"`);
       });
 
-      check("the answer beside the word survives the rail being put away", async () => {
+      check("the answer beside the word survives the focus box being put away", async () => {
         // "I could want to hide the study panel but still want to see the
-        // translation on hover" - so the rail's x is not an off switch.
-        window.__ssoStudy.updateSettings({ showRail: false });
+        // translation on hover" - so the box's x is not an off switch.
+        window.__ssoStudy.updateSettings({ showFocus: false });
         await sleep(120);
-        const railHost = [...document.querySelectorAll("div")].find((d) =>
-          d.shadowRoot?.querySelector(".sso-rail"),
+        const boxHost = [...document.querySelectorAll("div")].find((d) =>
+          d.shadowRoot?.querySelector(".sso-focus"),
         );
-        if (railHost && !railHost.hidden) throw new Error("the rail is still showing");
+        if (boxHost && !boxHost.hidden) throw new Error("the focus box is still showing");
 
         await hover("talking");
         const pop = popShadow()?.querySelector(".sso-pop");
-        if (!pop || pop.hidden) throw new Error("no answer with the rail put away");
-        window.__ssoStudy.updateSettings({ showRail: true });
+        if (!pop || pop.hidden) throw new Error("no answer with the focus box put away");
+        window.__ssoStudy.updateSettings({ showFocus: true });
         await sleep(120);
       });
 
       check("the answer goes away when the pointer leaves the word", async () => {
         await hover("frankly");
-        railShadow().dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
+        focusShadow().dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
         await sleep(80);
         const pop = popShadow()?.querySelector(".sso-pop");
         if (pop && !pop.hidden) throw new Error("the answer stayed after the pointer moved off");
       });
 
-      check("a word can be collapsed and opened again", async () => {
-        // "I can expand collapsed words but cannot collapse them back."
-        // Expanding used to be done by pinning, which made "keep this" and
-        // "open this" one gesture with no way back.
+      check("a word in the trail can be read again without waiting", async () => {
+        /* The trail is history, and history is only useful if you can get back
+         * into it: pointing at a word that has gone past puts it in the box,
+         * and taking the pointer away gives the box back to the film. */
         await hover("care");
         await hover("frankly");
-        const cards = () => [...railShadow().querySelectorAll(".sso-card")];
-        const of = (term) =>
-          cards().find((c) => c.querySelector(".sso-card__term")?.textContent === term);
+        const term = () => focusShadow().querySelector(".sso-card__term")?.textContent;
+        if (term() !== "frankly") throw new Error(`the box holds "${term()}" before the hover`);
 
-        const collapsed = of("care");
-        if (collapsed?.dataset.focused !== "false") throw new Error("nothing was collapsed to open");
-        collapsed.querySelector(".sso-card__head").click();
-        await sleep(80);
-        if (of("care")?.dataset.focused !== "true") throw new Error("it did not open");
+        const trail = cueOf(0).parentElement.querySelector(".sso-trail");
+        const older = [...trail.querySelectorAll(".sso-trail__word")]
+          .find((w) => w.dataset.term === "care");
+        if (!older) throw new Error("the older word is not in the trail to point at");
 
-        of("care").querySelector(".sso-card__head").click();
+        older.dispatchEvent(new PointerEvent("pointerenter", { bubbles: true, composed: true }));
         await sleep(80);
-        if (of("care")?.dataset.focused !== "false") throw new Error("it would not close again");
+        if (term() !== "care") throw new Error(`pointing at it put "${term()}" in the box`);
+
+        older.dispatchEvent(new PointerEvent("pointerleave", { bubbles: true, composed: true }));
+        await sleep(80);
+        if (term() !== "frankly")
+          throw new Error(`the box kept the borrowed word: "${term()}"`);
       });
 
-      check("a word held open stays open when the next one arrives", async () => {
-        // An explicit choice outranks the "newest is open" default, or the
-        // reader's decision would be undone by the next line of the film.
-        const of = (term) =>
-          [...railShadow().querySelectorAll(".sso-card")].find(
-            (c) => c.querySelector(".sso-card__term")?.textContent === term,
-          );
-        // "care" is collapsed after the test above; open it by hand.
-        of("care").querySelector(".sso-card__head").click();
+      check("a word clicked in the trail is held against the next line", async () => {
+        // An explicit choice outranks the film's, or the reader's decision would
+        // be undone by the next thing anybody says.
+        const term = () => focusShadow().querySelector(".sso-card__term")?.textContent;
+        const trail = cueOf(0).parentElement.querySelector(".sso-trail");
+        const held = [...trail.querySelectorAll(".sso-trail__word")]
+          .find((w) => w.dataset.term === "care");
+        held.click();
         await sleep(80);
-        if (of("care")?.dataset.focused !== "true") throw new Error("it did not open");
+        if (term() !== "care") throw new Error(`clicking it put "${term()}" in the box`);
 
         await hover("talking");
-        if (of("care")?.dataset.focused !== "true")
-          throw new Error("a word held open was closed by the next arrival");
-      });
+        await sleep(120);
+        if (term() !== "care")
+          throw new Error(`a word being held was replaced by "${term()}"`);
 
-      check("one word can be taken off the rail", async () => {
-        const before = railShadow().querySelectorAll(".sso-card").length;
-        railShadow().querySelector(".sso-card__drop").click();
+        /* And clicking it again lets go, or the only way out would be to hold
+         * something else. A different word from the one hovered above: a
+         * second hover of the word already under the pointer is not a hover. */
+        held.click();
         await sleep(80);
-        const after = railShadow().querySelectorAll(".sso-card").length;
-        if (after !== before - 1) throw new Error(`${before} cards became ${after}`);
+        await hover("frankly");
+        await sleep(160);
+        if (term() !== "frankly") throw new Error(`it would not let go: "${term()}"`);
       });
 
-      check("the rail's close button actually puts it away", async () => {
+      check("closing one subtitle's trail leaves the other one's alone", async () => {
+        /* Reported twice, and they are the same defect: "Closing one study
+         * panel closes all. Wrong." and "disabling 'learning' on a subtitle
+         * while the other one is enabled puts back the both study panels. I
+         * think our multiple-language-learning at the same time support is
+         * broken."
+         *
+         * It was: one surface for every language, and one switch that put it
+         * back - which fired on the way out as well, so unlearning the second
+         * subtitle reopened the first one's words. */
+        const was = window.__ssoStudy.settings();
+        const trailOf = (slot) => cueOf(slot).parentElement.querySelector(".sso-trail");
+        const shown = (slot) => {
+          const trail = trailOf(slot);
+          return Boolean(trail && trail.dataset.words !== "0" && trail.getBoundingClientRect().height > 0);
+        };
+        try {
+          window.__ssoStudy.updateSettings({
+            studySlots: [0, 1], rarityRank: 25000, auto: true, trailOff: [],
+          });
+          await sleep(500);
+          if (!shown(0) || !shown(1))
+            throw new Error(`two subtitles are being learnt and the trails are ${shown(0)}/${shown(1)}`);
+
+          // Close the second one's, from its own control.
+          trailOf(1).querySelector(".sso-trail__close").click();
+          await sleep(200);
+          if (shown(1)) throw new Error("closing a trail did not close it");
+          if (!shown(0)) throw new Error("closing one subtitle's trail closed the other's too");
+
+          // Now stop learning the first one. The second must stay closed.
+          await window.__ssoStudy.toggleStudySlot(0);
+          await sleep(300);
+          if (shown(1))
+            throw new Error("unlearning one subtitle put the other's closed trail back");
+          if (shown(0)) throw new Error("the subtitle that is no longer learnt still has a trail");
+        } finally {
+          window.__ssoStudy.updateSettings({
+            studySlots: was.studySlots, rarityRank: was.rarityRank,
+            auto: was.auto, trailOff: was.trailOff,
+          });
+          await sleep(250);
+        }
+      });
+
+      check("the focus box's close button actually puts it away", async () => {
         /* Reported: it simply does not respond. The setting changed and the
          * `hidden` attribute was set, and the rail stayed exactly where it was.
          *
@@ -4256,21 +4388,21 @@
          * screen disagreed, and only the screen mattered.
          *
          * So this measures the box, not the attribute. */
-        const host = railShadow().host;
+        const host = focusShadow().host;
         const before = host.getBoundingClientRect();
-        if (before.width === 0) throw new Error("the rail was not on screen to begin with");
+        if (before.width === 0) throw new Error("the box was not on screen to begin with");
 
-        railShadow().querySelector(".sso-icon--close").click();
+        focusShadow().querySelector(".sso-icon--close").click();
         await sleep(200);
         const after = host.getBoundingClientRect();
         if (after.width > 0 || after.height > 0)
           throw new Error(
             `still ${Math.round(after.width)}×${Math.round(after.height)} on screen after closing`);
-        if (window.__ssoStudy.settings().showRail)
+        if (window.__ssoStudy.settings().showFocus)
           throw new Error("the setting did not change");
 
         // And putting it back brings it back.
-        window.__ssoStudy.updateSettings({ showRail: true });
+        window.__ssoStudy.updateSettings({ showFocus: true });
         await sleep(200);
         if (host.getBoundingClientRect().width === 0)
           throw new Error("it would not come back");
@@ -4281,14 +4413,14 @@
          * decided how much room eight settings had, and getting back to the
          * words was a button rather than being done with it. The control
          * panel's settings moved out for the same reasons; these followed. */
-        const gear = [...railShadow().querySelectorAll(".sso-win__head button")]
+        const gear = [...focusShadow().querySelectorAll(".sso-win__head button")]
           .find((b) => b.textContent === "⚙");
         if (!gear) throw new Error("no way into the rail's settings");
         gear.click();
         await sleep(250);
 
         const sheet = [...document.querySelectorAll("div")]
-          .find((d) => d.shadowRoot?.querySelector(".sso-rail__settings"))?.shadowRoot;
+          .find((d) => d.shadowRoot?.querySelector(".sso-focus__settings"))?.shadowRoot;
         if (!sheet) throw new Error("no settings window opened");
         const win = sheet.host;
         const box = win.getBoundingClientRect();
@@ -4296,7 +4428,7 @@
         if (box.left < 0 || box.right > window.innerWidth || box.top < 0)
           throw new Error(`it opened off screen at ${Math.round(box.left)},${Math.round(box.top)}`);
         // The words are still there: a window, not a face of the rail.
-        if (railShadow().querySelector(".sso-rail__list").hidden)
+        if (focusShadow().querySelector(".sso-focus__body").hidden)
           throw new Error("opening the settings took the words away");
 
         // A control here reaches the setting it names.
@@ -4317,7 +4449,7 @@
         await sleep(150);
         if (win.getBoundingClientRect().width > 0)
           throw new Error("closing it left the window on screen");
-        if (railShadow().querySelector(".sso-rail__list").hidden)
+        if (focusShadow().querySelector(".sso-focus__body").hidden)
           throw new Error("closing it took the words away too");
       });
 
@@ -4328,12 +4460,12 @@
          * it does. Reading the keystroke stays in content.js, which owns the
          * settings and has to stop the key doing what it is bound to while it
          * is being read - one copy of that clause, not two. */
-        const gear = [...railShadow().querySelectorAll(".sso-win__head button")]
+        const gear = [...focusShadow().querySelectorAll(".sso-win__head button")]
           .find((b) => b.textContent === "⚙");
         gear.click();
         await sleep(250);
         const sheet = [...document.querySelectorAll("div")]
-          .find((d) => d.shadowRoot?.querySelector(".sso-rail__settings"))?.shadowRoot;
+          .find((d) => d.shadowRoot?.querySelector(".sso-focus__settings"))?.shadowRoot;
         if (!sheet) throw new Error("no settings window opened");
 
         const cells = [...sheet.querySelectorAll(".sso-set__keycell")];
@@ -4611,79 +4743,50 @@
         }
       });
 
-      check("the rail can be emptied", async () => {
-        const clear = [...railShadow().querySelectorAll(".sso-icon--word")].find(
+      check("the words can be cleared, box and trails together", async () => {
+        const clear = [...focusShadow().querySelectorAll(".sso-icon--word")].find(
           (b) => b.textContent === "Clear",
         );
         if (!clear) throw new Error("no way to empty it");
+        // Something to clear: the checks between here and the trail cases put
+        // study through a switch, which empties it by design.
+        await hover("frankly");
+        await sleep(200);
+        const trail = () => cueOf(0).parentElement.querySelector(".sso-trail");
+        if (!trail()?.querySelectorAll(".sso-trail__word").length)
+          throw new Error("nothing in the trail to clear");
         clear.click();
         await sleep(80);
-        const left = railShadow().querySelectorAll(".sso-card").length;
-        if (left !== 0) throw new Error(`${left} cards survived`);
-        if (!clear.hidden) throw new Error("an empty rail still offers to be emptied");
-      });
-
-      check("the rail folds to its title bar and back", async () => {
-        await hover("frankly");
-        window.__ssoStudy.updateSettings({ folded: true });
-        await sleep(120);
-        const list = railShadow().querySelector(".sso-rail__list");
-        if (getComputedStyle(list).display !== "none")
-          throw new Error("the words are still standing on the frame");
-        const head = railShadow().querySelector(".sso-win__head");
-        if (head.getBoundingClientRect().height < 10)
-          throw new Error("folding took the title bar with it, so there is no way back");
-
-        window.__ssoStudy.updateSettings({ folded: false });
-        await sleep(120);
-        if (getComputedStyle(railShadow().querySelector(".sso-rail__list")).display === "none")
-          throw new Error("it would not unfold");
+        const left = focusShadow().querySelectorAll(".sso-card").length;
+        if (left !== 0) throw new Error(`${left} entries survived in the box`);
+        const inTrail = trail().querySelectorAll(".sso-trail__word").length;
+        if (inTrail !== 0) throw new Error(`${inTrail} words survived under the subtitle`);
+        if (!clear.hidden) throw new Error("an empty surface still offers to be emptied");
       });
 
       check("the background setting reaches what is painted", async () => {
-        const rail = railShadow().querySelector(".sso-rail");
-        const solid = getComputedStyle(rail).backgroundColor;
+        const box = focusShadow().querySelector(".sso-focus");
+        const solid = getComputedStyle(box).backgroundColor;
         window.__ssoStudy.updateSettings({ opacity: 0.3 });
         await sleep(120);
-        const sheer = getComputedStyle(rail).backgroundColor;
-        if (solid === sheer) throw new Error(`the rail stayed ${solid}`);
+        const sheer = getComputedStyle(box).backgroundColor;
+        if (solid === sheer) throw new Error(`the focus box stayed ${solid}`);
 
         // The cards paint on top of it, so an opaque card would leave the
         // setting doing visibly nothing.
-        const card = railShadow().querySelector(".sso-card");
+        const card = focusShadow().querySelector(".sso-card");
         const behind = card && getComputedStyle(card).backgroundColor;
         if (behind && !/rgba\(0, 0, 0, 0\)|transparent/.test(behind))
-          throw new Error(`a card paints ${behind} over the rail`);
+          throw new Error(`a card paints ${behind} over the focus box`);
         window.__ssoStudy.updateSettings({ opacity: 0.93 });
         await sleep(120);
-      });
-
-      check("a collapsed word is one line, not two", async () => {
-        /* The whole point of collapsing. The gloss used to drop to a row of its
-         * own under the term, so folding four cards saved four rows instead of
-         * eight and the density the fold exists for never arrived. */
-        // Newest first, so "frankly" stays the open card at the top: the save
-        // cases below reach for the first one on the rail.
-        await hover("care");
-        await hover("frankly");
-        await sleep(160);
-        const cards = railShadow().querySelectorAll(".sso-card");
-        const shut = [...cards].find((c) => c.dataset.focused === "false");
-        if (!shut) throw new Error("nothing collapsed to measure");
-        const head = shut.querySelector(".sso-card__head").getBoundingClientRect();
-        const whole = shut.getBoundingClientRect();
-        if (whole.height > head.height + 14)
-          throw new Error(`a shut card is ${Math.round(whole.height)}px around a ${Math.round(head.height)}px line`);
-        const gloss = shut.querySelector(".sso-card__gloss");
-        if (gloss && gloss.getBoundingClientRect().top > head.bottom)
-          throw new Error("the meaning is on a second line");
       });
 
       check("both windows are cut from the same chrome", async () => {
         /* One stylesheet, adopted by both, is the only thing keeping two
          * floating surfaces from drifting into two visual languages again. If
          * the shared sheet stops being adopted these read as empty strings. */
-        for (const [name, shadow] of [["panel", panelShadow()], ["rail", railShadow()]]) {
+        for (const [name, shadow] of [["panel", panelShadow()], ["focus box", focusShadow()]]) {
           const win = shadow.querySelector(".sso-win");
           if (!win) throw new Error(`the ${name} is not built as a window`);
           const ink = getComputedStyle(win).getPropertyValue("--sso-ink").trim();
@@ -4694,32 +4797,14 @@
         }
       });
 
-      check("the rail can be resized from any corner", async () => {
-        const grips = railShadow().querySelectorAll(".sso-grip");
-        if (grips.length !== 4) throw new Error(`${grips.length} grips, want one per corner`);
-        const before = window.__ssoStudy.settings();
-        const grip = railShadow().querySelector(".sso-grip--sw");
-        grip.setPointerCapture = () => {};
-        grip.releasePointerCapture = () => {};
-        const box = grip.getBoundingClientRect();
-        const ev = (type, x, y, buttons) =>
-          new PointerEvent(type, { pointerId: 9, clientX: x, clientY: y, buttons, bubbles: true });
-        grip.dispatchEvent(ev("pointerdown", box.left, box.top, 1));
-        grip.dispatchEvent(ev("pointermove", box.left - 60, box.top + 50, 1));
-        grip.dispatchEvent(ev("pointerup", box.left - 60, box.top + 50, 0));
-        await sleep(120);
-        const after = window.__ssoStudy.settings();
-        if (after.width <= before.width)
-          throw new Error(`width went ${before.width} -> ${after.width}`);
-        if (!(after.height > 0)) throw new Error("the corner set no height");
-      });
-
-      check("the text size is one setting the whole rail follows", async () => {
-        const term = railShadow().querySelector(".sso-card__term");
+      check("the text size is one setting the whole box follows", async () => {
+        await hover("frankly");
+        await sleep(160);
+        const term = focusShadow().querySelector(".sso-card__term");
         const before = parseFloat(getComputedStyle(term).fontSize);
         window.__ssoStudy.updateSettings({ textPx: 22 });
         await sleep(120);
-        const after = parseFloat(getComputedStyle(railShadow().querySelector(".sso-card__term")).fontSize);
+        const after = parseFloat(getComputedStyle(focusShadow().querySelector(".sso-card__term")).fontSize);
         if (!(after > before + 3))
           throw new Error(`the word went ${before}px -> ${after}px with the setting at 22`);
         window.__ssoStudy.updateSettings({ textPx: 15 });
@@ -4728,7 +4813,7 @@
 
       check("saving keeps the word with its line, its film and its timestamp", async () => {
         deckSaves.length = 0;
-        railShadow().querySelector(".sso-card__save").click();
+        focusShadow().querySelector(".sso-card__save").click();
         await sleep(200);
         const [entry] = deckSaves;
         if (!entry) throw new Error("nothing was saved");
@@ -4757,27 +4842,26 @@
       check("a save that failed is not reported as one that was already there", async () => {
         /* A word that has NOT already been saved, because the case above saved
          * "frankly" and a saved card's button is disabled. Lowering the
-         * threshold puts two more of the line's words in the rail without
+         * threshold puts two more of the line's words through the box without
          * touching study's on/off state, which would empty it. */
         const wasStudy = window.__ssoStudy.settings();
         const toasts = [];
         const realToast = window.__ssoApi.showToast;
         try {
-          window.__ssoStudy.updateSettings({ rarityRank: 500, maxPerCue: 3, keep: 5 });
+          window.__ssoStudy.updateSettings({ rarityRank: 500, maxPerCue: 3 });
           await showWordyCue();
           await sleep(300);
 
-          const cards = [...railShadow().querySelectorAll(".sso-card")];
-          const card = cards.find(
-            (node) => node.querySelector(".sso-card__term")?.textContent !== "frankly",
-          );
-          if (!card) throw new Error(`no unsaved card in the rail (${cards.length} cards)`);
+          /* A word of the same line that the case above did not save, put in
+           * the box by pointing at it - the box holds one entry, so which word
+           * is in it is a thing this case has to state rather than hope for. */
+          await hover("care");
+          await sleep(150);
+          const card = focusShadow().querySelector(".sso-card");
+          if (!card) throw new Error("no entry in the focus box to save");
+          if (card.querySelector(".sso-card__term")?.textContent === "frankly")
+            throw new Error("the box still holds the word that was already saved");
           const term = card.querySelector(".sso-card__term").textContent;
-          // Only the open card carries its actions, so open it first.
-          if (card.dataset.focused !== "true") {
-            card.querySelector(".sso-card__head").click();
-            await sleep(150);
-          }
           const button = card.querySelector(".sso-card__save");
           if (!button || button.disabled)
             throw new Error(`"${term}" has no usable Save button`);
@@ -4800,7 +4884,7 @@
           if (!/could not save/i.test(said))
             throw new Error(`a failed save said nothing useful: "${said}"`);
 
-          const after = [...railShadow().querySelectorAll(".sso-card")].find(
+          const after = [...focusShadow().querySelectorAll(".sso-card")].find(
             (node) => node.querySelector(".sso-card__term")?.textContent === term,
           );
           if (after?.dataset.saved === "true")
@@ -4813,7 +4897,6 @@
           window.__ssoStudy.updateSettings({
             rarityRank: wasStudy.rarityRank,
             maxPerCue: wasStudy.maxPerCue,
-            keep: wasStudy.keep,
           });
           await sleep(150);
         }
@@ -4828,7 +4911,7 @@
          * then saved a phrase, or pinned a word, that nobody asked for. */
         await showWordyCue();
         await sleep(200);
-        const before = railShadow().querySelectorAll(".sso-card__term").length;
+        const before = focusShadow().querySelectorAll(".sso-card__term").length;
         const from = wordEl("do");
         const to = wordEl("care");
         const a = from.getBoundingClientRect();
@@ -4848,7 +4931,7 @@
         document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 22 }));
         await sleep(300);
 
-        const after = railShadow().querySelectorAll(".sso-card__term").length;
+        const after = focusShadow().querySelectorAll(".sso-card__term").length;
         if (after !== before)
           throw new Error(`an abandoned sweep added ${after - before} card(s) on a later click`);
       });
@@ -4875,7 +4958,7 @@
         }));
         document.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 9 }));
         await sleep(400);
-        const terms = [...railShadow().querySelectorAll(".sso-card__term")].map((n) => n.textContent);
+        const terms = [...focusShadow().querySelectorAll(".sso-card__term")].map((n) => n.textContent);
         if (!terms.includes("do not care"))
           throw new Error(`rail holds ${terms.join(" / ") || "nothing"}, not the phrase`);
       });
@@ -5015,7 +5098,7 @@
 
         if (reached !== 0)
           throw new Error(`the tap reached the player ${reached} time(s)`);
-        const pinned = [...railShadow().querySelectorAll(".sso-card")].find(
+        const pinned = [...focusShadow().querySelectorAll(".sso-card")].find(
           (node) => node.querySelector(".sso-card__term")?.textContent === "frankly",
         );
         if (!pinned) throw new Error("the word was not pinned, so nothing was claimed");
@@ -5036,7 +5119,7 @@
         await window.__ssoStudy.setEnabled(false);
         await showWordyCue();
         await sleep(200);
-        if (railShadow()) throw new Error("the rail is still in the page");
+        if (focusShadow()) throw new Error("the rail is still in the page");
         if (wordsIn(0).some((w) => w.dataset.rare === "true"))
           throw new Error("words are still marked");
       });
@@ -5049,8 +5132,12 @@
        * failure rather than an inconsistency nobody notices.
        */
       const SURFACES = [
-        { name: "panel", sel: ".sso-panel", head: ".sso-win__head", grip: ".sso-grip" },
-        { name: "rail", sel: ".sso-rail", head: ".sso-win__head", grip: ".sso-grip" },
+        { name: "panel", sel: ".sso-panel", head: ".sso-win__head", grip: ".sso-grip", folds: true },
+        /* No grips and no fold. The focus box holds one dictionary entry, so it
+         * has one size; folding a box that is already the smallest thing on
+         * screen is a control with nothing to do. Both are the same decision,
+         * and this table is where a shared check learns about it. */
+        { name: "focus box", sel: ".sso-focus", head: ".sso-win__head", grip: null, folds: false },
       ];
 
       const hostFor = (sel) =>
@@ -5058,7 +5145,7 @@
 
       const openBoth = async () => {
         await window.__ssoStudy.setEnabled(true);
-        window.__ssoStudy.updateSettings({ showRail: true, folded: false });
+        window.__ssoStudy.updateSettings({ showFocus: true, trailOff: [] });
         await window.__ssoPanel.show();
         await sleep(250);
       };
@@ -5177,7 +5264,7 @@
           await sleep(60);
         });
 
-        check(`the ${s.name} folds to its title bar and unfolds again`, async () => {
+        if (s.folds) check(`the ${s.name} folds to its title bar and unfolds again`, async () => {
           await openBoth();
           const host = hostFor(s.sel);
           const shadow = host.shadowRoot;
@@ -5238,12 +5325,12 @@
         // in another tab: study mode is one setting for every tab, so the rail
         // was built wherever the content script loaded with it on.
         await openBoth();
-        if (!hostFor(".sso-rail")) throw new Error("no rail to begin with");
+        if (!hostFor(".sso-focus")) throw new Error("no rail to begin with");
 
         window.__ssoApi.detach(0);
         window.__ssoApi.detach(1);
         await sleep(200);
-        if (hostFor(".sso-rail"))
+        if (hostFor(".sso-focus"))
           throw new Error("the rail is still there with no subtitle attached");
         if (!window.__ssoStudy.settings().enabled)
           throw new Error("it turned study mode off rather than leaving the page alone");
@@ -5251,7 +5338,7 @@
         // Attaching is what brings it back, without touching the switch.
         await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1 });
         await sleep(250);
-        if (!hostFor(".sso-rail")) throw new Error("attaching did not bring it back");
+        if (!hostFor(".sso-focus")) throw new Error("attaching did not bring it back");
       });
 
       check("a stretched subtitle shows the right line at the right moment", async () => {
@@ -5738,12 +5825,11 @@
         }
       });
 
-      check("the rail can be made taller than what is in it, and still folds", async () => {
-        /* The height was applied as a cap and never a floor, so the rail sprang
-         * back to its contents and could not be made bigger than them - which
-         * is not a resize. The cap is still right for a rail nobody has dragged:
-         * one card should not be a tall empty rectangle over the film. So a
-         * height that came from a corner is a height, and only that one. */
+      check("a long entry is capped, and scrolls rather than standing on the subtitle", async () => {
+        /* The one thing the focus box may never do is cover the line being
+         * spoken. It has no height setting to get this wrong with any more -
+         * the cap is the whole rule, and a dictionary entry with eight senses
+         * in it is what tests it. */
         const api = window.__ssoApi;
         const video = document.getElementById("v");
         const study = window.__ssoStudy;
@@ -5752,7 +5838,7 @@
         const wasTime = video.currentTime;
 
         try {
-          study.updateSettings({ auto: true, rarityRank: 1, showRail: true, folded: false, height: 0 });
+          study.updateSettings({ auto: true, rarityRank: 1, showFocus: true, trailOff: [] });
           await api.attach({
             cues: [{ start: 0, end: 600000, text: "frankly the corvette was decommissioned" }],
             label: "EN · study", fileId: 7100, language: "en", slot: 0,
@@ -5760,29 +5846,17 @@
           video.currentTime = 5;
           await sleep(900);
 
-          const rail = [...document.querySelectorAll("div")]
-            .find((d) => d.shadowRoot?.querySelector(".sso-rail"))
-            ?.shadowRoot.querySelector(".sso-rail");
-          if (!rail) throw new Error("no rail on screen to resize");
-          const height = () => Math.round(rail.getBoundingClientRect().height);
-
-          const content = height();
-          study.updateSettings({ height: content + 260 });
-          await sleep(250);
-          const asked = content + 260;
-          if (Math.abs(height() - asked) > 6)
-            throw new Error(`asked for ${asked}px and got ${height()}px`);
-
-          // Folded is a height of its own and has to outrank a dragged one.
-          study.updateSettings({ folded: true });
-          await sleep(250);
-          if (height() > 90) throw new Error(`folded to ${height()}px, which is not folded`);
-
-          // And back to nothing chosen is back to hugging the contents.
-          study.updateSettings({ folded: false, height: 0 });
-          await sleep(250);
-          if (Math.abs(height() - content) > 6)
-            throw new Error(`cleared the height and got ${height()}px, not ${content}px`);
+          const box = [...document.querySelectorAll("div")]
+            .find((d) => d.shadowRoot?.querySelector(".sso-focus"))
+            ?.shadowRoot.querySelector(".sso-focus");
+          if (!box) throw new Error("no focus box on screen to measure");
+          const height = box.getBoundingClientRect().height;
+          const cap = window.innerHeight * 0.6;
+          if (height > cap + 1)
+            throw new Error(`the box is ${Math.round(height)}px of a ${Math.round(cap)}px cap`);
+          const body = box.querySelector(".sso-focus__body");
+          if (getComputedStyle(body).overflowY !== "auto")
+            throw new Error("a capped box that does not scroll simply hides the rest of the entry");
         } finally {
           study.updateSettings(wasStudy);
           video.currentTime = wasTime;

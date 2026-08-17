@@ -14,7 +14,7 @@ isolated `window` — never through the DOM, and never reachable from the page.
 | `align.js` | 520 | matching a subtitle's timing to the playing release | — |
 | `content.js` | 4.5k | the video, the playback clock, the cue overlay, the CC handle, settings, keys, the frame roles, frame/fullscreen plumbing | `window.__ssoApi`, `__ssoTeardown` |
 | `panel.js` | 3.2k | the control panel window (search, attach, sync, settings) | `window.__ssoPanel`, `__ssoPanelTeardown` |
-| `study.js` | 2.0k | the study rail, word cards, the deck, the lookup popup | `window.__ssoStudy`, `__ssoStudyTeardown` |
+| `study.js` | 2.5k | the word strips, the focus box, the deck, the lookup popup | `window.__ssoStudy`, `__ssoStudyTeardown` |
 
 `content.js` is the only one that touches the `<video>`. `panel.js` and
 `study.js` reach it exclusively through `window.__ssoApi`. Keep that direction:
@@ -101,13 +101,13 @@ a push refused by a top frame that no longer thinks it draws the controls
 next tick claims again; and 3s of silence from the video frame drops the top
 frame back to `solo`, so the button does not outlive the film.
 
-**Still open, and now observed rather than argued:** the study rail and clicking
-a word both need the cue text, so they stay in the video's frame and remain
-behind a parent overlay on a site that paints one. `tests/frames/run.mjs`
-carries it as `KNOWN GAP - a press on the study rail is still taken by a
-full-viewport page overlay`: a real click at the rail's coordinates, from the
-top document, with the vehicle's interceptor on — the page's counter swallows
-both the pointerdown and the click.
+**Still open, and now observed rather than argued:** the study surfaces and
+clicking a word all need the cue text, so they stay in the video's frame and
+remain behind a parent overlay on a site that paints one. `tests/frames/run.mjs`
+carries it as `KNOWN GAP - a press on the study box is still taken by a
+full-viewport page overlay`: a real click at the focus box's coordinates, from
+the top document, with the vehicle's interceptor on — the page's counter
+swallows both the pointerdown and the click.
 
 **No user has reported it since streaming-site.example stopped painting that overlay**, so
 the exposure is to the class of page rather than to that page. The check is
@@ -380,6 +380,27 @@ Each of these was a reported bug. Undoing one brings the bug back.
   576 square pixels including its centre, so the × could not be pressed at all,
   on every window at every size. A harness check hit-tests every head control
   on every window we draw.
+- **Study is two surfaces, and which one carries what is the design.** A strip
+  of words under each subtitle - built into that subtitle's own overlay root by
+  `api.studyDock`, so it moves, scales and reparents with the line it belongs to
+  and adds no second host - and one focus box holding the whole entry for the
+  word being read. The single rail that did both was reported four ways at once:
+  "closing one study panel closes all", "disabling learning on a subtitle while
+  the other one is enabled puts back both study panels", words piling up so
+  nothing was ever the thing being looked at, and an animation that "makes the
+  rest of the rails drift". Per-language closing is now structural - a strip
+  belongs to one subtitle, and `trailOff` names the ones put away - rather than
+  a flag on a shared surface.
+- **The strip is a fixed-width box, and that is what stops the drift.** It takes
+  the whole allotment the cue is capped to and centres its words in it, pinning
+  them to the right end only once there are more than fit. Shrink-to-fit, an
+  arriving word grew the box while the track slid inside it: measured, one
+  arrival moved the left edge 7px and the width 13px, instantly, while the words
+  slid the other way over 380ms. Two motions in different directions at the same
+  moment is what "not stable" meant. The mask at the left edge is on the same
+  switch, because a fade that is always on does to the oldest word exactly what
+  the age fade is forbidden to do - at 14% of a 578px strip it put 81px of
+  gradient over the first word, which no opacity assertion could see.
 - **Study gets first refusal on the press AND on the release.**
   `claimPointerDown` deliberately declines a plain tap on a word, because the
   box has to stay draggable by its words and a tap is only a tap once it has
@@ -439,8 +460,8 @@ Two paths run hot and both are now guarded. Keep them that way.
   and then reads `getBoundingClientRect`, a write followed by a read. Both
   `panel.js` and `study.js` gate it behind a `settle()` memo keyed on the
   destination *and the host*, so it runs when a surface actually moves and not
-  otherwise. The host is part of the key because `turnOff` drops the rail and
-  `turnOn` builds a fresh one. A viewport resize is the other way the scale can
+  otherwise. The host is part of the key because `turnOff` drops the focus box
+  and `turnOn` builds a fresh one. A viewport resize is the other way the scale can
   change without a move, so `panel.js` answers that where `clampIntoView` is.
 
 Measured with two subtitles attached, on `tests/frames`: panel open and mouse

@@ -579,10 +579,10 @@ try {
    * said "Study mode on" anyway.
    *
    * Measured on this vehicle before the fix, in fullscreen: the top frame read
-   * on=true and the film's frame read on=false, and there was no rail in any of
-   * the three documents. So the assertion is the RAIL, in the frame that has
-   * the film, from a switch thrown somewhere else - not the flag, which is
-   * exactly what was already true while nothing appeared. */
+   * on=true and the film's frame read on=false, and there was no study surface
+   * in any of the three documents. So the assertion is the SURFACE, in the
+   * frame that has the film, from a switch thrown somewhere else - not the
+   * flag, which is exactly what was already true while nothing appeared. */
   const studyState = async () =>
     sw.evaluate(async () => {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -593,18 +593,18 @@ try {
           .executeScript({
             target: { tabId: tab.id, frameIds: [f.frameId] },
             func: () => {
-              let rail = null;
+              let focus = null;
               for (const node of document.querySelectorAll("*")) {
                 const first = node.shadowRoot?.firstElementChild;
-                if (typeof first?.className === "string" && first.className.includes("sso-rail")) {
+                if (typeof first?.className === "string" && first.className.includes("sso-focus")) {
                   const box = node.getBoundingClientRect();
-                  rail = [Math.round(box.width), Math.round(box.height)];
+                  focus = [Math.round(box.width), Math.round(box.height)];
                 }
               }
               return {
                 on: Boolean(window.__ssoStudy?.settings?.().enabled),
                 attached: Boolean(window.__ssoApi?.status?.().attached),
-                rail,
+                focus,
               };
             },
           })
@@ -646,35 +646,36 @@ try {
     await wake();
     const all = await studyState();
     const film = all.find((f) => f.attached);
-    return film?.on && film.rail && film.rail[0] > 0 ? all : null;
+    return film?.on && film.focus && film.focus[0] > 0 ? all : null;
   }, 15000);
-  t("study switched on away from the film still builds the rail where the film is",
+  t("study switched on away from the film still builds the box where the film is",
     Boolean(studyReached),
     JSON.stringify(await studyState()));
 
   /* And whether a press on it is ours, with the site painting over everything.
    *
-   * This is the one surface that cannot be moved to the top frame - the rail
-   * needs the cue text, and the cue text is where the film is - so it is the
-   * only one still exposed to a parent-document overlay. docs/reports/
+   * These are the surfaces that cannot be moved to the top frame - the focus
+   * box and the strip under each subtitle both work from the cue text, and the
+   * cue text is where the film is - so they are the only ones still exposed to
+   * a parent-document overlay. docs/reports/
    * click-blocking-2026-08-08.md established the mechanism and could not
    * observe it end to end.
    *
    * It has to be a real click from the TOP document, and that is the whole
-   * subtlety. Asking the film's frame whether its own rail is reachable gives a
+   * subtlety. Asking the film's frame whether its own box is reachable gives a
    * false pass every time: document.elementsFromPoint inside a frame knows
    * nothing about a box in its PARENT, so the frame reports itself unobstructed
    * while the parent takes the press. The counter in top.html is the witness -
    * it counts what the interceptor swallows - so a click that never reaches it
-   * is a click the rail got.
+   * is a click the box got.
    */
   if (studyReached) {
-    const railAt = await (async () => {
+    const focusAt = await (async () => {
       const film = page.frames().find((f) => f.url().includes("player.html"));
       const inside = await film.evaluate(() => {
         for (const node of document.querySelectorAll("*")) {
           const first = node.shadowRoot?.firstElementChild;
-          if (typeof first?.className === "string" && first.className.includes("sso-rail")) {
+          if (typeof first?.className === "string" && first.className.includes("sso-focus")) {
             const box = node.getBoundingClientRect();
             return { x: box.left + box.width / 2, y: box.top + 8 };
           }
@@ -690,15 +691,16 @@ try {
 
     await page.evaluate(() => { window.__intercept(true); window.__stolen = 0; });
     await page.waitForTimeout(200);
-    if (railAt) await page.mouse.click(railAt.x, railAt.y);
+    if (focusAt) await page.mouse.click(focusAt.x, focusAt.y);
     await page.waitForTimeout(300);
     const stolen = await page.evaluate(() => window.__stolen);
     await page.evaluate(() => window.__intercept(false));
     /* KNOWN GAP, recorded rather than asserted away.
      *
      * This press IS swallowed today, and that is the honest state of the
-     * product: every other surface was moved to the top frame, and the rail
-     * cannot follow while it reads cue text out of the frame the film is in.
+     * product: every other surface was moved to the top frame, and the study
+     * surfaces cannot follow while they read cue text out of the frame the
+     * film is in.
      * The report called it open; this is the first time it has been observed
      * rather than argued from the platform's rules.
      *
@@ -712,15 +714,15 @@ try {
      * paints such an overlay, so the reader sees no symptom. The exposure is
      * to the class of page, not to that page.
      */
-    t("KNOWN GAP - a press on the study rail is still taken by a full-viewport page overlay",
-      Boolean(railAt) && stolen > 0,
-      railAt
-        ? `swallowed ${stolen} at ${Math.round(railAt.x)},${Math.round(railAt.y)}` +
+    t("KNOWN GAP - a press on the study box is still taken by a full-viewport page overlay",
+      Boolean(focusAt) && stolen > 0,
+      focusAt
+        ? `swallowed ${stolen} at ${Math.round(focusAt.x)},${Math.round(focusAt.y)}` +
           (stolen === 0 ? " - IT IS FIXED: invert this check and rename it" : "")
-        : "could not find the rail to press");
+        : "could not find the box to press");
   } else {
-    t("KNOWN GAP - a press on the study rail is still taken by a full-viewport page overlay",
-      false, "no rail was built to press");
+    t("KNOWN GAP - a press on the study box is still taken by a full-viewport page overlay",
+      false, "no study box was built to press");
   }
 
   // And off again, so the ordinary-page section below starts where it expects.

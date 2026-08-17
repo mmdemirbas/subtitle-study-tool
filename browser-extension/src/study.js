@@ -76,17 +76,11 @@
      * over the picture. It is a slider because the right value is a property of
      * the reader, not of the film. */
     rarityRank: 4000,
-    /* Two at most per line, and three in the rail. Both were larger, and the
-     * rail became something to read instead of something to glance at: words
-     * from four lines ago were still there while new ones arrived under them,
-     * so nothing was ever the thing being looked at. A rail is a focus, not a
-     * transcript - the deck is where words go to be kept. */
+    /* Two at most per line. It was larger, and the surface became something to
+     * read instead of something to glance at: words from four lines ago were
+     * still arriving while new ones landed on top of them, so nothing was ever
+     * the thing being looked at. The deck is where words go to be kept. */
     maxPerCue: 2,
-    keep: 3,
-    /* Only the newest is worth the full entry; the ones under it are there to
-     * be recognised, not read, so they collapse to the word and its
-     * translation. Pinning a card opts it back into the full entry. */
-    focus: true,
     // Shortest word worth marking, in letters. Below three it is function
     // words and interjections, which are never the problem.
     minLetters: 3,
@@ -102,29 +96,44 @@
     // Empty means "whatever language that subtitle is in".
     language: "",
     pauseOnPin: false,
-    width: 320,
-    // 0 means "as tall as its contents". A dragged bottom edge sets a number.
-    height: 0,
-    /* The rail was set in 12px against a film, which is a size for a settings
-     * page and not for something read at a glance in the dark while something
-     * else is moving. */
+    /* The focus box was set in 12px against a film, which is a size for a
+     * settings page and not for something read at a glance in the dark while
+     * something else is moving. */
     textPx: 15,
     dwellMs: 140,
-    /* The rail can be put away without turning study off. What is left is the
-     * word under the pointer answered where the pointer already is, which is
-     * the whole feature for anyone who does not want a column of cards over
-     * the picture. */
-    showRail: true,
+    /* Which subtitles' trails are put away, by slot. Not one switch for all of
+     * them, which is the reported bug: "Closing one study panel closes all.
+     * Wrong." A trail belongs to one subtitle, so closing it is a statement
+     * about that subtitle and about nothing else.
+     *
+     * Study itself stays on: the words are still marked in the line and the
+     * focus box still answers. */
+    trailOff: [],
+    /* The one box that carries a whole entry. It can be put away too, leaving
+     * the trails and the marks - which is the reading for someone who wants
+     * the film with a strip of words under it and nothing else on screen. */
+    showFocus: true,
     hoverCard: true,
-    /* Folded to its title bar. Different from put away: the rail is still
-     * there, still counting, and one click brings the words back - what it
-     * stops doing is standing on the picture. */
-    folded: false,
-    /* How solid the rail is over the film. Dense text over a moving picture
-     * needs a backing to be readable at all, so this stops well short of
-     * invisible; the low end is for reading the frame through it. */
+    /* How solid the focus box is over the film. Dense text over a moving
+     * picture needs a backing to be readable at all, so this stops well short
+     * of invisible; the low end is for reading the frame through it. */
     opacity: 0.93,
   };
+
+  /* How many words a trail holds before the oldest leaves.
+   *
+   * Not a setting. It was one - "Words kept", 1 to 12 - and the number that
+   * matters is not how many are kept but how many are legible, which the
+   * strip's own width decides: past eight the left-hand end is clipped by the
+   * subtitle's width on every screen this was measured on, so a larger number
+   * only moved words out of sight faster than they faded. */
+  const TRAIL_KEEP = 8;
+
+  /* Fixed, because a box holding one entry has a size that fits one entry. The
+   * rail was resizable from all four corners and remembered a width and a
+   * height, which is three settings and four grips spent on a surface whose
+   * contents are always one word, its meaning and the line it was in. */
+  const FOCUS_WIDTH = 320;
 
   let settings = { ...DEFAULT_SETTINGS };
 
@@ -135,14 +144,13 @@
   let countEl = null;
   let noteEl = null;
   let clearEl = null;
-  let foldEl = null;
   let gearEl = null;
   let settingsEl = null;
   let setEls = null;
   let keyEls = null;
   let sheets = null;
 
-  /* Cards currently in the rail, newest first. Held here rather than read back
+  /* The words study mode has picked out, newest first. Held here rather than
    * out of the DOM so the save key has something to name without a selector. */
   let cards = [];
   let cardSeq = 0;
@@ -198,8 +206,8 @@
    * Our own writes are counted rather than compared, and that is the second
    * version of this. Comparing the event's value against the last thing we
    * wrote looks right and is wrong the moment two writes go out together -
-   * which they routinely do, since marking a subtitle writes the marks and
-   * then writes showRail. By the time the FIRST event arrives the guard holds
+   * which they routinely do, since switching study on writes the switch and
+   * then the trails. By the time the FIRST event arrives the guard holds
    * the second value, so the frame does not recognise its own write, adopts
    * the older one, and study is torn down and rebuilt for nothing. It cost 26
    * harness cases. Chrome emits one event per set() that touches the key, in
@@ -232,10 +240,20 @@
    * the old key is dropped rather than left to be read by something later. It
    * runs on the stored patch, not on the merged settings, because after the
    * merge the new key is always present and the old one would never be seen. */
+  /* The same for the rail's own keys, now that what it drew is a trail under
+   * each subtitle and one focus box. A reader who had put the rail away had
+   * said something - "not on the picture, thank you" - and the nearest thing
+   * this can still honour is to keep the focus box away; the trails are new
+   * and arrive shown, because nothing was ever said about them. `keep`,
+   * `focus`, `width`, `height` and `folded` describe a surface that no longer
+   * exists, and are dropped rather than left for something later to read. */
   function migrate(stored) {
-    const { studySlot, ...rest } = stored;
+    const { studySlot, showRail, keep, focus, width, height, folded, ...rest } = stored;
     if (!Array.isArray(rest.studySlots) && Number.isInteger(studySlot)) {
       rest.studySlots = [studySlot];
+    }
+    if (typeof rest.showFocus !== "boolean" && typeof showRail === "boolean") {
+      rest.showFocus = showRail;
     }
     return rest;
   }
@@ -321,14 +339,26 @@
    * setEnabled alone, which was the only door to it while the panel had a
    * separate Study button. Both doors lead to the same room. */
   async function toggleStudySlot(slot) {
-    const next = isStudied(slot)
-      ? studiedSlots().filter((studied) => studied !== slot)
-      : [...studiedSlots(), slot].sort((a, b) => a - b);
+    const on = !isStudied(slot);
+    const next = on
+      ? [...studiedSlots(), slot].sort((a, b) => a - b)
+      : studiedSlots().filter((studied) => studied !== slot);
     const was = settings.enabled;
-    updateSettings({ studySlots: next });
-    // Turning study on with the rail put away from a previous session would
-    // look like nothing happened. Same reason as in setEnabled.
-    if (settings.enabled && !settings.showRail) updateSettings({ showRail: true });
+    /* Only THIS subtitle's trail is brought back, and only when this subtitle
+     * is the one being switched on.
+     *
+     * The reported bug: "disabling learning on a subtitle while the other one
+     * is enabled puts back the both study panels. I think our
+     * multiple-language-learning at the same time support is broken." It was.
+     * There was one surface for every language and one switch that put it
+     * back, and it fired on the way OUT as well - so closing the English strip
+     * and then unlearning Turkish reopened the English one. A subtitle being
+     * switched on is the only thing that may show a strip, and the only strip
+     * it may show is its own. */
+    updateSettings({
+      studySlots: next,
+      trailOff: on ? closedTrails().filter((each) => each !== slot) : closedTrails(),
+    });
     await syncPresence();
     if (settings.enabled !== was) sayWhatStudyIsDoing();
     return settings;
@@ -354,28 +384,16 @@
 
   function applySettings() {
     if (host) {
-      host.style.setProperty("width", `${settings.width}px`, "important");
-      // Study can be on with the rail put away; the host stays in the tree so
-      // that turning it back on does not have to rebuild it.
-      setHostVisible(host, settings.showRail);
+      // Study can be on with the focus box put away; the host stays in the
+      // tree so that turning it back on does not have to rebuild it.
+      setHostVisible(host, settings.showFocus);
     }
     if (railEl) {
       railEl.dataset.auto = settings.auto ? "true" : "false";
-      railEl.dataset.folded = settings.folded ? "true" : "false";
       railEl.style.setProperty("--sso-study-text", `${settings.textPx}px`);
       railEl.style.setProperty("--sso-study-alpha", String(settings.opacity));
-      /* 0 is "as tall as its contents", which is not a height any element can
-       * be given - it is the absence of one. Anything else came from a corner
-       * being dragged, and is applied as a real height rather than a cap: a box
-       * that springs back to its contents cannot be made bigger than them. */
-      railEl.dataset.sized = settings.height > 0 ? "true" : "false";
-      if (settings.height > 0) railEl.style.setProperty("--sso-study-height", `${settings.height}px`);
-      else railEl.style.removeProperty("--sso-study-height");
     }
-    if (foldEl) {
-      foldEl.textContent = settings.folded ? "▸" : "▾";
-      foldEl.title = settings.folded ? "Show the words again" : "Fold to the title bar";
-    }
+    syncTrails();
     if (popupEl) {
       popupEl.style.setProperty("--sso-study-text", `${settings.textPx}px`);
       popupEl.style.setProperty("--sso-study-alpha", String(settings.opacity));
@@ -465,6 +483,8 @@
   const allWords = () => [...lines.values()].flatMap((line) => line.words);
   const lineOf = (span) => lines.get(Number(span?.dataset.slot));
   const isStudied = (slot) => (settings.studySlots || []).includes(slot);
+  const closedTrails = () => [...(settings.trailOff || [])];
+  const trailShown = (slot) => isStudied(slot) && !closedTrails().includes(slot);
 
   function onCue(slot, cue, cueBox) {
     if (!settings.enabled || !isStudied(slot)) return;
@@ -530,14 +550,19 @@
       if (isRare && !known) rare.push({ word, rank });
     }
 
-    /* Nothing to build when the rail is not on screen.
+    /* Nothing to build when there is nowhere to show it.
      *
      * The hover path carries this guard and says why - "adding to a list nobody
      * can see would only spend lookups" - and the automatic path, which is the
      * one that runs on every line of the film, did not. Measured with the rail
      * put away: cards built into a host at display:none and 0px wide, and a
-     * dictionary lookup spent on a word nobody could read. */
-    if (!settings.auto || !settings.showRail || rare.length === 0) return;
+     * dictionary lookup spent on a word nobody could read.
+     *
+     * Two surfaces can show it now, so it takes both being away to stop the
+     * work: this subtitle's own trail, and the focus box that any subtitle's
+     * word can land in. */
+    if (!settings.auto || rare.length === 0) return;
+    if (!trailShown(line.slot) && !settings.showFocus) return;
     /* Rarest first, then capped. When a line has more unfamiliar words than
      * fit, the rarest are the ones a reader is least likely to have got from
      * context. */
@@ -545,6 +570,193 @@
     for (const item of rare.slice(0, settings.maxPerCue)) {
       addCard(item.word, { rank: item.rank, language, auto: true, slot: line.slot });
     }
+  }
+
+  // --- the trail ----------------------------------------------------------------
+
+  /* One strip of words per subtitle, under the subtitle it came out of.
+   *
+   * Asked for: "our study panel should be streaming like live streaming videos
+   * on the net. I mean the words should be scrolling slowly and while new words
+   * appear, older ones should be slightly disappearing... instead of using a
+   * panel, maybe we can use another subtitle-like overlay area."
+   *
+   * It replaces a column of cards at the edge of the screen, and the reason is
+   * not decoration. The column held three words and the reader had to leave the
+   * subtitle to read it; a strip under the line is in the same glance as the
+   * line, which is the only place a word can be read without losing the film.
+   * What the column did that this does not is carry a whole dictionary entry -
+   * that is the focus box's job now, and there is exactly one of it.
+   *
+   * The elements live in content.js's overlay root, beside the cue they belong
+   * to (api.studyDock), so they move, scale and hide with that subtitle for
+   * free. Nothing here positions anything. */
+  const trails = new Map();
+
+  function trailFor(slot) {
+    const existing = trails.get(slot);
+    if (existing?.root?.isConnected) return existing;
+
+    const root = api.studyDock?.(slot);
+    if (!root) return null;
+    root.replaceChildren();
+
+    const track = document.createElement("div");
+    track.className = "sso-trail__track";
+
+    /* This subtitle's strip, and only this one's. The reported bug is that
+     * there was one control for all of them: "Closing one study panel closes
+     * all. Wrong." */
+    const close = document.createElement("button");
+    close.className = "sso-trail__close";
+    close.type = "button";
+    close.textContent = "×";
+    close.title = "Stop showing words for this subtitle";
+    close.addEventListener("click", (event) => {
+      event.stopPropagation();
+      updateSettings({ trailOff: [...new Set([...closedTrails(), slot])] });
+      api.showToast?.("Words for that subtitle put away - the Learn chip brings them back");
+    });
+
+    root.append(track, close);
+    root.dataset.words = "0";
+    const trail = { slot, root, track, close, words: [] };
+    trails.set(slot, trail);
+    return trail;
+  }
+
+  /* A word arriving is the strip moving, not a word appearing in a gap.
+   *
+   * The whole track is given the arriving word's width as a transform and then
+   * has it taken away on the next frame, so the browser interpolates the slide.
+   * Doing it the obvious way - letting flex lay the new word out and animating
+   * a margin - is a layout on every frame of every arriving word, and it was
+   * measured making the surfaces around it drift while it ran. */
+  function pushToTrail(card) {
+    const trail = trailFor(card.slot);
+    if (!trail || !trailShown(card.slot)) return null;
+
+    const node = document.createElement("span");
+    node.className = "sso-trail__word";
+    node.dataset.term = card.term;
+    node.dataset.saved = card.saved ? "true" : "false";
+
+    const term = document.createElement("span");
+    term.className = "sso-trail__term";
+    term.textContent = card.term;
+
+    const gloss = document.createElement("span");
+    gloss.className = "sso-trail__gloss";
+
+    node.append(term, gloss);
+    node.title = "Click to hold it in the focus box";
+    node.addEventListener("pointerenter", () => previewCard(card));
+    node.addEventListener("pointerleave", () => releasePreview(card));
+    node.addEventListener("click", (event) => {
+      event.stopPropagation();
+      pinCard(card);
+    });
+
+    trail.track.append(node);
+    trail.words.push({ card, node, gloss });
+    card.chip = { node, gloss, slot: card.slot };
+
+    ageTrail(trail);
+
+    /* How far the words have to slide for the new one to arrive where it
+     * belongs, which is not the same in the two regimes: pinned to the right
+     * the whole track moves by the arriving word's width, and centred it moves
+     * by half of it, because the group re-centres around what it now holds.
+     * Getting this wrong is visible - the words settle a few pixels off and
+     * then the next arrival corrects it. */
+    const width = node.getBoundingClientRect().width + 6;
+    const slide = trail.root.dataset.over === "true" ? width : width / 2;
+    trail.track.style.transition = "none";
+    trail.track.style.transform = `translateX(${Math.round(slide)}px)`;
+    requestAnimationFrame(() => {
+      trail.track.style.removeProperty("transition");
+      trail.track.style.transform = "translateX(0)";
+    });
+    return node;
+  }
+
+  /* Older words dim, and stop dimming while they are still readable.
+   *
+   * The floor is the whole rule. At 0.14 the third word back could not be read
+   * at all over a moving picture, reported as fading "that much aggresively" -
+   * so age is a hint about which word is newest and never the reason a word is
+   * unreadable. 0.075 a step, floor 0.5: eight words fit between them. */
+  const TRAIL_FADE_STEP = 0.075;
+  const TRAIL_FADE_FLOOR = 0.5;
+
+  function ageTrail(trail) {
+    while (trail.words.length > TRAIL_KEEP) {
+      const gone = trail.words.shift();
+      gone.node.remove();
+      if (gone.card.chip?.node === gone.node) gone.card.chip = null;
+    }
+    trail.words.forEach((item, index) => {
+      const age = trail.words.length - 1 - index;
+      const dim = Math.max(TRAIL_FADE_FLOOR, 1 - age * TRAIL_FADE_STEP);
+      item.node.style.opacity = String(dim);
+      // Which one carries its meaning. See .sso-trail__gloss: on all of them
+      // the strip became a paragraph under the dialogue.
+      item.node.dataset.newest = age === 0 ? "true" : "false";
+    });
+    trail.root.dataset.words = String(trail.words.length);
+    /* Whether anything is actually leaving. The fade at the left edge and the
+     * pinning at the right both hang off this, and both are wrong while the
+     * words still fit. Read after the widths are settled, so a word removed
+     * above is already out of the measurement. */
+    const over = trail.track.scrollWidth > trail.root.clientWidth + 1;
+    trail.root.dataset.over = over ? "true" : "false";
+  }
+
+  /* What the word means, put on the chip when the lookup comes back. The trail
+   * is worth reading on its own - a reader who glanced down for one word should
+   * not have to go to another surface for it - so the chip carries the short
+   * answer and the focus box carries the rest. */
+  function drawChip(card) {
+    if (!card.chip) return;
+    card.chip.node.dataset.saved = card.saved ? "true" : "false";
+    card.chip.node.dataset.focused = focused === card ? "true" : "false";
+    card.chip.gloss.textContent = shortMeaning(card);
+  }
+
+  function shortMeaning(card) {
+    const entry = card.lookup;
+    if (!entry) return "";
+    if (entry.translation) return entry.translation;
+    const first = entry.definitions?.[0];
+    const gloss = typeof first === "string" ? first : first?.text || first?.definition || "";
+    return gloss.length > 42 ? `${gloss.slice(0, 41)}…` : gloss;
+  }
+
+  /* Which subtitles have a strip, said in one place. Called whenever the
+   * settings change: a subtitle that is no longer being learnt, or whose strip
+   * was put away, loses its words rather than keeping a stale row of them
+   * under a line nobody is marking. */
+  function syncTrails() {
+    for (const slot of [...trails.keys()]) {
+      if (trailShown(slot)) continue;
+      emptyTrail(trails.get(slot));
+      trails.delete(slot);
+    }
+  }
+
+  function emptyTrail(trail) {
+    if (!trail) return;
+    for (const item of trail.words) {
+      item.node.remove();
+      if (item.card.chip?.node === item.node) item.card.chip = null;
+    }
+    trail.words = [];
+    if (trail.root?.isConnected) trail.root.dataset.words = "0";
+  }
+
+  function emptyTrails() {
+    for (const trail of trails.values()) emptyTrail(trail);
+    trails.clear();
   }
 
   /* Languages the worker has no frequency table for.
@@ -813,9 +1025,13 @@
       const slot = Number(word.dataset.slot);
       const language = studyLanguage(slot);
       if (settings.hoverCard) api.detached(showPopup(word, term, language), "That lookup");
-      // With the rail put away the popup is the whole answer; adding to a list
-      // nobody can see would only spend lookups.
-      if (settings.showRail) api.detached(addCard(term, { rank: rankOf(word), language, slot }), "That word");
+      /* A word pointed at goes into this subtitle's trail and into the focus
+       * box, unless both are away - with nowhere to show it, a lookup would be
+       * spent on something nobody can see. The popup beside the word is the
+       * whole answer in that case, which is what it is for. */
+      if (trailShown(slot) || settings.showFocus) {
+        api.detached(addCard(term, { rank: rankOf(word), language, slot }), "That word");
+      }
     }, settings.dwellMs);
   }
 
@@ -962,7 +1178,7 @@
       top: `${PARK_TOP}px`,
       right: `${PARK_RIGHT}px`,
       left: "auto",
-      width: `${settings.width}px`,
+      width: `${FOCUS_WIDTH}px`,
       "z-index": "2147483646", // just under the panel, which opens over it
     })) {
       host.style.setProperty(property, value, "important");
@@ -974,44 +1190,41 @@
     if (token !== buildToken) return null;
 
     railEl = document.createElement("div");
-    railEl.className = "sso-win sso-rail";
+    railEl.className = "sso-win sso-focus";
 
     const head = document.createElement("div");
     head.className = "sso-win__head";
     const title = document.createElement("span");
     title.className = "sso-win__title";
     title.textContent = "Study";
-    /* How many words are here. A plain number in the quiet ink: it was an amber
-     * pill, which made the least actionable fact on the surface the loudest
-     * thing on it and spent the one colour that means "this word is marked". */
+    /* Which word this is, and where it is from. It was a count of how many
+     * words were in the rail, which is the least actionable fact a surface
+     * showing ONE word can carry - the box holds one entry now, so the head
+     * says whose language it is in. */
     countEl = document.createElement("span");
-    countEl.className = "sso-rail__count";
+    countEl.className = "sso-focus__of";
 
-    /* Three controls, in the order they get reached for: empty it, fold it,
-     * put it away. All on the head, which is the thing they act on, and all in
-     * the one treatment the control panel's head buttons use. */
+    /* Three controls, in the order they get reached for: let go of the word
+     * being held, change how study works, put the box away. All on the head,
+     * which is the thing they act on, and all in the one treatment the control
+     * panel's head buttons use. */
     clearEl = document.createElement("button");
     clearEl.className = "sso-icon sso-icon--word";
     clearEl.type = "button";
     clearEl.textContent = "Clear";
-    clearEl.title = "Empty the rail";
+    clearEl.title = "Let go of this word and empty the trails";
     clearEl.addEventListener("click", clearCards);
-
-    foldEl = document.createElement("button");
-    foldEl.className = "sso-icon";
-    foldEl.type = "button";
-    foldEl.addEventListener("click", () => updateSettings({ folded: !settings.folded }));
 
     const close = document.createElement("button");
     close.className = "sso-icon sso-icon--close";
     close.type = "button";
     close.textContent = "×";
-    /* Puts the rail away without turning study off. Hovering a word still
-     * answers next to the word, which for a reader who wants the picture
-     * rather than a column of cards is the whole feature. Study itself goes
-     * off from the control panel, where turning it back on also lives. */
-    close.title = "Put the rail away — hovering a word still answers";
-    close.addEventListener("click", () => updateSettings({ showRail: false }));
+    /* Puts the box away without turning study off. The words are still marked
+     * in the line and still arrive in the trail under it; what goes is the one
+     * surface that stands on the picture. Study itself goes off from the
+     * control panel, where turning it back on also lives. */
+    close.title = "Put the focus box away — the words under the subtitle stay";
+    close.addEventListener("click", () => updateSettings({ showFocus: false }));
 
     /* Study's settings live here now rather than in the control panel.
      *
@@ -1031,13 +1244,13 @@
     gearEl.setAttribute("aria-pressed", "false");
     gearEl.addEventListener("click", () => api.detached(openRailSettings(), "Study settings"));
 
-    head.append(title, countEl, clearEl, gearEl, foldEl, close);
+    head.append(title, countEl, clearEl, gearEl, close);
 
     listEl = document.createElement("div");
-    listEl.className = "sso-rail__list";
+    listEl.className = "sso-focus__body";
 
     noteEl = document.createElement("p");
-    noteEl.className = "sso-rail__note";
+    noteEl.className = "sso-focus__note";
 
     railEl.append(head, listEl, noteEl);
     shadow.append(railEl);
@@ -1050,11 +1263,16 @@
      * both hosts were built the same way. */
     (api.paintableParent?.() || document.body || document.documentElement).append(host);
 
-    /* The whole rail is a handle, not only its bar - the same as the control
+    /* The whole box is a handle, not only its bar - the same as the control
      * panel. A press on a word or a meaning still selects the text: the grab
-     * only takes elements that carry no words of their own. */
+     * only takes elements that carry no words of their own.
+     *
+     * Draggable and not resizable, which is the one asymmetry with the panel.
+     * A box holding one entry has a size that fits one entry, and the four
+     * grips it used to carry cost two stored numbers and a fold state for a
+     * surface whose contents never change shape. Where it sits on the film is
+     * still the reader's, because that depends on the film. */
     makeDraggable(railEl, head);
-    makeResizable();
     await restorePosition();
     applySettings();
     // Now that it has a box, and not before. See restorePosition.
@@ -1119,7 +1337,7 @@
    * then how this box looks. */
   function buildRailSettings() {
     const wrap = document.createElement("div");
-    wrap.className = "sso-rail__settings";
+    wrap.className = "sso-focus__settings";
 
     const check = (label, key, hint) => {
       const row = document.createElement("label");
@@ -1135,10 +1353,19 @@
       return { row, input };
     };
 
-    const range = (label, key, min, max, step, format, hint) => {
+    /* A slider says what its number IS, and which way is more of what.
+     *
+     * Reported about the rarity control, and true of every one of these: "'rarer
+     * than' what? What unit? Which end shows more words. It is not clear." A
+     * title attribute was where that answer lived, which means it was not on
+     * screen - so the note is a line under the row, and the two ends of the
+     * scale are named under the track itself, where the hand is. */
+    const range = (label, key, min, max, step, format, note, ends) => {
+      const group = document.createElement("div");
+      group.className = "sso-set__group";
+
       const row = document.createElement("label");
       row.className = "sso-set";
-      if (hint) row.title = hint;
       const said = document.createElement("span");
       said.className = "sso-set__label";
       said.textContent = label;
@@ -1155,7 +1382,26 @@
         updateSettings({ [key]: key === "opacity" ? value / 100 : value });
       });
       row.append(said, input, readout);
-      wrap.append(row);
+      group.append(row);
+
+      if (ends) {
+        const scale = document.createElement("div");
+        scale.className = "sso-set__ends";
+        const low = document.createElement("span");
+        low.textContent = ends[0];
+        const high = document.createElement("span");
+        high.textContent = ends[1];
+        scale.append(low, high);
+        group.append(scale);
+      }
+      if (note) {
+        const said2 = document.createElement("p");
+        said2.className = "sso-set__note";
+        said2.textContent = note;
+        group.append(said2);
+      }
+
+      wrap.append(group);
       return { row, input, readout, format };
     };
 
@@ -1165,19 +1411,30 @@
       /* The threshold is a slider because the right value is a property of the
        * reader, not of the film: rank 2000 is where a beginner stops
        * recognising words and rank 12000 is where somebody comfortable does.
-       * Nothing else can know which of those is on the sofa. */
-      rank: range("Rarer than", "rarityRank", 500, 25000, 500, (v) => v.toLocaleString(),
-        "A word this far down the frequency list, or missing from it, gets underlined."),
-      keep: range("Words kept", "keep", 1, 8, 1, (v) => String(v),
-        "How many stay on the rail. Pinned words survive past this."),
+       * Nothing else can know which of those is on the sofa.
+       *
+       * What the number MEANS is the part that was missing. It is a position in
+       * a frequency list of film dialogue, so the readout says the position and
+       * the note says the list - "4,000" alone could as easily have been a
+       * count of words, a percentage or a score. */
+      rank: range(
+        "Mark a word rarer than", "rarityRank", 500, 25000, 500,
+        (v) => `the ${v.toLocaleString()} commonest`,
+        "Position in a frequency list of film dialogue. A word further down the list " +
+          "than this - or missing from it altogether - is the kind you are unlikely to " +
+          "know, so it gets underlined.",
+        ["← more words marked", "fewer, rarer words →"],
+      ),
       hover: check("Answer beside the word on hover", "hoverCard",
-        "Shows what a word means next to the word itself. Works with the rail put away."),
-      focus: check("Only the newest word in full", "focus",
-        "The rest collapse to the word and its meaning, so the rail stays something to glance at."),
+        "Shows what a word means next to the word itself, with or without the focus box."),
       pause: check("Pause when a word is clicked", "pauseOnPin"),
-      text: range("Text size", "textPx", 11, 26, 1, (v) => `${v}px`),
-      opacity: range("Background", "opacity", 20, 100, 5, (v) => `${v}%`,
-        "How solid this box is over the film."),
+      text: range("Text size", "textPx", 11, 26, 1, (v) => `${v}px`, "", ["smaller", "larger"]),
+      opacity: range(
+        "Focus box background", "opacity", 20, 100, 5, (v) => `${v}%`,
+        "How solid the focus box is over the film. The words under the subtitle are not " +
+          "affected; they carry their own backing.",
+        ["see the film through it", "solid"],
+      ),
     };
 
     /* Study's two key bindings, with study's other settings.
@@ -1262,8 +1519,8 @@
     }
     if (!setEls) return;
     for (const [key, control] of Object.entries(setEls)) {
-      const name = { auto: "auto", rank: "rarityRank", keep: "keep", hover: "hoverCard",
-        focus: "focus", pause: "pauseOnPin", text: "textPx", opacity: "opacity" }[key];
+      const name = { auto: "auto", rank: "rarityRank", hover: "hoverCard",
+        pause: "pauseOnPin", text: "textPx", opacity: "opacity" }[key];
       const value = name === "opacity" ? Math.round(settings.opacity * 100) : settings[name];
       if (control.input.type === "checkbox") control.input.checked = Boolean(value);
       else {
@@ -1336,7 +1593,7 @@
       return;
     }
     noteEl.textContent = settings.auto
-      ? "Rare words appear here as they are said. Hover any word to look it up; shift-drag for a phrase."
+      ? "Rare words arrive under the subtitle they were said in, and the one you are reading is here. Hover any word to look it up; shift-drag for a phrase."
       : "Hover a word in the subtitle to look it up. Shift-drag across words for a phrase.";
   }
 
@@ -1358,10 +1615,25 @@
      * markWords, twice, while switching study off and on again. */
     if (!term || !listEl) return null;
 
+    /* The same word twice in a minute is the film insisting, not two things to
+     * read. It goes to the front of the focus box rather than arriving in the
+     * trail a second time - a strip with the same word in it twice reads as a
+     * strip that is not keeping up. */
     const existing = cards.find((card) => card.term === term && card.language === language);
     if (existing) {
       if (pinned) existing.pinned = true;
-      promote(existing);
+      // Newest again, in the record as well as in the box. They are two
+      // statements of the same fact - "this is the word that just arrived" -
+      // and while they disagreed, letting go of a held word handed the box
+      // back to whatever had been newest before it, rather than to the line
+      // actually on screen.
+      cards = [existing, ...cards.filter((card) => card !== existing)];
+      /* And back into the strip if it is not in it. A word said again half an
+       * hour later is new to a trail that has moved on eight words since, and
+       * the record of it here is not a reason to leave the strip silent. */
+      if (!existing.chip?.node?.isConnected) pushToTrail(existing);
+      focusCard(existing);
+      drawChip(existing);
       return existing;
     }
 
@@ -1380,19 +1652,18 @@
       timeMs: api.filmTimeMs(),
       lookup: null,
       saved: savedTerms.has(`${language}:${term}`),
+      chip: null,
       node: null,
     };
 
     cards.unshift(card);
-    card.node = renderCard(card);
-    listEl.prepend(card.node);
+    pushToTrail(card);
+    focusCard(card);
     trim();
-    refreshCount();
-    refocus();
-    dedupeSentences();
 
     card.lookup = await lookUp(term, language, from);
-    if (card.node?.isConnected) redrawCard(card);
+    drawChip(card);
+    if (focused === card) drawFocus();
     return card;
   }
 
@@ -1469,134 +1740,118 @@
     }));
   }
 
-  function promote(card) {
-    cards = [card, ...cards.filter((item) => item !== card)];
-    listEl.prepend(card.node);
-    redrawCard(card);
-    refocus();
-    dedupeSentences();
-  }
+  // --- the focus box ------------------------------------------------------------
 
-  /* One line often contains three rare words, and with auto on that is three
-   * cards carrying the same two quoted sentences - six lines of identical text
-   * in a column 300px wide, which buries the words the column exists to show.
+  /* One word in full, in one place, however many subtitles are being learnt.
    *
-   * So a card quotes its line only when the card above it quotes a different
-   * one. The first card of each run keeps the quotation - cards arrive
-   * newest-first and are read top down, so that is where the reader meets the
-   * line, and the ones under it are more words out of the sentence they have
-   * just read. */
-  function dedupeSentences() {
-    let changed = false;
-    cards.forEach((card, index) => {
-      const above = cards[index - 1];
-      const hide = Boolean(above && above.sentence === card.sentence);
-      if (card.hideSentence === hide) return;
-      card.hideSentence = hide;
-      changed = true;
-    });
-    if (changed) for (const card of cards) redrawCard(card);
+   * The rail before it kept three cards, the newest in full and the rest
+   * collapsed to a line each - which is three pieces of state (which is
+   * newest, which is pinned, which the reader has opened by hand) deciding how
+   * much of each of three cards to draw, over a film. What a reader does with
+   * it is read ONE word. So there is one box, always the same size, and the
+   * only question left is which word is in it.
+   *
+   * `held` is the reader's answer and beats the film's: clicking a word in a
+   * trail holds it there until they let go, so a line arriving underneath does
+   * not take away what they were reading. `previewed` is a hover, which is
+   * borrowed rather than taken - the box goes back to whatever it was showing
+   * when the pointer leaves. */
+  let focused = null;
+  let held = null;
+  let previewed = null;
+
+  function focusCard(card) {
+    if (held && held !== card) return;
+    focused = card;
+    drawFocus();
   }
 
-  /* Unpinned cards fall off the bottom as new ones arrive; pinned ones do not.
-   * Pinning is the only way to say "I am still reading that", and a rail that
-   * discarded it would be unusable at exactly the moment it is being used. */
+  function previewCard(card) {
+    previewed = card;
+    focused = card;
+    drawFocus();
+  }
+
+  function releasePreview(card) {
+    if (previewed !== card) return;
+    previewed = null;
+    focused = held || cards[0] || null;
+    drawFocus();
+  }
+
+  /* Clicking the same word again lets it go, which is the rule every other
+   * pressed-in control on these surfaces follows. Without it the only way to
+   * stop holding a word was to hold a different one. */
+  function pinCard(card) {
+    const already = held === card;
+    held = already ? null : card;
+    card.pinned = !already;
+    previewed = null;
+    focused = held || cards[0] || card;
+    if (!already && settings.pauseOnPin) api.pauseVideo?.();
+    drawFocus();
+    for (const item of cards) drawChip(item);
+  }
+
+  /* The cards behind the trails. Bounded because every one of them holds a
+   * sentence, a paired sentence and a dictionary entry, and a two-hour film
+   * would otherwise keep every word it ever marked. The trails hold eight each
+   * and the box holds one; nothing reads past that. */
+  const CARD_MEMORY = 40;
+
   function trim() {
-    const keep = [];
-    const dropped = [];
-    for (const card of cards) {
-      if (card.pinned || keep.length < settings.keep) keep.push(card);
-      else dropped.push(card);
-    }
-    for (const card of dropped) card.node?.remove();
-    cards = keep;
+    if (cards.length <= CARD_MEMORY) return;
+    cards = cards.filter((card, index) => index < CARD_MEMORY || card === held || card === focused);
   }
 
-  /* The rail fills itself, so it needs a way to be emptied. Auto mode puts
-   * words there without being asked and the reader is the only one who knows
-   * which of them were wanted - without this the only control over the contents
-   * was to wait for them to fall off the end. */
-  function removeCard(card) {
-    card.node?.remove();
-    cards = cards.filter((item) => item !== card);
-    refreshCount();
-    refocus();
-    dedupeSentences();
-  }
-
+  /* The trails fill themselves, so there has to be a way to empty them. Auto
+   * mode puts words there without being asked and the reader is the only one
+   * who knows which of them were wanted. */
   function clearCards() {
-    for (const card of cards) card.node?.remove();
+    for (const trail of trails.values()) emptyTrail(trail);
     cards = [];
-    refreshCount();
+    held = previewed = focused = null;
+    drawFocus();
   }
 
-  function refreshCount() {
-    if (countEl) countEl.textContent = cards.length ? String(cards.length) : "";
-    // The head's list controls belong to a list that is not on screen while the
-    // settings are, so the screen has the last word on whether they show.
+  /* Which word, and out of which subtitle. Two languages can be being learnt
+   * at once, and "what does this mean" has a different answer in each - so the
+   * box says which one it is answering for rather than leaving the reader to
+   * work it out from the word. */
+  function drawFocus() {
+    if (!listEl) return;
+    for (const card of cards) drawChip(card);
+    listEl.replaceChildren();
+    if (countEl) countEl.textContent = focused ? (focused.language || "").toUpperCase() : "";
     if (clearEl) clearEl.hidden = cards.length === 0;
     emptyNote();
-  }
+    if (!focused) return;
 
-  function renderCard(card) {
     const node = document.createElement("div");
     node.className = "sso-card";
-    redrawCard(card, node);
-    return node;
-  }
-
-  /* Which card is the one being looked at.
-   *
-   * `card.open` is the reader's own answer and beats everything: undefined
-   * means "you decide", true and false mean they have decided. Without it,
-   * expanding was done by pinning - which made "keep this" and "open this" one
-   * gesture and left no way to close a card again.
-   *
-   * The default, when they have not said, is the newest and anything pinned.
-   * Everything else collapses to the word and what it means, which is what a
-   * reader would have kept anyway. */
-  function isFocused(card) {
-    if (typeof card.open === "boolean") return card.open;
-    return !settings.focus || card.pinned || cards[0] === card;
-  }
-
-  function toggleCard(card) {
-    card.open = !isFocused(card);
-    redrawCard(card);
-  }
-
-  function refocus() {
-    for (const card of cards) {
-      const wanted = isFocused(card);
-      if (card.focused === wanted) continue;
-      card.focused = wanted;
-      redrawCard(card);
-    }
+    focused.node = node;
+    redrawCard(focused, node);
+    listEl.append(node);
   }
 
   function redrawCard(card, into) {
     const node = into || card.node;
     if (!node) return;
-    card.focused = isFocused(card);
+    /* Always in full. There is one card on screen and it is the one being
+     * read, so there is nothing for a collapsed state to make room for. */
+    card.focused = true;
     node.dataset.pinned = card.pinned ? "true" : "false";
     node.dataset.saved = card.saved ? "true" : "false";
-    node.dataset.focused = card.focused ? "true" : "false";
+    node.dataset.focused = "true";
     node.replaceChildren();
 
-    /* The head is the card's own control strip: open or close it, and throw it
-     * away. Both act on this card, so both live on it. */
+    /* The head is the word itself, how rare it is, and how it is said. It
+     * carried a caret and a discard button when it was one card of three; a
+     * box with one card in it has nothing to collapse and nothing to discard
+     * it in favour of - the next word replaces it, and the head's own × puts
+     * the whole box away. */
     const head = document.createElement("div");
     head.className = "sso-card__head";
-
-    const caret = document.createElement("button");
-    caret.className = "sso-card__caret";
-    caret.type = "button";
-    caret.textContent = card.focused ? "▾" : "▸";
-    caret.title = card.focused ? "Collapse" : "Expand";
-    caret.addEventListener("click", (event) => {
-      event.stopPropagation();
-      toggleCard(card);
-    });
 
     const term = document.createElement("span");
     term.className = "sso-card__term";
@@ -1606,45 +1861,20 @@
     meta.className = "sso-card__rank";
     meta.textContent = rankLabel(card.rank);
 
-    const drop = document.createElement("button");
-    drop.className = "sso-card__drop";
-    drop.type = "button";
-    drop.textContent = "×";
-    drop.title = "Remove this word";
-    drop.addEventListener("click", (event) => {
-      event.stopPropagation();
-      removeCard(card);
-    });
+    head.append(term);
 
-    head.append(caret, term);
-
-    /* The head is one line and it carries everything about the word itself.
-     *
-     * Open, that is the pronunciation - which had a row of its own, spending a
-     * whole line on the quietest thing in the card and pushing the answer
-     * further from the question. Shut, it is the translation, which is the
-     * reason to collapse a card rather than remove it: a shut card used to be
-     * two lines, so folding four of them saved four rows instead of eight and
-     * the density the fold was for never arrived. */
-    if (!card.focused && card.lookup?.translation) {
-      const gloss = document.createElement("span");
-      gloss.className = "sso-card__gloss";
-      gloss.textContent = card.lookup.translation;
-      head.append(gloss);
-    } else if (card.focused && card.lookup?.phonetic) {
+    /* The pronunciation goes on the head rather than in a row of its own,
+     * which is what it had: a whole line spent on the quietest thing in the
+     * card, pushing the answer further from the question. */
+    if (card.lookup?.phonetic) {
       const phon = document.createElement("span");
       phon.className = "sso-card__phonetic";
       phon.textContent = card.lookup.phonetic;
       head.append(phon);
     }
 
-    head.append(meta, drop);
-    // The whole head toggles, not only the caret: it is a 12px target beside a
-    // 300px one that means the same thing.
-    head.addEventListener("click", () => toggleCard(card));
+    head.append(meta);
     node.append(head);
-
-    if (!card.focused) return;
 
     /* The translation leads, above the definition, the same way it does in the
      * popup: it is the line that answers "what is this", and a card the reader
@@ -1683,7 +1913,7 @@
     /* The line it was said in, with the word marked inside it. This is the part
      * that makes the entry worth keeping, so it is in the card and not behind
      * an expander. */
-    if (card.sentence && !card.hideSentence) {
+    if (card.sentence) {
       node.append(sentenceLine(card.sentence, card.term, "sso-card__line", card.language));
       // Every other subtitle's line at that moment, in slot order, so a card
       // from a three-language screen reads down the languages the same way the
@@ -1712,18 +1942,19 @@
     save.disabled = card.saved;
     save.addEventListener("click", () => api.detached(saveCard(card), "Saving that word"));
 
+    /* Hold this word here, so the next line does not take it away. The same
+     * statement as clicking the word in its trail, which is where a reader
+     * standing at the strip makes it - both end in pinCard so the two cannot
+     * come to mean different things. */
     const pin = document.createElement("button");
     pin.type = "button";
     pin.className = "sso-card__pin";
-    pin.dataset.on = card.pinned ? "true" : "false";
-    pin.textContent = card.pinned ? "Unpin" : "Pin";
-    pin.addEventListener("click", () => {
-      card.pinned = !card.pinned;
-      redrawCard(card);
-      refocus();
-      trim();
-      refreshCount();
-    });
+    pin.dataset.on = held === card ? "true" : "false";
+    pin.textContent = held === card ? "Let go" : "Hold";
+    pin.title = held === card
+      ? "Let the next word replace this one"
+      : "Keep this word here while the film runs";
+    pin.addEventListener("click", () => pinCard(card));
 
     actions.append(save, pin);
     node.append(actions);
@@ -1837,9 +2068,11 @@
    * the key about. */
   function saveTop() {
     if (!settings.enabled) return false;
-    const card = cards[0];
+    // What the key saves is what the box is showing, which is what the reader
+    // is looking at - held, previewed or simply the last one to arrive.
+    const card = focused || cards[0];
     if (!card) {
-      api.showToast("Nothing in the study rail yet");
+      api.showToast("No word to save yet");
       return true;
     }
     saveCard(card);
@@ -1882,100 +2115,20 @@
     host.style.setProperty("right", `${PARK_RIGHT}px`, "important");
     host.style.setProperty("top", `${PARK_TOP}px`, "important");
     api.writeStored(null, { remove: POSITION_KEY });
-    api.showToast?.("Rail parked");
+    api.showToast?.("Focus box parked");
   }
 
   function savePosition() {
     api.writeStored({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } });
   }
 
-  /* All four corners, like the panel and for the same reason: the rail can be
-   * dragged anywhere, so whichever single corner were chosen would be the one
-   * off the screen exactly when the rail is too big to fit - which is when
-   * resizing it is what the reader wants.
+  /* Nothing here resizes it, and that is the change.
    *
-   * Width decides whether a definition reads as prose or as a column of two
-   * words per line; height decides how much of the film the rail is standing
-   * on. Both depend on the screen and the film, so neither has a right default.
+   * It had four corner grips, a stored width, a stored height and a minimum
+   * and maximum for each - all of it so that a column of three cards could be
+   * made to fit a film. One entry has one size, so the box has one size, and
+   * what is left of the geometry is where the reader put it.
    */
-  const CORNERS = [
-    { name: "nw", dx: -1, dy: -1, cursor: "nwse-resize" },
-    { name: "ne", dx: +1, dy: -1, cursor: "nesw-resize" },
-    { name: "sw", dx: -1, dy: +1, cursor: "nesw-resize" },
-    { name: "se", dx: +1, dy: +1, cursor: "nwse-resize" },
-  ];
-
-  const MIN_WIDTH = 200;
-  const MAX_WIDTH = 620;
-  const MIN_HEIGHT = 120;
-
-  function makeResizable() {
-    for (const corner of CORNERS) railEl.append(buildGrip(corner));
-  }
-
-  function buildGrip(corner) {
-    const grip = document.createElement("div");
-    grip.className = `sso-grip sso-grip--${corner.name}`;
-    grip.style.cursor = corner.cursor;
-    grip.title = "Drag to resize";
-
-    let from = null;
-
-    grip.addEventListener("pointerdown", (event) => {
-      const box = host.getBoundingClientRect();
-      from = {
-        x: event.clientX,
-        y: event.clientY,
-        width: box.width,
-        height: box.height,
-        left: box.left,
-        top: box.top,
-        map: api.measurePlacement(host, (x, y) => setPosition(`${x}px`, `${y}px`)),
-      };
-      // measurePlacement moved it; put it back before the drag begins.
-      const back = from.map.toLocal(box.left, box.top);
-      setPosition(`${back.x}px`, `${back.y}px`);
-
-      grip.setPointerCapture?.(event.pointerId);
-      event.preventDefault();
-      event.stopPropagation();
-    });
-
-    grip.addEventListener("pointermove", (event) => {
-      if (!from) return;
-      if (event.buttons === 0) {
-        end(event);
-        return;
-      }
-      const width = clamp(from.width + (event.clientX - from.x) * corner.dx, MIN_WIDTH, MAX_WIDTH);
-      const height = clamp(
-        from.height + (event.clientY - from.y) * corner.dy,
-        MIN_HEIGHT,
-        Math.max(MIN_HEIGHT, window.innerHeight - 40),
-      );
-      updateSettings({ width: Math.round(width), height: Math.round(height) });
-
-      /* Pulling a left or top edge grows the rail away from the pointer unless
-       * the opposite edge is pinned, so move it by however much it actually
-       * grew - which is not what the pointer did once the size hit a limit. */
-      const grewX = corner.dx < 0 ? width - from.width : 0;
-      const grewY = corner.dy < 0 ? host.getBoundingClientRect().height - from.height : 0;
-      if (grewX || grewY) {
-        const local = from.map.toLocal(from.left - grewX, from.top - grewY);
-        setPosition(`${local.x}px`, `${local.y}px`);
-      }
-    });
-
-    const end = (event) => {
-      if (!from) return;
-      from = null;
-      grip.releasePointerCapture?.(event.pointerId);
-      api.writeStored({ [POSITION_KEY]: { left: host.style.left, top: host.style.top } });
-    };
-    grip.addEventListener("pointerup", end);
-    grip.addEventListener("pointercancel", end);
-    return grip;
-  }
 
   function setPosition(left, top) {
     host.style.setProperty("right", "auto", "important");
@@ -2112,9 +2265,12 @@
 
   async function setEnabled(on) {
     updateSettings({ enabled: Boolean(on) });
-    // Turning study on with the rail put away from a previous session would
-    // look like nothing happened.
-    if (settings.enabled && !settings.showRail) updateSettings({ showRail: true });
+    /* Study switched on with every surface put away from a previous session
+     * would look like nothing happened, so the trails of the subtitles being
+     * learnt come back with it. The focus box does not: it is the surface that
+     * stands on the picture, putting it away is a deliberate act, and the
+     * words still arrive under the subtitle where they can be seen. */
+    if (settings.enabled) updateSettings({ trailOff: [] });
 
     await syncPresence();
     sayWhatStudyIsDoing();
@@ -2189,7 +2345,7 @@
     reparent(api.fullscreenHolder?.() || null);
     setStudyFlag(true);
     await loadSavedTerms();
-    refreshCount();
+    drawFocus();
     // The line already on screen was rendered before study mode existed, so it
     // has no words in it. Force it through again.
     api.redrawCues?.();
@@ -2209,7 +2365,7 @@
     host?.remove();
     host = null;
     shadow = null;
-    railEl = listEl = countEl = noteEl = clearEl = foldEl = null;
+    railEl = listEl = countEl = noteEl = clearEl = null;
     // The popup goes the same way and for the same reason: a live reference to
     // a removed element is what brought the rail back on the next mouse
     // movement, and a second host would do it a second time.
@@ -2220,7 +2376,13 @@
     popupTerm = "";
     hoveredWord = null;
     clearTimeout(hoverTimer);
+    /* The trails are in content.js's overlay root rather than in a host of our
+     * own, so nothing removes them when this one goes - they have to be emptied
+     * by hand, or the words of a film stay under its subtitles with study
+     * switched off. */
+    emptyTrails();
     cards = [];
+    held = previewed = focused = null;
     // Words stay wrapped in whatever line is on screen, which is harmless -
     // the next cue rebuilds the box - but the marks have to go.
     for (const span of allWords()) {

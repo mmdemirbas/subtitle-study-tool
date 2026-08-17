@@ -1,11 +1,11 @@
-/* The study rail.
+/* The study focus box.
  *
  * It sits beside a moving picture, which is a harder background than any page:
  * every value in it changes 24 times a second, and the one constant is that the
- * film is more interesting to look at than this is. So the rail is dark and
+ * film is more interesting to look at than this is. So the box is dark and
  * quiet, the type is dense, and exactly one colour means anything - the amber
  * that also underlines a rare word in the subtitle, so the mark on screen and
- * the card at the side are visibly the same fact.
+ * the entry at the side are visibly the same fact.
  *
  * The surface is warm-neutral rather than the panel's cool grey, and that is
  * the accent's doing: an amber highlight on a blue-grey box reads as two
@@ -13,25 +13,24 @@
  * means the two windows are told apart from the corner of the eye, before
  * either has been read.
  *
- * The window furniture - title bar, head buttons, corner grips, folded state -
- * is in chrome.css and shared with the control panel. Everything here is
- * declared rather than inherited: this stylesheet lands inside arbitrary pages,
- * and although the shadow boundary stops their rules reaching in, inheritable
+ * What is NOT here is the history. The words already said stream past under
+ * the subtitle they came out of - see .sso-trail in overlay.css - and this box
+ * carries one of them in full. The two surfaces divide the work the rail was
+ * doing badly with three cards: history you glance at without leaving the
+ * line, and one entry you actually read.
+ *
+ * The window furniture - title bar, head buttons, folded state - is in
+ * chrome.css and shared with the control panel. Everything here is declared
+ * rather than inherited: this stylesheet lands inside arbitrary pages, and
+ * although the shadow boundary stops their rules reaching in, inheritable
  * properties still cross through the host.
  */
 
-/* Until a corner is dragged the height is the contents', capped short of the
- * bottom of the screen: the rail is docked near the top and the subtitles sit
- * between 84% and 93%, so one free to grow to the bottom would end up standing
- * on the right-hand subtitle at exactly the moment it is most useful. A dragged
- * corner replaces both the height and the cap, because a reader who has just
- * set a height has said where they want the bottom edge to be.
- *
- * One size drives the rail, set from the settings and read by everything under
+/* One size drives the box, set from the settings and read by everything under
  * it in `em`. It was a column of fixed pixel sizes, which meant "make the text
- * bigger" had no single lever to pull and the rail stayed at a size chosen for
- * a settings page rather than for a dark room with a film in it. */
-.sso-rail {
+ * bigger" had no single lever to pull and the surface stayed at a size chosen
+ * for a settings page rather than for a dark room with a film in it. */
+.sso-focus {
   --sso-accent: #e0a458;
   --sso-accent-ink: #d8a86a;
   --sso-answer: #9fd3b4;
@@ -61,13 +60,11 @@
 
   display: flex;
   flex-direction: column;
-  /* Until somebody drags a corner, this is a cap and never a floor: a rail
-   * holding one card should not be a tall empty rectangle standing on the film.
-   * A drag is the other case - it is a reader saying how big this is, and a box
-   * that springs back to its contents cannot be resized at all, which is what
-   * "it still cannot be resized beyond the content" meant. So a chosen height
-   * is a height, and only a chosen one. */
-  max-height: var(--sso-study-height, 60vh);
+  /* A cap and never a floor. The box holds one entry, so its height is that
+   * entry's - what this stops is a long dictionary entry growing down the
+   * screen until it stands on the subtitle, which is the one thing on screen
+   * it must never cover. */
+  max-height: 60vh;
   margin: 0;
   padding: 0;
   font-size: var(--sso-study-text, 15px);
@@ -75,26 +72,13 @@
   overflow: hidden;
 }
 
-.sso-rail[data-sized="true"] {
-  height: var(--sso-study-height);
-  max-height: none;
-}
-
-/* Folding is a height of its own and outranks a dragged one - a rail folded to
- * its title bar that kept a 400px height would be a title bar with an empty
- * 360px box under it. */
-.sso-rail[data-folded="true"] {
-  height: auto;
-  max-height: none;
-}
-
 /* --- head ------------------------------------------------------------------ */
 
-/* How many words are on the rail. It was an amber pill, which made a count -
- * the least actionable fact on the surface - the loudest thing on it, and spent
- * the one colour that is supposed to mean "this word is marked". A number in
- * the quiet ink says the same thing and leaves the amber to the words. */
-.sso-rail__count {
+/* Which subtitle this word came out of, as its language. With two languages
+ * being learnt at once "what does this mean" has a different answer in each,
+ * so the box says which one it is answering for. It was a count of the words
+ * on the rail - the least actionable fact on a surface that now shows one. */
+.sso-focus__of {
   flex: none;
   font-size: 11px;
   font-weight: 700;
@@ -102,16 +86,13 @@
   color: var(--sso-ink-3);
 }
 
-.sso-rail__count:empty {
+.sso-focus__of:empty {
   display: none;
 }
 
-/* --- list ------------------------------------------------------------------ */
+/* --- the entry -------------------------------------------------------------- */
 
-/* The pad at the foot is for the corner grips, which sit over whatever is in
- * the last eighteen pixels of the rail. Without it the final collapsed row's
- * rank is under the hatching and cannot be read. */
-.sso-rail__list {
+.sso-focus__body {
   display: flex;
   flex-direction: column;
   padding-bottom: 8px;
@@ -119,11 +100,11 @@
   overscroll-behavior: contain;
 }
 
-.sso-rail__list:empty {
+.sso-focus__body:empty {
   display: none;
 }
 
-.sso-rail__note {
+.sso-focus__note {
   margin: 0;
   padding: 12px 12px 14px;
   font-size: var(--sso-t-small);
@@ -138,7 +119,7 @@
  * often shorter than the list.
  */
 
-.sso-rail__settings {
+.sso-focus__settings {
   padding: 4px 11px 12px;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -178,9 +159,44 @@
 
 .sso-set__value {
   flex: none;
-  width: 4em;
+  /* Wide enough for a phrase, not only a number. The rarity control reads "the
+   * 4,000 commonest" rather than "4,000", because the bare number was the
+   * reported problem: "'rarer than' what? What unit?" */
+  width: 9.5em;
   font-variant-numeric: tabular-nums;
   text-align: right;
+  color: var(--sso-ink-3);
+}
+
+/* A slider and everything that explains it, as one block. Grouped so the note
+ * under a control cannot be read as belonging to the control below it - which
+ * is what a flat list of rows and notes does. */
+.sso-set__group {
+  padding: 2px 0 6px;
+}
+
+.sso-set__group + .sso-set__group {
+  border-top: 1px solid var(--sso-line-soft);
+}
+
+/* What each end of the track means, under the track, where the hand is.
+ * Reported as "which end shows more words. It is not clear" - and it was not:
+ * the direction was in a title attribute, which is to say nowhere. */
+.sso-set__ends {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  /* Under the slider itself rather than the whole row: the label on the left
+   * and the readout on the right are not part of the scale. */
+  margin: 0 9.5em 0 8.5em;
+  font-size: var(--sso-t-micro);
+  color: var(--sso-ink-3);
+}
+
+.sso-set__note {
+  margin: 3px 0 0;
+  font-size: var(--sso-t-micro);
+  line-height: 1.45;
   color: var(--sso-ink-3);
 }
 
@@ -305,66 +321,13 @@ button.sso-set__action:hover {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  cursor: pointer;
 }
 
-/* Open and close. The caret is the affordance; the whole head is the target,
- * because a 12px glyph next to a 300px row that does the same thing is a worse
- * place to aim at. */
-.sso-card__caret {
-  flex: none;
-  /* 24px, which is the smallest a control may be. It was 11px wide: reachable
-   * with a mouse, not with a thumb, and the whole card head toggles anyway so
-   * this one had a larger equivalent. The remove beside it does not. */
-  width: 24px;
-  min-height: 24px;
-  padding: 0;
-  font-family: inherit;
-  font-size: var(--sso-t-small);
-  line-height: 1;
-  text-align: left;
-  color: var(--sso-ink-3);
-  background: none;
-  border: 0;
-  cursor: pointer;
-}
-
-.sso-card__head:hover .sso-card__caret {
-  color: var(--sso-accent);
-}
-
-/* One word off the rail. Held back until the card is under the pointer: it is
- * destructive and it is next to the word it destroys. */
-.sso-card__drop {
-  flex: none;
-  /* Measured at 15x26 before this. It is the one control on a card that throws
-   * something away and it had no larger equivalent anywhere. */
-  min-width: 24px;
-  min-height: 24px;
-  padding: 0 3px;
-  font-family: inherit;
-  font-size: 1em;
-  line-height: 1;
-  color: var(--sso-ink-3);
-  background: none;
-  border: 0;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0;
-  transition:
-    opacity var(--sso-motion) ease,
-    color var(--sso-motion) ease;
-}
-
-.sso-card:hover .sso-card__drop,
-.sso-card__drop:focus-visible {
-  opacity: 1;
-}
-
-.sso-card__drop:hover {
-  color: var(--sso-danger);
-  background: rgba(240, 131, 111, 0.14);
-}
+/* Neither a caret nor a discard button here any more. The box holds one word
+ * in full, so there is nothing to collapse it in favour of and nothing to
+ * throw it away for - the next word replaces it, and the head's own x puts the
+ * whole box away. Both controls were 24px squares on a card 300px wide, spent
+ * on states that no longer exist. */
 
 /* The largest thing on the surface, because it is the thing being asked
  * about. */
@@ -554,38 +517,6 @@ button.sso-set__action:hover {
   border-color: transparent;
 }
 
-/* --- the collapsed cards ----------------------------------------------------
- *
- * Everything but the one being read, on one line: the word and what it means,
- * which is what a reader would have kept anyway. It took two lines before, so
- * collapsing four cards saved four rows instead of eight and the density the
- * fold was for never arrived.
- */
-
-.sso-card[data-focused="false"] {
-  padding: 5px 11px 6px;
-}
-
-.sso-card[data-focused="false"] .sso-card__term {
-  font-size: var(--sso-t-lead);
-  font-weight: 600;
-  color: var(--sso-ink-2);
-}
-
-.sso-card[data-focused="false"]:hover .sso-card__term {
-  color: #fff;
-}
-
-.sso-card__gloss {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--sso-t-small);
-  color: #7f9c8b;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* --- the answer beside the word ---------------------------------------------
  *
  * The same dark surface as the rail, deliberately: it is the same fact in a
@@ -646,7 +577,6 @@ button.sso-set__action:hover {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sso-card__drop,
   .sso-card__actions button {
     transition: none;
   }

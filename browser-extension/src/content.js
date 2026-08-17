@@ -5223,6 +5223,30 @@
     overlayRoots() {
       return views.map((view) => view.root);
     },
+    /* Where study mode hangs its trail of words: under this subtitle, inside
+     * this subtitle's own root.
+     *
+     * It could have been a floating surface of its own, positioned against the
+     * cue box's measured rectangle. It is here instead because the subtitle is
+     * dragged, placed against an edge, resized and re-scaled, and a second
+     * surface tracking all of that is a second copy of the placement code that
+     * would be one frame behind on every one of those gestures. As a sibling of
+     * the cue box it simply moves with it, for nothing.
+     *
+     * A sibling and NOT a child: renderCues empties the cue box for every line
+     * of the film, so anything inside it lasts until the next cue. The root is
+     * a column anchored by its bottom edge, so the trail holds the anchor line
+     * and the dialogue floats above it - see .sso-root in overlay.css. */
+    studyDock(slot) {
+      const view = views?.[slot];
+      if (!view) return null;
+      if (!view.trail) {
+        view.trail = document.createElement("div");
+        view.trail.className = "sso-trail";
+        view.root.append(view.trail);
+      }
+      return view.trail;
+    },
     /* Study settings live in study.js, so a change there is invisible to the
      * panel's subscription. This pushes one status round so the panel redraws
      * against them. */

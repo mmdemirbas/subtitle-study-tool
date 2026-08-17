@@ -37,6 +37,15 @@
   width: var(--sso-width, 80vw);
   z-index: 2147483647; /* above player chrome, which often sits near 2^31 */
   display: flex;
+  /* A column, because study mode hangs a trail of words under the dialogue and
+   * the two have to stack. With one child - which is every case where study is
+   * off - a column and a row put the cue in exactly the same place, provided
+   * the alignment moves from justify-content to align-items with it. The box is
+   * anchored by its BOTTOM edge (translate -100%), so the trail holds the
+   * anchor and the dialogue floats above it rather than the dialogue staying
+   * put and the trail hanging off the bottom of the frame. */
+  flex-direction: column;
+  align-items: var(--sso-justify, center);
   /* Centre unless the subtitle has been placed against an edge of the picture,
    * where the text has to be ranged against that edge too or the margin
    * between it and the frame changes with every line. Two properties because
@@ -246,6 +255,183 @@
 .sso-w[data-selected="true"] {
   background: rgba(120, 190, 255, 0.28);
   box-shadow: 0 0 0 2px rgba(120, 190, 255, 0.28);
+}
+
+/* --- the trail ---------------------------------------------------------------
+ *
+ * The words study mode has picked out of this subtitle, in the order they were
+ * said, under the subtitle they came from. Asked for as "the words should be
+ * scrolling slowly and while new words appear, older ones should be slightly
+ * disappearing... instead of using a panel, maybe we can use another
+ * subtitle-like overlay area".
+ *
+ * One per subtitle rather than one for the film, which is the other half of
+ * what was asked: with two languages being learnt at once, a single list mixes
+ * them and there is nothing to close but both of them together.
+ *
+ * It is history, so it is quieter than the dialogue above it and quieter than
+ * the marks in that dialogue: smaller, dimmer, no backdrop of its own beyond
+ * what a word needs to stay legible over a moving picture. Nothing here may
+ * pull the eye off the line being spoken.
+ */
+.sso-trail {
+  display: flex;
+  align-items: baseline;
+  gap: 0.42em;
+  max-width: 100%;
+  margin-top: 0.3em;
+  padding: 0;
+  overflow: hidden;
+  font-family: var(--sso-family, "Helvetica Neue", Helvetica, Arial, sans-serif);
+  /* Half the dialogue's size. It was 0.62, and measured against a real cue the
+   * strip came out nearly as large as the line above it - a second subtitle
+   * competing with the first, which is the opposite of what was asked for:
+   * "some sort of cool animation/effect, not a bold/attraction-getting one." */
+  font-size: calc(var(--sso-font-size, 2.6vh) * 0.5);
+  line-height: 1.3;
+  /* Newest at the right, so the word that just arrived is always in the same
+   * place. The older ones are pushed leftwards out of the box, which is what
+   * makes this read as a strip going past rather than as a list being added
+   * to. The mask finishes what the per-word fade starts: a word does not stop
+   * at half opacity, it leaves. */
+  /* Centred under a centred subtitle, and only pinned to the right end once
+   * there are more words than fit.
+   *
+   * The strip is a FIXED width - the whole allotment, the same box the cue is
+   * capped to - and that is what stops the drift. Shrink-to-fit, an arriving
+   * word grew the box while the track slid inside it: the box jumped instantly
+   * and the words slid over 380ms, so the two motions were in different
+   * directions at the same moment and the row read as unstable. That is the
+   * fault reported against the first design - "the animation in the rails is
+   * not stable, it makes the rest of the rails drift". Now the box does not
+   * move at all and there is one motion to follow. */
+  width: 100%;
+  box-sizing: border-box;
+  justify-content: center;
+}
+
+/* Only once the words are wider than the strip. Then the newest is pinned at
+ * the right, where it lands in the same place every time, and the oldest go
+ * over the left edge and out under the fade.
+ *
+ * The mask is here rather than on .sso-trail because a mask that is always on
+ * does to the oldest word exactly what the age fade is forbidden to do: at 14%
+ * of a 578px strip the first word sat under 81px of gradient and could not be
+ * read, whatever its opacity said. Nothing fades until something is genuinely
+ * leaving. */
+.sso-trail[data-over="true"] {
+  justify-content: flex-end;
+  mask-image: linear-gradient(to right, transparent, #000 3.2em, #000);
+}
+
+/* Nothing said yet, or this subtitle's strip was closed. Not `:empty`: the
+ * track and the close button are built once and live in it for good, so the
+ * element is never empty after the first word however few words are in it. */
+.sso-trail:empty,
+.sso-trail[data-words="0"] {
+  display: none;
+}
+
+/* The whole strip slides, rather than each word jumping into place. The width
+ * of the arriving word is put on the track as a transform and then taken off
+ * again on the next frame, so the browser interpolates it - a transform,
+ * because animating anything that changes layout re-lays out the page on every
+ * frame of every arriving word. */
+.sso-trail__track {
+  display: flex;
+  align-items: baseline;
+  gap: 0.42em;
+  /* Never shrunk to fit the strip: a track wider than the strip is the whole
+   * point, and it is the LEFT end - the oldest words - that goes over the
+   * edge and is clipped. Shrinking instead would squeeze every word. */
+  flex: 0 0 auto;
+  transition: transform 380ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+.sso-trail__word {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3em;
+  padding: 0.05em 0.4em;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(0, 0, 0, 0.42);
+  border-radius: 5px;
+  /* The same outline the dialogue carries, for the same reason: the backing is
+   * thinner here (0.42 against the cue's 0.55) so that the strip stays quiet,
+   * and over a bright frame a thin backing is not enough on its own. */
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.9), 0 1px 2px rgba(0, 0, 0, 0.9);
+  /* Set from script, by age. A floor rather than a fade to nothing: at 0.14
+   * the third word back was already unreadable, reported as fading "that much
+   * aggresively", so age is a hint and never the reason a word cannot be
+   * read. */
+  opacity: 1;
+  transition: opacity 380ms ease, background 160ms ease;
+  cursor: help;
+  pointer-events: auto;
+}
+
+.sso-trail__word:hover {
+  background: rgba(0, 0, 0, 0.72);
+}
+
+/* The one being read in the focus box, marked here so the two surfaces are
+ * obviously about the same word. */
+.sso-trail__word[data-focused="true"] {
+  box-shadow: inset 0 0 0 1px rgba(255, 214, 120, 0.55);
+}
+
+.sso-trail__word[data-saved="true"] .sso-trail__term {
+  color: rgba(159, 211, 180, 0.95);
+}
+
+.sso-trail__term {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+/* What it means, on the newest word only.
+ *
+ * The trail has to be worth reading on its own - a reader who glanced down for
+ * the word they missed should not have to go to another surface for it - and
+ * it also has to stay quiet. Measured with the meaning on every word, eight of
+ * them filled 960px and the strip was a paragraph under the dialogue. The one
+ * that just arrived is the one being read; the others are a memory of what was
+ * said, and the focus box has the whole entry for any of them. */
+.sso-trail__gloss {
+  display: none;
+  font-size: 0.86em;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.sso-trail__word[data-newest="true"] .sso-trail__gloss,
+.sso-trail__word:hover .sso-trail__gloss {
+  display: inline;
+}
+
+/* Stops this subtitle's trail, and only this one's. The reported bug is
+ * exactly this: "Closing one study panel closes all. Wrong." Hidden until the
+ * strip is pointed at, because a control on screen for two hours over a film
+ * is a control in the way. */
+.sso-trail__close {
+  padding: 0 0.3em;
+  font: inherit;
+  font-size: 0.9em;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(0, 0, 0, 0.5);
+  border: 0;
+  border-radius: 5px;
+  opacity: 0;
+  transition: opacity 160ms ease;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.sso-trail:hover .sso-trail__close,
+.sso-trail__close:focus-visible {
+  opacity: 1;
 }
 
 /* The symbol sits before the words rather than replacing them - the point is

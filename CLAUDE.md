@@ -14,7 +14,7 @@ The other directories are largely stable:
 
 | Directory | Touch it when |
 |---|---|
-| `browser-extension/` | the overlay, the panel, the study rail, subtitle fetch/sync |
+| `browser-extension/` | the overlay, the panel, the study surfaces, subtitle fetch/sync |
 | `subtitle-daemon/` | OpenSubtitles access, the on-disk cache, local transcription |
 | `srt-viewer/` | the standalone dual-subtitle study page (no video) |
 | `srt-translator/` | batch `.srt` translation CLI |

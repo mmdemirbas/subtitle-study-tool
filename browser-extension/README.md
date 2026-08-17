@@ -158,7 +158,7 @@ else, and a player that binds letters of its own would fight them.
 | <kbd>P</kbd> | Control panel |
 | <kbd>V</kbd> | Hide / show subtitles |
 | <kbd>S</kbd> | Study mode |
-| <kbd>D</kbd> | Save the word at the top of the study rail |
+| <kbd>D</kbd> | Save the word in the study box |
 
 <kbd>T</kbd> and <kbd>Y</kbd> sit directly above <kbd>G</kbd> and <kbd>H</kbd>,
 which is why they were picked: the pair below moves the subtitle against the
