@@ -89,10 +89,20 @@
      * and not looked up.
      *
      * A set rather than one slot, because a reader can be working on two
-     * languages at once. Empty is not a state it rests in - unmarking the last
-     * one turns study off, so "study nothing" and the switch cannot disagree
-     * about whether the words under the pointer are live. */
-    studySlots: [0],
+     * languages at once. It cannot disagree with the switch - marked means
+     * study is on, empty means it is off - and that is why this starts EMPTY
+     * beside `enabled: false` rather than at [0].
+     *
+     * It was [0] with the switch off, which is the one pair the rule forbids,
+     * and it made the first press of a subtitle's learn chip do the opposite of
+     * what it says. Observed in a real browser on the nested-player vehicle:
+     * subtitle 1 was already marked before anything was pressed, so the press
+     * unmarked it, `slotsAndSwitchAgree` correctly kept study off, and the
+     * reader who had just switched learning on got nothing on screen - reported
+     * as "I cannot see any strips ... I've enabled learning for a language
+     * already". Switching study on with nothing marked still marks the first
+     * attached subtitle, so nothing is lost by starting empty. */
+    studySlots: [],
     // Empty means "whatever language that subtitle is in".
     language: "",
     pauseOnPin: false,
@@ -181,11 +191,26 @@
   async function loadSettings() {
     try {
       const stored = await api.readStored(SETTINGS_KEY);
-      settings = { ...DEFAULT_SETTINGS, ...migrate(stored[SETTINGS_KEY] || {}) };
+      settings = settled({ ...DEFAULT_SETTINGS, ...migrate(stored[SETTINGS_KEY] || {}) });
     } catch {
       // Defaults are fine.
     }
     applySettings();
+  }
+
+  /* The switch and the marks, made to agree on the way IN.
+   *
+   * `slotsAndSwitchAgree` holds this rule for every change to the settings, and
+   * that turned out to be half of it: a state that arrives already disagreeing
+   * - from the defaults, from an installation that predates studySlots, from a
+   * write by an older version - never passes through it, and every later
+   * decision is then made against a contradiction. The switch is the coarser
+   * statement, so it wins: study off means nothing is being learnt. */
+  function settled(state) {
+    const marked = Array.isArray(state.studySlots) && state.studySlots.length > 0;
+    if (!state.enabled && marked) return { ...state, studySlots: [] };
+    if (state.enabled && !marked) return { ...state, enabled: false };
+    return state;
   }
 
   /* Every frame keeps its own copy of these, and storage is what makes the
@@ -221,7 +246,7 @@
     }
     if (!stored || JSON.stringify(stored) === JSON.stringify(settings)) return;
     const was = settings.enabled;
-    settings = { ...DEFAULT_SETTINGS, ...migrate(stored) };
+    settings = settled({ ...DEFAULT_SETTINGS, ...migrate(stored) });
     applySettings();
     // Only the switch changes what exists; everything else is appearance, and
     // applySettings has already dealt with it.
@@ -252,9 +277,14 @@
     if (!Array.isArray(rest.studySlots) && Number.isInteger(studySlot)) {
       rest.studySlots = [studySlot];
     }
-    if (typeof rest.showFocus !== "boolean" && typeof showRail === "boolean") {
-      rest.showFocus = showRail;
-    }
+    /* showRail is deliberately dropped rather than carried into showFocus.
+     *
+     * They are not the same surface. Closing the old rail meant "put away the
+     * column of cards at the edge of the screen"; the box it became holds one
+     * entry and sits with a strip under each subtitle. Carried across, a reader
+     * who had closed the rail once, months ago, would switch learning on and
+     * see nothing at all - and nothing on screen would say why. A surface that
+     * has changed shape starts visible, and closing it again is one click. */
     return rest;
   }
 
@@ -773,6 +803,17 @@
    * probe per session is nothing. */
   const untabled = new Set();
 
+  /* Different from untabled, and the difference is what the reader is told.
+   *
+   * A daemon that is not answering produces the same empty result as a language
+   * with no table, and study mode said "no word-frequency list for EN" either
+   * way - a wrong diagnosis of a condition the reader could fix in one command.
+   * Observed with a plain `python3 -m http.server` left running on 8791: every
+   * rank request came back HTTP 501, nothing was ever marked, and the surface
+   * blamed the language. It is not remembered like `untabled` either: the
+   * daemon coming back has to be enough, without a reload. */
+  let ranksUnavailable = false;
+
   async function ranksFor(words, language) {
     const known = new Map();
     const missing = [];
@@ -784,6 +825,21 @@
     if (missing.length === 0 || untabled.has(language)) return known;
 
     const response = await api.daemon("rank", { words: missing, language });
+    /* Nothing was asked and nothing was answered - the helper is down, or
+     * something else is on its port. Say so rather than blaming the language,
+     * and do not write a verdict that the next successful request would have
+     * to undo. */
+    if (response?.transportError || response?.error) {
+      if (!ranksUnavailable) {
+        ranksUnavailable = true;
+        emptyNote();
+      }
+      return known;
+    }
+    if (ranksUnavailable) {
+      ranksUnavailable = false;
+      emptyNote();
+    }
     const ranks = response?.ranks || {};
     /* Nothing back for a request that named words is the table being absent -
      * a language that has one always answers for every word it was asked
@@ -1585,6 +1641,12 @@
      * promising that rare words will turn up, staying empty for two hours,
      * with nothing anywhere saying why. Hovering still answers, so the
      * sentence says what does work rather than only what does not. */
+    if (ranksUnavailable) {
+      noteEl.textContent =
+        "The subtitle helper is not answering, so no word can be marked as rare. " +
+        "Hovering still looks a word up; shift-drag for a phrase.";
+      return;
+    }
     const language = studyLanguage();
     if (untabled.has(language)) {
       noteEl.textContent =

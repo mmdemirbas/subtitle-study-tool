@@ -135,6 +135,10 @@
              * marked, what lands in the rail, what a save keeps. The tables
              * themselves are generated data with their own generator. */
             if (msg.op === "rank") {
+              /* Switched on by the check for a helper that is not answering.
+               * The worker turns a transport failure into this shape rather
+               * than rejecting, so this is what study mode really sees. */
+              if (rankFails) return { transportError: "Daemon returned HTTP 501" };
               const ranks = {};
               for (const word of msg.args.words) {
                 ranks[word] = RANKS[word] === undefined ? null : RANKS[word];
@@ -227,6 +231,9 @@
          * check hovers later leaves that one with nothing to observe. */
         reckoning: 16400, is: 18, upon: 2200, us: 90,
       };
+      // See "a helper that is not answering ...": the one case where the stub
+      // has to fail the way the real worker fails.
+      let rankFails = false;
       const lookupCalls = [];
       const lookupTargets = [];
       const deckSaves = [];
@@ -4245,6 +4252,88 @@
           throw new Error(`the strip fits in ${trail.clientWidth}px and is still masked: ${masked}`);
         if (fits && trail.dataset.over === "true")
           throw new Error("the strip says it is overflowing and is not");
+      });
+
+      check("a helper that is not answering is not reported as a language with no word list", async () => {
+        /* Observed on a real machine: a plain `python3 -m http.server` had been
+         * left on the daemon's port, so every rank request came back HTTP 501,
+         * nothing was ever marked, and the study surface said "No word-frequency
+         * list for EN" - a wrong diagnosis of something the reader could have
+         * fixed in one command.
+         *
+         * The two cases produce the same empty result and have to be told apart
+         * at the only place that can: whether the helper answered at all.
+         *
+         * It needs words this session has never ranked. Ranks are cached for
+         * the session, so asking about the cue the other study cases use would
+         * send no request at all and observe nothing. */
+        const note = () => focusShadow()?.querySelector(".sso-focus__note")?.textContent || "";
+        const showing = async (words, at) => {
+          await window.__ssoApi.attach({
+            cues: [{ start: at, end: at + 20000, text: words }],
+            label: "EN · helper", fileId: 8811, language: "en", slot: 0,
+          });
+          video.currentTime = (at + 2000) / 1000;
+          await sleep(400);
+        };
+        try {
+          rankFails = true;
+          await showing("the perambulating hierophant absconded", 1400000);
+          if (/word-frequency list/i.test(note()))
+            throw new Error(`a silent helper was reported as a missing table: "${note()}"`);
+          if (!/not answering/i.test(note()))
+            throw new Error(`the surface says "${note()}"`);
+
+          // And it recovers on its own once the helper answers, without a
+          // reload: the verdict was never written down.
+          rankFails = false;
+          await showing("the obstreperous vicissitude prevailed", 1450000);
+          if (/not answering/i.test(note()))
+            throw new Error(`still blaming the helper after it answered: "${note()}"`);
+        } finally {
+          rankFails = false;
+          await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
+          await showWordyCue();
+          await sleep(150);
+        }
+      });
+
+      check("a stored state where study is off but a subtitle is marked cannot survive", async () => {
+        /* Reported as "I cannot see any strips or rails or something else in
+         * study mode ... I've enabled learning for a language already", and
+         * observed in a real browser before it was believed: the settings said
+         * study was OFF while subtitle 1 was marked as being learnt, which is
+         * the one pair the rule forbids. Every later decision is then made
+         * against a contradiction - the first press of that subtitle's learn
+         * chip unmarks it, study stays off, and nothing appears.
+         *
+         * slotsAndSwitchAgree held the rule for every CHANGE to the settings,
+         * so a state that arrived already disagreeing never passed through it.
+         * This writes exactly such a state, the way an older version's write
+         * would arrive, and then presses the chip. */
+        const was = { ...window.__ssoStudy.settings() };
+        try {
+          await chrome.storage.local.set({
+            "sso:study": { ...was, enabled: false, studySlots: [0] },
+          });
+          await sleep(120);
+          const after = window.__ssoStudy.settings();
+          if (!after.enabled && after.studySlots.length)
+            throw new Error(
+              `study is off and ${JSON.stringify(after.studySlots)} is marked as being learnt`,
+            );
+
+          // And the first press of the chip is the one that switches it on.
+          await window.__ssoStudy.toggleStudySlot(0);
+          const now = window.__ssoStudy.settings();
+          if (!now.enabled || !now.studySlots.includes(0))
+            throw new Error(
+              `one press left enabled=${now.enabled} slots=${JSON.stringify(now.studySlots)}`,
+            );
+        } finally {
+          await chrome.storage.local.set({ "sso:study": was });
+          await sleep(120);
+        }
       });
 
       check("hovering answers beside the word, leading with the translation", async () => {
