@@ -922,7 +922,33 @@ button.sso-quick__move[data-on="true"] {
  * The word is lower case and the pill is a hairline; on, it fills with amber at
  * a fifth of the strength it had. It still reads as marked at a glance, and the
  * name gets its characters back. See the head's own note on hierarchy. */
+/* Both words occupy the button, and only one is painted.
+ *
+ * "learn" is an invitation and "learning" is a state, so the word has to
+ * change - and the button is right-aligned in a group that also holds the
+ * timing field and its clear, so a button that changes width moves both of
+ * them. Reported as "buttons shouldn't drift as well; learn/learning change
+ * drifts the sync amount input box and backspace symbol". Measured at the
+ * panel's opening width, the word costs 22px, and everything left of it moved
+ * by that on every toggle. Stacking the two words in one grid cell makes the
+ * button as wide as the longer of them, always. */
+/* Present, unpaintable, unreachable - and still holding its width. `hidden`
+ * took it out of the row and moved the timing field beside it, which is half
+ * of "buttons shouldn't drift as well". Below 400px it goes properly: at the
+ * 342px the panel opens at the name is already at its floor, and 26px spent on
+ * an empty box is 26px taken out of the one line that says which subtitle this
+ * is - measured, the release name's distinguishing tail ended 23px past the
+ * edge of its own box. So: stable at the widths people sync at, and the narrow
+ * card keeps its name. */
+.sso-sync__clear[data-idle="true"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 button.sso-track__learn {
+  display: inline-grid;
+  grid-template-areas: "word";
+  place-items: center;
   flex: none;
   min-height: var(--sso-h-ctl);
   padding: 0 var(--sso-s2);
@@ -934,6 +960,17 @@ button.sso-track__learn {
   background: none;
   border: 0;
   border-radius: var(--sso-r-ctl);
+}
+
+.sso-track__learn-word {
+  grid-area: word;
+}
+
+/* visibility, not display: a word that is not painted still has to take up its
+ * width, or the stacking buys nothing. */
+.sso-track__learn[data-on="true"] .sso-track__learn-word[data-word="learn"],
+.sso-track__learn[data-on="false"] .sso-track__learn-word[data-word="learning"] {
+  visibility: hidden;
 }
 
 button.sso-track__learn:hover:not(:disabled) {
@@ -954,6 +991,10 @@ button.sso-track__learn:hover:not(:disabled) {
  * not have below 400. Above it the word is back, because the word is what
  * makes this control explain itself. */
 @container (max-width: 400px) {
+  .sso-sync__clear[data-idle="true"] {
+    display: none;
+  }
+
   /* The WORD goes; the target does not. `padding: 1px 3px` with no text
    * collapsed the button to 13x26, which is half the smallest comfortable
    * pointer target and exactly the defect the "every verb is on the face"
@@ -964,7 +1005,13 @@ button.sso-track__learn:hover:not(:disabled) {
     justify-content: center;
     min-width: var(--sso-h-ctl);
     padding: 0;
-    font-size: 0;
+  }
+
+  /* Both words go, not the button. font-size:0 no longer does it - the words
+   * are elements now, and one of them is what holds the button's width at
+   * every other size. */
+  .sso-track__learn-word {
+    display: none;
   }
 
   button.sso-track__learn::after {
@@ -1134,35 +1181,63 @@ button.sso-sync__align:hover:not(:disabled) {
  * is the biggest object on the card - spent on a line that repeats the number
  * already showing in the field above it. It says the same thing quietly now
  * and keeps its Undo, which is the part that is actually worth a control. */
-.sso-track__said {
+/* The one place the panel says anything, at the foot of the window.
+ *
+ * Its height is paid for whether or not there is a message, and that is the
+ * whole point: reported as "the messages should have a single fixed place,
+ * they shouldn't appear on card face, this causes UI drift". A line that
+ * appears and disappears moves whatever is next to it, and what was next to it
+ * was the map and the timing field - the two things being aimed at when the
+ * message arrives. */
+.sso-panel__status {
   display: flex;
+  flex: none;
   gap: var(--sso-s2);
   align-items: center;
-  margin: 6px 0 0;
-  padding: 2px 0 2px 8px;
+  min-height: 24px;
+  padding: 2px var(--sso-s3);
   font-size: var(--sso-t-small);
   line-height: 1.35;
   color: var(--sso-ink-3);
-  background: none;
-  border-left: 2px solid var(--sso-line);
-  border-radius: 0;
+  border-top: 1px solid var(--sso-line);
 }
 
-.sso-track__said[data-warn="true"] {
+.sso-panel__status[data-warn="true"] {
   color: var(--sso-ink-2);
-  border-left-color: var(--sso-danger);
 }
 
-.sso-track__said-text {
+/* Which subtitle it is about. On the card this was implicit; on a shared line
+ * it is the first thing the reader needs, so it leads. */
+.sso-panel__status-slot {
+  flex: none;
+  min-width: 16px;
+  padding: 0 4px;
+  font-size: var(--sso-t-small);
+  font-weight: 700;
+  color: var(--sso-ink-2);
+  text-align: center;
+  background: var(--sso-fill);
+  border-radius: var(--sso-r-ctl);
+}
+
+.sso-panel__status[data-warn="true"] .sso-panel__status-slot {
+  color: var(--sso-bg);
+  background: var(--sso-danger);
+}
+
+.sso-panel__status-text {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* One step up the fill on hover, not a flip to solid blue. It was the loudest
  * hover on the panel and the only one that changed hue, on a control that
  * reverses something - and an accent fill belongs to a resting state, never to
  * a hover. See the note on hover in chrome.css. */
-button.sso-track__said-do {
+button.sso-panel__status-do {
   flex: none;
   min-height: var(--sso-h-chip);
   padding: 0 var(--sso-s2);
@@ -1175,7 +1250,7 @@ button.sso-track__said-do {
   border-radius: var(--sso-r-ctl);
 }
 
-button.sso-track__said-do:hover {
+button.sso-panel__status-do:hover {
   background: var(--sso-fill-hover);
 }
 

@@ -2366,7 +2366,7 @@
      * anywhere. Recording the sentences means a report of "it said something
      * about the daemon and then stopped working" has the sentence in it. */
     trace("said", { message: String(message), slot, hadAction: Boolean(action) });
-    if (slot != null && window.__ssoPanel?.sayOnCard?.(slot, message, { action })) return;
+    if (slot != null && window.__ssoPanel?.sayInPanel?.(slot, message, { action })) return;
     ensureOverlay();
     ensureToast();
     toast.replaceChildren();

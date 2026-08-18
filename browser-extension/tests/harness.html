@@ -2247,24 +2247,51 @@
         }
       });
 
-      check("an answer about one subtitle is said on that subtitle's card", async () => {
-        /* Reported against Line up: "the message can be easily missed since it
-         * is printed on top of the screen, very far from the button I've
-         * clicked." The rule is applied where every such message passes rather
-         * than at the one call site that raised the complaint - showToast puts
-         * anything that names a slot onto that slot's card when the panel is
-         * open, and keeps the toast for when it is not, which is where the
-         * keyboard nudges live. */
+      check("an answer names its subtitle, and nothing on the card moves to make room", async () => {
+        /* Two reports, and the second one is why this moved.
+         *
+         * "The message can be easily missed since it is printed on top of the
+         * screen, very far from the button I've clicked" put every message that
+         * names a slot onto that slot's card. Then: "the messages should have a
+         * single fixed place, they shouldn't appear on card face, this causes
+         * UI drift" - and it did, because a card that grows by a line when a
+         * message arrives moves the map and the timing field under the hand
+         * that is aiming at them.
+         *
+         * So the line is at the foot of the window, its height is paid for
+         * whether or not it holds anything, and it says which subtitle. Both
+         * halves are asserted: the message arrives AND the card is the same
+         * height before and after. */
         await window.__ssoApi.attach({ cues: CUES, label: "EN · said", fileId: 910, slot: 0 });
         await window.__ssoPanel.show();
         await sleep(200);
         const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
-        const said = card.querySelector(".sso-track__said");
+        const status = panelShadow().querySelector(".sso-panel__status");
+        if (!status) throw new Error("the panel has no status line");
+        if (card.querySelector(".sso-track__said"))
+          throw new Error("a card still carries a message of its own");
+
+        /* Height and vertical position, which is what a line appearing inside
+         * a card moves. The field's x belongs to the other check - it is moved
+         * by the clear arriving, not by the message. */
+        const geometry = () => ({
+          card: Math.round(card.getBoundingClientRect().height),
+          fieldY: Math.round(card.querySelector(".sso-sync__field").getBoundingClientRect().y),
+          mapY: Math.round(card.querySelector(".sso-track__map, canvas").getBoundingClientRect().y),
+        });
+        const before = geometry();
 
         window.__ssoApi.setOffset(1500, { slot: 0 });
         await sleep(150);
-        if (said.hidden || !said.textContent.trim())
-          throw new Error("with the panel open, the answer was not put on the card");
+        if (!status.textContent.trim())
+          throw new Error("with the panel open, the answer was not said in the panel");
+        if (status.querySelector(".sso-panel__status-slot").textContent !== "1")
+          throw new Error(`the line does not say which subtitle: "${status.textContent}"`);
+        const during = geometry();
+        if (JSON.stringify(before) !== JSON.stringify(during))
+          throw new Error(
+            `the card moved to make room: ${JSON.stringify(before)} then ${JSON.stringify(during)}`,
+          );
 
         // Shut, the same message still has to reach the reader somewhere.
         window.__ssoPanel.hide();
@@ -2280,6 +2307,59 @@
         window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
         await window.__ssoPanel.show();
         await sleep(150);
+      });
+
+      check("the learn chip and the clear keep their place in both states", async () => {
+        /* Reported as "buttons shouldn't drift as well; learn/learning change
+         * drifts the sync amount input box and backspace symbol". They share a
+         * right-aligned group with the timing field, so any of them changing
+         * width - or leaving the layout when there is nothing to clear - moves
+         * the field the reader is reading. */
+        await window.__ssoPanel.show();
+        /* Above the width where the card gives up its words. Under 400px the
+         * chip is a dot and the clear leaves the row entirely, because there
+         * the name needs those pixels more than the row needs to hold still -
+         * so measuring drift there would be measuring the other decision. */
+        const wasWidth = Math.round(
+          panelShadow().querySelector(".sso-panel").getBoundingClientRect().width,
+        );
+        window.__ssoPanel.applySize(460);
+        await sleep(200);
+        const card = [...panelShadow().querySelectorAll(".sso-track")].find((c) => !c.hidden);
+        const field = () => Math.round(card.querySelector(".sso-sync__field").getBoundingClientRect().x);
+        const chip = card.querySelector(".sso-track__learn");
+        const chipWidth = () => Math.round(chip.getBoundingClientRect().width);
+
+        const was = window.__ssoStudy.settings().studySlots;
+        const wasOffset = window.__ssoApi.status().tracks[0].offsetMs;
+        try {
+          window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
+          await sleep(150);
+          const flat = { field: field(), chip: chipWidth() };
+
+          window.__ssoApi.setOffset(2500, { slot: 0, quiet: true });
+          await sleep(150);
+          const moved = { field: field(), chip: chipWidth() };
+          if (flat.field !== moved.field)
+            throw new Error(
+              `the clear appearing moved the field from ${flat.field} to ${moved.field}`,
+            );
+
+          await window.__ssoStudy.toggleStudySlot(0);
+          await sleep(200);
+          const learning = { field: field(), chip: chipWidth() };
+          if (moved.chip !== learning.chip)
+            throw new Error(`the chip went from ${moved.chip}px to ${learning.chip}px`);
+          if (moved.field !== learning.field)
+            throw new Error(
+              `learn/learning moved the field from ${moved.field} to ${learning.field}`,
+            );
+        } finally {
+          window.__ssoStudy.updateSettings({ studySlots: was });
+          window.__ssoApi.setOffset(wasOffset, { slot: 0, quiet: true });
+          window.__ssoPanel.applySize(wasWidth);
+          await sleep(150);
+        }
       });
 
       check("the title bar's own controls stay quiet until they are wanted", async () => {
@@ -2672,11 +2752,19 @@
 
         window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
         await sleep(80);
-        if (!clear.hidden) throw new Error("it offers to undo a timing that is already the file's");
+        /* Not `hidden` any more: on a wide card it keeps its box and only stops
+         * being paintable, so that the timing field beside it does not move the
+         * moment a subtitle comes back to its own timing. Either way it must be
+         * impossible to press what there is nothing to undo with. */
+        const reachable = (el) =>
+          el.dataset.idle !== "true" &&
+          getComputedStyle(el).visibility !== "hidden" &&
+          el.getBoundingClientRect().width > 0;
+        if (reachable(clear)) throw new Error("it offers to undo a timing that is already the file's");
 
         window.__ssoApi.setOffset(-4250, { slot: 0, quiet: true });
         await sleep(100);
-        if (clear.hidden) throw new Error("there is something to undo and no way to undo it");
+        if (!reachable(clear)) throw new Error("there is something to undo and no way to undo it");
         if (clear.getBoundingClientRect().width < 24)
           throw new Error(`the undo is ${Math.round(clear.getBoundingClientRect().width)}px wide`);
 

@@ -295,7 +295,40 @@
     };
     body.append(...Object.values(el.screens));
 
-    panel.append(head, body, ...buildResizeGrips(body));
+    /* Everything the panel has to say, in one place that never moves.
+     *
+     * Messages used to be written on the card they were about, which put a
+     * result next to the control that produced it - the right instinct, and it
+     * was reported as the wrong trade: "the messages should have a single fixed
+     * place, they shouldn't appear on card face, this causes UI drift". It did.
+     * A card grew by a line when a message arrived and shrank when it expired,
+     * so the map, the field and the card below it all moved while the reader
+     * was aiming at them.
+     *
+     * A status line at the foot of the window costs its height once, always,
+     * and nothing above it ever moves. It carries the subtitle's number, so a
+     * message about one of two subtitles still says which - that was the whole
+     * value of writing it on the card. */
+    el.status = document.createElement("div");
+    el.status.className = "sso-panel__status";
+    el.statusSlot = document.createElement("span");
+    el.statusSlot.className = "sso-panel__status-slot";
+    el.statusText = document.createElement("span");
+    el.statusText.className = "sso-panel__status-text";
+    el.statusDo = document.createElement("button");
+    el.statusDo.type = "button";
+    el.statusDo.className = "sso-panel__status-do";
+    el.statusDo.hidden = true;
+    /* Bound once, to whatever offer is standing. The button is built with the
+     * window rather than with each message, so a new offer replaces what it
+     * does and never leaves a second listener behind on the same element. */
+    el.statusDo.addEventListener("click", (event) => {
+      event.stopPropagation();
+      saidAction?.onClick();
+    });
+    el.status.append(el.statusSlot, el.statusText, el.statusDo);
+
+    panel.append(head, body, el.status, ...buildResizeGrips(body));
     shadow.append(panel);
 
     /* Into the document here, not on the first reparent.
@@ -1742,7 +1775,7 @@
        * would have snapped nothing and said so confidently. */
       api.detached(
         Promise.resolve(api.snapTiming?.(slot)).then((snapped) => {
-          sayOnCard(slot, snapped
+          sayInPanel(slot, snapped
             ? `Snapped · ${api.describeOffset(next + snapped.deltaMs)} · ${snapped.lines} lines agree`
             : `Moved · ${api.describeOffset(next)}`);
           refresh(api.status());
@@ -1898,6 +1931,16 @@
     const learnChip = document.createElement("button");
     learnChip.className = "sso-track__learn";
     learnChip.type = "button";
+    /* Both words, one cell. See .sso-track__learn: the button is right-aligned
+     * in a group with the timing field and its clear, so a width that changes
+     * with the state moves both of them under the reader's hand. */
+    for (const word of ["learn", "learning"]) {
+      const span = document.createElement("span");
+      span.className = "sso-track__learn-word";
+      span.dataset.word = word;
+      span.textContent = word;
+      learnChip.append(span);
+    }
     learnChip.addEventListener("click", (event) => {
       event.stopPropagation();
       api.toggleStudySlot(slot);
@@ -2101,7 +2144,7 @@
       // Acts too. A subtitle cut into acts is not back to its own timing.
       api.setSteps([], { slot });
       api.setOffset(0, { slot, quiet: true, how: "reset" });
-      sayOnCard(slot, "Back to the file's own timing");
+      sayInPanel(slot, "Back to the file's own timing");
     });
 
     /* Again and Next are not here any more. They are on the quick row.
@@ -2172,22 +2215,18 @@
      * result belongs next to the control that produced it, and the answer here
      * is often a question ("use it?"), which is worse than missed if it is
      * missed: the reader concludes nothing happened. */
-    const said = document.createElement("div");
-    said.className = "sso-track__said";
-    said.hidden = true;
-
     /* The map, and the controls that move it, on one line. */
     const timeline = buildTimeline(slot);
     offsets.append(timeline.root, timing);
 
     const body = document.createElement("div");
     body.className = "sso-track__body";
-    body.append(offsets, said);
+    body.append(offsets);
 
     root.append(head, body);
     return {
       root, learnChip, label, labelNo, labelLang, labelHead, labelTail, styleButton,
-      offsetField, offsetReset, visible, remove, disarm, lineUpButton, timeline, said,
+      offsetField, offsetReset, visible, remove, disarm, lineUpButton, timeline,
     };
   }
 
@@ -2215,49 +2254,60 @@
    * itself while being considered is worse than one never asked. */
   const SAID_MS = 6000;
 
-  function sayOnCard(slot, text, { action = null, warn = false } = {}) {
-    const card = el.trackCards[slot];
-    if (!card) return false;
-    if (!isPanelVisible() || folded || atScreen !== "root" || card.root.hidden) return false;
-    clearTimeout(card.saidTimer);
-    card.saidTimer = null;
-    card.said.replaceChildren();
-    card.said.hidden = !text;
-    card.said.dataset.warn = warn ? "true" : "false";
+  let saidTimer = null;
+  let saidSlot = null;
+  let saidAction = null;
+
+  function sayInPanel(slot, text, { action = null, warn = false } = {}) {
+    if (!el.status) return false;
+    if (!isPanelVisible() || folded || atScreen !== "root") return false;
+    clearTimeout(saidTimer);
+    saidTimer = null;
+    saidSlot = text ? slot : null;
+    el.status.dataset.warn = warn ? "true" : "false";
+    /* Which subtitle, kept out of the sentence. It was implicit while the
+     * message sat on the card; on one shared line it has to be said, and a
+     * number in its own box says it without every caller having to write "for
+     * subtitle 2" into a string that is already a full sentence. */
+    /* And dropped when the sentence already opens with it. Several messages
+     * are written as "Subtitle 2 on - 1238 lines · TR", which with a number
+     * beside them reads "2 Subtitle 2 on ...". The sentence is left alone
+     * rather than trimmed: it is also the toast, where there is no chip to
+     * carry the number. */
+    const named = Number.isInteger(slot) && new RegExp(`^subtitle ${slot + 1}\\b`, "i").test(text || "");
+    el.statusSlot.textContent = text && Number.isInteger(slot) && !named ? String(slot + 1) : "";
+    el.statusSlot.hidden = !el.statusSlot.textContent;
+    el.statusText.textContent = text || "";
+    el.statusDo.hidden = !text || !action;
+    el.statusDo.replaceChildren();
+    saidAction = text && action ? action : null;
+    if (saidAction) el.statusDo.textContent = saidAction.label;
     if (!text) return true;
-    if (!action) card.saidTimer = setTimeout(() => clearSaid(slot), SAID_MS);
-    const words = document.createElement("span");
-    words.className = "sso-track__said-text";
-    words.textContent = text;
-    card.said.append(words);
-    if (action) {
-      const act = document.createElement("button");
-      act.type = "button";
-      act.className = "sso-track__said-do";
-      act.textContent = action.label;
-      act.addEventListener("click", (event) => {
-        event.stopPropagation();
-        action.onClick();
-      });
-      card.said.append(act);
-    }
+    if (!action) saidTimer = setTimeout(() => clearSaid(slot), SAID_MS);
     return true;
   }
 
-  /* Take a card's message away.
+  /* Take the message away.
    *
    * A message is an answer to something the reader just did, so it stops being
    * true the moment they do something else. Without this, "these look 4.2s
-   * apart - use it?" sat on a card the reader had since detached and re-filled,
-   * offering a shift measured against a subtitle that is no longer there. */
+   * apart - use it?" stood over a subtitle the reader had since detached and
+   * re-filled, offering a shift measured against a file that is no longer
+   * there. The slot is checked because the line is shared now: clearing what
+   * happened to subtitle 1 must not wipe an offer standing about subtitle 2. */
   function clearSaid(slot) {
-    const card = el.trackCards[slot];
-    if (!card) return;
-    clearTimeout(card.saidTimer);
-    card.saidTimer = null;
-    if (card.said.hidden) return;
-    card.said.hidden = true;
-    card.said.replaceChildren();
+    if (!el.status) return;
+    if (Number.isInteger(slot) && saidSlot !== null && saidSlot !== slot) return;
+    clearTimeout(saidTimer);
+    saidTimer = null;
+    saidSlot = null;
+    saidAction = null;
+    el.statusSlot.textContent = "";
+    el.statusSlot.hidden = true;
+    el.statusText.textContent = "";
+    el.statusDo.hidden = true;
+    el.statusDo.replaceChildren();
+    el.status.dataset.warn = "false";
   }
 
   /* --- how one subtitle looks -------------------------------------------------
@@ -2616,7 +2666,7 @@
   async function lineUp(slot) {
     const answer = await api.autoAlign?.(slot);
     if (!answer) {
-      sayOnCard(slot, "Nothing to line this up against", { warn: true });
+      sayInPanel(slot, "Nothing to line this up against", { warn: true });
       return;
     }
     /* No Undo behind this any more.
@@ -2644,7 +2694,7 @@
      * otherwise be making at every break is the thing it saves. */
     const lined = () => {
       const acts = answer.steps?.length ?? 1;
-      sayOnCard(slot, acts > 1
+      sayInPanel(slot, acts > 1
         ? `Lined up in ${acts} acts · ${api.describeOffset(answer.offsetMs)} at the start`
         : `Lined up · ${api.describeOffset(answer.offsetMs)}`);
     };
@@ -2662,7 +2712,7 @@
       const why = answer.reason === "thin"
         ? " The two files only agree about a fifth of their lines, so check it before taking it."
         : "";
-      sayOnCard(slot, `These look ${api.describeOffset(answer.offsetMs)} apart.${why}`, {
+      sayInPanel(slot, `These look ${api.describeOffset(answer.offsetMs)} apart.${why}`, {
         action: {
           label: "Use it",
           onClick: () => {
@@ -2694,7 +2744,7 @@
       const gap = Number.isFinite(answer.offsetMs)
         ? ` The closest fit is ${api.describeOffset(answer.offsetMs)}, which is too weak to trust (${answer.confidence}).`
         : ` (confidence ${answer.confidence})`;
-      sayOnCard(
+      sayInPanel(
         slot,
         `No timing fits both files well enough to use.${gap} Drag the map to line them up by eye.`,
         { warn: true },
@@ -3623,8 +3673,9 @@
       card.learnChip.dataset.on = learning ? "true" : "false";
       /* "learning" is a state and "learn" is an invitation. The chip carried
        * the state's word in both positions, so an off switch read as a label
-       * saying this subtitle was being studied when it was not. */
-      card.learnChip.textContent = learning ? "learning" : "learn";
+       * saying this subtitle was being studied when it was not. Which of the
+       * two shows is decided by data-on in the stylesheet, because both of them
+       * are in the button and the other one is holding the width. */
       /* On every attached subtitle, whether or not study mode is running.
        *
        * It used to need `study.enabled` AND a second subtitle, which hid it in
@@ -3673,7 +3724,13 @@
       // Acts count: clearing them is part of "back to the file's own timing",
       // so a subtitle that has only been cut into acts still has something to
       // clear even with its base offset at zero.
-      card.offsetReset.hidden = !track.offsetMs && !stretched && acts < 2;
+      /* Kept in the layout when there is nothing to clear, rather than taken
+       * out of it. It sits between the timing field and the learn chip in a
+       * right-aligned group, so removing it slid the field sideways the moment
+       * a subtitle came back to its own timing - which is exactly when the
+       * reader is watching that number. */
+      card.offsetReset.dataset.idle =
+        !track.offsetMs && !stretched && acts < 2 ? "true" : "false";
       /* A message is an answer about the subtitle that was in this card. When a
        * different one arrives the answer is about a file that is no longer
        * there, so it goes rather than sitting under its replacement. */
@@ -3942,14 +3999,14 @@
   /* applySize is exported for the harness, which measures the sync row at both
    * ends of the width the corner grips allow. Driving the grips with synthetic
    * pointer events to get there would be testing the grips, not the row. */
-  /* sayOnCard is exported because content.js offers every slot-specific
+  /* sayInPanel is exported because content.js offers every slot-specific
    * message to it before falling back to a toast. See showToast there. */
   /* isOpen is for samplePerf in content.js, which reports whether the panel was
    * up in the window it is describing. Boolean(window.__ssoPanel) cannot answer
    * that - panel.js runs in every frame and defines this global whether or not
    * anything is on screen, so the first version of that field said true
    * everywhere and would have made "panel open" impossible to correlate with. */
-  window.__ssoPanel = { show, hide, toggle, reparent, rescale, applySize, sayOnCard, isOpen: isPanelVisible };
+  window.__ssoPanel = { show, hide, toggle, reparent, rescale, applySize, sayInPanel, isOpen: isPanelVisible };
 
   window.__ssoPanelTeardown = () => {
     // Both live on hosts outside this shadow tree, so removing the panel does
