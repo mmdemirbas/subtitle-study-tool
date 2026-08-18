@@ -1,0 +1,283 @@
+{
+ "file": "Battlestar.Galactica.Miniseries.S00E02.2003.1080p.BluRay-EN.srt",
+ "language": "en",
+ "rarerThan": 4000,
+ "cues": 1122,
+ "unparsedCues": 0,
+ "runtimeMin": 88.5,
+ "tokens": 7399,
+ "uniqueWords": 1498,
+ "rareTypes": 429,
+ "rareTypeShare": "28.6%",
+ "rareTokens": 752,
+ "rareTokenShare": "10.2%",
+ "repeatedRareTypes": 54,
+ "repeatedRareCoverage": "42.3%",
+ "topRepeatedRare": [
+  [
+   "cylon",
+   25,
+   "name"
+  ],
+  [
+   "cylons",
+   21,
+   "name"
+  ],
+  [
+   "i'll",
+   15,
+   "word"
+  ],
+  [
+   "i've",
+   15,
+   "word"
+  ],
+  [
+   "fleet",
+   14,
+   "word"
+  ],
+  [
+   "galactica",
+   13,
+   "name"
+  ],
+  [
+   "colonial",
+   11,
+   "name"
+  ],
+  [
+   "starbuck",
+   10,
+   "name"
+  ],
+  [
+   "stations",
+   9,
+   "word"
+  ],
+  [
+   "kobol",
+   8,
+   "name"
+  ],
+  [
+   "apollo",
+   7,
+   "name"
+  ],
+  [
+   "adama",
+   7,
+   "name"
+  ],
+  [
+   "combat",
+   7,
+   "word"
+  ],
+  [
+   "vipers",
+   7,
+   "name"
+  ],
+  [
+   "cic",
+   6,
+   "name"
+  ]
+ ],
+ "markedTokens": 682,
+ "markedTypes": 399,
+ "markedNameTokens": 193,
+ "repeatedRareNames": 24,
+ "coverageCurve": [
+  {
+   "words": 10,
+   "withNames": 18.8,
+   "withoutNames": 11.7
+  },
+  {
+   "words": 20,
+   "withNames": 27,
+   "withoutNames": 16.1
+  },
+  {
+   "words": 30,
+   "withNames": 32.7,
+   "withoutNames": 20.1
+  },
+  {
+   "words": 40,
+   "withNames": 36.7,
+   "withoutNames": 22.7
+  },
+  {
+   "words": 50,
+   "withNames": 40.7,
+   "withoutNames": 25.4
+  },
+  {
+   "words": 60,
+   "withNames": 43.9,
+   "withoutNames": 28.1
+  },
+  {
+   "words": 70,
+   "withNames": 46.5,
+   "withoutNames": 30.7
+  },
+  {
+   "words": 80,
+   "withNames": 49.2,
+   "withoutNames": 33.4
+  },
+  {
+   "words": 90,
+   "withNames": 51.9,
+   "withoutNames": 35
+  },
+  {
+   "words": 100,
+   "withNames": 54.5,
+   "withoutNames": 36.3
+  },
+  {
+   "words": 110,
+   "withNames": 57.2,
+   "withoutNames": 37.6
+  },
+  {
+   "words": 120,
+   "withNames": 58.9,
+   "withoutNames": 39
+  },
+  {
+   "words": 130,
+   "withNames": 60.2,
+   "withoutNames": 40.3
+  },
+  {
+   "words": 140,
+   "withNames": 61.6,
+   "withoutNames": 41.6
+  },
+  {
+   "words": 150,
+   "withNames": 62.9,
+   "withoutNames": 43
+  },
+  {
+   "words": 160,
+   "withNames": 64.2,
+   "withoutNames": 44.3
+  }
+ ],
+ "charsPerSecond": {
+  "p50": 11.8,
+  "p90": 20.5,
+  "p99": 27
+ },
+ "cuesOverFast": 252,
+ "cuesOverFastShare": "22.5%",
+ "rarePerMinute": {
+  "max": 27,
+  "median": 7,
+  "zeroMinutes": 4,
+  "minutes": 89,
+  "series": [
+   6,
+   8,
+   10,
+   7,
+   6,
+   9,
+   8,
+   14,
+   4,
+   3,
+   3,
+   24,
+   13,
+   17,
+   2,
+   12,
+   9,
+   2,
+   6,
+   4,
+   14,
+   7,
+   15,
+   17,
+   3,
+   8,
+   17,
+   2,
+   13,
+   16,
+   13,
+   4,
+   2,
+   2,
+   3,
+   9,
+   12,
+   5,
+   2,
+   3,
+   22,
+   3,
+   3,
+   4,
+   10,
+   7,
+   6,
+   9,
+   0,
+   0,
+   18,
+   13,
+   3,
+   22,
+   27,
+   13,
+   16,
+   6,
+   10,
+   15,
+   4,
+   14,
+   12,
+   8,
+   14,
+   15,
+   6,
+   13,
+   15,
+   3,
+   15,
+   12,
+   0,
+   1,
+   7,
+   6,
+   14,
+   6,
+   5,
+   3,
+   3,
+   4,
+   8,
+   12,
+   4,
+   2,
+   0,
+   4,
+   1
+  ]
+ }
+}
