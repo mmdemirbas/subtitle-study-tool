@@ -42,6 +42,14 @@ if (!file) {
 const lang = String(flag("lang", /-TR\b|\.tr\./i.test(file) ? "tr" : "en")).toLowerCase();
 const threshold = Number(flag("rank", 4000));
 
+/* Folded with the file's own language, the way study.js folds a word on
+ * screen. Turkish disagrees with the default fold twice - a dotted capital
+ * becomes "i" plus a combining dot, and a dotless capital I becomes a dotted i
+ * - and neither form is in the table, so every affected word would be counted
+ * here as rarer than the 30,000th word. Measured before this: 78 of the 5,122
+ * tokens in the Turkish file, 61 of them words the table knows once folded. */
+const fold = (word) => String(word).toLocaleLowerCase(lang);
+
 const { WORDS } = await import(`../src/study/frequency-${lang}.generated.js`);
 const ranks = new Map();
 WORDS.split("\n").forEach((word, rank) => ranks.set(word, rank));
@@ -97,7 +105,7 @@ const perCue = [];
 const marked = new Map(); // what the overlay would actually put on screen
 for (const cue of cues) {
   const spoken = cue.text.replace(NOT_SPOKEN, " ");
-  const words = (spoken.match(WORD_PATTERN) || []).map((w) => w.toLowerCase());
+  const words = (spoken.match(WORD_PATTERN) || []).map(fold);
   /* A name, guessed the only way a subtitle file allows: capitalised where a
    * sentence did not just start. Walked with real match positions rather than
    * indexOf, which returns the FIRST occurrence of a surface form and therefore
@@ -109,7 +117,7 @@ for (const cue of cues) {
    * a mid-sentence capital and inflate the count. */
   for (const match of spoken.matchAll(WORD_PATTERN)) {
     const raw = match[0];
-    const lower = raw.toLowerCase();
+    const lower = fold(raw);
     const before = spoken.slice(0, match.index).replace(/["'“”‘’()\[\]]+\s*$/, "").trimEnd();
     const sentenceStart = before === "" || /[.!?…:]$/.test(before) || /(^|\s)[-–—]$/.test(before);
     const entry = seen.get(lower) || { rank: rankOf(lower), count: 0, firstMs: cue.start, capitalMid: 0 };

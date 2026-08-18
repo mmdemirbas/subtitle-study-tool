@@ -6,13 +6,13 @@
  "unparsedCues": 12,
  "runtimeMin": 93.3,
  "tokens": 5063,
- "uniqueWords": 2332,
- "rareTypes": 1287,
- "rareTypeShare": "55.2%",
- "rareTokens": 1727,
- "rareTokenShare": "34.1%",
- "repeatedRareTypes": 82,
- "repeatedRareCoverage": "23.0%",
+ "uniqueWords": 2316,
+ "rareTypes": 1263,
+ "rareTypeShare": "54.5%",
+ "rareTokens": 1682,
+ "rareTokenShare": "33.2%",
+ "repeatedRareTypes": 79,
+ "repeatedRareCoverage": "22.3%",
  "topRepeatedRare": [
   [
    "galactica",
@@ -25,17 +25,12 @@
    "name"
   ],
   [
-   "i̇yi",
-   13,
-   "word"
-  ],
-  [
    "apollo",
    13,
    "name"
   ],
   [
-   "i̇ki",
+   "iskele",
    11,
    "word"
   ],
@@ -75,11 +70,6 @@
    "word"
   ],
   [
-   "i̇skele",
-   7,
-   "word"
-  ],
-  [
    "mühimmat",
    7,
    "word"
@@ -88,92 +78,102 @@
    "boomer",
    7,
    "name"
+  ],
+  [
+   "koloni",
+   7,
+   "name"
+  ],
+  [
+   "filo",
+   6,
+   "name"
   ]
  ],
- "markedTokens": 1261,
- "markedTypes": 993,
- "markedNameTokens": 141,
+ "markedTokens": 1228,
+ "markedTypes": 981,
+ "markedNameTokens": 138,
  "repeatedRareNames": 17,
  "coverageCurve": [
   {
    "words": 10,
-   "withNames": 6.7,
-   "withoutNames": 5.1
+   "withNames": 6.5,
+   "withoutNames": 4.8
   },
   {
    "words": 20,
-   "withNames": 10.5,
-   "withoutNames": 7.8
+   "withNames": 10.3,
+   "withoutNames": 7.4
   },
   {
    "words": 30,
-   "withNames": 13.1,
-   "withoutNames": 10.1
+   "withNames": 12.9,
+   "withoutNames": 9.6
   },
   {
    "words": 40,
-   "withNames": 15.5,
-   "withoutNames": 11.9
+   "withNames": 15.3,
+   "withoutNames": 11.4
   },
   {
    "words": 50,
-   "withNames": 17.4,
-   "withoutNames": 13.6
+   "withNames": 17.1,
+   "withoutNames": 13.2
   },
   {
    "words": 60,
-   "withNames": 19.2,
-   "withoutNames": 15.3
+   "withNames": 18.9,
+   "withoutNames": 15
   },
   {
    "words": 70,
-   "withNames": 20.9,
-   "withoutNames": 16.8
+   "withNames": 20.7,
+   "withoutNames": 16.3
   },
   {
    "words": 80,
-   "withNames": 22.6,
-   "withoutNames": 18
+   "withNames": 22.4,
+   "withoutNames": 17.5
   },
   {
    "words": 90,
-   "withNames": 23.9,
-   "withoutNames": 19.1
+   "withNames": 23.6,
+   "withoutNames": 18.7
   },
   {
    "words": 100,
-   "withNames": 25.1,
-   "withoutNames": 20.3
+   "withNames": 24.8,
+   "withoutNames": 19.9
   },
   {
    "words": 110,
-   "withNames": 26.2,
-   "withoutNames": 21.4
+   "withNames": 26,
+   "withoutNames": 21
   },
   {
    "words": 120,
-   "withNames": 27.4,
-   "withoutNames": 22.6
+   "withNames": 27.2,
+   "withoutNames": 22.2
   },
   {
    "words": 130,
-   "withNames": 28.5,
-   "withoutNames": 23.7
+   "withNames": 28.4,
+   "withoutNames": 23.4
   },
   {
    "words": 140,
-   "withNames": 29.7,
-   "withoutNames": 24.9
+   "withNames": 29.5,
+   "withoutNames": 24.6
   },
   {
    "words": 150,
-   "withNames": 30.9,
-   "withoutNames": 26.1
+   "withNames": 30.7,
+   "withoutNames": 25.8
   },
   {
    "words": 160,
-   "withNames": 32,
-   "withoutNames": 27.2
+   "withNames": 31.9,
+   "withoutNames": 27
   }
  ],
  "charsPerSecond": {
@@ -184,9 +184,9 @@
  "cuesOverFast": 201,
  "cuesOverFastShare": "17.6%",
  "rarePerMinute": {
-  "max": 47,
+  "max": 46,
   "median": 16,
-  "zeroMinutes": 7,
+  "zeroMinutes": 8,
   "minutes": 94,
   "series": [
    0,
@@ -195,40 +195,40 @@
    1,
    0,
    13,
-   37,
    36,
+   35,
    30,
    23,
-   14,
-   30,
+   13,
+   28,
    6,
-   7,
+   6,
    6,
    5,
    17,
    8,
    4,
-   6,
+   5,
    5,
    32,
    7,
-   33,
+   32,
    38,
    20,
    16,
-   7,
-   13,
-   12,
-   9,
    6,
-   3,
+   13,
+   10,
+   6,
+   6,
+   0,
    5,
    2,
-   27,
+   25,
    23,
-   18,
-   27,
-   29,
+   17,
+   26,
+   28,
    15,
    5,
    14,
@@ -239,29 +239,29 @@
    28,
    24,
    42,
-   38,
-   47,
-   36,
+   37,
+   46,
    35,
+   32,
    7,
    0,
-   12,
-   47,
+   11,
+   45,
    39,
    0,
    0,
-   19,
    18,
+   16,
    6,
    10,
-   5,
-   33,
+   4,
+   32,
    32,
    28,
    26,
-   41,
-   16,
-   11,
+   40,
+   15,
+   10,
    26,
    45,
    42,
@@ -272,14 +272,14 @@
    24,
    4,
    22,
-   30,
-   19,
+   28,
+   18,
    11,
    28,
    36,
-   29,
-   14,
-   29,
+   28,
+   13,
+   28,
    20,
    10,
    2
