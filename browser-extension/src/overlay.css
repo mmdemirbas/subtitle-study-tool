@@ -37,15 +37,9 @@
   width: var(--sso-width, 80vw);
   z-index: 2147483647; /* above player chrome, which often sits near 2^31 */
   display: flex;
-  /* A column, because study mode hangs a trail of words under the dialogue and
-   * the two have to stack. With one child - which is every case where study is
-   * off - a column and a row put the cue in exactly the same place, provided
-   * the alignment moves from justify-content to align-items with it. The box is
-   * anchored by its BOTTOM edge (translate -100%), so the trail holds the
-   * anchor and the dialogue floats above it rather than the dialogue staying
-   * put and the trail hanging off the bottom of the frame. */
-  flex-direction: column;
-  align-items: var(--sso-justify, center);
+  /* A row with one child in it. The strip of studied words used to be a second
+   * child here, which is what made it impossible to place; it has a root of its
+   * own now (.sso-strip) with its own position and width. */
   /* Centre unless the subtitle has been placed against an edge of the picture,
    * where the text has to be ranged against that edge too or the margin
    * between it and the frame changes with every line. Two properties because
@@ -257,170 +251,153 @@
   box-shadow: 0 0 0 2px rgba(120, 190, 255, 0.28);
 }
 
-/* --- the trail ---------------------------------------------------------------
+/* --- the strip of studied words ---------------------------------------------
  *
- * The words study mode has picked out of this subtitle, in the order they were
- * said, under the subtitle they came from. Asked for as "the words should be
- * scrolling slowly and while new words appear, older ones should be slightly
- * disappearing... instead of using a panel, maybe we can use another
- * subtitle-like overlay area".
+ * The words study mode has picked out of one subtitle, newest last, in a box
+ * with its own place on the screen.
+ *
+ * Two reports shaped it. "The words should be scrolling slowly and while new
+ * words appear, older ones should be slightly disappearing... instead of using
+ * a panel, maybe we can use another subtitle-like overlay area" is the strip.
+ * Then, of the first version: "they should have their own places on the screen
+ * and Place button (or drag&drop) should allow to relocate/resize them just
+ * like the subtitle areas... their looks should be revisited. They are nothing
+ * like you showed me in the mockups. I even didn't understand it is rails."
+ *
+ * So it is a SURFACE, not a run of text hanging under a cue: a panel with an
+ * edge, a label saying which subtitle it belongs to, and word cards inside it
+ * that are visibly cards. content.js gives it its position and width, in the
+ * same variables and with the same drag as a subtitle.
  *
  * One per subtitle rather than one for the film, which is the other half of
  * what was asked: with two languages being learnt at once, a single list mixes
  * them and there is nothing to close but both of them together.
- *
- * It is history, so it is quieter than the dialogue above it and quieter than
- * the marks in that dialogue: smaller, dimmer, no backdrop of its own beyond
- * what a word needs to stay legible over a moving picture. Nothing here may
- * pull the eye off the line being spoken.
  */
-.sso-trail {
+.sso-strip {
+  position: fixed;
+  left: var(--sso-x, 50%);
+  top: var(--sso-y, 13%);
+  /* The same bottom-centre anchor the subtitle has, so --sso-y means the same
+   * thing on both and a strip placed by hand stays where it was put when its
+   * contents grow a line. */
+  transform: translate(-50%, -100%);
+  width: var(--sso-width, 56vw);
+  z-index: 2147483646;
   display: flex;
-  align-items: baseline;
-  gap: 0.42em;
-  max-width: 100%;
-  margin-top: 0.3em;
-  padding: 0;
-  overflow: hidden;
-  font-family: var(--sso-family, "Helvetica Neue", Helvetica, Arial, sans-serif);
-  /* Half the dialogue's size. It was 0.62, and measured against a real cue the
-   * strip came out nearly as large as the line above it - a second subtitle
-   * competing with the first, which is the opposite of what was asked for:
-   * "some sort of cool animation/effect, not a bold/attraction-getting one." */
-  font-size: calc(var(--sso-font-size, 2.6vh) * 0.5);
-  line-height: 1.3;
-  /* Newest at the right, so the word that just arrived is always in the same
-   * place. The older ones are pushed leftwards out of the box, which is what
-   * makes this read as a strip going past rather than as a list being added
-   * to. The mask finishes what the per-word fade starts: a word does not stop
-   * at half opacity, it leaves. */
-  /* Centred under a centred subtitle, and only pinned to the right end once
-   * there are more words than fit.
-   *
-   * The strip is a FIXED width - the whole allotment, the same box the cue is
-   * capped to - and that is what stops the drift. Shrink-to-fit, an arriving
-   * word grew the box while the track slid inside it: the box jumped instantly
-   * and the words slid over 380ms, so the two motions were in different
-   * directions at the same moment and the row read as unstable. That is the
-   * fault reported against the first design - "the animation in the rails is
-   * not stable, it makes the rest of the rails drift". Now the box does not
-   * move at all and there is one motion to follow. */
-  width: 100%;
-  box-sizing: border-box;
   justify-content: center;
+  pointer-events: none;
+  margin: 0;
+  padding: 0;
 }
 
-/* Only once the words are wider than the strip. Then the newest is pinned at
- * the right, where it lands in the same place every time, and the oldest go
- * over the left edge and out under the fade.
- *
- * The mask is here rather than on .sso-trail because a mask that is always on
- * does to the oldest word exactly what the age fade is forbidden to do: at 14%
- * of a 578px strip the first word sat under 81px of gradient and could not be
- * read, whatever its opacity said. Nothing fades until something is genuinely
- * leaving. */
-.sso-trail[data-over="true"] {
-  justify-content: flex-end;
-  mask-image: linear-gradient(to right, transparent, #000 3.2em, #000);
-}
-
-/* Nothing said yet, or this subtitle's strip was closed. Not `:empty`: the
- * track and the close button are built once and live in it for good, so the
- * element is never empty after the first word however few words are in it. */
-.sso-trail:empty,
-.sso-trail[data-words="0"] {
+/* Off until this subtitle is being learnt, and away again when its own × is
+ * pressed. Empty is also off - except while the reader is placing things,
+ * where an invisible box cannot be put anywhere. */
+.sso-strip[data-on="false"]:not([data-placing="true"]),
+.sso-strip[data-words="0"]:not([data-placing="true"]) {
   display: none;
 }
 
-/* The whole strip slides, rather than each word jumping into place. The width
- * of the arriving word is put on the track as a transform and then taken off
- * again on the next frame, so the browser interpolates it - a transform,
- * because animating anything that changes layout re-lays out the page on every
- * frame of every arriving word. */
-.sso-trail__track {
+/* The panel itself.
+ *
+ * Quiet until it is pointed at. The cards carry their own background and edge,
+ * so a second surface behind them is two elevation systems stacked - and with
+ * one card in a 672px box, read back off a screenshot, 500px of it was an empty
+ * dark bar over the film. Hover, drag, resize and Place each bring the field
+ * back, which is every moment the box itself is the thing being used. */
+.sso-strip__box {
   display: flex;
-  align-items: baseline;
-  gap: 0.42em;
-  /* Never shrunk to fit the strip: a track wider than the strip is the whole
-   * point, and it is the LEFT end - the oldest words - that goes over the
-   * edge and is clipped. Shrinking instead would squeeze every word. */
-  flex: 0 0 auto;
-  transition: transform 380ms cubic-bezier(0.22, 0.61, 0.36, 1);
-}
-
-.sso-trail__word {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 0.3em;
-  padding: 0.05em 0.4em;
-  white-space: nowrap;
-  color: rgba(255, 255, 255, 0.92);
-  background: rgba(0, 0, 0, 0.42);
-  border-radius: 5px;
-  /* The same outline the dialogue carries, for the same reason: the backing is
-   * thinner here (0.42 against the cue's 0.55) so that the strip stays quiet,
-   * and over a bright frame a thin backing is not enough on its own. */
-  text-shadow: 0 0 4px rgba(0, 0, 0, 0.9), 0 1px 2px rgba(0, 0, 0, 0.9);
-  /* Set from script, by age. A floor rather than a fade to nothing: at 0.14
-   * the third word back was already unreadable, reported as fading "that much
-   * aggresively", so age is a hint and never the reason a word cannot be
-   * read. */
-  opacity: 1;
-  transition: opacity 380ms ease, background 160ms ease;
-  cursor: help;
+  box-sizing: border-box;
+  gap: 0.5em;
+  align-items: stretch;
+  width: 100%;
+  padding: 0.32em 0.4em;
+  overflow: hidden;
+  font-family: var(--sso-family, "Helvetica Neue", Helvetica, Arial, sans-serif);
+  /* Half the dialogue. Large enough to read a word and its meaning at a glance,
+   * small enough that the line being spoken stays the loudest thing on the
+   * screen - at 0.62 the cards were reading as a second subtitle. */
+  font-size: calc(var(--sso-font-size, 2.6vh) * 0.5);
+  line-height: 1.25;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  transition: background 160ms ease, border-color 160ms ease;
+  /* The box is the drag handle, the way the cue box is. */
+  cursor: grab;
   pointer-events: auto;
 }
 
-.sso-trail__word:hover {
-  background: rgba(0, 0, 0, 0.72);
+.sso-strip__box:hover,
+.sso-strip[data-dragging="true"] .sso-strip__box,
+.sso-strip[data-sizing="true"] .sso-strip__box,
+.sso-strip[data-placing="true"] .sso-strip__box {
+  background: var(--sso-bg, rgba(0, 0, 0, 0.55));
+  border-color: rgba(255, 255, 255, 0.26);
 }
 
-/* The one being read in the focus box, marked here so the two surfaces are
- * obviously about the same word. */
-.sso-trail__word[data-focused="true"] {
-  box-shadow: inset 0 0 0 1px rgba(255, 214, 120, 0.55);
+.sso-strip[data-dragging="true"] .sso-strip__box {
+  cursor: grabbing;
+  user-select: none;
 }
 
-.sso-trail__word[data-saved="true"] .sso-trail__term {
-  color: rgba(159, 211, 180, 0.95);
+.sso-strip[data-sizing="true"] .sso-strip__box {
+  cursor: ew-resize;
+  user-select: none;
+  outline: 2px dashed rgba(255, 255, 255, 0.55);
+  outline-offset: 3px;
 }
 
-.sso-trail__term {
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
-/* What it means, on the newest word only.
+/* Which subtitle these words came out of, in that subtitle's own colour.
  *
- * The trail has to be worth reading on its own - a reader who glanced down for
- * the word they missed should not have to go to another surface for it - and
- * it also has to stay quiet. Measured with the meaning on every word, eight of
- * them filled 960px and the strip was a paragraph under the dialogue. The one
- * that just arrived is the one being read; the others are a memory of what was
- * said, and the focus box has the whole entry for any of them. */
-.sso-trail__gloss {
-  display: none;
-  font-size: 0.86em;
-  font-weight: 400;
-  color: rgba(255, 255, 255, 0.72);
+ * The label is the answer to "I even didn't understand it is rails": a surface
+ * that cannot say what it is has to be explained, and an explanation is not
+ * available while a film is playing. It is also the part to take hold of when
+ * there are no cards in the strip yet. */
+.sso-strip__tag {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding: 0 0.5em;
+  font-size: 0.72em;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--sso-color, #fff);
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: rgba(0, 0, 0, 0.45);
+  border-radius: 6px;
+  opacity: 0.7;
 }
 
-.sso-trail__word[data-newest="true"] .sso-trail__gloss,
-.sso-trail__word:hover .sso-trail__gloss {
-  display: inline;
+.sso-strip__box:hover .sso-strip__tag {
+  opacity: 1;
 }
 
-/* Stops this subtitle's trail, and only this one's. The reported bug is
- * exactly this: "Closing one study panel closes all. Wrong." Hidden until the
+/* Where the cards go. Newest at the right, older ones leaving at the left. */
+.sso-strip__track {
+  display: flex;
+  flex: 1;
+  gap: 0.4em;
+  align-items: stretch;
+  justify-content: flex-end;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Stops this subtitle's strip, and only this one's. The reported bug is
+ * exactly this: "Closing one study panel closes all. Wrong." Quiet until the
  * strip is pointed at, because a control on screen for two hours over a film
  * is a control in the way. */
-.sso-trail__close {
+.sso-strip__close {
+  flex: none;
+  align-self: flex-start;
   padding: 0 0.3em;
   font: inherit;
-  font-size: 0.9em;
-  line-height: 1.3;
+  font-size: 0.8em;
+  line-height: 1.6;
   color: rgba(255, 255, 255, 0.75);
-  background: rgba(0, 0, 0, 0.5);
+  background: none;
   border: 0;
   border-radius: 5px;
   opacity: 0;
@@ -429,9 +406,118 @@
   pointer-events: auto;
 }
 
-.sso-trail:hover .sso-trail__close,
-.sso-trail__close:focus-visible {
+.sso-strip__box:hover .sso-strip__close,
+.sso-strip__close:focus-visible {
   opacity: 1;
+}
+
+.sso-strip__close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* While things are being placed, an empty strip shows itself and says what it
+ * is - otherwise the one surface that most needs moving is the one that cannot
+ * be found. */
+.sso-strip[data-placing="true"] .sso-strip__box {
+  outline: 2px dashed rgba(255, 255, 255, 0.55);
+  outline-offset: 3px;
+}
+
+.sso-strip[data-placing="true"][data-words="0"] .sso-strip__track::after {
+  align-self: center;
+  color: rgba(255, 255, 255, 0.75);
+  content: "Drag me — the words from this subtitle appear here";
+  font-size: 0.9em;
+}
+
+/* The whole row slides when a card arrives, rather than each card jumping into
+ * place. The arriving card's width is put on the track as a transform and
+ * taken off on the next frame, so the browser interpolates it - a transform,
+ * because animating anything that changes layout re-lays out the page on every
+ * frame of every arriving word. */
+.sso-trail__track {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.4em;
+  align-items: stretch;
+  margin-left: auto;
+  transition: transform 380ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* Only once the cards are wider than the strip. Nothing fades while everything
+ * still fits: a fade that is always on does to the oldest card exactly what the
+ * age fade is forbidden to do.
+ *
+ * On the BOX rather than on the row, because the row is as wide as its cards
+ * and a mask there would fade its own left card wherever that card happened to
+ * be. The strip's edge is what a card leaves through. */
+.sso-strip__track[data-over="true"] {
+  mask-image: linear-gradient(to right, transparent, #000 4em, #000);
+}
+
+/* A word card, and it has to look like one.
+ *
+ * The first version was a run of small text with a black backing behind each
+ * word, and it did not read as a rail at all. Two lines - the word, and what it
+ * means under it - a floor on the width so the cards line up, and a surface of
+ * their own inside the strip's surface. */
+.sso-trail__word {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.05em;
+  justify-content: center;
+  min-width: 4.5em;
+  max-width: 12em;
+  padding: 0.2em 0.5em;
+  color: rgba(255, 255, 255, 0.95);
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 7px;
+  /* Set from script, by age. A floor rather than a fade to nothing: at 0.14 the
+   * third card back was already unreadable, reported as fading "that much
+   * aggresively", so age is a hint and never the reason a card cannot be
+   * read. */
+  opacity: 1;
+  transition: opacity 380ms ease, background 160ms ease;
+  cursor: help;
+  pointer-events: auto;
+}
+
+.sso-trail__word:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* The one being read in the focus box, marked here so the two surfaces are
+ * obviously about the same word. */
+.sso-trail__word[data-focused="true"] {
+  border-color: rgba(255, 214, 120, 0.75);
+  box-shadow: inset 0 0 0 1px rgba(255, 214, 120, 0.35);
+}
+
+.sso-trail__term {
+  overflow: hidden;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sso-trail__word[data-saved="true"] .sso-trail__term {
+  color: rgba(159, 211, 180, 0.98);
+}
+
+/* What it means, under the word rather than beside it. Beside it, eight cards
+ * filled 960px and the strip read as a paragraph; under it, a card is a card
+ * and the strip is a row of them. */
+.sso-trail__gloss {
+  overflow: hidden;
+  font-size: 0.8em;
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.74);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The symbol sits before the words rather than replacing them - the point is

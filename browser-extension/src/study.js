@@ -604,23 +604,26 @@
 
   // --- the trail ----------------------------------------------------------------
 
-  /* One strip of words per subtitle, under the subtitle it came out of.
+  /* One strip of word cards per subtitle.
    *
    * Asked for: "our study panel should be streaming like live streaming videos
    * on the net. I mean the words should be scrolling slowly and while new words
    * appear, older ones should be slightly disappearing... instead of using a
    * panel, maybe we can use another subtitle-like overlay area."
    *
-   * It replaces a column of cards at the edge of the screen, and the reason is
-   * not decoration. The column held three words and the reader had to leave the
-   * subtitle to read it; a strip under the line is in the same glance as the
-   * line, which is the only place a word can be read without losing the film.
+   * It replaces a column of cards at the edge of the screen. The column held
+   * three words and the reader had to leave the subtitle to read it; a strip is
+   * one glance, which is the only way a word gets read without losing the film.
    * What the column did that this does not is carry a whole dictionary entry -
    * that is the focus box's job now, and there is exactly one of it.
    *
-   * The elements live in content.js's overlay root, beside the cue they belong
-   * to (api.studyDock), so they move, scale and hide with that subtitle for
-   * free. Nothing here positions anything. */
+   * The BOX is content.js's: a root of its own with its own position, width and
+   * drag, so it can be put anywhere and resized like a subtitle. This file owns
+   * what goes in it and nothing else - api.studyDock is the way in, and
+   * api.showStrip says whether this subtitle has one at all. The first version
+   * hung the words under the cue, which made them impossible to place: "they
+   * should have their own places on the screen and Place button (or drag&drop)
+   * should allow to relocate/resize them just like the subtitle areas". */
   const trails = new Map();
 
   function trailFor(slot) {
@@ -634,25 +637,34 @@
     const track = document.createElement("div");
     track.className = "sso-trail__track";
 
-    /* This subtitle's strip, and only this one's. The reported bug is that
-     * there was one control for all of them: "Closing one study panel closes
-     * all. Wrong." */
-    const close = document.createElement("button");
-    close.className = "sso-trail__close";
-    close.type = "button";
-    close.textContent = "×";
-    close.title = "Stop showing words for this subtitle";
-    close.addEventListener("click", (event) => {
-      event.stopPropagation();
-      updateSettings({ trailOff: [...new Set([...closedTrails(), slot])] });
-      api.showToast?.("Words for that subtitle put away - the Learn chip brings them back");
-    });
-
-    root.append(track, close);
-    root.dataset.words = "0";
-    const trail = { slot, root, track, close, words: [] };
+    root.append(track);
+    const trail = { slot, root, track, words: [] };
     trails.set(slot, trail);
+    /* The box is resized by its own edges and by the window, neither of which
+     * goes through a word arriving - so measuring the fit only when a word
+     * arrives left a strip dragged narrower cutting its cards until the next
+     * one did. */
+    if (typeof ResizeObserver === "function") {
+      trail.watch = new ResizeObserver(() => measureFit(trail));
+      trail.watch.observe(root);
+    }
+    api.showStrip?.(slot, true);
+    api.stripCount?.(slot);
     return trail;
+  }
+
+  /* Whether anything is actually leaving the box. The fade at the left edge and
+   * the pinning at the right both hang off this, and both are wrong while the
+   * words still fit.
+   *
+   * Measured against the BOX, not against the row: the row is `flex: 0 0 auto`
+   * and therefore always exactly as wide as its cards, so comparing it with
+   * itself said "nothing is leaving" while cards were being cut in half at the
+   * strip's edge. */
+  function measureFit(trail) {
+    if (!trail?.root?.isConnected) return;
+    trail.over = trail.track.scrollWidth > trail.root.clientWidth + 1;
+    trail.root.dataset.over = trail.over ? "true" : "false";
   }
 
   /* A word arriving is the strip moving, not a word appearing in a gap.
@@ -700,7 +712,7 @@
      * Getting this wrong is visible - the words settle a few pixels off and
      * then the next arrival corrects it. */
     const width = node.getBoundingClientRect().width + 6;
-    const slide = trail.root.dataset.over === "true" ? width : width / 2;
+    const slide = trail.over ? width : width / 2;
     trail.track.style.transition = "none";
     trail.track.style.transform = `translateX(${Math.round(slide)}px)`;
     requestAnimationFrame(() => {
@@ -729,17 +741,15 @@
       const age = trail.words.length - 1 - index;
       const dim = Math.max(TRAIL_FADE_FLOOR, 1 - age * TRAIL_FADE_STEP);
       item.node.style.opacity = String(dim);
-      // Which one carries its meaning. See .sso-trail__gloss: on all of them
-      // the strip became a paragraph under the dialogue.
       item.node.dataset.newest = age === 0 ? "true" : "false";
     });
-    trail.root.dataset.words = String(trail.words.length);
-    /* Whether anything is actually leaving. The fade at the left edge and the
-     * pinning at the right both hang off this, and both are wrong while the
-     * words still fit. Read after the widths are settled, so a word removed
-     * above is already out of the measurement. */
-    const over = trail.track.scrollWidth > trail.root.clientWidth + 1;
-    trail.root.dataset.over = over ? "true" : "false";
+    /* How many words are in it, said on the box, because whether the box is
+     * worth drawing at all is the box's own question - and in Place mode an
+     * empty one still has to show itself so it can be put somewhere. */
+    api.stripCount?.(trail.slot);
+    // Read after the widths are settled, so a word removed above is already out
+    // of the measurement.
+    measureFit(trail);
   }
 
   /* What the word means, put on the chip when the lookup comes back. The trail
@@ -769,8 +779,16 @@
   function syncTrails() {
     for (const slot of [...trails.keys()]) {
       if (trailShown(slot)) continue;
-      emptyTrail(trails.get(slot));
+      const going = trails.get(slot);
+      emptyTrail(going);
+      going?.watch?.disconnect();
       trails.delete(slot);
+      api.showStrip?.(slot, false);
+    }
+    // And the boxes of the ones that are being learnt, which may have been put
+    // away in a previous session and switched back on since.
+    for (let slot = 0; slot < (api.trackCount || 0); slot += 1) {
+      if (trailShown(slot) && trails.has(slot)) api.showStrip?.(slot, true);
     }
   }
 
@@ -781,11 +799,23 @@
       if (item.card.chip?.node === item.node) item.card.chip = null;
     }
     trail.words = [];
-    if (trail.root?.isConnected) trail.root.dataset.words = "0";
+    if (trail.root?.isConnected) api.stripCount?.(trail.slot);
+  }
+
+  /* Put one subtitle's strip away. The × on the box calls this; the box itself
+   * belongs to content.js. The reported bug is that there was one control for
+   * all of them: "Closing one study panel closes all. Wrong." */
+  function closeStrip(slot) {
+    updateSettings({ trailOff: [...new Set([...closedTrails(), slot])] });
+    api.showToast?.("Words for that subtitle put away - the Learn chip brings them back");
   }
 
   function emptyTrails() {
-    for (const trail of trails.values()) emptyTrail(trail);
+    for (const trail of trails.values()) {
+      emptyTrail(trail);
+      trail.watch?.disconnect();
+      api.showStrip?.(trail.slot, false);
+    }
     trails.clear();
   }
 
@@ -2483,6 +2513,7 @@
     setEnabled,
     updateSettings,
     toggleStudySlot,
+    closeStrip,
     settings: () => ({ ...settings }),
     defaults: DEFAULT_SETTINGS,
   };

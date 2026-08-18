@@ -3876,6 +3876,23 @@
       ];
       const roots = () => [...shadowOf().querySelectorAll(".sso-root")];
       const cueOf = (slot) => roots()[slot].querySelector(".sso-cue");
+      /* The strip of studied words is a surface of its own now, with its own
+       * position and width - not a row inside the subtitle's box. */
+      const stripOf = (slot) => [...shadowOf().querySelectorAll(".sso-strip")][slot];
+      /* Pointer capture is stubbed for the same reason dragCue stubs it: a
+       * synthetic PointerEvent has no active pointer behind it, so the real
+       * call throws and the gesture never starts. */
+      const dragStrip = async (slot, fromX, fromY, toX, toY) => {
+        const box = stripOf(slot).querySelector(".sso-strip__box");
+        box.setPointerCapture = () => {};
+        box.releasePointerCapture = () => {};
+        const ev = (type, x, y, buttons) => new PointerEvent(type,
+          { pointerId: 9, clientX: x, clientY: y, button: 0, buttons, bubbles: true, composed: true });
+        box.dispatchEvent(ev("pointerdown", fromX, fromY, 1));
+        box.dispatchEvent(ev("pointermove", toX, toY, 1));
+        box.dispatchEvent(ev("pointerup", toX, toY, 0));
+        await sleep(140);
+      };
       const attachSecond = () =>
         window.__ssoApi.attach({ cues: CUES_TR, label: "TR · harness", fileId: 2, language: "tr", slot: 1 });
 
@@ -4263,7 +4280,7 @@
          * The trail is inside the subtitle's own root rather than in a floating
          * host, which is what makes it move with the subtitle - so this looks
          * for it there, and would fail if it were ever built somewhere else. */
-        const trail = cueOf(0).parentElement.querySelector(".sso-trail");
+        const trail = stripOf(0);
         if (!trail) throw new Error("no trail under the subtitle");
         const words = [...trail.querySelectorAll(".sso-trail__word")];
         const terms = words.map((w) => w.dataset.term);
@@ -4274,8 +4291,81 @@
           throw new Error(`the newest word is not at the end: ${JSON.stringify(terms)}`);
       });
 
+      check("a strip has its own place, and is dragged like a subtitle", async () => {
+        /* Asked for after the first version: "they should have their own places
+         * on the screen and Place button (or drag&drop) should allow to
+         * relocate/resize them just like the subtitle areas."
+         *
+         * It is the subtitle's own gesture on the strip's box, writing the
+         * strip's own settings - and the assertion that matters is the last
+         * one: the subtitle it belongs to did not move with it. */
+        const strip = stripOf(0);
+        const cueBefore = cueOf(0).getBoundingClientRect();
+        const before = strip.getBoundingClientRect();
+        const was = { ...window.__ssoApi.status().settings.tracks[0] };
+
+        await dragStrip(0, before.x + before.width / 2, before.y + 8, 420, 520);
+
+        const after = stripOf(0).getBoundingClientRect();
+        if (Math.abs(after.y - before.y) < 40)
+          throw new Error(
+            `the strip went from ${Math.round(before.x)},${Math.round(before.y)} ` +
+            `to ${Math.round(after.x)},${Math.round(after.y)}`,
+          );
+
+        const track = window.__ssoApi.status().settings.tracks[0];
+        if (!track.stripPlaced) throw new Error("the move was not remembered as a placement");
+        if (track.posX !== was.posX || track.posY !== was.posY)
+          throw new Error("dragging the strip moved the subtitle's own position");
+        const cueAfter = cueOf(0).getBoundingClientRect();
+        if (Math.round(cueAfter.y) !== Math.round(cueBefore.y))
+          throw new Error("the subtitle moved with its strip");
+
+        window.__ssoApi.updateTrackSettings(0, {
+          stripX: was.stripX, stripY: was.stripY, stripPlaced: false,
+        });
+        await sleep(120);
+      });
+
+      check("a strip is resized by its edges, and only that strip", async () => {
+        const strip = stripOf(0);
+        const was = { ...window.__ssoApi.status().settings.tracks[0] };
+        const rect = strip.querySelector(".sso-strip__box").getBoundingClientRect();
+        // Inside the resize edge, which is where the cursor says ew-resize.
+        await dragStrip(0, rect.right - 4, rect.y + rect.height / 2, rect.right + 110, rect.y + rect.height / 2);
+
+        const now = window.__ssoApi.status().settings.tracks[0];
+        if (now.stripWidth <= was.stripWidth)
+          throw new Error(`the strip is ${now.stripWidth}vw, was ${was.stripWidth}vw`);
+        if (now.widthPercent !== was.widthPercent)
+          throw new Error("resizing the strip resized the subtitle");
+        window.__ssoApi.updateTrackSettings(0, { stripWidth: was.stripWidth, stripPlaced: false });
+        await sleep(120);
+      });
+
+      check("Place shows an empty strip, so it can be put somewhere", async () => {
+        /* The one surface that most needs moving is the one that is invisible
+         * until it has been used, which is why it joins the mode that exists
+         * for putting things where you want them. */
+        const strip = stripOf(1);
+        window.__ssoStudy.updateSettings({ trailOff: [1] });
+        await sleep(150);
+        if (strip.getBoundingClientRect().height > 0)
+          throw new Error("a strip that was put away is still on screen");
+
+        window.__ssoApi.setPlacing(true);
+        await sleep(200);
+        const placing = stripOf(1).getBoundingClientRect();
+        if (placing.height === 0 || placing.width === 0)
+          throw new Error("nothing to drag in Place mode");
+
+        window.__ssoApi.setPlacing(false);
+        window.__ssoStudy.updateSettings({ trailOff: [] });
+        await sleep(150);
+      });
+
       check("a word in the trail says what it means, and older ones stay readable", async () => {
-        const trail = cueOf(0).parentElement.querySelector(".sso-trail");
+        const trail = stripOf(0);
         const words = [...trail.querySelectorAll(".sso-trail__word")];
         const newest = words[words.length - 1];
         if (!newest.querySelector(".sso-trail__gloss")?.textContent)
@@ -4290,7 +4380,7 @@
       });
 
       check("the trail holds a bounded number of words", async () => {
-        const trail = cueOf(0).parentElement.querySelector(".sso-trail");
+        const trail = stripOf(0);
         const words = trail.querySelectorAll(".sso-trail__word").length;
         if (words > 8) throw new Error(`${words} words in one trail`);
       });
@@ -4304,7 +4394,7 @@
          *
          * So the box is a fixed width and only the words inside it move. This
          * measures the box, not the words: the words are supposed to move. */
-        const trail = () => cueOf(0).parentElement.querySelector(".sso-trail");
+        const trail = () => stripOf(0);
         const box = () => {
           const r = trail().getBoundingClientRect();
           return `${Math.round(r.x)},${Math.round(r.width)}`;
@@ -4332,14 +4422,49 @@
          * forbidden to do. Measured on the first version: 14% of a 578px strip
          * put 81px of gradient over the first word, which no opacity check
          * could see because the fade is not opacity. */
-        const trail = cueOf(0).parentElement.querySelector(".sso-trail");
+        const trail = stripOf(0);
+        /* The box is what clips, so the box is what carries the mask. Measured
+         * on the row instead, the mask faded whichever card happened to be
+         * leftmost wherever the row had slid to. */
+        const box = trail.querySelector(".sso-strip__track");
         const track = trail.querySelector(".sso-trail__track");
-        const fits = track.scrollWidth <= trail.clientWidth + 1;
-        const masked = getComputedStyle(trail).maskImage;
+        const fits = track.scrollWidth <= box.clientWidth + 1;
+        const masked = getComputedStyle(box).maskImage;
         if (fits && masked && masked !== "none")
-          throw new Error(`the strip fits in ${trail.clientWidth}px and is still masked: ${masked}`);
-        if (fits && trail.dataset.over === "true")
+          throw new Error(`the strip fits in ${box.clientWidth}px and is still masked: ${masked}`);
+        if (fits && box.dataset.over === "true")
           throw new Error("the strip says it is overflowing and is not");
+      });
+
+      check("a word leaving the strip fades out instead of being cut in half", async () => {
+        /* The other half of the same rule, and the one that was wrong: read
+         * back off a screenshot, the leftmost card in each strip was sliced
+         * mid-word - "kcasi" for "acikcasi", "ning" for "reckoning" - with a
+         * hard vertical edge. The mask was being asked for correctly and hung
+         * on the row, which is exactly as wide as its cards and therefore never
+         * overflows itself, so the flag that turns the mask on was always
+         * false. Narrow the box until the cards cannot fit and the fade has to
+         * be there. */
+        const trail = stripOf(0);
+        const box = trail.querySelector(".sso-strip__track");
+        const track = trail.querySelector(".sso-trail__track");
+        const was = { ...window.__ssoApi.status().settings.tracks[0] };
+        try {
+          window.__ssoApi.updateTrackSettings(0, { stripWidth: 14, stripPlaced: true });
+          await sleep(160);
+          if (track.scrollWidth <= box.clientWidth + 1)
+            throw new Error(`${track.scrollWidth}px of cards still fit in ${box.clientWidth}px`);
+          if (box.dataset.over !== "true")
+            throw new Error("the cards are past the edge and the strip does not know it");
+          const masked = getComputedStyle(box).maskImage;
+          if (!masked || masked === "none")
+            throw new Error(`${track.scrollWidth}px of cards in ${box.clientWidth}px, cut with no fade`);
+        } finally {
+          window.__ssoApi.updateTrackSettings(0, {
+            stripWidth: was.stripWidth, stripPlaced: was.stripPlaced,
+          });
+          await sleep(120);
+        }
       });
 
       check("a helper that is not answering is not reported as a language with no word list", async () => {
@@ -4467,7 +4592,7 @@
         const term = () => focusShadow().querySelector(".sso-card__term")?.textContent;
         if (term() !== "frankly") throw new Error(`the box holds "${term()}" before the hover`);
 
-        const trail = cueOf(0).parentElement.querySelector(".sso-trail");
+        const trail = stripOf(0);
         const older = [...trail.querySelectorAll(".sso-trail__word")]
           .find((w) => w.dataset.term === "care");
         if (!older) throw new Error("the older word is not in the trail to point at");
@@ -4486,7 +4611,7 @@
         // An explicit choice outranks the film's, or the reader's decision would
         // be undone by the next thing anybody says.
         const term = () => focusShadow().querySelector(".sso-card__term")?.textContent;
-        const trail = cueOf(0).parentElement.querySelector(".sso-trail");
+        const trail = stripOf(0);
         const held = [...trail.querySelectorAll(".sso-trail__word")]
           .find((w) => w.dataset.term === "care");
         held.click();
@@ -4519,7 +4644,7 @@
          * back - which fired on the way out as well, so unlearning the second
          * subtitle reopened the first one's words. */
         const was = window.__ssoStudy.settings();
-        const trailOf = (slot) => cueOf(slot).parentElement.querySelector(".sso-trail");
+        const trailOf = (slot) => stripOf(slot);
         const shown = (slot) => {
           const trail = trailOf(slot);
           return Boolean(trail && trail.dataset.words !== "0" && trail.getBoundingClientRect().height > 0);
@@ -4533,7 +4658,7 @@
             throw new Error(`two subtitles are being learnt and the trails are ${shown(0)}/${shown(1)}`);
 
           // Close the second one's, from its own control.
-          trailOf(1).querySelector(".sso-trail__close").click();
+          stripOf(1).querySelector(".sso-strip__close").click();
           await sleep(200);
           if (shown(1)) throw new Error("closing a trail did not close it");
           if (!shown(0)) throw new Error("closing one subtitle's trail closed the other's too");
@@ -4929,7 +5054,7 @@
         // study through a switch, which empties it by design.
         await hover("frankly");
         await sleep(200);
-        const trail = () => cueOf(0).parentElement.querySelector(".sso-trail");
+        const trail = () => stripOf(0);
         if (!trail()?.querySelectorAll(".sso-trail__word").length)
           throw new Error("nothing in the trail to clear");
         clear.click();

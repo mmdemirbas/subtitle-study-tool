@@ -381,10 +381,16 @@ Each of these was a reported bug. Undoing one brings the bug back.
   on every window at every size. A harness check hit-tests every head control
   on every window we draw.
 - **Study is two surfaces, and which one carries what is the design.** A strip
-  of words under each subtitle - built into that subtitle's own overlay root by
-  `api.studyDock`, so it moves, scales and reparents with the line it belongs to
-  and adds no second host - and one focus box holding the whole entry for the
-  word being read. The single rail that did both was reported four ways at once:
+  of words per subtitle - a placeable root of its own, with `stripX`, `stripY`,
+  `stripWidth` and `stripPlaced` beside the subtitle's own four keys, dragged
+  and resized by the same gesture through `surfaceOf()` in `content.js`, so the
+  two cannot drift apart - and one focus box holding the whole entry for the
+  word being read. `study.js` owns only what goes in the strip: `api.studyDock`
+  is the way in, `api.showStrip` says whether a subtitle has one at all. Hanging
+  the words under the cue was the first version, and it made them impossible to
+  put anywhere: "they should have their own places on the screen and Place
+  button (or drag&drop) should allow to relocate/resize them just like the
+  subtitle areas". The single rail that did both was reported four ways at once:
   "closing one study panel closes all", "disabling learning on a subtitle while
   the other one is enabled puts back both study panels", words piling up so
   nothing was ever the thing being looked at, and an animation that "makes the
@@ -401,6 +407,20 @@ Each of these was a reported bug. Undoing one brings the bug back.
   switch, because a fade that is always on does to the oldest word exactly what
   the age fade is forbidden to do - at 14% of a 578px strip it put 81px of
   gradient over the first word, which no opacity assertion could see.
+- **The fit is measured against the box, and re-measured when the box moves.**
+  The row inside the strip is `flex: 0 0 auto` and therefore always exactly as
+  wide as its cards, so comparing it with itself says "nothing is leaving" while
+  cards are being cut in half at the strip's edge - read back off a screenshot
+  as "kcasi" for "acikcasi". A `ResizeObserver` on the box does the re-measure,
+  because a strip dragged narrower and a window resized never go through a word
+  arriving, which was the only thing that used to recompute it.
+- **The box itself is quiet until it is pointed at.** The cards carry their own
+  background and edge; a second surface behind them is two elevation systems
+  stacked, and with one card in a 672px box that left 500px of empty dark bar
+  over the film. Hover, drag, resize and Place bring the field back, which is
+  every moment the box rather than its contents is the thing being used. The
+  language tag stays visible throughout, because it is the answer to "I even
+  didn't understand it is rails".
 - **Study gets first refusal on the press AND on the release.**
   `claimPointerDown` deliberately declines a plain tap on a word, because the
   box has to stay draggable by its words and a tap is only a tap once it has

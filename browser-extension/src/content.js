@@ -178,6 +178,29 @@
     // and attaching a second subtitle may arrange both.
     placed: false,
 
+    /* Where this subtitle's strip of studied words sits, and how wide it is.
+     *
+     * Its own place on the screen rather than a row hanging under the cue,
+     * asked for directly: "they should have their own places on the screen and
+     * Place button (or drag&drop) should allow to relocate/resize them just
+     * like the subtitle areas". Same units, same anchor and the same drag as
+     * the subtitle, because they are the same kind of thing - a box the reader
+     * puts where they want it and expects to find again.
+     *
+     * The default is just above the dialogue, stacking upwards, and that is a
+     * decision about the only screen it has to be sane on. Under a subtitle is
+     * out: two subtitles are already at 88% and 96%, so a strip under either
+     * lands on the other. The top of the picture is out too - the focus box
+     * parks top-right, and a strip centred up there covers its buttons, which
+     * measured as a Save that could not be pressed. Above the lines it is in
+     * the same glance as the lines and in nothing else's way.
+     *
+     * Bottom edges, like every other posY here. */
+    stripX: 50,
+    stripY: 78,
+    stripWidth: 56,
+    stripPlaced: false,
+
     /* Which edge of its own box the text is ranged against.
      *
      * Only meaningful for a box that is not in the middle of the picture, and
@@ -252,6 +275,12 @@
    * 44% wide at 26% and 74% leaves a margin at both screen edges and a gap of
    * four percent down the middle. Half the screen each, exactly, would put a
    * box against the edge of the frame and the two of them touching. */
+  /* How far apart two strips start, in percent of the viewport height. A strip
+   * is one row of word cards - about 7% of an 800px picture - and this is that
+   * plus a gap, so the second one starts clear of the first. They stack
+   * upwards, away from the dialogue. */
+  const STRIP_STACK_PERCENT = 9;
+
   const SIDE_BY_SIDE = [
     { posX: 26, posY: 94, widthPercent: 44 },
     { posX: 74, posY: 94, widthPercent: 44 },
@@ -325,9 +354,14 @@
     background: 0.55,
     tracks: [
       { ...DEFAULT_TRACK },
-      // The known language sits slightly smaller: it is there to be glanced at,
-      // not read.
-      { ...DEFAULT_TRACK, fontScale: 0.88 },
+      /* The known language sits slightly smaller: it is there to be glanced at,
+       * not read. Its strip starts below the other one's, for the same reason
+       * two subtitles do not start on top of each other. */
+      {
+        ...DEFAULT_TRACK,
+        fontScale: 0.88,
+        stripY: DEFAULT_TRACK.stripY - STRIP_STACK_PERCENT,
+      },
     ],
     // Let the box decide where lines break rather than the file. See rewrapRuns.
     rewrap: true,
@@ -1258,6 +1292,7 @@
     for (const key of ["posX", "posY", "widthPercent", "fontScale", "placed", "bottomPercent"]) {
       delete next[key];
     }
+
     return next;
   }
 
@@ -1428,6 +1463,19 @@
       root.dataset.dim = dimNonSpeech ? "true" : "false";
       // Once placed by hand, a cue's own {\an8} no longer moves it.
       root.dataset.placed = track.placed ? "manual" : "auto";
+
+      /* The strip carries the same font size, colour and backdrop as the
+       * subtitle it belongs to, scaled down by the stylesheet. That is what
+       * makes two strips tellable apart at a glance without reading either -
+       * the same thing the per-track colour does for the subtitles. */
+      const { stripRoot, stripTag } = view;
+      writePosition(stripRoot, track.stripX, track.stripY);
+      stripRoot.style.setProperty("--sso-width", `${track.stripWidth}vw`);
+      stripRoot.style.setProperty("--sso-font-size", `${fontPx.toFixed(2)}px`);
+      stripRoot.style.setProperty("--sso-bg", `rgba(0, 0, 0, ${alpha})`);
+      stripRoot.style.setProperty("--sso-color", track.color || DEFAULT_TRACK.color);
+      stripRoot.style.setProperty("--sso-family", FONTS[track.font] || FONTS.sans);
+      void stripTag;
     });
 
     // Symbols and wrapping are part of the rendered content, so a change needs
@@ -1448,17 +1496,43 @@
   const DRAG_THRESHOLD_PX = 4;
   const RESIZE_EDGE_PX = 16;
   const MIN_WIDTH_PERCENT = 20;
+  /* A strip narrower than this holds one word card and a fade, which is a
+   * surface that cannot do its job. Lower than the subtitle's floor because a
+   * strip does not have to hold a sentence. */
+  const MIN_STRIP_PERCENT = 14;
   const MAX_WIDTH_PERCENT = 100;
   let drag = null;
 
   /* Either vertical edge of the cue resizes it; the middle moves it. On a box
    * narrower than four edge-widths the two zones would meet in the middle and
    * there would be nowhere left to grab, so a short cue is all middle. */
-  function edgeAt(slot, clientX) {
-    const box = views[slot].cueBox.getBoundingClientRect();
-    if (box.width < RESIZE_EDGE_PX * 4) return 0;
-    if (clientX - box.left <= RESIZE_EDGE_PX) return -1;
-    if (box.right - clientX <= RESIZE_EDGE_PX) return 1;
+  /* Which box is being moved, and which settings it writes.
+   *
+   * The subtitle and its strip are placed the same way and remembered the same
+   * way, so they are one gesture parameterised rather than two implementations
+   * that will drift. Everything below reads the surface; only the cue's own
+   * two special cases - study's claim on a press, and forwarding an unmoved
+   * click to the player - stay behind a check on which kind it is. */
+  function surfaceOf(slot, kind) {
+    const view = views[slot];
+    return kind === "strip"
+      ? {
+          kind, slot, root: view.stripRoot, box: view.stripBox,
+          keys: { x: "stripX", y: "stripY", width: "stripWidth", placed: "stripPlaced" },
+          minWidth: MIN_STRIP_PERCENT,
+        }
+      : {
+          kind: "cue", slot, root: view.root, box: view.cueBox,
+          keys: { x: "posX", y: "posY", width: "widthPercent", placed: "placed" },
+          minWidth: MIN_WIDTH_PERCENT,
+        };
+  }
+
+  function edgeAt(box, clientX) {
+    const rect = box.getBoundingClientRect();
+    if (rect.width < RESIZE_EDGE_PX * 4) return 0;
+    if (clientX - rect.left <= RESIZE_EDGE_PX) return -1;
+    if (rect.right - clientX <= RESIZE_EDGE_PX) return 1;
     return 0;
   }
 
@@ -1472,15 +1546,42 @@
      * study mode existed. */
     if (window.__ssoStudy?.claimPointerDown?.(slot, event)) return;
 
+    beginDrag(surfaceOf(slot, "cue"), event);
+  }
+
+  function onStripPointerDown(slot, event) {
+    if (event.button !== 0) return;
+    // A press on a word is that word's, not the box's. The strip is still
+    // draggable by everything around them, which is most of it.
+    if (event.target.closest?.(".sso-trail__word, .sso-strip__close")) return;
+    beginDrag(surfaceOf(slot, "strip"), event);
+  }
+
+  function beginDrag(surface, event) {
     drag = {
-      slot,
+      surface,
+      slot: surface.slot,
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       moved: false,
-      sizing: edgeAt(slot, event.clientX) !== 0,
+      sizing: edgeAt(surface.box, event.clientX) !== 0,
     };
-    views[slot].cueBox.setPointerCapture(event.pointerId);
+    surface.box.setPointerCapture(event.pointerId);
+  }
+
+  function onStripPointerMove(slot, event) {
+    if (drag && event.pointerId === drag.pointerId && event.buttons === 0) {
+      onSurfacePointerUp(event);
+      return;
+    }
+    if (!drag) {
+      const surface = surfaceOf(slot, "strip");
+      surface.box.style.cursor = edgeAt(surface.box, event.clientX) ? "ew-resize" : "";
+      return;
+    }
+    if (event.pointerId !== drag.pointerId) return;
+    onDragMove(event);
   }
 
   function onCuePointerMove(slot, event) {
@@ -1508,11 +1609,19 @@
     if (!drag || event.pointerId !== drag.pointerId) {
       // Not dragging: say which of the two things a press here would do.
       if (!drag) {
-        views[slot].cueBox.style.cursor = edgeAt(slot, event.clientX) ? "ew-resize" : "";
+        views[slot].cueBox.style.cursor = edgeAt(views[slot].cueBox, event.clientX) ? "ew-resize" : "";
       }
       return;
     }
 
+    onDragMove(event);
+  }
+
+  function onDragMove(event) {
+    /* A press is not a gesture until it has moved far enough to be one, and
+     * everything the gesture needs is solved once, there. Both surfaces come
+     * through here, so neither can forget it - the strip's own handler did, and
+     * the first move read a map that had never been measured. */
     if (!drag.moved) {
       const far =
         Math.abs(event.clientX - drag.startX) > DRAG_THRESHOLD_PX ||
@@ -1535,15 +1644,15 @@
      * Everything here is the box's top-left corner, because that is what the
      * map reports; the bottom-centre anchor the CSS uses differs from it by a
      * transform the map has already absorbed. */
-    const box = views[drag.slot].root.getBoundingClientRect();
+    const box = drag.surface.root.getBoundingClientRect();
     const x = clamp(event.clientX - drag.grabX, 0, Math.max(0, window.innerWidth - box.width));
     const y = clamp(event.clientY - drag.grabY, 0, Math.max(0, window.innerHeight - box.height));
     const local = drag.map.toLocal(x, y);
 
     updateTrackSettings(drag.slot, {
-      posX: round1(local.x),
-      posY: round1(local.y),
-      placed: true,
+      [drag.surface.keys.x]: round1(local.x),
+      [drag.surface.keys.y]: round1(local.y),
+      [drag.surface.keys.placed]: true,
     });
   }
 
@@ -1559,25 +1668,25 @@
    * high, drag up, and it covered its own height extra. Holding the offset
    * for the whole gesture makes the box follow the pointer and nothing else. */
   function beginGesture() {
-    const view = views[drag.slot];
+    const { root, keys } = drag.surface;
     const track = state.settings.tracks[drag.slot];
 
-    view.root.dataset[drag.sizing ? "sizing" : "dragging"] = "true";
+    root.dataset[drag.sizing ? "sizing" : "dragging"] = "true";
 
-    drag.map = measurePlacement(view.root, (x, y) => writePosition(view.root, x, y));
-    writePosition(view.root, track.posX, track.posY);
+    drag.map = measurePlacement(root, (x, y) => writePosition(root, x, y));
+    writePosition(root, track[keys.x], track[keys.y]);
 
     /* Measured from the press, not from the move that crossed the threshold.
      * The offset is "where inside the box the user took hold of it", which the
      * press is the only event that knows: taking it from the first move folds
      * that whole move into the offset and the box never catches up. */
-    const corner = drag.map.toViewport(track.posX, track.posY);
+    const corner = drag.map.toViewport(track[keys.x], track[keys.y]);
     drag.grabX = drag.startX - corner.x;
     drag.grabY = drag.startY - corner.y;
 
     // Fixed for the gesture: the box grows about its centre, and reading the
     // centre back off a box that is being resized would have it chase itself.
-    drag.centreX = corner.x + view.root.getBoundingClientRect().width / 2;
+    drag.centreX = corner.x + root.getBoundingClientRect().width / 2;
   }
 
   /* The box grows about its centre, so the width is twice the distance from
@@ -1594,24 +1703,28 @@
      * those vw larger, which is the part that has to be divided back out. */
     const half = Math.abs(event.clientX - drag.centreX);
     const percent = (((half * 2) / window.innerWidth) * 100) / hostScale();
+    const { keys, minWidth } = drag.surface;
     updateTrackSettings(drag.slot, {
-      widthPercent: round1(clamp(percent, MIN_WIDTH_PERCENT, MAX_WIDTH_PERCENT)),
-      placed: true,
+      [keys.width]: round1(clamp(percent, minWidth, MAX_WIDTH_PERCENT)),
+      [keys.placed]: true,
     });
   }
 
   // No slot argument: the press decided which box is being dragged, and the
   // pointer is captured, so the release belongs to that box whatever it is over.
   function onCuePointerUp(event) {
-    if (!drag || event.pointerId !== drag.pointerId) return;
-    const { moved, startX, startY, slot } = drag;
-    const view = views[drag.slot];
-    drag = null;
-    view.cueBox.releasePointerCapture?.(event.pointerId);
-    view.root.dataset.dragging = "false";
-    view.root.dataset.sizing = "false";
+    onSurfacePointerUp(event);
+  }
 
-    if (moved) return;
+  function onSurfacePointerUp(event) {
+    if (!drag || event.pointerId !== drag.pointerId) return;
+    const { moved, startX, startY, slot, surface } = drag;
+    drag = null;
+    surface.box.releasePointerCapture?.(event.pointerId);
+    surface.root.dataset.dragging = "false";
+    surface.root.dataset.sizing = "false";
+
+    if (moved || surface.kind !== "cue") return;
     /* Study gets first refusal on the RELEASE as well as on the press.
      *
      * A press on a word cannot be judged when it arrives - it is a tap only if
@@ -1700,10 +1813,23 @@
     views = Array.from({ length: TRACK_COUNT }, (_, slot) => buildView(slot));
 
     handle = buildHandle();
-    shadow.append(...views.map((view) => view.root), handle);
+    shadow.append(...views.flatMap((view) => [view.root, view.stripRoot]), handle);
 
     applySettings();
     attachToCorrectParent();
+  }
+
+  /* Which subtitle each strip belongs to, written where every change to the
+   * attached files passes. It cannot live in applySettings with the rest of the
+   * strip's appearance: that runs when a SETTING changes, and the language
+   * arrives with the file - so a strip built before the second subtitle was
+   * attached kept saying "2" with no language after it. */
+  function writeStripTags() {
+    for (const [slot, view] of (views || []).entries()) {
+      if (!view?.stripTag) continue;
+      const language = (state.tracks[slot]?.language || "").slice(0, 2).toUpperCase();
+      view.stripTag.textContent = language ? `${slot + 1} ${language}` : `${slot + 1}`;
+    }
   }
 
   function buildView(slot) {
@@ -1720,7 +1846,62 @@
     cueBox.addEventListener("pointercancel", onCuePointerUp);
     root.appendChild(cueBox);
 
-    return { root, cueBox };
+    /* The strip of studied words, in a root of its own.
+     *
+     * It hung under the cue and moved with it, which made it cheap to build
+     * and impossible to put anywhere: "they should have their own places on the
+     * screen and Place button (or drag&drop) should allow to relocate/resize
+     * them just like the subtitle areas". A root of its own is what makes that
+     * true for free - the same position variables, the same drag, the same
+     * Place mode, the same reparenting into a fullscreen element.
+     *
+     * study.js owns what is INSIDE it and content.js owns where it is. That
+     * split is the same one the cue box already has, and it is what keeps the
+     * strip working when study mode is not loaded at all: an empty box that
+     * hides itself. */
+    const stripRoot = document.createElement("div");
+    stripRoot.className = "sso-strip";
+    stripRoot.dataset.slot = String(slot);
+    stripRoot.dataset.words = "0";
+
+    const stripBox = document.createElement("div");
+    stripBox.className = "sso-strip__box";
+    stripBox.title = "Drag to move this strip — its edges resize it";
+    stripBox.addEventListener("pointerdown", (event) => onStripPointerDown(slot, event));
+    stripBox.addEventListener("pointermove", (event) => onStripPointerMove(slot, event));
+    stripBox.addEventListener("pointerup", onSurfacePointerUp);
+    stripBox.addEventListener("pointercancel", onSurfacePointerUp);
+
+    /* What it is, said on the strip itself. The reader could not tell what the
+     * row of words was - "I even didn't understand it is rails" - and a surface
+     * that has to be explained is a surface with no label on it. It carries the
+     * subtitle's number and language, and it is also the part to take hold of
+     * when there are no words in it yet. */
+    const stripTag = document.createElement("span");
+    stripTag.className = "sso-strip__tag";
+
+    const stripTrack = document.createElement("div");
+    stripTrack.className = "sso-strip__track";
+
+    /* The box's furniture is this file's, the way the box is; what pressing it
+     * MEANS is study.js's, the way the words are. Same direction as onCue and
+     * claimPointerDown, and it keeps the button working when study.js has not
+     * loaded - it does nothing, which is correct, because then there is nothing
+     * in the strip to put away. */
+    const stripClose = document.createElement("button");
+    stripClose.type = "button";
+    stripClose.className = "sso-strip__close";
+    stripClose.textContent = "×";
+    stripClose.title = "Stop showing words for this subtitle";
+    stripClose.addEventListener("click", (event) => {
+      event.stopPropagation();
+      window.__ssoStudy?.closeStrip?.(slot);
+    });
+
+    stripBox.append(stripTag, stripTrack, stripClose);
+    stripRoot.append(stripBox);
+
+    return { root, cueBox, stripRoot, stripBox, stripTag, stripTrack, stripClose };
   }
 
   /* Constructable stylesheet rather than a <style> element: adopted sheets are
@@ -4393,6 +4574,7 @@
   const NO_SPANS = { starts: [], ends: [], chars: [] };
 
   function notify() {
+    writeStripTags();
     pushMirror();
     for (const listener of listeners) {
       try {
@@ -5080,7 +5262,14 @@
     setPlacing(on) {
       state.placing = Boolean(on);
       for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;
-      for (const view of views) view.root.dataset.placing = state.placing ? "true" : "false";
+      for (const view of views) {
+        view.root.dataset.placing = state.placing ? "true" : "false";
+        /* The strips join Place mode, which is the whole reason it exists: a
+         * surface that is only visible while it has something in it cannot be
+         * put anywhere before it has been used. In placing mode an empty strip
+         * shows itself and says which subtitle it belongs to. */
+        view.stripRoot.dataset.placing = state.placing ? "true" : "false";
+      }
       notify();
     },
     resetPosition() {
@@ -5237,15 +5426,31 @@
      * of the film, so anything inside it lasts until the next cue. The root is
      * a column anchored by its bottom edge, so the trail holds the anchor line
      * and the dialogue floats above it - see .sso-root in overlay.css. */
+    /* Where study.js puts this subtitle's word cards. It owns what goes in;
+     * this file owns where the box is, how big it is and when it is shown. */
     studyDock(slot) {
       const view = views?.[slot];
       if (!view) return null;
-      if (!view.trail) {
-        view.trail = document.createElement("div");
-        view.trail.className = "sso-trail";
-        view.root.append(view.trail);
-      }
-      return view.trail;
+      return view.stripTrack;
+    },
+
+    /* Whether this subtitle's strip is on screen at all. study.js decides -
+     * a strip belongs to a subtitle being learnt, and can be put away on its
+     * own - and this is where that decision is written, because the box is
+     * built here and has to hide itself when study.js is not loaded. */
+    showStrip(slot, on) {
+      const view = views?.[slot];
+      if (!view) return;
+      view.stripRoot.dataset.on = on ? "true" : "false";
+    },
+
+    stripCount(slot) {
+      const view = views?.[slot];
+      if (!view) return;
+      // The cards, not the one track element that holds them.
+      view.stripRoot.dataset.words = String(
+        view.stripTrack.querySelectorAll(".sso-trail__word").length,
+      );
     },
     /* Study settings live in study.js, so a change there is invisible to the
      * panel's subscription. This pushes one status round so the panel redraws
