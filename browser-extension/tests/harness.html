@@ -230,6 +230,11 @@
          * is cached for the session, so a check that hovers a word another
          * check hovers later leaves that one with nothing to observe. */
         reckoning: 16400, is: 18, upon: 2200, us: 90,
+        /* Turkish, and the point of these three is that they are COMMON. A
+         * lowercasing that leaves a combining dot behind, or that turns a
+         * dotless capital into a dotted i, produces a word this table has never
+         * heard of - and never heard of is the rarest thing there is. */
+        iyi: 25, iki: 113, "ışık": 2400, yandı: 5200,
       };
       // See "a helper that is not answering ...": the one case where the stub
       // has to fail the way the real worker fails.
@@ -3873,6 +3878,10 @@
         { start: 0, end: 600000, text: "[Ormon] Yere yat!" },
         { start: 600000, end: 900000, text: "[iç çeker] Peki." },
         { start: 1200000, end: 1500000, text: "Neden bahsettiğini bilmiyorum ve açıkçası umurumda değil." },
+        // Both halves of the Turkish casing problem in one line: a dotted
+        // capital İ that must fold to plain "i", and a dotless capital I that
+        // must fold to "ı".
+        { start: 1500000, end: 1800000, text: "İyi. Işık yandı, iki dakika kaldı." },
       ];
       const roots = () => [...shadowOf().querySelectorAll(".sso-root")];
       const cueOf = (slot) => roots()[slot].querySelector(".sso-cue");
@@ -4137,6 +4146,63 @@
           if (!paired.some((text) => text.includes("frankly")))
             throw new Error(`the paired line is ${JSON.stringify(paired)}`);
         } finally {
+          window.__ssoStudy.updateSettings({ studySlots: was });
+          await sleep(120);
+        }
+      });
+
+      check("a Turkish word is lowercased the way Turkish lowercases it", async () => {
+        /* Lowercasing is a property of the language. `"İyi".toLowerCase()` is
+         * "i" followed by a combining dot, and `"Işık".toLowerCase()` is "işık"
+         * with a dotted i where Turkish wants the dotless one. Neither form is
+         * in any frequency table, and a word the table does not hold counts as
+         * rarer than the 30,000th word in it - so the two commonest words in
+         * the line were marked as very rare and took both of its places.
+         *
+         * Measured over the Turkish subtitle in srt-viewer/subtitles before the
+         * fix: 78 of 5,122 tokens lowercase differently under Turkish rules,
+         * and 61 of those are words the table knows once folded that way.
+         *
+         * The claim is about the KEY, so it is asserted on the key and on what
+         * the key then produces. A check that only looked at the marking would
+         * pass again the moment somebody added the broken form to a table. */
+        const was = window.__ssoStudy.settings().studySlots;
+        try {
+          await attachSecond();
+          window.__ssoStudy.updateSettings({ studySlots: [1], rarityRank: 4000, auto: false });
+          await window.__ssoStudy.setEnabled(true);
+          video.currentTime = 1600;
+          await sleep(300);
+
+          const keys = wordsIn(1).map((w) => w.dataset.w);
+          if (!keys.includes("iyi"))
+            throw new Error(`"İyi" became ${JSON.stringify(keys[0])}, and the table has no such word`);
+          if (!keys.includes("ışık"))
+            throw new Error(`"Işık" became ${JSON.stringify(keys[1])}; Turkish wants the dotless "ışık"`);
+
+          // And the consequence, which is what the reader actually sees: two of
+          // the commonest words in the language, not underlined.
+          const rare = wordsIn(1).filter((w) => w.dataset.rare === "true").map((w) => w.dataset.w);
+          for (const common of ["iyi", "ışık", "iki"]) {
+            if (rare.includes(common))
+              throw new Error(`"${common}" was marked rare; marked: ${rare.join(", ")}`);
+          }
+
+          /* The card quotes the line and marks the word inside it, and that
+           * search has to fold the sentence the same way the term was folded -
+           * otherwise the fix above moves the term out of reach of its own
+           * quotation and the mark silently lands nowhere. */
+          const word = wordsIn(1).find((w) => w.dataset.w === "iyi");
+          word.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, composed: true }));
+          await sleep(450);
+          const marked = focusShadow().querySelector(".sso-card__line mark");
+          if (!marked)
+            throw new Error("the card quotes the line without marking the word in it");
+          if (marked.textContent.toLocaleLowerCase("tr") !== "iyi")
+            throw new Error(`the mark landed on ${JSON.stringify(marked.textContent)}`);
+        } finally {
+          // Left attached: the checks after this one expect a second subtitle,
+          // the same way the pairing check above leaves what it attached.
           window.__ssoStudy.updateSettings({ studySlots: was });
           await sleep(120);
         }

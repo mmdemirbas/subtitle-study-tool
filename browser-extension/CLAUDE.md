@@ -421,6 +421,20 @@ Each of these was a reported bug. Undoing one brings the bug back.
   every moment the box rather than its contents is the thing being used. The
   language tag stays visible throughout, because it is the answer to "I even
   didn't understand it is rails".
+- **Lowercasing a word is a property of its language, so it takes the
+  subtitle's language.** `study.js` folds every word through `fold(word,
+  language)` rather than `toLowerCase()`, because Turkish disagrees with the
+  default twice: `"İyi".toLowerCase()` is `i` plus a combining dot, and
+  `"Işık".toLowerCase()` has a dotted i where Turkish wants the dotless one.
+  Neither form is in any frequency table, and a word the table does not hold
+  counts as rarer than the 30,000th word in it - so `iyi`, the 26th commonest
+  word in Turkish film dialogue, was marked as very rare and took one of the
+  line's two places every time it was said. Measured over the Turkish subtitle
+  in `srt-viewer/subtitles`: 78 of 5,122 tokens fold differently under Turkish
+  rules, 61 of them into words the table knows. Anything comparing a term
+  against text has to fold BOTH sides the same way - the card's own quotation
+  of the line was the second bug, where the fixed term could no longer be found
+  inside a sentence folded the old way.
 - **Study gets first refusal on the press AND on the release.**
   `claimPointerDown` deliberately declines a plain tap on a word, because the
   box has to stay draggable by its words and a tap is only a tap once it has

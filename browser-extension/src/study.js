@@ -448,6 +448,30 @@
 
   const letterCount = (word) => (word.match(LETTERS) || []).length;
 
+  /* Lowercasing is a property of the language, not of the string, and Turkish
+   * is where the default answer is wrong twice over.
+   *
+   * `"İyi".toLowerCase()` is "i" followed by COMBINING DOT ABOVE, because that
+   * is what round-trips in every language except this one. No frequency table
+   * holds that form, and a word the table does not hold counts as rarer than
+   * the 30,000th word in it - so `iyi`, the 26th commonest word in Turkish film
+   * dialogue, was marked as very rare and took one of the two places in its
+   * line every time somebody said it. `"Işık".toLowerCase()` is the other half:
+   * "işık", where Turkish wants the dotless "ışık".
+   *
+   * Measured over the Turkish subtitle in srt-viewer/subtitles: 78 of its 5,122
+   * tokens lowercase differently under Turkish rules, and 61 of those are words
+   * the table knows once they are folded that way, against 3 that only the
+   * default gets right.
+   *
+   * The language has to be the SUBTITLE's, not the page's or the browser's,
+   * because the same letters mean different things in two files on screen at
+   * the same time. */
+  function fold(word, language) {
+    const text = String(word);
+    return language ? text.toLocaleLowerCase(language) : text.toLowerCase();
+  }
+
   /* Wrap every word in the rendered cue in its own element, leaving punctuation
    * and spacing as they were.
    *
@@ -456,6 +480,9 @@
    * those spans, which is what keeps a rare word inside a shouted line still
    * looking like part of the shouted line. */
   function wrapWords(cueBox, slot) {
+    // Once per cue rather than once per word: it is the same answer for every
+    // word in the line, and it reads the settings and the track to get it.
+    const language = studyLanguage(slot);
     const walker = document.createTreeWalker(cueBox, NodeFilter.SHOW_TEXT);
     const texts = [];
     while (walker.nextNode()) texts.push(walker.currentNode);
@@ -476,7 +503,7 @@
         const span = document.createElement("span");
         span.className = "sso-w";
         span.textContent = match[0];
-        span.dataset.w = match[0].toLowerCase();
+        span.dataset.w = fold(match[0], language);
         /* Which subtitle it came out of, carried on the word itself. With more
          * than one subtitle being studied, "the language of the line" and "the
          * line to quote on the card" are different answers for two words on
@@ -1055,7 +1082,8 @@
       const slot = Number(selection?.anchor?.dataset.slot);
       clearSelection();
       if (phrase) {
-        addCard(phrase.toLowerCase(), { pinned: true, language: studyLanguage(slot), slot });
+        const language = studyLanguage(slot);
+        addCard(fold(phrase, language), { pinned: true, language, slot });
       }
     };
 
@@ -2071,7 +2099,14 @@
 
     const text = document.createElement("span");
     const flat = sentence.replace(/\s*\n\s*/g, " ");
-    const at = term ? flat.toLowerCase().indexOf(term) : -1;
+    /* Folded the way the term was, or the mark lands nowhere. The term now
+     * carries its subtitle's own lowercasing, and a default fold of the same
+     * sentence is a different string in Turkish - "iyi" would never be found
+     * inside "i̇yi". The length is checked because the default fold GROWS the
+     * string there, and every index after the growth would be one place off,
+     * which slices the mark across the middle of a letter. */
+    const folded = fold(flat, language);
+    const at = term && folded.length === flat.length ? folded.indexOf(term) : -1;
     if (at === -1) {
       text.textContent = flat;
     } else {
@@ -2173,8 +2208,24 @@
 
   async function loadSavedTerms() {
     const response = await api.daemon("deckTerms", {});
-    savedTerms = new Set(response?.terms || []);
+    savedTerms = new Set((response?.terms || []).map(foldStoredTerm));
     remarkCurrent();
+  }
+
+  /* A stored term folded the way this session folds the words on screen.
+   *
+   * The deck holds `language:term`, and terms kept before the folding was
+   * right carry the combining dot. Without this they never match the word in
+   * the line again, so a Turkish word saved last week comes back underlined and
+   * arrives in the strip once more - which is the one thing saving it was
+   * supposed to stop. Split on the FIRST colon only: a saved phrase can carry
+   * one of its own. */
+  function foldStoredTerm(stored) {
+    const text = String(stored);
+    const at = text.indexOf(":");
+    if (at < 1) return text;
+    const language = text.slice(0, at);
+    return `${language}:${fold(text.slice(at + 1), language)}`;
   }
 
   // --- geometry -----------------------------------------------------------------
