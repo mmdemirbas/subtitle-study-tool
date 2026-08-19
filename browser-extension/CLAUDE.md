@@ -478,9 +478,12 @@ Each of these was a reported bug. Undoing one brings the bug back.
   3.878, 9.675, 18.476, 33.408 over the first fifteen seconds, measured in
   Chrome against a real 46:13 - and `seekable` cannot tell that apart from a
   short file, because Chrome reports one range over what has arrived. So a
-  length seen to GROW is distrusted for two seconds after it last did, which
-  leaves a player that sets its duration once and late with its map, and falls
-  back to what the page states in schema.org.
+  length seen to GROW TWICE is distrusted for the rest of that resource, and
+  what the page states in schema.org is used instead. Never a time window on
+  the last growth: a stream is written in bursts and the gaps are seconds long,
+  so the reported length flipped ten times in twenty-four seconds and every
+  flip took both subtitles off and put them back. Twice rather than once so a
+  player that corrects its duration once, late, keeps its map.
 - **Nothing may assume the tick is 50ms of FILM.** It is 50ms of wall time, so
   at 2x playback it is 100ms of film and at 4x 200ms. Anything testing "are we
   near the end of this cue" has to work from the step the playhead actually

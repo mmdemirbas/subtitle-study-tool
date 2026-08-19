@@ -653,14 +653,19 @@
           configurable: true,
         });
         // Which video this page is about is cached for 250ms, and a length is
-        // not distrusted until it has been seen to change.
-        await sleep(600);
+        // not distrusted until it has been seen to grow twice.
+        await sleep(900);
         try {
           return await run();
         } finally {
           Object.defineProperty(video, "duration", wasDuration);
           Object.defineProperty(video, "seekable", wasSeekable);
           delete video.dataset.ssoTimeOffset;
+          /* Putting the old stream back IS a new resource, and that is the
+           * only thing that makes the extension forget it was watching one
+           * being produced. Without this the element stays a stream for the
+           * rest of the run, which is right on a real page and wrong here. */
+          video.dispatchEvent(new Event("loadstart"));
           await sleep(300);
         }
       }
@@ -689,14 +694,49 @@
           const said = window.__ssoApi.status().duration;
           if (said !== null)
             throw new Error(`reported ${said}s as the length of a two-hour episode`);
-          /* The control: a length that stops changing is a length again, or a
-           * player that sets its duration once and late would lose its map for
-           * the rest of the film. */
-          Object.defineProperty(video, "duration", { get: () => 7200, configurable: true });
-          await sleep(2200);
-          if (window.__ssoApi.status().duration !== 7200)
-            throw new Error("a length that settled was still treated as unknown");
         }));
+
+      /* ...and it stays not a length while the stream pauses.
+       *
+       * A server writing into a pipe stops whenever the player has buffered
+       * enough, so growth comes in bursts with gaps of seconds between them.
+       * Read as "grew recently" the reported length flips between the page's
+       * and the arrived-so-far one - ten times in twenty-four seconds on the
+       * real page - and since the programme mark is keyed on the length, each
+       * flip took both subtitles off and put them back. */
+      check("a stream that pauses between bursts is not a film that just ended", () =>
+        /* Started past the minute mark on purpose: a stream only six seconds in
+         * is refused for being short whatever this decides, so the arrived-so-
+         * far number has to be a plausible film length for the check to have
+         * anything to catch. */
+        whileStillArriving(120, async () => {
+          const wasArriving = Object.getOwnPropertyDescriptor(video, "duration");
+          const stuck = video.duration;
+          Object.defineProperty(video, "duration", { get: () => stuck, configurable: true });
+          await sleep(2400);   // longer than any window worth watching for
+          const said = window.__ssoApi.status().duration;
+          Object.defineProperty(video, "duration", wasArriving);
+          if (said !== null)
+            throw new Error(`a pause in the stream made ${said}s look like the film's length`);
+        }));
+
+      /* The control, and the reason two growths are needed rather than one: a
+       * player that sets a placeholder and corrects it once must keep its map
+       * for the rest of the film. */
+      check("a player that states its length once, late, is believed", async () => {
+        video.dispatchEvent(new Event("loadstart"));   // nothing known about it yet
+        const was = Object.getOwnPropertyDescriptor(video, "duration");
+        Object.defineProperty(video, "duration", { get: () => 90, configurable: true });
+        await sleep(600);
+        Object.defineProperty(video, "duration", { get: () => 7200, configurable: true });
+        await sleep(600);
+        const said = window.__ssoApi.status().duration;
+        Object.defineProperty(video, "duration", was);
+        video.dispatchEvent(new Event("loadstart"));
+        await sleep(300);
+        if (said !== 7200)
+          throw new Error(`a length corrected once was treated as a stream: ${said}`);
+      });
 
       /* ...and a page that KNOWS the length is believed, through the standard
        * vocabulary rather than through anything invented here. A `VideoObject`

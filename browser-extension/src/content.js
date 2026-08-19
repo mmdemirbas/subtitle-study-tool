@@ -624,14 +624,30 @@
    * it looks as though it should. Chrome reports one seekable range over what
    * has arrived, so a stream 10 seconds in is indistinguishable from a
    * 10-second file that can be seeked. The one thing that separates them is
-   * that this one CHANGES, so that is what is watched - and only what has been
-   * seen to grow is distrusted, because a player that sets its duration once,
-   * late, must not lose its map for the rest of the film.
+   * that this one CHANGES, so that is what is watched.
+   *
+   * It is COUNTED, and never counted back down. Growth was first read as a
+   * recent event - trust the element's own number again once it had been still
+   * for two seconds - and that is wrong, because a stream is written into the
+   * pipe in bursts and the pauses between them are longer than any window worth
+   * having. Measured on the real page: the reported length flipped between the
+   * page's 2760 and the arrived-so-far 10, 18.6, 22.1, 25.1 ten times in
+   * twenty-four seconds. Every flip is a different programme mark, so both
+   * subtitles were reported gone and re-attached, over and over, and the map
+   * blinked out between them. Reported as "it thinks that both subtitles are
+   * removed, shows a message then both subtitles come back".
+   *
+   * Two growths rather than one, so that a player which sets a placeholder and
+   * corrects it once does not lose its map for the rest of the film. A stream
+   * being produced as it is sent passes two within a second; nothing else ever
+   * does. A new resource on the element starts the count over, because what was
+   * learned was learned about the old one.
    *
    * A page that knows better says so - see the clock below. */
   const LENGTH_GROWTH_S = 0.25;   // below this, a re-read is not a change
-  const LENGTH_UNSETTLED_MS = 2000;
+  const LENGTH_GROWTHS = 2;       // one late correction is not a stream
   const lengths = new WeakMap();
+  const forgetLength = (event) => lengths.delete(event.currentTarget);
 
   /* Called from pickVideo, which already walks every video on the page. */
   function noticeLength(video) {
@@ -640,18 +656,20 @@
     const seen = lengths.get(video);
     if (!seen) {
       // Never grown as far as anyone knows, which is the ordinary case.
-      lengths.set(video, { seconds, grewAt: -Infinity });
+      lengths.set(video, { seconds, grew: 0 });
+      // Same function, so a second load does not stack a second listener.
+      video.addEventListener("loadstart", forgetLength);
       return;
     }
-    if (seconds - seen.seconds > LENGTH_GROWTH_S) seen.grewAt = performance.now();
+    if (seconds - seen.seconds > LENGTH_GROWTH_S) seen.grew += 1;
     seen.seconds = seconds;
   }
 
   function filmSeconds(video = state.video) {
+    const seen = lengths.get(video);
+    if (seen && seen.grew >= LENGTH_GROWTHS) return statedSeconds();
     const own = video?.duration;
     if (!Number.isFinite(own) || own <= 0) return null;
-    const seen = lengths.get(video);
-    if (seen && performance.now() - seen.grewAt < LENGTH_UNSETTLED_MS) return statedSeconds();
     return own;
   }
 
