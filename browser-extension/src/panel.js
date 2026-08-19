@@ -1092,9 +1092,27 @@
       if (next === cssWidth) return;
       cssWidth = next;
       painted = "";
+      ink = null;
     }).observe(canvas);
 
     let painted = "";
+
+    /* The colour, read from the cascade once - the same rule the cards' strips
+     * follow, and for the same reason: getComputedStyle forces a style
+     * recalculation, and this one ran on every repaint of the preview.
+     *
+     * Which during a drag on a card's map is every pointermove, because the
+     * offset is in the preview's own signature. Measured on the catalogue app
+     * with two 900-cue subtitles: sixty setOffsets produced sixty calls, and
+     * the panel went from 11 layouts a second to 70. Re-read when the box
+     * changes, which is the one moment cheap enough not to care about. */
+    let ink = null;
+    const inkOf = () => {
+      if (ink === null) {
+        ink = getComputedStyle(root).getPropertyValue("--sso-peek-ink").trim() || "#93b9fb";
+      }
+      return ink;
+    };
 
     function draw(status) {
       const attached = status.tracks
@@ -1149,8 +1167,7 @@
       const context = canvas.getContext("2d");
       if (!context) return;
       context.clearRect(0, 0, width, height);
-      const style = getComputedStyle(root);
-      context.fillStyle = style.getPropertyValue("--sso-peek-ink").trim() || "#93b9fb";
+      context.fillStyle = inkOf();
 
       const row = Math.round(PREVIEW_ROW * dpr);
       attached.forEach((each, index) => {
@@ -1642,8 +1659,13 @@
       if (shot === painted) return;
       painted = shot;
 
+      const started = performance.now();
       if (!scale.ms) rebuildDensity(status);
       paint(status);
+      // Only the rounds that actually put ink on the canvas: the ones the
+      // signature above skips are the same picture and cost nothing.
+      api.notePerf?.("maps", 1);
+      api.notePerf?.("mapMs", performance.now() - started);
 
       /* And whether anything was drawn, because an empty well and a well whose
        * lines have all been pushed out of the window look identical - and one
@@ -1732,6 +1754,9 @@
       const next = movedTo(event);
       if (next === null) return;
       readout.textContent = api.describeOffset(next);
+      // How many repaints the gesture asked for, so a slow drag can be told
+      // from a slow film.
+      api.notePerf?.("drags", 1);
       /* Silent, deliberately: the drag is one correction and this fires sixty
        * times inside it. finish() commits the same value once with `note`, so
        * the drift estimator and the log see the gesture, not its samples. */
@@ -3884,7 +3909,17 @@
      * actually look like" and it costs nothing but a message - no search, no
      * download. See trace.js. */
     api.trace?.("panel", { open: true }, { frames: true });
-    unsubscribe ||= api.subscribe(refresh);
+    /* Timed, because a freeze reported against the map had no number behind
+     * it. content.js counts long tasks and its own two hot paths; the panel
+     * runs in the same world and cost nothing anything could see, so a window
+     * full of long tasks looked the same whether this was drawing or the page
+     * was. See notePerf and the note above PERF_ZERO. */
+    unsubscribe ||= api.subscribe((status) => {
+      const started = performance.now();
+      refresh(status);
+      api.notePerf?.("panels", 1);
+      api.notePerf?.("panelMs", performance.now() - started);
+    });
     // Point the next attach at the first free subtitle, which is what somebody
     // opening the panel is nearly always about to fill.
     const status = api.status();

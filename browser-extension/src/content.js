@@ -808,7 +808,14 @@
     return candidates[0];
   }
 
-  const hasPlayableVideo = () => pickVideo() !== null;
+  /* Through the cache, because this is asked far more often than the answer
+   * changes. It is part of every status round - twenty a second while a film
+   * plays, and more while a map is being dragged, since each pointermove
+   * writes an offset and every write notifies - and each uncached call walks
+   * every <video> on the page and measures it, which is a forced layout apiece.
+   * The cache exists for exactly this and was simply not used here: measured on
+   * the catalogue app, 134 getBoundingClientRects inside sixty offset writes. */
+  const hasPlayableVideo = () => pickVideoCached() !== null;
 
   /* A page with a video on it is not the same as a page you are watching.
    *
@@ -5295,7 +5302,22 @@
    * produce no line, which is what keeps this from becoming the next thing
    * filling the log. */
   const PERF_MS = 10000;
-  const PERF_ZERO = { long: 0, longMs: 0, worst: 0, ticks: 0, tickMs: 0, moves: 0, moveMs: 0, cues: 0, arranged: 0 };
+  const PERF_ZERO = {
+    long: 0, longMs: 0, worst: 0, ticks: 0, tickMs: 0, moves: 0, moveMs: 0, cues: 0, arranged: 0,
+    /* The panel's share, which nothing here could see before.
+     *
+     * A freeze was reported as "the subtitle map is freezing and dragging it
+     * becomes terribly hard", and the sample had no way to answer it: the
+     * panel and the map run in this world and cost nothing this counted, so a
+     * window full of long tasks looked the same whether the panel was drawing
+     * or the page was. Reproducing it needs the reader's machine - on the
+     * catalogue app with two 900-cue subtitles, study mode on, a real
+     * compositor and a 2x display, the drag holds 60fps with two dropped
+     * frames in five seconds, which is not what was described. So the numbers
+     * have to come from where it happens, which is what the note above this
+     * whole block already says about long tasks. */
+    panels: 0, panelMs: 0, maps: 0, mapMs: 0, drags: 0,
+  };
   const perf = { ...PERF_ZERO };
   let perfAt = Date.now();
   try {
@@ -5348,6 +5370,13 @@
       moveMs: Math.round(seen.moveMs),
       cues: seen.cues,
       arranged: seen.arranged,
+      // The panel's share of it: status rounds it redrew, strips it repainted,
+      // and how many of those repaints a drag on a map asked for.
+      panels: seen.panels,
+      panelMs: Math.round(seen.panelMs),
+      maps: seen.maps,
+      mapMs: Math.round(seen.mapMs),
+      drags: seen.drags,
       attached: anyAttached(),
       study: Boolean(window.__ssoStudy?.settings?.().enabled),
       panel: Boolean(window.__ssoPanel?.isOpen?.()),
@@ -5595,6 +5624,15 @@
       return Boolean(window.__ssoStudy?.saveTop?.());
     },
     trace,
+    /* For the surfaces that run in this world and are not this file.
+     *
+     * Timed by the caller because only the caller knows where its own work
+     * begins and ends, counted here because this is where the window is and
+     * where the sample is sent from. Costs an addition; the sample itself is
+     * still sent only when the window held a long task. */
+    notePerf(kind, ms) {
+      if (kind in perf) perf[kind] += Number.isFinite(ms) ? ms : 1;
+    },
     pageInfo,
     hasPlayableVideo,
     updateSettings,
