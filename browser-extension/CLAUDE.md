@@ -447,6 +447,22 @@ Each of these was a reported bug. Undoing one brings the bug back.
   by nothing else. `attach()` used to clear it, which destroyed the correction
   belonging to the track already on screen. Use `forgetAdDrift()`; there are
   three callers and they all have to forget the stamp as well as the number.
+- **Nothing may assume the element's clock is the film's clock, or that its
+  duration is the film's length.** A player streaming a repackaged file cannot
+  be seeked, so it seeks by fetching a new stream that begins at the moment
+  asked for: the element's zero is then twenty minutes into the film, and its
+  duration is only what has arrived, growing as it plays - 3.878, 9.675,
+  18.476, 33.408 over the first fifteen seconds, measured in Chrome against a
+  real 46:13. Nothing on the element says either, so the page says it, on the
+  video: `data-sso-time-offset` and `data-sso-duration`, both in seconds and
+  both read live. `streamNowMs()` and `elementSeconds()` in `content.js` are
+  the two directions and the only places that know; use them rather than
+  `video.currentTime`. `filmSeconds()` is the length, and returns null while
+  the number is still growing - `seekable` cannot tell the two apart, because
+  Chrome reports one range over what has arrived, so a stream ten seconds in
+  looks exactly like a ten-second file. A length seen to grow is distrusted
+  for two seconds after it last did, so a player that sets its duration once
+  and late keeps its map.
 - **Nothing may assume the tick is 50ms of FILM.** It is 50ms of wall time, so
   at 2x playback it is 100ms of film and at 4x 200ms. Anything testing "are we
   near the end of this cue" has to work from the step the playhead actually
