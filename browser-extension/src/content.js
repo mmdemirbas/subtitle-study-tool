@@ -637,15 +637,26 @@
    * blinked out between them. Reported as "it thinks that both subtitles are
    * removed, shows a message then both subtitles come back".
    *
-   * Two growths rather than one, so that a player which sets a placeholder and
-   * corrects it once does not lose its map for the rest of the film. A stream
-   * being produced as it is sent passes two within a second; nothing else ever
-   * does. A new resource on the element starts the count over, because what was
+   * ONE growth is enough, and waiting for a second cost ten seconds of every
+   * playback. The second was meant to protect a player that sets a placeholder
+   * and corrects it once - but that player was never at risk, because a
+   * duration arriving from nothing is not a growth: `noticeLength` starts the
+   * record at the first finite value, so NaN to 46:13 is counted as zero
+   * changes. Measured on the catalogue app: the stream's length climbs in
+   * plateaus, one step every couple of seconds, so a second step is seconds
+   * away rather than the moment the first was seen. For those seconds the
+   * arrived-so-far number is under a minute, the film is refused for being
+   * short, and the page reports no video playing - twenty consecutive samples
+   * of it at 500ms each. That is the same failure as "the subtitle overlay is
+   * not shown in this page", reintroduced by the guard against a case that
+   * does not exist.
+   *
+   * A new resource on the element starts the count over, because what was
    * learned was learned about the old one.
    *
    * A page that knows better says so - see the clock below. */
   const LENGTH_GROWTH_S = 0.25;   // below this, a re-read is not a change
-  const LENGTH_GROWTHS = 2;       // one late correction is not a stream
+  const LENGTH_GROWTHS = 1;
   const lengths = new WeakMap();
   const forgetLength = (event) => lengths.delete(event.currentTarget);
 

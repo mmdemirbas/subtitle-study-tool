@@ -630,6 +630,10 @@
           throw new Error("a sub-second flicker was counted as an ad break");
       });
 
+      // How long the arrived length sits still between steps, on the model
+      // above. The real one was about two seconds.
+      const STEP_MS = 1500;
+
       /* A stream the server is making as it sends it.
        *
        * Every part of this is the measurement rather than an invention. The
@@ -644,8 +648,12 @@
         const wasDuration = Object.getOwnPropertyDescriptor(video, "duration");
         const wasSeekable = Object.getOwnPropertyDescriptor(video, "seekable");
         const from = performance.now();
+        /* In STEPS, because that is what it does. A smooth ramp was the model
+         * here first, and a smooth ramp hides everything about how long the
+         * extension waits: the real one sat at 6.5 seconds, went to 15, sat
+         * there, went on. Measured at 500ms intervals on the catalogue app. */
         Object.defineProperty(video, "duration", {
-          get: () => arrivedSeconds + ((performance.now() - from) / 1000) * 2.2,
+          get: () => arrivedSeconds + Math.floor((performance.now() - from) / STEP_MS) * 3.3,
           configurable: true,
         });
         Object.defineProperty(video, "seekable", {
@@ -653,8 +661,8 @@
           configurable: true,
         });
         // Which video this page is about is cached for 250ms, and a length is
-        // not distrusted until it has been seen to grow twice.
-        await sleep(900);
+        // not distrusted until a step has been seen.
+        await sleep(STEP_MS + 700);
         try {
           return await run();
         } finally {
@@ -720,13 +728,15 @@
             throw new Error(`a pause in the stream made ${said}s look like the film's length`);
         }));
 
-      /* The control, and the reason two growths are needed rather than one: a
-       * player that sets a placeholder and corrects it once must keep its map
-       * for the rest of the film. */
+      /* The control. A length arriving from nothing is not a length growing,
+       * and a player that sets its duration once and late must keep its map
+       * for the rest of the film. This is why one step is enough to distrust
+       * the number: the case that looks like it needs two is this one, and it
+       * never reaches the count at all. */
       check("a player that states its length once, late, is believed", async () => {
         video.dispatchEvent(new Event("loadstart"));   // nothing known about it yet
         const was = Object.getOwnPropertyDescriptor(video, "duration");
-        Object.defineProperty(video, "duration", { get: () => 90, configurable: true });
+        Object.defineProperty(video, "duration", { get: () => NaN, configurable: true });
         await sleep(600);
         Object.defineProperty(video, "duration", { get: () => 7200, configurable: true });
         await sleep(600);
@@ -735,7 +745,49 @@
         video.dispatchEvent(new Event("loadstart"));
         await sleep(300);
         if (said !== 7200)
-          throw new Error(`a length corrected once was treated as a stream: ${said}`);
+          throw new Error(`a length that arrived once was treated as a stream: ${said}`);
+      });
+
+      /* ...and the film is taken at the FIRST step, not the third.
+       *
+       * Waiting for a second step was a guard against the check above, which
+       * turned out never to be at risk. What it cost was measured on the
+       * catalogue app: twenty consecutive samples at 500ms with no video
+       * detected - ten seconds of every playback with no overlay, no CC handle
+       * and nothing to attach to. Reported as "sometimes it says that there is
+       * no video playing", on a page that plays every time. */
+      check("a stream whose length arrives in steps is the film at the first step", async () => {
+        const wasDuration = Object.getOwnPropertyDescriptor(video, "duration");
+        const wasSeekable = Object.getOwnPropertyDescriptor(video, "seekable");
+        video.dispatchEvent(new Event("loadstart"));
+        const from = performance.now();
+        Object.defineProperty(video, "duration", {
+          get: () => 6.5 + Math.floor((performance.now() - from) / STEP_MS) * 8,
+          configurable: true,
+        });
+        Object.defineProperty(video, "seekable", {
+          get: () => ({ length: 1, start: () => 0, end: () => video.duration }),
+          configurable: true,
+        });
+        try {
+          // Six seconds of film is refused for being short, and should be.
+          await sleep(400);
+          if (window.__ssoApi.status().hasVideo)
+            throw new Error("six seconds of arrived stream was taken for the film");
+          const waitingFrom = performance.now();
+          let took = null;
+          for (let i = 0; i < 60 && took === null; i++) {
+            await sleep(100);
+            if (window.__ssoApi.status().hasVideo) took = Math.round(performance.now() - waitingFrom);
+          }
+          if (took === null || took > 2500)
+            throw new Error(`the film was refused for ${took === null ? "six whole seconds" : took + "ms"}`);
+        } finally {
+          Object.defineProperty(video, "duration", wasDuration);
+          Object.defineProperty(video, "seekable", wasSeekable);
+          video.dispatchEvent(new Event("loadstart"));
+          await sleep(300);
+        }
       });
 
       /* ...and a page that KNOWS the length is believed, through the standard
