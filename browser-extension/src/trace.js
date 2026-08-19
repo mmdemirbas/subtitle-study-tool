@@ -202,7 +202,16 @@ async function toDaemon(log) {
     });
     if (!answer.ok) return { ok: false, reason: `daemon answered ${answer.status}` };
     const said = await answer.json().catch(() => ({}));
-    return { ok: true, bytes: text.length, file: said.file || null };
+    /* A POST that succeeded is not proof the daemon took it.
+     *
+     * Ports collide, and 8791 is on this machine: something else holding it
+     * that answers 200 would be handed the log AND have the browser's copy
+     * dropped, so the entries are gone and they went to a stranger's process.
+     * The daemon says where it wrote them, and nothing else does. */
+    if (said.ok !== true || typeof said.file !== "string") {
+      return { ok: false, reason: "something other than the daemon answered on 8791" };
+    }
+    return { ok: true, bytes: text.length, file: said.file };
   } catch (error) {
     return { ok: false, reason: `daemon not running (${error?.message || error})` };
   }

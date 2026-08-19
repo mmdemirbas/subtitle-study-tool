@@ -16,6 +16,7 @@ const written = [];
 const posted = [];
 let downloadsFail = false;
 let daemonUp = true;
+let foreignOnPort = false;
 
 /* The daemon is a socket, so it is stubbed as one. The extension does not
  * health-check it: the POST is the check, and "not running" arrives as a fetch
@@ -23,6 +24,10 @@ let daemonUp = true;
 globalThis.fetch = async (url, options) => {
   if (String(url).includes("/log")) {
     if (!daemonUp) throw new TypeError("Failed to fetch");
+    /* Something that is not the daemon, holding 8791 - the same case the
+     * health probe has to handle. It answers, so the POST succeeds and the log
+     * would be dropped from the browser having gone to a stranger. */
+    if (foreignOnPort) return { ok: true, status: 200, json: async () => ({}) };
     posted.push(JSON.parse(options.body));
     return { ok: true, status: 200, json: async () => ({ ok: true, file: "logs/today.jsonl" }) };
   }
@@ -347,6 +352,7 @@ const trace = await import("../src/trace.js");
 const resetTrace = async () => {
   downloadsFail = false;
   daemonUp = true;
+  foreignOnPort = false;
   await new Promise((r) => setTimeout(r, 60));
   await trace.flush();
   await trace.clear();
@@ -405,6 +411,21 @@ t(
   posted.length === 1 && posted[0].entries.length === 80 && (await trace.entries()).length === 0,
   `${posted.length} batch(es), ${posted[0]?.entries.length} entries`,
 );
+
+/* ...but only to the daemon. A POST that succeeds is the whole check that the
+ * daemon is there, so anything else holding the port is handed the log and the
+ * browser's copy is dropped - the entries are gone and they went to a
+ * stranger's process. The reply has to look like the daemon's. */
+await resetTrace();
+foreignOnPort = true;
+for (let i = 0; i < 5; i++) await trace.record("panel", { i });
+await trace.flush();
+t(
+  "a stranger on the daemon's port is not handed the log",
+  posted.length === 0 && (await trace.entries()).length === 5,
+  `${posted.length} batch(es) sent, ${(await trace.entries()).length} held`,
+);
+foreignOnPort = false;
 
 /* Asked for by hand on the report page, with no daemon: that is the one time a
  * file is the right answer. */
