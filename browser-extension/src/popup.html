@@ -11,8 +11,10 @@
       <span id="daemon-state" class="pill pill--muted">checking…</span>
     </header>
 
-    <!-- Replaces the body when the daemon is unreachable or unconfigured;
-         nothing below it would work until that is fixed. -->
+    <!-- Replaces the body when nothing can find a subtitle at all - no API
+         key on the side that would answer, or no service worker to ask. The
+         daemon being down is NOT one of those: the extension does the same
+         work itself, and every button below goes through the worker. -->
     <section id="blocker" class="blocker" hidden>
       <p id="blocker-message"></p>
       <pre id="blocker-hint" class="hint"></pre>

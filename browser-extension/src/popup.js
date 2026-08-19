@@ -12,7 +12,8 @@ import { reportPageErrors } from "./page-errors.js";
 reportPageErrors("popup");
 
 
-import { DaemonDownError, health, tabStatus } from "./daemon.js";
+// tabStatus asks the tab's frames, not the daemon - see the note in init().
+import { tabStatus } from "./daemon.js";
 
 const ui = {
   daemonState: document.getElementById("daemon-state"),
@@ -57,17 +58,22 @@ async function init() {
 
   await renderShortcuts();
 
-  let config;
-  try {
-    config = await health();
-  } catch (error) {
-    if (error instanceof DaemonDownError) {
-      return block(
-        "The subtitle daemon is not running.",
-        "cd subtitle-study-tool/subtitle-daemon\n./run.sh",
-      );
-    }
-    throw error;
+  /* Through the worker, which asks whichever side can answer - not the daemon.
+   *
+   * The daemon is optional: the extension does the same work itself when
+   * nothing is listening, and that is the ordinary case. Every button below
+   * already goes through the worker for exactly that reason, so asking the
+   * daemon directly here blocked the whole popup on a helper none of them
+   * need. Observed with a foreign server holding 8791: the popup said "the
+   * subtitle daemon is not running", hid Find, Control panel, Hide and
+   * Diagnose, and offered advice - run.sh - that fails on an occupied port.
+   *
+   * What is still worth blocking on is a missing API key, because then nothing
+   * can be FOUND on either side. The advice differs by side, since the daemon
+   * reads a file and the extension reads its own options. */
+  const config = await chrome.runtime.sendMessage({ type: "sso:daemon", op: "health" });
+  if (!config || config.transportError) {
+    return block(config?.transportError || "Could not reach the extension's service worker.", "");
   }
 
   setPill(
@@ -78,8 +84,10 @@ async function init() {
   if (!config.has_api_key) {
     return block(
       "No OpenSubtitles API key configured. Create one (free) at " +
-        "opensubtitles.com/en/consumers, put it in config.local.json and restart the daemon.",
-      "cd subtitle-study-tool/subtitle-daemon\ncp config.example.json config.local.json",
+        "opensubtitles.com/en/consumers.",
+      config.daemon_running
+        ? "cd subtitle-study-tool/subtitle-daemon\ncp config.example.json config.local.json"
+        : "Put it in the extension's options, under OpenSubtitles.",
     );
   }
 
