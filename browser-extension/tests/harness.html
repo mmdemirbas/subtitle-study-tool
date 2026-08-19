@@ -879,6 +879,73 @@
         }
       });
 
+      /* A field that is present and empty has not been stated.
+       *
+       * Site generators emit the whole vocabulary and leave the parts they have
+       * no value for as empty strings - it is the ordinary output of every SEO
+       * plugin. `Number("")` is 0, so an empty episodeNumber reads as episode
+       * zero of season zero, and because a stated episode outranks one scraped
+       * out of a title or an address, that invented pair wins over the real
+       * one and the search goes out for something that does not exist. */
+      check("a page that states an empty episode number has not stated one", async () => {
+        const script = document.createElement("script");
+        script.type = "application/ld+json";
+        script.textContent = JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "TVEpisode",
+          name: "Baggage",
+          episodeNumber: "",
+          partOfSeason: { "@type": "TVSeason", seasonNumber: "" },
+          partOfSeries: { "@type": "TVSeries", name: "The Americans" },
+        });
+        document.head.append(script);
+        try {
+          const stated = askPage().episode?.fromMetadata;
+          if (stated)
+            throw new Error(`two empty fields became S${stated.season}E${stated.episode}`);
+        } finally {
+          script.remove();
+        }
+      });
+
+      /* A stated length is only worth having while it is a length a film could
+       * have. The page is the last word once the element's own duration cannot
+       * be trusted, so an impossible one goes straight onto the map, into the
+       * programme mark and into the drift estimator's divisor with nothing
+       * downstream to catch it. The two shapes are a wrong unit - the local
+       * catalogue app writes `PT${seconds}S`, and milliseconds there is 32 days
+       * - and a placeholder short enough to make a film look like an advert. */
+      const statingLength = async (iso, run) => {
+        const script = document.createElement("script");
+        script.type = "application/ld+json";
+        script.textContent = JSON.stringify({
+          "@context": "https://schema.org", "@type": "VideoObject", name: "x", duration: iso,
+        });
+        document.head.append(script);
+        try {
+          return await whileStillArriving(120, async () => {
+            await sleep(1100);   // the stated length is re-read once a second
+            return run(window.__ssoApi.status());
+          });
+        } finally {
+          script.remove();
+        }
+      };
+
+      check("a length no film has is not believed because a page stated it", () =>
+        statingLength("PT2773162S", (status) => {
+          if (status.duration !== null)
+            throw new Error(`32 days was taken as the length of the film: ${status.duration}`);
+        }));
+
+      check("a film is not refused because its page states an advert's length", () =>
+        statingLength("PT30S", (status) => {
+          if (status.duration !== null)
+            throw new Error(`30s was taken as the length of the film: ${status.duration}`);
+          if (!status.hasVideo)
+            throw new Error("a page stating 30s took the film away from the overlay");
+        }));
+
       /* Dragging the cue. The overlay is click-through apart from the cue
        * itself, which sits where people click to pause - so a press that does
        * not move must reach the player, and one that moves must not. */

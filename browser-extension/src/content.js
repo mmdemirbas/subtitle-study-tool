@@ -686,6 +686,18 @@
   let statedLength = { at: -Infinity, seconds: null };
   const STATED_LENGTH_MS = 1000;
 
+  /* ...and only while it is a length a film could have.
+   *
+   * This is the last word once the element's own duration cannot be trusted,
+   * so an impossible number goes straight onto the map, into the programme
+   * mark and into the drift estimator's divisor, with nothing downstream to
+   * catch it. Two shapes turn up. A wrong unit: the local catalogue app writes
+   * `PT${seconds}S` and the same field in milliseconds is 32 days. And a
+   * placeholder short enough to make a film look like an advert, which would
+   * take the overlay off a page that had it. Out of range is not a length,
+   * which every reader of this already handles. */
+  const LONGEST_FILM_S = 24 * 3600;
+
   function statedSeconds() {
     const now = performance.now();
     if (now - statedLength.at < STATED_LENGTH_MS) return statedLength.seconds;
@@ -694,7 +706,7 @@
       const type = schemaType(item);
       if (!SCHEMA_VIDEO_TYPE.test(type)) continue;
       const seconds = isoSeconds(item.duration);
-      if (!seconds) continue;
+      if (seconds === null || seconds < MIN_VIDEO_SECONDS || seconds > LONGEST_FILM_S) continue;
       if (/VideoObject/i.test(type)) { best = seconds; break; }
       if (best === null) best = seconds;
     }
@@ -947,11 +959,24 @@
    * answer - it would send a search for a whole season - so both are required.
    */
   function statedEpisode(item) {
-    const season = Number(item.partOfSeason?.seasonNumber ?? item.seasonNumber);
-    const episode = Number(item.episodeNumber);
-    if (!Number.isFinite(season) || !Number.isFinite(episode)) return null;
-    if (season < 0 || episode < 0) return null;
+    const season = statedNumber(item.partOfSeason?.seasonNumber ?? item.seasonNumber);
+    const episode = statedNumber(item.episodeNumber);
+    if (season === null || episode === null) return null;
     return { season, episode, matched: "schema.org episodeNumber" };
+  }
+
+  /* A field that is present and empty has not been stated.
+   *
+   * `Number("")` is 0, and a site generator emitting the whole vocabulary with
+   * empty strings where it has no value is the ordinary output of every SEO
+   * plugin - so the page reads as episode zero of season zero. A stated
+   * episode outranks one scraped out of a title or an address, so that
+   * invented pair beats the real one and the search goes out for something
+   * that does not exist. Digits or nothing; season zero is a real season, so
+   * the value is checked and not merely its truthiness. */
+  function statedNumber(value) {
+    if (typeof value === "number") return Number.isInteger(value) && value >= 0 ? value : null;
+    return typeof value === "string" && /^\d+$/.test(value.trim()) ? Number(value.trim()) : null;
   }
 
   function readJsonLd() {
