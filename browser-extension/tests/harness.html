@@ -269,6 +269,16 @@
       // Configurable, so a case can swap the stream for a different one - which
       // is what starting the next episode looks like from in here.
       Object.defineProperty(video, "duration", { get: () => 7200, configurable: true });
+      /* A two-hour film can always be seeked over, and that is now the
+       * difference between a length the extension can trust and one that is
+       * only what has arrived so far. A stub that claims the duration and not
+       * the range claims something no real player does - the case below is the
+       * one where they come apart. */
+      Object.defineProperty(video, "seekable", {
+        get: () => ({ length: 1, start: () => 0, end: () => video.duration }),
+        configurable: true,
+      });
+      Object.defineProperty(video, "readyState", { get: () => 4, configurable: true });
       // Configurable, so a case can make pausing real - the overlay can stop
       // the film now, and a stub that is always playing cannot show that.
       Object.defineProperty(video, "paused", { get: () => false, configurable: true });
@@ -419,6 +429,10 @@
         preview.style.width = `${Math.round(shape.width * window.innerWidth)}px`;
         preview.style.height = `${Math.round(shape.height * window.innerHeight)}px`;
         Object.defineProperty(preview, "duration", { get: () => 464 });
+        Object.defineProperty(preview, "seekable", {
+          get: () => ({ length: 1, start: () => 0, end: () => 464 }),
+        });
+        Object.defineProperty(preview, "readyState", { get: () => 4 });
         Object.defineProperty(preview, "paused", { get: () => false });
 
         let holder = preview;
@@ -615,6 +629,97 @@
         if ((window.__ssoApi.status().adDriftMs || 0) !== 0)
           throw new Error("a sub-second flicker was counted as an ad break");
       });
+
+      /* A stream the server is making as it sends it.
+       *
+       * Every part of this is the measurement rather than an invention. The
+       * duration is only what has arrived, so it GROWS - about 2.2 seconds of
+       * length per second of playing, which is what the real one did: 3.878,
+       * 9.675, 18.476, 33.408 over the first fifteen seconds. And `seekable`
+       * covers what has arrived rather than being empty, which is the part that
+       * looks wrong and is not: a stream ten seconds in reports exactly what a
+       * ten-second file that can be seeked reports. That is why the growth is
+       * the thing watched. */
+      async function whileStillArriving(arrivedSeconds, run) {
+        const wasDuration = Object.getOwnPropertyDescriptor(video, "duration");
+        const wasSeekable = Object.getOwnPropertyDescriptor(video, "seekable");
+        const from = performance.now();
+        Object.defineProperty(video, "duration", {
+          get: () => arrivedSeconds + ((performance.now() - from) / 1000) * 2.2,
+          configurable: true,
+        });
+        Object.defineProperty(video, "seekable", {
+          get: () => ({ length: 1, start: () => 0, end: () => video.duration }),
+          configurable: true,
+        });
+        // Which video this page is about is cached for 250ms, and a length is
+        // not distrusted until it has been seen to change.
+        await sleep(600);
+        try {
+          return await run();
+        } finally {
+          Object.defineProperty(video, "duration", wasDuration);
+          Object.defineProperty(video, "seekable", wasSeekable);
+          delete video.dataset.ssoTimeOffset;
+          delete video.dataset.ssoDuration;
+          await sleep(300);
+        }
+      }
+
+      /* Reported as "this address can play my local video, but the subtitle
+       * overlay is not shown in this page somehow". The page was serving a
+       * Matroska file repackaged as it was sent - no byte ranges, no length -
+       * so the duration was whatever had arrived and grew as it played:
+       * 3.878, 9.675, 18.476, 33.408 over the first fifteen seconds, measured
+       * in Chrome. Tested against sixty seconds that is not a film, so there
+       * was no CC handle and nowhere to attach anything, for the first minute
+       * of every playback. */
+      check("a film being repackaged as it plays is still the film", () =>
+        whileStillArriving(3.878, () => {
+          if (!window.__ssoApi.status().hasVideo)
+            throw new Error("4s of a two-hour episode was refused as too short to subtitle");
+        }));
+
+      /* ...and the number it grew from is not a length. A growing one is worse
+       * than none: it is what the map would draw, what the programme mark would
+       * key on - so every tick would look like the next episode starting - and
+       * what the drift estimator would divide by. Every reader of it already
+       * handles not knowing. */
+      check("a length that is only what has arrived is not reported as the film's", () =>
+        whileStillArriving(3.878, async () => {
+          const said = window.__ssoApi.status().duration;
+          if (said !== null)
+            throw new Error(`reported ${said}s as the length of a two-hour episode`);
+          /* The control: a length that stops changing is a length again, or a
+           * player that sets its duration once and late would lose its map for
+           * the rest of the film. */
+          Object.defineProperty(video, "duration", { get: () => 7200, configurable: true });
+          await sleep(2200);
+          if (window.__ssoApi.status().duration !== 7200)
+            throw new Error("a length that settled was still treated as unknown");
+        }));
+
+      /* The other half of that page, and the one that would have looked like a
+       * sync bug instead of a missing overlay. A stream that cannot be seeked
+       * is seeked by fetching a new one that starts at the moment asked for, so
+       * resuming 25 minutes in gives an element whose clock starts at zero
+       * while the picture is 25 minutes in. Nothing about the element says so;
+       * the page does, and everything here is on the film's clock. */
+      check("a player that streams from an offset is read on the film's clock", () =>
+        whileStillArriving(3.878, async () => {
+          video.dataset.ssoTimeOffset = "1500";
+          video.dataset.ssoDuration = "7200";
+          video.currentTime = 1;
+          await sleep(200);
+          const status = window.__ssoApi.status();
+          if (Math.abs(status.currentTime - 1501) > 0.01)
+            throw new Error(`the film is 25:01 in and the extension reads ${status.currentTime}s`);
+          if (status.duration !== 7200)
+            throw new Error(`the page said the film is 7200s and the extension says ${status.duration}`);
+          const drawn = shadowOf().querySelector(".sso-cue")?.textContent || "";
+          if (!drawn.includes("I saw nothing at all"))
+            throw new Error(`the line at 25:01 was not the one drawn: "${drawn.trim().slice(0, 40)}"`);
+        }));
 
       /* Dragging the cue. The overlay is click-through apart from the cue
        * itself, which sits where people click to pause - so a press that does

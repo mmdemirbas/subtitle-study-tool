@@ -127,6 +127,7 @@
    * loaded, and it is the difference between a cost per tab and no cost. */
   const IDLE_TICK_MS = 500;
   const MIN_VIDEO_SECONDS = 60; // ignore ad breaks, teasers, autoplay loops
+  const HAVE_METADATA = 1; // HTMLMediaElement.HAVE_METADATA, off the instance
   const TOAST_MS = 1600;
   // Long enough to notice what happened and reach the button. The usual advice
   // for an undo is five to eight seconds; 1.6 is a confirmation, not an offer.
@@ -604,9 +605,105 @@
     return videoGuess.video;
   }
 
+  /* How long the film is, when anything knows.
+   *
+   * `video.duration` is the whole answer for a file the browser was given the
+   * length of, and no answer at all for a stream produced as it is sent: there
+   * the number is whatever has arrived so far. Measured in Chrome on the local
+   * catalogue app this repo is used with, over the first fifteen seconds of an
+   * episode: 3.878, 9.675, 18.476, 33.408, against a response carrying
+   * `accept-ranges: none` and no `content-length`.
+   *
+   * A growing number is worse than no number - it is what the map would draw,
+   * what the programme mark would key on, so every tick would look like the
+   * next episode starting, and what the drift estimator would divide by. Every
+   * reader of it already handles not knowing: the map hides itself and the mark
+   * stays quiet.
+   *
+   * `seekable` does NOT separate the two, which is worth writing down because
+   * it looks as though it should. Chrome reports one seekable range over what
+   * has arrived, so a stream 10 seconds in is indistinguishable from a
+   * 10-second file that can be seeked. The one thing that separates them is
+   * that this one CHANGES, so that is what is watched - and only what has been
+   * seen to grow is distrusted, because a player that sets its duration once,
+   * late, must not lose its map for the rest of the film.
+   *
+   * A page that knows better says so - see the clock below. */
+  const LENGTH_GROWTH_S = 0.25;   // below this, a re-read is not a change
+  const LENGTH_UNSETTLED_MS = 2000;
+  const lengths = new WeakMap();
+
+  /* Called from pickVideo, which already walks every video on the page. */
+  function noticeLength(video) {
+    const seconds = video.duration;
+    if (!Number.isFinite(seconds) || seconds <= 0) return;
+    const seen = lengths.get(video);
+    if (!seen) {
+      // Never grown as far as anyone knows, which is the ordinary case.
+      lengths.set(video, { seconds, grewAt: -Infinity });
+      return;
+    }
+    if (seconds - seen.seconds > LENGTH_GROWTH_S) seen.grewAt = performance.now();
+    seen.seconds = seconds;
+  }
+
+  function filmSeconds(video = state.video) {
+    const said = timingHint(video, "ssoDuration");
+    if (said) return said;
+    const own = video?.duration;
+    if (!Number.isFinite(own) || own <= 0) return null;
+    const seen = lengths.get(video);
+    if (seen && performance.now() - seen.grewAt < LENGTH_UNSETTLED_MS) return null;
+    return own;
+  }
+
+  /* The element's clock is not always the film's clock.
+   *
+   * A stream that cannot be seeked is seeked by fetching a new one that begins
+   * at the moment asked for - so resuming an episode 22 minutes in gives an
+   * element whose `currentTime` starts at zero while the picture is 22 minutes
+   * into the film. Nothing about the element says so, and subtitles put on it
+   * are wrong by the resume point in a way that looks exactly like a bad sync.
+   *
+   * There is no way to work it out from here, so the page says it, in seconds,
+   * on the video element itself:
+   *
+   *   <video data-sso-time-offset="1320" data-sso-duration="3245">
+   *
+   * Both are read live, because a player that seeks this way changes them.
+   * Everything in this file is on the film's clock; the element's is that
+   * clock less `startSeconds`, and the two writes to `currentTime` are the only
+   * places that have to go back the other way. */
+  function timingHint(video, key) {
+    const said = Number.parseFloat(video?.dataset?.[key] ?? "");
+    return Number.isFinite(said) && said >= 0 ? said : null;
+  }
+  const startSeconds = (video = state.video) => timingHint(video, "ssoTimeOffset") ?? 0;
+  const streamNowMs = (video = state.video) =>
+    ((video?.currentTime || 0) + startSeconds(video)) * 1000;
+  const elementSeconds = (streamMs, video = state.video) =>
+    Math.max(0, streamMs / 1000 - startSeconds(video));
+
+  /* Long enough to be worth subtitling, or of a length nothing can know.
+   *
+   * The test is for a SHORT video, not for an unknown one. An ad break, a
+   * teaser and a hover preview are short and their length is known; a live
+   * stream and a file being repackaged as it is sent have no length to test,
+   * and are judged on size like everything else here. Testing a growing
+   * duration against sixty seconds rejects the film for the first minute of
+   * every playback - which is the minute somebody is getting their subtitles
+   * up, and was reported as "the subtitle overlay is not shown in this page". */
+  function longEnough(video) {
+    const known = filmSeconds(video);
+    if (known !== null) return known >= MIN_VIDEO_SECONDS;
+    // NaN with nothing loaded is not "no length", it is "no video yet".
+    return video.readyState >= HAVE_METADATA;
+  }
+
   function pickVideo() {
     const candidates = Array.from(document.querySelectorAll("video")).filter((video) => {
-      if (!Number.isFinite(video.duration) || video.duration < MIN_VIDEO_SECONDS) return false;
+      noticeLength(video);
+      if (!longEnough(video)) return false;
       const box = video.getBoundingClientRect();
       return box.width > 200 && box.height > 100;
     });
@@ -1069,8 +1166,8 @@
     if (!video) return null;
     const box = video.getBoundingClientRect();
     return {
-      duration: Number.isFinite(video.duration) ? Math.round(video.duration) : null,
-      currentTime: Math.round(video.currentTime),
+      duration: Math.round(filmSeconds(video) ?? 0) || null,
+      currentTime: Math.round(streamNowMs(video) / 1000),
       paused: video.paused,
       width: Math.round(box.width),
       height: Math.round(box.height),
@@ -2740,7 +2837,7 @@
    *
    * Rate defaults to 1, where this is exactly the expression it replaced. */
   function filmTimeMs(track) {
-    const stream = state.video.currentTime * 1000 - state.adDriftMs - track.offsetMs;
+    const stream = streamNowMs() - state.adDriftMs - track.offsetMs;
     const plain = track.rate && track.rate !== 1 ? stream / track.rate : stream;
     if (!track.steps?.length) return plain;
     /* Inverted by trying each act's own offset and keeping the one whose
@@ -2873,9 +2970,8 @@
      * this mode is for. Put it back just inside. The move is one step at most,
      * which is 200ms of film even at 4x. */
     if (now > target.end) {
-      state.video.currentTime = Math.max(
-        0,
-        streamTimeMs(track, target.end - LINE_END_MARGIN_MS) / 1000,
+      state.video.currentTime = elementSeconds(
+        streamTimeMs(track, target.end - LINE_END_MARGIN_MS),
       );
     }
   }
@@ -2936,10 +3032,7 @@
       return true;
     }
 
-    state.video.currentTime = Math.max(
-      0,
-      (streamTimeMs(track, cue.start) - LINE_PREROLL_MS) / 1000,
-    );
+    state.video.currentTime = elementSeconds(streamTimeMs(track, cue.start) - LINE_PREROLL_MS);
     /* Draw it now rather than up to a tick later. Setting currentTime moves the
      * official playback position immediately, so the tick reads the new time
      * even while the frames are still on their way. */
@@ -3008,10 +3101,9 @@
 
   function programmeMark() {
     const video = state.video;
-    if (!video || !Number.isFinite(video.duration) || video.duration < MIN_VIDEO_SECONDS) {
-      return "";
-    }
-    return `${Math.round(video.duration)}|${programmeTitle()}`;
+    const seconds = filmSeconds(video);
+    if (!video || seconds === null || seconds < MIN_VIDEO_SECONDS) return "";
+    return `${Math.round(seconds)}|${programmeTitle()}`;
   }
 
   /* Long enough for a player that is still settling - the duration arrives
@@ -3079,7 +3171,7 @@
     const showing = adMarkerVisible();
     if (showing === state.inAd) return;
 
-    const streamMs = state.video.currentTime * 1000;
+    const streamMs = streamNowMs();
     if (showing) {
       state.inAd = true;
       state.adStartedAtMs = streamMs;
@@ -3565,7 +3657,7 @@
     const otherSlot = state.tracks.findIndex((t, i) => i !== slot && t.cues.length > 0);
     if (otherSlot === -1) return null;
 
-    const at = Number.isFinite(atMs) ? atMs : (state.video?.currentTime || 0) * 1000;
+    const at = Number.isFinite(atMs) ? atMs : streamNowMs();
     if (!Number.isFinite(at)) return null;
 
     // Both on the video's clock, which is the only one they share.
@@ -3756,7 +3848,7 @@
   }
 
   function traceCorrection(track, slot, { how, wasOffsetMs, wasRate }) {
-    const streamMs = (state.video?.currentTime || 0) * 1000;
+    const streamMs = streamNowMs();
     if (!Number.isFinite(streamMs)) return;
     trace("sync", {
       how,
@@ -3771,7 +3863,7 @@
       rate: track.rate,
       wasRate,
       adDriftMs: Math.round(state.adDriftMs || 0),
-      duration: state.video?.duration ?? null,
+      duration: filmSeconds(),
       /* Every attached subtitle, not only the one that moved. Whether the other
        * one was already right at that moment is the difference between "this
        * file is out" and "these two files disagree", and only one of those is
@@ -3794,7 +3886,7 @@
   }
 
   function noteCorrection(track, slot) {
-    const durationMs = (state.video?.duration || 0) * 1000;
+    const durationMs = (filmSeconds() || 0) * 1000;
     if (!Number.isFinite(durationMs) || durationMs <= 0) return;
     const fileMs = filmTimeMs(track);
     if (!Number.isFinite(fileMs)) return;
@@ -4077,7 +4169,7 @@
       offsetMs: track.offsetMs,
       rate: track.rate,
       timingWasKnown: timing.known,
-      duration: state.video?.duration ?? null,
+      duration: filmSeconds(),
       firstCueMs: track.cues[0]?.start ?? null,
       lastCueMs: track.cues[track.cues.length - 1]?.start ?? null,
     });
@@ -4479,8 +4571,8 @@
       inAd: state.inAd,
       visible: state.visible,
       settings: state.settings,
-      currentTime: state.video?.currentTime ?? null,
-      duration: state.video?.duration ?? null,
+      currentTime: state.video ? streamNowMs() / 1000 : null,
+      duration: filmSeconds(),
     };
   }
 
@@ -5398,7 +5490,7 @@
         const seen = mirror?.status;
         return seen?.currentTime == null ? null : seen.currentTime * 1000 - (seen.adDriftMs || 0);
       }
-      return state.video ? state.video.currentTime * 1000 - state.adDriftMs : null;
+      return state.video ? streamNowMs() - state.adDriftMs : null;
     },
     pauseVideo() {
       state.video?.pause();
