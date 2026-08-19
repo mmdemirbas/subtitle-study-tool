@@ -10,11 +10,18 @@
 export const DAEMON_ORIGIN = "http://127.0.0.1:8791";
 
 export class DaemonDownError extends Error {
-  constructor() {
-    super("The subtitle daemon is not running. Start it with subtitle-daemon/run.sh");
+  constructor(message) {
+    super(message || "The subtitle daemon is not running. Start it with subtitle-daemon/run.sh");
     this.name = "DaemonDownError";
   }
 }
+
+/* Something is listening on the port and it is not the daemon.
+ *
+ * Worth its own words rather than the message above, because the advice
+ * differs: starting the daemon on top of this fails with the port already in
+ * use, and the reader has to find what is holding it first. */
+const FOREIGN = `Something other than the subtitle daemon is listening on ${DAEMON_ORIGIN}.`;
 
 async function call(path, options = {}) {
   let response;
@@ -34,8 +41,32 @@ async function call(path, options = {}) {
   return payload;
 }
 
-export function health() {
-  return call("/health");
+/* Whether the daemon is there - and it has to be the daemon, not merely an
+ * answer.
+ *
+ * The probe asked "did something reply". Ports collide, and this one is 8791 on
+ * the reader's own machine: a dev server left running there answers 200 with
+ * its index page for every path it does not know, so nothing fails, nothing
+ * parses, and every search went to it and came back empty while the
+ * extension's own search - which works, and is the ordinary path now - never
+ * ran. It reads as "no subtitles for anything" with nothing saying why.
+ * `python3 -m http.server` on the same port is the other shape, answering 404,
+ * and was already observed once - see study.js on the same port.
+ *
+ * `default_languages` is the cheapest thing in the reply that a page cannot
+ * produce by accident: the daemon always sends the list, and a document, an
+ * empty body and an unrelated JSON API all fail it. */
+export async function health() {
+  let payload;
+  try {
+    payload = await call("/health");
+  } catch (error) {
+    // An HTTP error from /health is something else on the port, not a daemon
+    // with a problem - the daemon has no failing path here.
+    throw error instanceof DaemonDownError ? error : new DaemonDownError(FOREIGN);
+  }
+  if (!Array.isArray(payload.default_languages)) throw new DaemonDownError(FOREIGN);
+  return payload;
 }
 
 /** Search for subtitles. Free — this never costs download quota. */

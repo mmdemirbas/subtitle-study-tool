@@ -76,6 +76,7 @@
       const calls = { download: 0, features: 0, subtitles: 0, daemonSearch: 0, imported: [], forgotten: [] };
       let daemonRunning = false;
       let daemonFails = null;
+      let foreignOnPort = false;
       const daemonCache = new Map();
 
       const json = (body, status = 200) =>
@@ -113,6 +114,17 @@
         // --- the daemon ---
         if (target.startsWith("http://127.0.0.1:8791")) {
           if (!daemonRunning) throw new TypeError("Failed to fetch");
+          /* Something that is not the daemon, holding the port. A dev server
+           * answers 200 with its index page for every path it does not know,
+           * so nothing fails and nothing parses - which is the case that got
+           * through. `python3 -m http.server` on the same port is the other
+           * shape and answers 404; that one already ends up here. */
+          if (foreignOnPort) {
+            return new Response("<!doctype html><title>dev server</title>", {
+              status: 200,
+              headers: { "Content-Type": "text/html" },
+            });
+          }
           const path = target.slice("http://127.0.0.1:8791".length);
           if (path.startsWith("/health")) {
             return json({ has_api_key: true, default_languages: ["en"] });
@@ -365,6 +377,25 @@
         const found = await provider.search({ title: "Crime 101", languages: ["en"] });
         if (found.served_by !== "daemon") throw new Error(`served by ${found.served_by}`);
         if (!calls.daemonSearch) throw new Error("the daemon was not asked");
+      });
+
+      /* Ports collide, and this one is 8791 on the reader's own machine. The
+       * probe asked "did something answer" rather than "did the daemon
+       * answer", so a dev server left running there was taken for the daemon:
+       * every search went to it, came back as nothing, and the extension's own
+       * search - which works, and is the ordinary path now - never ran. It
+       * reads as "no subtitles for anything" with no way to tell why. */
+      check("something else answering on the daemon's port is not the daemon", async () => {
+        foreignOnPort = true;
+        await setDaemon(true);
+        reset();
+        const found = await provider.search({ title: "Crime 101", languages: ["en"] });
+        foreignOnPort = false;
+        await setDaemon(false);
+        if (found.served_by !== "extension")
+          throw new Error(`a dev server on the port was taken for the daemon: ${found.served_by}`);
+        if (!found.results?.length)
+          throw new Error("the extension's own search never ran");
       });
 
       check("an error from the daemon is not retried locally", async () => {
