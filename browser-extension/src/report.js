@@ -520,6 +520,16 @@ function describeEntry(entry) {
   if (entry.kind === "alignOutcome") {
     return `the reader ${entry.outcome} that alignment`;
   }
+  /* A freeze reported against the panel needs the panel's own numbers beside
+   * the page's, or the entry only says the window was slow. */
+  if (entry.kind === "perf") {
+    const held = `${entry.long} long task${entry.long === 1 ? "" : "s"} in ${entry.over}s, worst ${entry.worst}ms`;
+    const ours = `we took ${entry.tickMs}ms over ${entry.ticks} ticks`;
+    const panel = entry.panel
+      ? `, panel ${entry.panelMs ?? "?"}ms over ${entry.panels ?? "?"} rounds and ${entry.mapMs ?? "?"}ms repainting ${entry.maps ?? "?"} strips${entry.drags ? ` (${entry.drags} of them a drag)` : ""}`
+      : ", panel shut";
+    return `${held} · ${ours}${panel}`;
+  }
   return entry.kind;
 }
 
