@@ -837,6 +837,15 @@
    * detail page "Prime Video: Crime 101", and other sites append episode
    * numbers, resolutions and marketing. og:title and JSON-LD are what the site
    * tells crawlers the page is about, so they are tried first. */
+  /* Kept as one range so the two readings of a year cannot drift apart.
+   * `subtitles/titles.js` holds the same one for the search side. */
+  const YEAR_RANGE = "(?:19[0-9]{2}|20[0-4][0-9])";
+  const ANY_YEAR = new RegExp(`\\b(${YEAR_RANGE})\\b`);
+  // JavaScript has lookbehind, so titles.js's dotted-scene-release form ports.
+  const TITLE_YEAR = new RegExp(
+    `[([]\\s*(${YEAR_RANGE})\\s*[)\\]]|(?<=\\.)(${YEAR_RANGE})(?=\\.)`,
+  );
+
   function pageInfo() {
     const candidates = [];
 
@@ -853,8 +862,24 @@
 
     let year = null;
     const noteYear = (value) => {
-      const match = String(value || "").match(/\b(19[0-9]{2}|20[0-4][0-9])\b/);
+      const match = String(value || "").match(ANY_YEAR);
       if (match && year === null) year = Number(match[1]);
+    };
+
+    /* ...but a number in a TITLE is not a year.
+     *
+     * `subtitles/titles.js` already carries the rule and the same example - "a
+     * bare trailing number is left alone, because Blade Runner 2049 is a real
+     * title" - and this scrape did not, so a page with no structured date
+     * reported 2049. The year goes to the search as a hard filter, so that is
+     * nothing found for a film that has subtitles in every language.
+     *
+     * A year printed beside a title is bracketed, or dotted in a scene release
+     * name. The bare chip Prime and Netflix render near the heading is read
+     * further down, where bare IS the signal rather than part of the name. */
+    const noteTitleYear = (value) => {
+      const match = String(value || "").match(TITLE_YEAR);
+      if (match && year === null) year = Number(match[1] ?? match[2]);
     };
 
     /* schema.org is the standard way a page says what it is showing, and until
@@ -918,7 +943,7 @@
      * Streaming pages print the year next to the title, so scrape it from the
      * places it turns up, most reliable first. */
     noteYear(document.querySelector('meta[itemprop="datePublished"]')?.content);
-    for (const candidate of candidates) noteYear(candidate.text);
+    for (const candidate of candidates) noteTitleYear(candidate.text);
     if (year === null) {
       // Prime and Netflix both render it as a bare 4-digit chip near the title.
       const near = document.querySelector("h1")?.closest("div")?.textContent || "";

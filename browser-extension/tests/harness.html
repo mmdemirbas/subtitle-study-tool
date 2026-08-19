@@ -879,6 +879,28 @@
         }
       });
 
+      /* A number in a title is not a year, and `titles.js` already says so:
+       * "a bare trailing number is left alone, because Blade Runner 2049 is a
+       * real title". The scrape here did not, so a page with no structured date
+       * reported 2049 - and the year is a hard filter on the search, so the
+       * answer is nothing found for a film that has subtitles in every
+       * language. A bracketed one is the year: "(2017)" beside the title is how
+       * every site prints it, and a bare chip near the heading is scraped
+       * separately, where bare IS the signal. */
+      check("a number in the title is not read as the film's year", async () => {
+        const was = document.title;
+        try {
+          document.title = "Blade Runner 2049";
+          if (askPage().year !== null)
+            throw new Error(`the title's own number was read as a year: ${askPage().year}`);
+          document.title = "Blade Runner 2049 (2017)";
+          if (askPage().year !== 2017)
+            throw new Error(`the bracketed year was not read: ${askPage().year}`);
+        } finally {
+          document.title = was;
+        }
+      });
+
       /* A field that is present and empty has not been stated.
        *
        * Site generators emit the whole vocabulary and leave the parts they have
