@@ -648,13 +648,51 @@
   }
 
   function filmSeconds(video = state.video) {
-    const said = timingHint(video, "ssoDuration");
-    if (said) return said;
     const own = video?.duration;
     if (!Number.isFinite(own) || own <= 0) return null;
     const seen = lengths.get(video);
-    if (seen && performance.now() - seen.grewAt < LENGTH_UNSETTLED_MS) return null;
+    if (seen && performance.now() - seen.grewAt < LENGTH_UNSETTLED_MS) return statedSeconds();
     return own;
+  }
+
+  /* How long the page SAYS the film is, from schema.org.
+   *
+   * Only consulted when the element's own number cannot be trusted, which is
+   * the rare path - so it is parsed on demand rather than kept up to date, and
+   * memoised for a second because the caller runs several times a second.
+   *
+   * A `VideoObject` wins over the work it belongs to: `duration` on a Movie is
+   * the published runtime, rounded to the minute, while a VideoObject describes
+   * the encode actually on the page and can say 46 minutes 13.162 seconds. Half
+   * a minute of error would be visible on the map this feeds. */
+  let statedLength = { at: -Infinity, seconds: null };
+  const STATED_LENGTH_MS = 1000;
+
+  function statedSeconds() {
+    const now = performance.now();
+    if (now - statedLength.at < STATED_LENGTH_MS) return statedLength.seconds;
+    let best = null;
+    for (const item of readJsonLd()) {
+      const type = schemaType(item);
+      if (!SCHEMA_VIDEO_TYPE.test(type)) continue;
+      const seconds = isoSeconds(item.duration);
+      if (!seconds) continue;
+      if (/VideoObject/i.test(type)) { best = seconds; break; }
+      if (best === null) best = seconds;
+    }
+    statedLength = { at: now, seconds: best };
+    return best;
+  }
+
+  /* ISO 8601 durations, which is how schema.org writes one: PT46M13.162S. */
+  function isoSeconds(value) {
+    const match = /^P(?:([\d.]+)D)?(?:T(?:([\d.]+)H)?(?:([\d.]+)M)?(?:([\d.]+)S)?)?$/.exec(
+      String(value ?? "").trim(),
+    );
+    if (!match) return null;
+    const [, days, hours, minutes, seconds] = match.map((part) => (part ? Number(part) : 0));
+    const total = days * 86400 + hours * 3600 + minutes * 60 + seconds;
+    return Number.isFinite(total) && total > 0 ? total : null;
   }
 
   /* The element's clock is not always the film's clock.
@@ -665,12 +703,22 @@
    * into the film. Nothing about the element says so, and subtitles put on it
    * are wrong by the resume point in a way that looks exactly like a bad sync.
    *
-   * There is no way to work it out from here, so the page says it, in seconds,
-   * on the video element itself:
+   * There is no standard that carries it, and both candidates were tried:
+   * ffmpeg's `-copyts` does not survive the MP4 muxer - Chrome reports
+   * currentTime 0 and buffered.start(0) 0 for a stream built with it and one
+   * built without, measured side by side - and the Media Session API, which is
+   * where a page states its true position, is write-only: `positionState` has
+   * no getter, in the page's world or in ours.
    *
-   *   <video data-sso-time-offset="1320" data-sso-duration="3245">
+   * So this one fact is stated on the element, in seconds:
    *
-   * Both are read live, because a player that seeks this way changes them.
+   *   <video data-sso-time-offset="1320">
+   *
+   * The film's LENGTH is not here. That has a standard vocabulary and is read
+   * from it - see `statedSeconds`. This is the only thing the extension asks a
+   * page to invent.
+   *
+   * It is read live, because a player that seeks this way changes it.
    * Everything in this file is on the film's clock; the element's is that
    * clock less `startSeconds`, and the two writes to `currentTime` are the only
    * places that have to go back the other way. */
@@ -779,12 +827,52 @@
       if (match && year === null) year = Number(match[1]);
     };
 
+    /* schema.org is the standard way a page says what it is showing, and until
+     * now only a third of it was read - the name, and the series' name. The
+     * rest of the vocabulary is the part that matters for finding a subtitle.
+     *
+     * Reported on a local catalogue app: the page is an episode called
+     * "Baggage", every visible title says "Baggage", and the search went out as
+     * that word. What OpenSubtitles needs is "The Americans" with a season and
+     * an episode number - and the page had all three in its metadata, in the
+     * properties nothing here was reading.
+     *
+     * `episodeNumber` and `partOfSeason.seasonNumber` are read as NUMBERS
+     * rather than scraped out of a string, so a page that states them is not
+     * competing with `matchEpisode` against a title that happens to contain a
+     * digit. Nothing about this is specific to any one site: it is the
+     * vocabulary Google, IMDb and every SEO plugin already emit. */
+    let fromMetadata = null;
     for (const item of readJsonLd()) {
-      if (/^(Movie|TVEpisode|TVSeries|VideoObject|CreativeWork)$/i.test(item["@type"] || "")) {
-        push(item.name, "json-ld");
-        if (item.partOfSeries?.name) push(item.partOfSeries.name, "json-ld-series");
-        noteYear(item.datePublished || item.dateCreated || item.copyrightYear);
-      }
+      if (!SCHEMA_VIDEO_TYPE.test(schemaType(item))) continue;
+      push(item.name, "json-ld");
+      if (item.partOfSeries?.name) push(item.partOfSeries.name, "json-ld-series");
+      noteYear(item.datePublished || item.dateCreated || item.copyrightYear);
+      if (!fromMetadata) fromMetadata = statedEpisode(item);
+    }
+
+    /* What the page tells the BROWSER it is playing - the same statement that
+     * fills the OS media controls and Chrome's media hub. It is a W3C standard
+     * (Media Session), every large video site sets it, and an isolated world
+     * can read it: measured in Chrome with the extension loaded, a page-world
+     * `new MediaMetadata({title, artist, album})` comes back through
+     * `chrome.scripting.executeScript` intact.
+     *
+     * Which field carries what is NOT standardised, and that is why all three
+     * are offered rather than one being trusted: a video site puts the channel
+     * in `artist`, a series site puts the show there. The choosing already
+     * handles that, including `matchEpisode` over each - which is how a site
+     * writing "S03E02" into any of the three contributes the episode without
+     * anything here having to know which field it used.
+     *
+     * `title` outranks the other two because it is the one field whose meaning
+     * is consistent: what is playing. Both rank below schema.org, which is
+     * typed, and above a scraped heading, which is not a statement at all. */
+    const playing = navigator.mediaSession?.metadata;
+    if (playing) {
+      push(playing.title, "mediaSession.title");
+      push(playing.artist, "mediaSession.artist");
+      push(playing.album, "mediaSession.album");
     }
 
     push(document.querySelector('meta[property="og:title"]')?.content, "og:title");
@@ -817,6 +905,7 @@
       url: location.href,
       isTopFrame: window === window.top,
       episode: {
+        fromMetadata,
         fromTitle: matchEpisode(document.title),
         fromMarker: selectedEpisodeOnPage(),
         fromUrl: matchEpisode(decodeURIComponent(location.pathname + location.search)),
@@ -824,12 +913,41 @@
     };
   }
 
+  const SCHEMA_VIDEO_TYPE = /^(Movie|TVEpisode|TVSeries|VideoObject|CreativeWork)$/i;
+
+  /* `@type` is a string or a list of them, and both are valid JSON-LD. */
+  function schemaType(item) {
+    const type = item?.["@type"];
+    return String(Array.isArray(type) ? type.find((one) => SCHEMA_VIDEO_TYPE.test(one)) || type[0] : type || "");
+  }
+
+  /* The season and episode the page states, or null.
+   *
+   * `partOfSeason.seasonNumber` is where the vocabulary puts it; `seasonNumber`
+   * directly on the episode is common enough in the wild to be worth reading,
+   * and both are sometimes strings. A season with no episode number is not an
+   * answer - it would send a search for a whole season - so both are required.
+   */
+  function statedEpisode(item) {
+    const season = Number(item.partOfSeason?.seasonNumber ?? item.seasonNumber);
+    const episode = Number(item.episodeNumber);
+    if (!Number.isFinite(season) || !Number.isFinite(episode)) return null;
+    if (season < 0 || episode < 0) return null;
+    return { season, episode, matched: "schema.org episodeNumber" };
+  }
+
   function readJsonLd() {
     const found = [];
     for (const node of document.querySelectorAll('script[type="application/ld+json"]')) {
       try {
         const parsed = JSON.parse(node.textContent || "{}");
-        found.push(...(Array.isArray(parsed) ? parsed : [parsed]));
+        /* `@graph` is how a page ships several things in one block, and it is
+         * what most site generators emit - a document that only reads the top
+         * level sees a `WebPage` and nothing else. */
+        for (const one of Array.isArray(parsed) ? parsed : [parsed]) {
+          found.push(one);
+          if (Array.isArray(one?.["@graph"])) found.push(...one["@graph"]);
+        }
       } catch {
         // Sites ship malformed JSON-LD routinely; skip it.
       }

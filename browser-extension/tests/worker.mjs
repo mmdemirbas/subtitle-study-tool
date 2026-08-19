@@ -542,6 +542,44 @@ t(
   pageInfoReply = () => ({ ok: true });
 }
 
+/* An episode page names two things, and only one of them can be searched.
+ *
+ * Reported on a local catalogue app: the page is "Baggage", season 3 episode 2
+ * of The Americans, and every visible title on it says "Baggage" - so that is
+ * what went to OpenSubtitles, which indexes episodes under the series with the
+ * numbers beside it. The page stated all three in schema.org and nothing read
+ * two of them.
+ */
+{
+  const { pageContextForTab } = await import("../src/daemon.js");
+  frameList = [{ frameId: 0 }];
+  pageInfoReply = () => ({
+    ok: true,
+    year: 2015,
+    candidates: [
+      { source: "json-ld", text: "Baggage", episode: null },
+      { source: "json-ld-series", text: "The Americans", episode: null },
+      { source: "h1", text: "Baggage", episode: null },
+      { source: "document.title", text: "Baggage (2015) - Catalogue", episode: null },
+    ],
+    episode: { fromMetadata: { season: 3, episode: 2, matched: "schema.org episodeNumber" } },
+  });
+
+  const context = await pageContextForTab({ id: 1, title: "Baggage (2015) - Catalogue" }, 0);
+  t(
+    "an episode page is searched by its series, not by the episode's own name",
+    context.title === "The Americans",
+    JSON.stringify({ title: context.title, source: context.titleSource }),
+  );
+  t(
+    "and the season and episode come from the metadata that stated them",
+    context.season === 3 && context.episode === 2,
+    JSON.stringify({ season: context.season, episode: context.episode, source: context.episodeSource }),
+  );
+
+  pageInfoReply = () => ({ ok: true });
+}
+
 /* A failure inside the worker is invisible from the page and from the report,
  * and it is exactly what makes a control do nothing. */
 await resetTrace();

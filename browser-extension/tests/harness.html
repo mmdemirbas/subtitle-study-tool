@@ -661,7 +661,6 @@
           Object.defineProperty(video, "duration", wasDuration);
           Object.defineProperty(video, "seekable", wasSeekable);
           delete video.dataset.ssoTimeOffset;
-          delete video.dataset.ssoDuration;
           await sleep(300);
         }
       }
@@ -699,6 +698,29 @@
             throw new Error("a length that settled was still treated as unknown");
         }));
 
+      /* ...and a page that KNOWS the length is believed, through the standard
+       * vocabulary rather than through anything invented here. A `VideoObject`
+       * describes the encode on the page, so its duration can carry the
+       * fractional seconds the work's own published runtime rounds away - half
+       * a minute of error would be visible on the map this feeds. */
+      check("a length the page states is used when the element's own cannot be", () => {
+        const script = document.createElement("script");
+        script.type = "application/ld+json";
+        script.textContent = JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "VideoObject",
+          name: "Baggage",
+          duration: "PT46M13.162S",
+        });
+        document.head.append(script);
+        return whileStillArriving(3.878, async () => {
+          await sleep(150);
+          const said = window.__ssoApi.status().duration;
+          if (Math.abs(said - 2773.162) > 0.01)
+            throw new Error(`the page said PT46M13.162S and the extension reports ${said}`);
+        }).finally(() => script.remove());
+      });
+
       /* The other half of that page, and the one that would have looked like a
        * sync bug instead of a missing overlay. A stream that cannot be seeked
        * is seeked by fetching a new one that starts at the moment asked for, so
@@ -708,18 +730,114 @@
       check("a player that streams from an offset is read on the film's clock", () =>
         whileStillArriving(3.878, async () => {
           video.dataset.ssoTimeOffset = "1500";
-          video.dataset.ssoDuration = "7200";
           video.currentTime = 1;
           await sleep(200);
           const status = window.__ssoApi.status();
           if (Math.abs(status.currentTime - 1501) > 0.01)
             throw new Error(`the film is 25:01 in and the extension reads ${status.currentTime}s`);
-          if (status.duration !== 7200)
-            throw new Error(`the page said the film is 7200s and the extension says ${status.duration}`);
           const drawn = shadowOf().querySelector(".sso-cue")?.textContent || "";
           if (!drawn.includes("I saw nothing at all"))
             throw new Error(`the line at 25:01 was not the one drawn: "${drawn.trim().slice(0, 40)}"`);
         }));
+
+      /* What the page says it is showing, asked for the way the worker asks.
+       *
+       * The worker sends `sso:pageInfo` to every frame and chooses between the
+       * answers; this is the answering half, which is where the reading of the
+       * page happens. The listeners are kept by the chrome stub for exactly
+       * this - the worker's own half is not loaded here. */
+      const askPage = () => {
+        let answer;
+        for (const listener of window.__listeners) {
+          listener({ type: "sso:pageInfo" }, {}, (reply) => { answer = reply; });
+        }
+        return answer;
+      };
+
+      /* Reported on a local catalogue app: an episode page whose every visible
+       * title is the episode's own name, so the search went out as "Baggage"
+       * and found nothing. OpenSubtitles indexes an episode under its SERIES
+       * with the numbers beside it, and the page had all three in schema.org -
+       * inside `@graph`, which is how most site generators emit it, and in
+       * `episodeNumber`, which nothing here was reading. */
+      check("an episode page's series and numbers are read out of its metadata", async () => {
+        const script = document.createElement("script");
+        script.type = "application/ld+json";
+        script.textContent = JSON.stringify({
+          "@context": "https://schema.org",
+          "@graph": [
+            { "@type": "WebPage", name: "Catalogue" },
+            {
+              "@type": ["TVEpisode", "CreativeWork"],
+              name: "Baggage",
+              episodeNumber: 2,
+              partOfSeason: { "@type": "TVSeason", seasonNumber: 3 },
+              partOfSeries: { "@type": "TVSeries", name: "The Americans" },
+              datePublished: "2015-01-28",
+            },
+          ],
+        });
+        document.head.append(script);
+        try {
+          const info = askPage();
+          if (!info) throw new Error("nothing answered sso:pageInfo");
+          const series = info.candidates.find((c) => c.source === "json-ld-series");
+          if (series?.text !== "The Americans")
+            throw new Error(`the series was not offered: ${JSON.stringify(info.candidates)}`);
+          const stated = info.episode?.fromMetadata;
+          if (stated?.season !== 3 || stated?.episode !== 2)
+            throw new Error(`the stated episode was not read: ${JSON.stringify(info.episode)}`);
+          if (info.year !== 2015)
+            throw new Error(`the year was not read: ${info.year}`);
+        } finally {
+          script.remove();
+        }
+      });
+
+      /* The other standard statement a page makes about what it is playing, and
+       * the one that covers sites with no structured data at all. Measured
+       * first: an isolated world can read what the page set, which is the only
+       * reason this is worth reading. */
+      check("what the page told the browser it is playing is offered too", async () => {
+        const was = navigator.mediaSession.metadata;
+        navigator.mediaSession.metadata = new MediaMetadata({
+          title: "Baggage", artist: "The Americans", album: "Season 3, Episode 2",
+        });
+        try {
+          const sources = askPage().candidates.reduce((all, c) => ({ ...all, [c.source]: c.text }), {});
+          if (sources["mediaSession.title"] !== "Baggage")
+            throw new Error(`the title was not offered: ${JSON.stringify(sources)}`);
+          if (sources["mediaSession.artist"] !== "The Americans")
+            throw new Error(`the artist was not offered: ${JSON.stringify(sources)}`);
+          if (sources["mediaSession.album"] !== "Season 3, Episode 2")
+            throw new Error(`the album was not offered: ${JSON.stringify(sources)}`);
+        } finally {
+          navigator.mediaSession.metadata = was;
+        }
+      });
+
+      /* The control. A film has no series and no episode number, and inventing
+       * either would send a search for something that does not exist. */
+      check("a film's metadata states no episode, and none is invented", async () => {
+        const script = document.createElement("script");
+        script.type = "application/ld+json";
+        script.textContent = JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "Movie",
+          name: "Mercy",
+          datePublished: "2016-01-01",
+        });
+        document.head.append(script);
+        try {
+          const info = askPage();
+          if (info.episode?.fromMetadata)
+            throw new Error(`a film was given an episode: ${JSON.stringify(info.episode.fromMetadata)}`);
+          if (!info.candidates.some((c) => c.source === "json-ld" && c.text === "Mercy"))
+            throw new Error(`the film's name was not offered: ${JSON.stringify(info.candidates)}`);
+        } finally {
+          script.remove();
+        }
+      });
 
       /* Dragging the cue. The overlay is click-through apart from the cue
        * itself, which sits where people click to pause - so a press that does

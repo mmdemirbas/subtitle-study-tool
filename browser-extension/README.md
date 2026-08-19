@@ -348,15 +348,56 @@ recent first.
 
 The tab title is the weakest signal available. Prime Video calls a detail page
 `Prime Video: Crime 101`; other sites bolt on resolutions, episode numbers and
-marketing. So the content script reads `og:title`, `twitter:title` and JSON-LD
-`Movie`/`TVEpisode` entries first — what the site tells crawlers the page is
-about — and falls back to the tab title only if none of those exist.
+marketing. So what the site *states* is read first, and only standards are
+read — nothing here asks a site to implement anything for this extension's
+benefit:
 
-Whatever comes out is still a guess, so the panel shows it and lets you correct
-it, and auto-attach refuses to download anything that does not match it well.
-That guard exists because the first version had none: it downloaded the top
-fuzzy hit for `Prime Video: Crime 101` and displayed subtitles for an unrelated
-2007 Japanese horror film.
+| Read | What it gives |
+|---|---|
+| **schema.org** `Movie` / `TVEpisode` / `TVSeries` / `VideoObject`, as JSON-LD | the name, and for an episode the **series** name with `episodeNumber` and `partOfSeason.seasonNumber` as numbers. `@graph` and array `@type` are both handled. `duration` is read too, and used when the player cannot report a real one |
+| **Media Session** (`navigator.mediaSession.metadata`) | `title`, `artist` and `album`, which is what the page already tells the OS media controls |
+| `og:title`, `twitter:title` | the crawler's version of the name |
+| `<h1>`, the tab title | last resort |
+
+For a series the **series name wins over the episode's own name**, because that
+is how subtitles are indexed: an episode page names both "Baggage" and "The
+Americans", and only the second can be looked up anywhere. Searching for the
+episode's own title is how a page with perfectly good metadata still finds
+nothing.
+
+Whatever comes out is still a guess on a site that states nothing, so the panel
+shows it and lets you correct it, and auto-attach refuses to download anything
+that does not match it well. That guard exists because the first version had
+none: it downloaded the top fuzzy hit for `Prime Video: Crime 101` and displayed
+subtitles for an unrelated 2007 Japanese horror film.
+
+### If you are building the site
+
+Two things the extension cannot work out on its own, and it only asks for the
+second one.
+
+**How long the film is** — publish it in schema.org. A `VideoObject` describes
+the video actually on the page, so its `duration` can be exact
+(`PT46M13.162S`), where a `Movie`'s runtime is rounded to the minute. This
+matters for a stream produced as it is sent: the browser is told nothing about
+what has not been made yet, so `video.duration` is only what has arrived and
+grows as it plays.
+
+**Where the stream starts** — `data-sso-time-offset` on the `<video>`, in
+seconds. This is the one non-standard thing here, and only because no standard
+carries it: a stream that cannot be seeked is seeked by fetching a new one that
+begins at the moment asked for, so the element's clock restarts at zero while
+the picture is twenty minutes in. Subtitles put on that are wrong by the resume
+point in a way that looks like bad sync. `MediaSession.setPositionState` is
+where a page states its true position and has no getter, and ffmpeg's `-copyts`
+does not survive the MP4 muxer, so there is nothing else to read.
+
+```html
+<video src="/media?path=...&t=1231" data-sso-time-offset="1231"></video>
+<script type="application/ld+json">
+  {"@context":"https://schema.org","@type":"VideoObject","duration":"PT46M13.162S"}
+</script>
+```
 
 ## Why the panel is in a shadow root
 

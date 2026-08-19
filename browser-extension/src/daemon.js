@@ -199,13 +199,29 @@ export async function tabStatus(tabId) {
 /* How much a source is worth, low is better. Structured metadata is what the
  * site tells crawlers the page is about; a document title is whatever the page
  * felt like calling itself. */
+/* The series outranks the episode's own name, and that order is the point.
+ *
+ * An episode page states two names: "Baggage" and "The Americans". Only the
+ * second one can be searched - subtitles are indexed under the series, with the
+ * season and episode as numbers beside it, so the episode's own title is the
+ * one piece of the metadata that cannot be used to find anything. Reported as
+ * a local catalogue app whose search went out as "Baggage".
+ *
+ * `json-ld-series` only exists when the page said `partOfSeries`, so this
+ * cannot affect a film. */
 const SOURCE_RANK = {
-  "json-ld": 0,
-  "json-ld-series": 1,
+  "json-ld-series": 0,
+  "json-ld": 1,
   "og:title": 2,
   "twitter:title": 3,
-  h1: 4,
-  "document.title": 5,
+  /* What the page told the browser it is playing. A statement, like the two
+   * above and unlike the two below - but an untyped one, since no standard
+   * says which of the three fields carries the programme's name. */
+  "mediaSession.title": 4,
+  "mediaSession.artist": 5,
+  "mediaSession.album": 6,
+  h1: 7,
+  "document.title": 8,
 };
 
 /**
@@ -288,21 +304,24 @@ export async function pageContextForTab(tab, videoFrameId = null) {
  *
  * The player's own frame title outranks the page, because it describes what was
  * actually loaded into the player - if a viewer picked one episode and the
- * embed served another, that is the one on screen. The marked control comes
- * next: it is what the viewer chose, and on a site whose player says nothing it
- * is the only answer there is.
+ * embed served another, that is the one on screen. Structured metadata comes
+ * next: a page that states `episodeNumber` is not guessing, and it is the only
+ * source here that cannot be confused by a digit in a title. Then the marked
+ * control: it is what the viewer chose, and on a site whose player says nothing
+ * it is the only answer there is.
  */
 function pickEpisode(reports, videoFrameId) {
   const at = (frameId) => reports.find((report) => report.frameId === frameId)?.info.episode;
   const fromVideoTitle = at(videoFrameId)?.fromTitle;
   if (fromVideoTitle) return { ...fromVideoTitle, source: "the player frame's title" };
 
-  for (const key of ["fromMarker", "fromTitle", "fromUrl"]) {
+  for (const key of ["fromMetadata", "fromMarker", "fromTitle", "fromUrl"]) {
     const hit = reports.map((report) => report.info.episode?.[key]).find(Boolean);
     if (hit) {
       return {
         ...hit,
         source: {
+          fromMetadata: "the page's schema.org metadata",
           fromMarker: "the control marked as chosen on the page",
           fromTitle: "a frame title",
           fromUrl: "the address",

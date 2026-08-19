@@ -447,22 +447,40 @@ Each of these was a reported bug. Undoing one brings the bug back.
   by nothing else. `attach()` used to clear it, which destroyed the correction
   belonging to the track already on screen. Use `forgetAdDrift()`; there are
   three callers and they all have to forget the stamp as well as the number.
+- **What a page may tell the extension is a STANDARD, with exactly one
+  exception.** This is meant to be published, so a contract only one site
+  implements is worth nothing. Three sources, and the order matters:
+  - **schema.org (JSON-LD)** for identity. `pageInfo()` reads `name`,
+    `partOfSeries.name`, `episodeNumber`, `partOfSeason.seasonNumber`,
+    `datePublished` and `duration`, through `@graph` and array `@type`, because
+    that is how site generators emit it. The series outranks the episode's own
+    name in `SOURCE_RANK`, and that is load-bearing: an episode page names
+    "Baggage" and "The Americans", and only the second can be looked up
+    anywhere. `episodeNumber` is read as a NUMBER, so it never competes with
+    `matchEpisode` scraping a digit out of a title.
+  - **Media Session** for identity on sites with no structured data. Measured:
+    an isolated world CAN read `navigator.mediaSession.metadata` that the page
+    set. All three of `title`, `artist` and `album` are offered as candidates,
+    because no standard says which carries the programme - one site puts the
+    channel in `artist`, another puts the series there.
+  - **`data-sso-time-offset` on the video**, in seconds, the only invented
+    thing here. A stream that cannot be seeked is seeked by fetching a new one
+    starting at the moment asked for, so the element's zero can be twenty
+    minutes into the film. Both standards were tried and neither carries it:
+    ffmpeg `-copyts` does not survive the MP4 muxer (Chrome reports
+    currentTime 0 and buffered.start(0) 0 either way, measured side by side),
+    and `MediaSession.setPositionState` has no getter.
 - **Nothing may assume the element's clock is the film's clock, or that its
-  duration is the film's length.** A player streaming a repackaged file cannot
-  be seeked, so it seeks by fetching a new stream that begins at the moment
-  asked for: the element's zero is then twenty minutes into the film, and its
-  duration is only what has arrived, growing as it plays - 3.878, 9.675,
-  18.476, 33.408 over the first fifteen seconds, measured in Chrome against a
-  real 46:13. Nothing on the element says either, so the page says it, on the
-  video: `data-sso-time-offset` and `data-sso-duration`, both in seconds and
-  both read live. `streamNowMs()` and `elementSeconds()` in `content.js` are
-  the two directions and the only places that know; use them rather than
-  `video.currentTime`. `filmSeconds()` is the length, and returns null while
-  the number is still growing - `seekable` cannot tell the two apart, because
-  Chrome reports one range over what has arrived, so a stream ten seconds in
-  looks exactly like a ten-second file. A length seen to grow is distrusted
-  for two seconds after it last did, so a player that sets its duration once
-  and late keeps its map.
+  duration is the film's length.** `streamNowMs()` and `elementSeconds()` in
+  `content.js` are the two directions and the only places that know; use them
+  rather than `video.currentTime`. `filmSeconds()` is the length: the element's
+  own duration is only what has ARRIVED on a stream produced as it is sent -
+  3.878, 9.675, 18.476, 33.408 over the first fifteen seconds, measured in
+  Chrome against a real 46:13 - and `seekable` cannot tell that apart from a
+  short file, because Chrome reports one range over what has arrived. So a
+  length seen to GROW is distrusted for two seconds after it last did, which
+  leaves a player that sets its duration once and late with its map, and falls
+  back to what the page states in schema.org.
 - **Nothing may assume the tick is 50ms of FILM.** It is 50ms of wall time, so
   at 2x playback it is 100ms of film and at 4x 200ms. Anything testing "are we
   near the end of this cue" has to work from the step the playhead actually
