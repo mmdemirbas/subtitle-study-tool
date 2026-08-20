@@ -3964,11 +3964,12 @@
   const PAIR_NEAR_MS = 1500;
   /* The file-clock window to search before converting anything. Offsets and
    * acts move a track by seconds, so a generous slack around the plain inverse
-   * cannot miss a line, and it keeps this a scan of a few cues rather than of
-   * the file. */
+   * covers them, and it keeps this a scan of a few cues rather than of the
+   * file. It is slack, not a guarantee: what stops a line being missed is the
+   * reach bisection below, not this number. */
   const PAIR_SLACK_MS = 45000;
 
-  function cuesOverlappingStream(track, fromStreamMs, toStreamMs) {
+  function cuesOverlappingStream(track, slot, fromStreamMs, toStreamMs) {
     const cues = track.cues || [];
     if (!cues.length) return [];
 
@@ -3976,12 +3977,22 @@
     const plainFrom = (fromStreamMs - track.offsetMs - state.adDriftMs) / rate - PAIR_SLACK_MS;
     const plainTo = (toStreamMs - track.offsetMs - state.adDriftMs) / rate + PAIR_SLACK_MS;
 
+    /* First line that could still be on screen, over how far the file has
+     * REACHED rather than over the ends themselves. The ends are not sorted -
+     * a sign held across the dialogue under it ends after the lines that start
+     * later - so bisecting them can step past a line that is still up and
+     * leave it out of the pair. The slack above hid it: measured across the
+     * 182 subtitles in the repository the worst end-inversion is 2,602ms
+     * against 45,000ms of slack, so nothing in reach of this corpus triggers
+     * it. A file with a four-minute caption over dialogue would, and one with
+     * a 231,680ms cue is already in there. */
+    const { reach } = cueSpansFor(slot);
     let low = 0;
     let high = cues.length - 1;
     let first = cues.length;
     while (low <= high) {
       const mid = (low + high) >> 1;
-      if (cues[mid].end >= plainFrom) {
+      if (reach[mid] >= plainFrom) {
         first = mid;
         high = mid - 1;
       } else {
@@ -5686,7 +5697,7 @@
         if (other === slot) continue;
         const track = state.tracks[other];
         if (!track?.cues?.length) continue;
-        const found = cuesOverlappingStream(track, from, to);
+        const found = cuesOverlappingStream(track, other, from, to);
         if (!found.length) continue;
         out.push({
           slot: other,

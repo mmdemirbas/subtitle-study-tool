@@ -7040,6 +7040,68 @@
         await sleep(150);
       });
 
+      /* Pairing a spoken line with the other subtitle, when a sign is held
+       * across the dialogue under it.
+       *
+       * The other subtitle is searched by bisection, and what is bisected has
+       * to be how far the file has REACHED by each line rather than the line's
+       * own end. The ends do not run in order: a caption held for two hundred
+       * seconds ends after every short line that starts inside it, so a search
+       * over the ends steps past the caption and the study card for the line
+       * being read comes back with nothing beside it. The same defect the
+       * subtitle map had, in a second place.
+       *
+       * It was invisible because of the slack: the search starts 45 seconds
+       * early, and across the 182 subtitles in this repository the worst that
+       * the ends run backwards by is 2,602ms. A four-minute caption over
+       * dialogue is what it takes, and a 231,680ms cue is already in the
+       * corpus. */
+      check("a line under a held sign is still paired with it", async () => {
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasGeometry = api.status().settings.tracks.map((t) => ({ ...t }));
+
+        const spoken = [{ start: 100000, end: 102000, text: "the line being read" }];
+        // The sign first, then short lines all ending long before the moment
+        // asked about, which is what makes the ends run backwards.
+        const held = [{ start: 0, end: 200000, text: "HELD SIGN" }];
+        for (let at = 10000; at <= 60000; at += 10000) {
+          held.push({ start: at, end: at + 2000, text: `short at ${at}` });
+        }
+
+        api.clearAdDrift();
+        try {
+          await api.attach({ cues: spoken, label: "spoken", fileId: 4251, language: "en", slot: 0 });
+          await api.attach({ cues: held, label: "signs", fileId: 4252, language: "tr", slot: 1 });
+          // Both files are already in the film's own clock here; the aligner
+          // has nothing to say about seven lines and must not be left a guess.
+          api.setOffset(0, { slot: 0, quiet: true });
+          api.setOffset(0, { slot: 1, quiet: true });
+          await sleep(120);
+
+          const paired = api.pairedCues(0, spoken[0]);
+          if (!paired.some((each) => (each.text || "").includes("HELD SIGN")))
+            throw new Error(`the held sign was not paired: ${JSON.stringify(paired)}`);
+        } finally {
+          /* Put back even when the assertion above throws. Without this the
+           * harness's own subtitles stay replaced for every check that runs
+           * after, and one failure is reported as three - which cost a run to
+           * work out the first time it happened. */
+          for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({
+                cues: CUES, label: slot ? "second" : "first", fileId: slot + 1,
+                language: slot ? "tr" : "en", slot,
+              });
+            } else {
+              api.detach(slot);
+            }
+          }
+          api.updateSettings({ tracks: wasGeometry });
+          await sleep(150);
+        }
+      });
+
       /* The obstruction probe in the diagnostic report.
        *
        * Asked through the message the worker actually sends, so what is under
