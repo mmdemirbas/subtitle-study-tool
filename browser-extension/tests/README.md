@@ -29,6 +29,15 @@ cache-buster to its own `<script src>` tags, but a page cannot defend what a
 module imports — `fallback.html` imports `provider.js`, which imports
 `cache.js`, and nothing in the page ever names that URL.
 
+**Give the window room: 1512x944 or larger.** The pages are written to be
+opened in an ordinary browser window, and a few checks drag a surface to a
+fixed point and assert that it moved. Run `harness.html` in a 1280x720 viewport
+and "a strip has its own place, and is dragged like a subtitle" fails on its
+own: the strip starts at y=526 and the drag target is y=520, so it travels 14px
+where the check wants 40. Nothing is wrong with the overlay. Anything driving
+these pages headlessly has to set the viewport, and `deviceScaleFactor: 2`,
+which several of the geometry checks also assume.
+
 There is a third, which lives on the daemon's side because it needs both
 languages at once: `subtitle-daemon/tests/test_js_parity.py` runs the Python
 pipeline and the JavaScript one over the same inputs and diffs the results. Run
