@@ -67,11 +67,25 @@ export async function converge(daemon) {
   }
   const theirIds = new Set((theirs.subtitles || []).map((item) => item.file_id));
 
-  const mine = await cache.listSubtitles();
+  /* Metadata to decide, bytes only for what actually moves.
+   *
+   * The list is here to answer two questions - which ids the daemon is
+   * missing, and which ids we are missing - and neither needs a single byte of
+   * a subtitle. Reading them anyway is the same cost the search path was
+   * measured paying before `listMeta` existed: 40 subtitles at 90KB each is
+   * 3.6MB read into a service worker that is killed for holding memory, and it
+   * grows with everything ever downloaded. The steady state is the one that
+   * matters, because it is the common one - both sides already agree, nothing
+   * is pushed, and every one of those bytes was read to conclude that. */
+  const mine = await cache.listMeta();
   const myIds = new Set(mine.map((item) => item.file_id));
 
-  for (const record of mine) {
-    if (theirIds.has(record.file_id)) continue;
+  for (const entry of mine) {
+    if (theirIds.has(entry.file_id)) continue;
+    const record = await cache.getSubtitle(entry.file_id);
+    // Deleted between the listing and here. Not a failure - there is nothing
+    // left to push, and the deletion is the user's own.
+    if (!record) continue;
     try {
       const response = await daemon.importSubtitle({
         file_id: record.file_id,
