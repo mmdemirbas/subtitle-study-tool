@@ -478,12 +478,17 @@ Each of these was a reported bug. Undoing one brings the bug back.
   3.878, 9.675, 18.476, 33.408 over the first fifteen seconds, measured in
   Chrome against a real 46:13 - and `seekable` cannot tell that apart from a
   short file, because Chrome reports one range over what has arrived. So a
-  length seen to GROW TWICE is distrusted for the rest of that resource, and
-  what the page states in schema.org is used instead. Never a time window on
-  the last growth: a stream is written in bursts and the gaps are seconds long,
-  so the reported length flipped ten times in twenty-four seconds and every
-  flip took both subtitles off and put them back. Twice rather than once so a
-  player that corrects its duration once, late, keeps its map.
+  length seen to GROW ONCE is distrusted for the rest of that resource, and
+  what the page states in schema.org is used instead. Two things about that
+  counter are load-bearing and were each got wrong once. It is a count and not
+  a time window: a stream is written in bursts and the gaps are seconds long,
+  so a window said "still growing" then "settled" ten times in twenty-four
+  seconds, and every flip took both subtitles off and put them back. And the
+  threshold is one growth, not two: a duration arriving from NaN is not a
+  growth, it is the first reading, so a player that states its length once and
+  late still keeps its map at one. Raising it to two was measured costing ten
+  seconds of "there is no video playing" at the start of every remuxed
+  playback - twenty consecutive samples at 500ms with no video reported.
 - **Nothing may assume the tick is 50ms of FILM.** It is 50ms of wall time, so
   at 2x playback it is 100ms of film and at 4x 200ms. Anything testing "are we
   near the end of this cue" has to work from the step the playhead actually
