@@ -2180,8 +2180,12 @@
       api.setRate(1, { slot, quiet: true, how: "reset" });
       // Acts too. A subtitle cut into acts is not back to its own timing.
       api.setSteps([], { slot });
+      // Read before the move, because the move is what it describes.
+      const carried = api.status().leadSlot === slot;
       api.setOffset(0, { slot, quiet: true, how: "reset" });
-      sayInPanel(slot, "Back to the file's own timing");
+      sayInPanel(slot, carried
+        ? "Back to the file's own timing, and the other moved with it"
+        : "Back to the file's own timing");
     });
 
     /* Again and Next are not here any more. They are on the quick row.
@@ -2697,7 +2701,12 @@
   const applyTiming = (slot, { offsetMs, rate, steps }) => {
     api.setRate(rate ?? 1, { slot, quiet: true });
     api.setSteps(steps ?? [], { slot });
-    api.setOffset(offsetMs ?? 0, { slot, quiet: true });
+    /* `byHand: false`, the same as the aligner's own apply path, and here it is
+     * load-bearing rather than tidy. This offset says where THIS file has to
+     * sit against the other one, so if the slot happens to be the leading
+     * subtitle, carrying it to the follower would move the very subtitle it
+     * was just measured against - and destroy the alignment being accepted. */
+    api.setOffset(offsetMs ?? 0, { slot, quiet: true, byHand: false });
   };
 
   async function lineUp(slot) {
@@ -3744,11 +3753,22 @@
        * the number is the right one to show and edit; what would be wrong is
        * showing it with nothing saying the rest exists. The title says it, on
        * the control the number is in. */
-      card.offsetField.title = acts > 1
+      /* And the other thing the number does not say by itself: whether moving
+       * it moves the other subtitle too. The first one attached is where the
+       * FILM's dialogue is, so a correction to it is true of everything on
+       * screen; the rest are each positioned against it and move alone. */
+      const leads = status.leadSlot === slot;
+      const carries = leads
+        ? " Moving this one moves the other with it - it is the first subtitle,"
+          + " so where it sits is where the film's dialogue is."
+        : status.leadSlot !== null
+          ? " Moving this one moves only this one."
+          : "";
+      card.offsetField.title = (acts > 1
         ? `Seconds, for the whole subtitle. This file is lined up in ${acts} acts - `
           + `the advertising breaks fall in different places in the two releases - `
           + `and nudging moves all of them together.`
-        : "Seconds. Negative brings the subtitle forward.";
+        : "Seconds. Negative brings the subtitle forward.") + carries;
       /* A hidden subtitle says so on its card. The menu item it was toggled
        * from is not on screen to carry the state, and a subtitle that has
        * vanished from the picture with nothing in the panel saying why is the

@@ -3822,6 +3822,49 @@
    * same instant, and traced, one drag would be sixty lines in the log saying
    * the same thing. The moves are silent now and the release is the correction,
    * which is also what the reader means by having made one. */
+  /* Which subtitle carries the others, or null when none does.
+   *
+   * The first one attached, and null when it is the only one - so a single
+   * subtitle is never described as leading anything, and nothing in the panel
+   * has to say so. */
+  function leadSlot() {
+    const first = state.tracks.findIndex((track) => track.cues.length > 0);
+    if (first < 0) return null;
+    const others = state.tracks.some((track, slot) => slot !== first && track.cues.length > 0);
+    return others ? first : null;
+  }
+
+  /* Move everything that is not the lead by the same amount.
+   *
+   * Asked for as "the first subtitle should be treated like master, so moving
+   * it should move the rest, but the others should be individuals", and the
+   * split is right because the two corrections mean different things. Where
+   * the first subtitle sits is where the FILM's dialogue is; where each other
+   * one sits is how that file differs from the first. A reader who hears a
+   * line before they read it has learnt something about the film, and it is
+   * true of every subtitle on screen at once.
+   *
+   * Nothing is lost by it. The two things a reader can mean are still both
+   * reachable: moving the lead by d moves everything and leaves every relative
+   * offset alone, and moving a follower by d changes only its relation to the
+   * lead. "The lead alone is out" is the lead by d and the follower by -d,
+   * which is also the honest description of that case.
+   *
+   * The drift estimator is deliberately not told. It learns "this reader keeps
+   * nudging this file", and a follower that moved because the lead did has not
+   * been nudged - counting it would measure a drift in a file nobody corrected
+   * and offer to stretch it. */
+  function carryFollowers(lead, deltaMs, byHand) {
+    if (!deltaMs) return;
+    state.tracks.forEach((track, slot) => {
+      if (slot === lead || track.cues.length === 0) return;
+      track.offsetMs += deltaMs;
+      track.activeIndexes = NEEDS_REDRAW;
+      saveOffset(track);
+      if (byHand) rememberTimingSoon(track);
+    });
+  }
+
   function setOffset(
     ms,
     { quiet = false, slot = state.keyTrack, byHand = true, how = "set", note = true, fromMs } = {},
@@ -3831,8 +3874,19 @@
      * longer than one call: the map drag has already moved the offset sixty
      * times by the point it commits, so the value it is replacing is its own. */
     const wasOffsetMs = Number.isFinite(fromMs) ? Math.round(fromMs) : track.offsetMs;
+    /* Only a correction the reader aimed at the film carries the others.
+     *
+     * `byHand` is already false for everything the extension works out for
+     * itself - the aligner, a remembered timing, the drift fix - and every one
+     * of those is a statement about ONE file, so carrying them would undo the
+     * very relationship they were computed to establish. The snap is by hand
+     * and is the same kind of thing: it moves a subtitle onto the other one,
+     * which is meaningless to do to the whole pair at once. */
+    const carries = byHand && how !== "snap" && slot === leadSlot();
+    const moved = Math.round(ms) - track.offsetMs;
     track.offsetMs = Math.round(ms);
     track.activeIndexes = NEEDS_REDRAW; // force a re-render at the new offset
+    if (carries) carryFollowers(slot, moved, byHand);
     saveOffset(track);
     if (byHand) rememberTimingSoon(track);
     notify();
@@ -3840,7 +3894,11 @@
       // Name the track only when there are two of them to confuse, and say what
       // the correction did rather than what number it is now.
       const which = attachedTracks().length > 1 ? `Subtitle ${slot + 1}` : "Subtitles";
-      showToast(`${which} ${describeOffset(track.offsetMs)}`, { slot });
+      /* Said out loud, because a control that moves something it is not next
+       * to has to. The alternative is a reader who corrects subtitle 1, sees
+       * subtitle 2 move, and concludes the pair is coupled by a bug. */
+      const also = carries && moved ? " · the other moved with it" : "";
+      showToast(`${which} ${describeOffset(track.offsetMs)}${also}`, { slot });
     }
     /* After the toast confirming the nudge, and deliberately replacing it. One
      * toast at a time, and of the two the reader already knows what they just
@@ -3893,6 +3951,13 @@
   function snapTiming(slot = state.keyTrack, { atMs } = {}) {
     const track = state.tracks[slot];
     if (!track?.cues.length || !globalThis.__ssoAlign?.snapNear) return null;
+    /* The lead has nothing above it to snap to.
+     *
+     * It is the reference the others are positioned against, so snapping it
+     * onto one of them would pull the reader's own aim back toward a subtitle
+     * that is only where it is because of the lead - undoing half the
+     * correction they just made, quietly, immediately after they made it. */
+    if (slot === leadSlot()) return null;
     const otherSlot = state.tracks.findIndex((t, i) => i !== slot && t.cues.length > 0);
     if (otherSlot === -1) return null;
 
@@ -4346,8 +4411,18 @@
       // acts, is not back to the file's own timing until those go too.
       api.setRate(1, { quiet: true, how: "reset" });
       api.setSteps([]);
+      /* The lead carries the others here too, and it has to: putting the first
+       * subtitle back on its file's own timing without moving the second one
+       * would leave the pair out by however far the first one travelled. The
+       * second keeps its own distance from the first, which is exactly what
+       * its offset means. */
+      const carried = seen.leadSlot !== null && seen.keyTrack === seen.leadSlot;
       api.setOffset(0, { quiet: true, how: "reset" });
-      showToast("Subtitle back to the file's own timing");
+      showToast(
+        carried
+          ? "Subtitle back to the file's own timing · the other moved with it"
+          : "Subtitle back to the file's own timing",
+      );
     } else if (isKey(typed, keys.toggleOverlay)) {
       api.setVisible(!seen.visible);
       showToast(seen.visible ? "Subtitles hidden" : "Subtitles shown");
@@ -4818,6 +4893,8 @@
         visible: track.visible,
       })),
       keyTrack: state.keyTrack,
+      // Which subtitle moves the others with it. See carryFollowers.
+      leadSlot: leadSlot(),
       placing: state.placing,
       adDriftMs: state.adDriftMs,
       inAd: state.inAd,

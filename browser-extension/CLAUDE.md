@@ -285,6 +285,45 @@ the playhead. Three things about it are load-bearing:
 Not on a keyboard nudge: a fixed step that snaps somewhere else is a key that
 does not do the same thing twice.
 
+**And not on the leading subtitle**, for the reason in the next section: it is
+the reference, so snapping it onto a follower would pull the reader's own aim
+back toward a subtitle that is only where it is because of the lead - silently,
+in the moment after they let go.
+
+## The first subtitle leads and the rest are individuals
+
+Asked for as "the first subtitle should be treated like master, so moving it
+should move the rest, but the others should be individuals". It is a model, not
+a convenience, and the model is what stops it reading as a coupling bug:
+
+- **The lead's offset is where the FILM's dialogue is.** A reader who hears a
+  line before they read it has learnt something about the film, and it is true
+  of every subtitle on screen at once.
+- **Each follower's offset is how that file differs from the lead.** Only it
+  moves, because only it is being described.
+- **Nothing is lost.** Both degrees of freedom stay reachable: the lead by `d`
+  moves everything and keeps every relative offset; a follower by `d` changes
+  only its relation to the lead. "The lead alone is out" is the lead by `d` and
+  the follower by `-d`, which is also the honest description of that case.
+
+`byHand` is the discriminator, and it already was. Everything the extension
+works out for itself - the aligner, a remembered release timing, the drift fix -
+passes `byHand: false`, and every one of those is a statement about ONE file, so
+carrying it would undo the relationship it was computed to establish. The snap
+is by hand and is excluded by name (`how === "snap"`). **A new caller of
+`setOffset` has to decide which kind it is**; the panel's `applyTiming` was the
+one that had to be corrected when this landed, because it applies an aligner
+answer and defaulted to by-hand.
+
+The drift estimator is deliberately not told about a carried move. It learns
+"this reader keeps nudging this file", and a follower that moved because the
+lead did has not been nudged - counting it would measure a drift in a file
+nobody corrected and then offer to stretch it.
+
+Ordering matters when zeroing a pair: **the lead first**, because zeroing it
+carries the follower. Zeroing the follower first and the lead second puts the
+follower back wherever the lead happened to be.
+
 ## The search pipeline exists twice, and the copy that runs is the quiet one
 
 `subtitle-daemon/` and `src/subtitles/` are the same pipeline in two languages.

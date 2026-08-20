@@ -4460,6 +4460,18 @@
       };
       const attachSecond = () =>
         window.__ssoApi.attach({ cues: CUES_TR, label: "TR · harness", fileId: 2, language: "tr", slot: 1 });
+      /* Both subtitles back to their files' own timing, lead first.
+       *
+       * The order is the whole reason this is a helper. The first subtitle
+       * carries the second, so zeroing it AFTER the second puts the second
+       * back wherever the first happened to be - which is how a case that
+       * zeroed only slot 0 and assumed slot 1 was already there came out 250ms
+       * short. */
+      const zeroBoth = async () => {
+        window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        await sleep(60);
+      };
 
       check("a second subtitle renders in its own box, beside the first", async () => {
         window.__ssoApi.resetPosition();
@@ -4574,7 +4586,7 @@
         await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1, language: "en", slot: 0 });
         await attachSecond();
         await showSpeakerCue();
-        window.__ssoApi.setOffset(0, { slot: 0 });
+        await zeroBoth();
         window.__ssoApi.nudge(1000, { slot: 1 });
         await sleep(50);
         const [a, b] = window.__ssoApi.status().tracks;
@@ -4622,6 +4634,98 @@
         const after = window.__ssoApi.status().settings.tracks.map((t) => t.posY);
         if (JSON.stringify(before) !== JSON.stringify(after))
           throw new Error(`stacked ${before} became ${after}`);
+      });
+
+      /* The first subtitle leads and the rest are individuals.
+       *
+       * Asked for as "the first subtitle should be treated like master, so
+       * moving it should move the rest, but the others should be individuals".
+       * The two corrections mean different things: where the first one sits is
+       * where the FILM's dialogue is, which is true of everything on screen at
+       * once, and where each other one sits is how that file differs from the
+       * first. Both are still reachable - "the lead alone is out" is the lead
+       * by d and the follower by -d - so nothing is lost by coupling them.
+       */
+      check("moving the first subtitle moves the second with it", async () => {
+        const api = window.__ssoApi;
+        await attachSecond();
+        await zeroBoth();
+        try {
+          api.setOffset(2000, { slot: 0, quiet: true });
+          await sleep(60);
+          const tracks = api.status().tracks;
+          if (tracks[0].offsetMs !== 2000)
+            throw new Error(`the first went to ${tracks[0].offsetMs}, not 2000`);
+          if (tracks[1].offsetMs !== 2000)
+            throw new Error(`the second stayed at ${tracks[1].offsetMs} while the first moved`);
+        } finally {
+          await zeroBoth();
+        }
+      });
+
+      check("moving the second moves only the second, and its distance is kept", async () => {
+        const api = window.__ssoApi;
+        await attachSecond();
+        await zeroBoth();
+        try {
+          api.setOffset(-750, { slot: 1, quiet: true });
+          await sleep(60);
+          const moved = api.status().tracks;
+          if (moved[1].offsetMs !== -750)
+            throw new Error(`the second went to ${moved[1].offsetMs}, not -750`);
+          if (moved[0].offsetMs !== 0)
+            throw new Error(`moving the second dragged the first to ${moved[0].offsetMs}`);
+
+          /* And the three quarters of a second between them survives the lead
+           * being moved afterwards, which is the point of coupling them: the
+           * reader lined the pair up once and a correction to the film does
+           * not cost them that. */
+          api.setOffset(1000, { slot: 0, quiet: true });
+          await sleep(60);
+          const after = api.status().tracks;
+          if (after[1].offsetMs !== 250)
+            throw new Error(
+              `the pair drifted apart: ${after[0].offsetMs} and ${after[1].offsetMs}`);
+        } finally {
+          await zeroBoth();
+        }
+      });
+
+      check("a correction the extension worked out for itself is not carried", async () => {
+        const api = window.__ssoApi;
+        await attachSecond();
+        await zeroBoth();
+        try {
+          /* What the aligner, a remembered timing and the drift fix all do, and
+           * every one of them is a statement about ONE file - carrying it would
+           * undo the very relationship it was computed to establish. They are
+           * told apart by `byHand`, which they already all passed as false. */
+          api.setOffset(3000, { slot: 0, quiet: true, byHand: false });
+          await sleep(60);
+          const tracks = api.status().tracks;
+          if (tracks[1].offsetMs !== 0)
+            throw new Error(`the second was dragged to ${tracks[1].offsetMs} by the aligner`);
+        } finally {
+          await zeroBoth();
+        }
+      });
+
+      check("a subtitle on its own leads nothing, and says so", async () => {
+        const api = window.__ssoApi;
+        // Geometry too: attach() arranges a pair, and this one takes the pair
+        // apart and puts it back.
+        const wasGeometry = api.status().settings.tracks.map((t) => ({ ...t }));
+        api.detach(1);
+        await sleep(80);
+        try {
+          if (api.status().leadSlot !== null)
+            throw new Error(`one subtitle reported slot ${api.status().leadSlot} as leading`);
+        } finally {
+          await attachSecond();
+          api.updateSettings({ tracks: wasGeometry });
+          await sleep(80);
+          await zeroBoth();
+        }
       });
 
       /* --- study mode -------------------------------------------------------
