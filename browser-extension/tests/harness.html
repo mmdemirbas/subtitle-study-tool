@@ -832,6 +832,48 @@
             throw new Error(`the line at 25:01 was not the one drawn: "${drawn.trim().slice(0, 40)}"`);
         }));
 
+      /* ...and the same page again once somebody uses the scrubber.
+       *
+       * Reported as "when I rewind or forward the movie, subtitle position
+       * becomes conflated and drifted - it is not true to the movie time".
+       *
+       * A stream that cannot be seeked is seeked by throwing it away and
+       * fetching another one that begins at the new moment, so a seek is three
+       * separate changes to the element and the player cannot make them in one
+       * go: the source is replaced straight away, and the offset it states is
+       * written by the framework on its next flush. In between, the element
+       * reads zero on the clock with the PREVIOUS stream's offset still on it -
+       * which is the old position exactly, and the reason this is written as a
+       * sequence rather than as one assignment.
+       *
+       * What is asserted is where it settles. A frame or two of the outgoing
+       * line is not what was reported; a film that stays half an hour out is.
+       */
+      check("a seek to a new stream is read on the film's clock, not the old one's", () =>
+        whileStillArriving(3.878, async () => {
+          // Resumed 25 minutes in: the stream starts there, the clock at zero.
+          video.dataset.ssoTimeOffset = "1500";
+          video.currentTime = 100;
+          await sleep(200);
+          const at = window.__ssoApi.status().currentTime;
+          if (Math.abs(at - 1600) > 0.01)
+            throw new Error(`the film is 26:40 in and the extension reads ${at}s`);
+
+          // Now rewind to 11 minutes, in the order the player really does it.
+          video.currentTime = 0;
+          video.dispatchEvent(new Event("loadstart"));
+          await sleep(120);
+          video.dataset.ssoTimeOffset = "660";
+          await sleep(400);
+
+          const back = window.__ssoApi.status().currentTime;
+          if (Math.abs(back - 660) > 0.01)
+            throw new Error(`rewound to 11:00 and the extension reads ${back}s`);
+          const drawn = shadowOf().querySelector(".sso-cue")?.textContent || "";
+          if (!drawn.includes("Fine."))
+            throw new Error(`the line at 11:00 was not the one drawn: "${drawn.trim().slice(0, 40)}"`);
+        }));
+
       /* What the page says it is showing, asked for the way the worker asks.
        *
        * The worker sends `sso:pageInfo` to every frame and chooses between the
