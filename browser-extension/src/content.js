@@ -4857,17 +4857,28 @@
     const starts = new Array(cues.length);
     const ends = new Array(cues.length);
     const chars = new Array(cues.length);
+    /* How far the file has reached by each line: the running maximum of the
+     * ends. Sorted by construction, which the ends themselves are not - a sign
+     * or a song lyric held across the dialogue under it ends long after the
+     * lines that started later - and everything that looks for "the first line
+     * still on screen at this moment" bisects it. See firstReaching in
+     * panel.js for what that costs when it is missing. */
+    const reach = new Array(cues.length);
+    let furthest = -Infinity;
     for (let i = 0; i < cues.length; i++) {
       starts[i] = cues[i].start;
       ends[i] = cues[i].end;
       chars[i] = (cues[i].text || "").length;
+      const until = Number.isFinite(ends[i]) ? ends[i] : starts[i];
+      if (until > furthest) furthest = until;
+      reach[i] = furthest;
     }
-    const spans = { starts, ends, chars };
+    const spans = { starts, ends, chars, reach };
     spansCache.set(slot, { cues, spans });
     return spans;
   }
 
-  const NO_SPANS = { starts: [], ends: [], chars: [] };
+  const NO_SPANS = { starts: [], ends: [], chars: [], reach: [] };
 
   function notify() {
     writeStripTags();

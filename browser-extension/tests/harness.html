@@ -2378,6 +2378,67 @@
         }
       });
 
+      /* A caption held across the dialogue under it.
+       *
+       * A sign, a song lyric or a note stays up for half a minute while short
+       * lines run beneath it - which puts the cue ENDS out of order, because
+       * the banner ends long after the four lines that started later. The strip
+       * found its first visible line by bisecting those ends, and a bisection
+       * is only defined on a sorted list: on the shape below it answered
+       * "nothing from here on", so no bars were drawn and the strip marked
+       * itself empty, which is the one signal that means this subtitle needs
+       * moving. */
+      check("a caption held across the lines under it is still drawn", async () => {
+        const at = 600000;
+        const cues = [
+          { start: at, end: at + 40000, text: "[the sign reads KEEP OUT]" },
+          { start: at + 5000, end: at + 7000, text: "Did you see that?" },
+          { start: at + 8000, end: at + 10000, text: "I saw nothing." },
+          { start: at + 11000, end: at + 13000, text: "Keep walking." },
+        ];
+        await window.__ssoApi.attach({ cues, label: "TR - held", fileId: 611, slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        const was = video.currentTime;
+        /* Inside the banner and past every line under it, at a scale whose
+         * window STARTS after those lines ended - which is the whole of the
+         * shape. A wider window reaches back far enough to include them, the
+         * search lands on one of them by luck, and nothing looks wrong. */
+        video.currentTime = (at + 30000) / 1000;
+        await sleep(300);
+        const strip = mapStrips()[1];
+        const plot = strip.querySelector(".sso-map__plot");
+        const canvas = strip.querySelector(".sso-map__canvas");
+        const zoom = strip.querySelector(".sso-map__zoom");
+        try {
+          // Fifteen seconds around the playhead, whatever the last case left.
+          for (let i = 0; i < 3 && zoom.textContent !== "15s"; i++) {
+            zoom.click();
+            await sleep(180);
+          }
+          await sleep(200);
+          const context = canvas.getContext("2d");
+          const top = context.getImageData(0, 0, canvas.width, 1).data;
+          const low = context.getImageData(0, canvas.height - 1, canvas.width, 1).data;
+          /* A bar reaches the bottom and never the top; a tick and the playhead
+           * run the whole height. So a column with ink only at the bottom is
+           * dialogue, which is what this is counting. */
+          let bars = 0;
+          for (let x = 0; x < canvas.width; x++) {
+            if (low[x * 4 + 3] > 8 && top[x * 4 + 3] <= 8) bars += 1;
+          }
+          if (plot.dataset.empty === "true")
+            throw new Error("a strip showing a forty-second caption reported itself empty");
+          if (bars < canvas.width / 4)
+            throw new Error(`a caption covering most of the window drew ${bars} of ${canvas.width} columns`
+              + ` (scale ${zoom.textContent}, empty ${plot.dataset.empty}, at ${video.currentTime}s,`
+              + ` duration ${window.__ssoApi.status().duration})`);
+        } finally {
+          video.currentTime = was;
+          window.__ssoApi.detach(1);
+          await sleep(120);
+        }
+      });
+
       check("a correction is snapped to where the two subtitles agree", async () => {
         /* Asked for: "some level of smart snapping could be a great help while
          * syncing subtitles". A hand on a 180px strip showing a minute of film

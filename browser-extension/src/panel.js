@@ -1017,6 +1017,40 @@
     { ms: 0, label: "film", title: "Showing the whole film. Click to come back to a minute." },
   ];
 
+  /* The first line that could still be on screen at `from`.
+   *
+   * Bisected on the running maximum of the ends - `reach` - and not on the ends
+   * themselves. A caption held across the dialogue under it puts the ends out
+   * of order: a forty-second sign ends long after the four short lines that
+   * started later, and a bisection is only defined on a sorted list. Measured
+   * on exactly that shape, with the playhead inside the sign and past every
+   * line under it, the search answered "nothing from here on" and the strip
+   * drew 0 of its 361 columns - and marked itself empty, which is the one
+   * signal that means this subtitle needs moving.
+   *
+   * The running maximum is sorted by construction and lands on the right line
+   * rather than merely a safe one: it rises only where a cue's own end is the
+   * new highest, so the first index whose maximum reaches `from` is itself a
+   * line that reaches `from`, and nothing before it does.
+   *
+   * Written once because it was written twice - the strip and the preview each
+   * had a copy, and only one of them was ever going to be corrected. */
+  function firstReaching(reach, count, toStream, from) {
+    let low = 0;
+    let high = count - 1;
+    let first = count;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (toStream(reach[mid]) >= from) {
+        first = mid;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return first;
+  }
+
   /* The sync, in the title bar, at a glance.
    *
    * Asked for: "put a preview of the subtitle maps to the header bar of the
@@ -1171,23 +1205,12 @@
 
       const row = Math.round(PREVIEW_ROW * dpr);
       attached.forEach((each, index) => {
-        const { starts, ends } = api.cueSpans(each.slot);
+        const { starts, ends, reach } = api.cueSpans(each.slot);
         const top = index * row;
         const tall = Math.max(1, row - dpr);
-        // The first line whose end reaches the window, by bisection: this runs
-        // on the status round and the file is a thousand lines.
-        let low = 0;
-        let high = starts.length - 1;
-        let first = starts.length;
-        while (low <= high) {
-          const mid = (low + high) >> 1;
-          if (api.toStreamMs(each.slot, ends[mid] ?? starts[mid]) >= from) {
-            first = mid;
-            high = mid - 1;
-          } else {
-            low = mid + 1;
-          }
-        }
+        // The first line still on screen at the window's edge: this runs on the
+        // status round and the file is a thousand lines.
+        const first = firstReaching(reach, starts.length, (ms) => api.toStreamMs(each.slot, ms), from);
         context.globalAlpha = 0.85;
         for (let i = first; i < starts.length; i++) {
           const at = api.toStreamMs(each.slot, starts[i]);
@@ -1445,26 +1468,14 @@
      * costs nothing in the opening titles and grows for two hours. It was the
      * only linear walk left on this path, three lines below a bisection doing
      * the same job. */
-    function firstInWindow(ends, starts) {
-      let low = 0;
-      let high = starts.length - 1;
-      let first = starts.length;
-      while (low <= high) {
-        const mid = (low + high) >> 1;
-        if (api.toStreamMs(slot, ends[mid] ?? starts[mid]) >= from) {
-          first = mid;
-          high = mid - 1;
-        } else {
-          low = mid + 1;
-        }
-      }
-      return first;
-    }
+    const firstInWindow = (spans) =>
+      firstReaching(spans.reach, spans.starts.length, (ms) => api.toStreamMs(slot, ms), from);
 
     function paintCues(context) {
-      const { starts, ends, chars } = api.cueSpans(slot);
+      const spans = api.cueSpans(slot);
+      const { starts, ends, chars } = spans;
       if (!starts.length) return;
-      const first = firstInWindow(ends, starts);
+      const first = firstInWindow(spans);
       const thin = Math.max(2, ratio() * 2);
       for (let i = first; i < starts.length; i++) {
         const at = api.toStreamMs(slot, starts[i]);
@@ -1681,11 +1692,12 @@
      * canvas and answers in pixels: a bar one device pixel wide at the very
      * edge of the strip is drawn and is not something a reader can see. */
     function cuesInWindow() {
-      const { starts, ends } = api.cueSpans(slot);
+      const spans = api.cueSpans(slot);
+      const { starts } = spans;
       if (!starts.length) return false;
-      // The first line whose end reaches the window. If its start is past the
-      // far edge, the window falls in a silence and there is nothing to draw.
-      const first = firstInWindow(ends, starts);
+      // The first line still on screen at the window's edge. If its start is
+      // past the far edge, the window falls in a silence and nothing is drawn.
+      const first = firstInWindow(spans);
       if (first >= starts.length) return false;
       return api.toStreamMs(slot, starts[first]) <= to;
     }
