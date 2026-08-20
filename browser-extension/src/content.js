@@ -789,13 +789,28 @@
     return video.readyState >= HAVE_METADATA;
   }
 
+  /* Big enough to be somebody's player rather than a decoration. Named because
+   * two things ask it and they have to ask it the same way. */
+  const playerSized = (video) => {
+    const box = video.getBoundingClientRect();
+    return box.width > 200 && box.height > 100;
+  };
+
+  /* Whether the last walk saw a player at all, set by the walk rather than
+   * measured again. videoComing needs the same rectangles pickVideo is already
+   * taking, and a second pass over every <video> is a second set of forced
+   * layouts - which is the cost the cache below exists to avoid. */
+  let sawPlayer = false;
+
   function pickVideo() {
+    let player = false;
     const candidates = Array.from(document.querySelectorAll("video")).filter((video) => {
       noticeLength(video);
-      if (!longEnough(video)) return false;
-      const box = video.getBoundingClientRect();
-      return box.width > 200 && box.height > 100;
+      if (!playerSized(video)) return false;
+      player = true;
+      return longEnough(video);
     });
+    sawPlayer = player;
     if (candidates.length === 0) return null;
 
     candidates.sort((a, b) => {
@@ -816,6 +831,26 @@
    * The cache exists for exactly this and was simply not used here: measured on
    * the catalogue app, 134 getBoundingClientRects inside sixty offset writes. */
   const hasPlayableVideo = () => pickVideoCached() !== null;
+
+  /* A film that has not arrived yet, told apart from a page with no film.
+   *
+   * `hasVideo` is false for both and the worker has to treat them differently:
+   * one is worth waiting a few seconds for, the other is worth refusing at
+   * once. The difference is the LENGTH test, not the size one - on a stream
+   * produced as it is sent, the element is already there and already the right
+   * size, and only the part of the film that has arrived is too short to be
+   * worth subtitling.
+   *
+   * Reported as "it fails to find subtitles, and even video for a while - I
+   * need to try multiple times". Measured on the catalogue app, the same file
+   * on the same machine: the element became playable 409ms after play on one
+   * run and had still not after five seconds on the next, because it depends
+   * on how fast ffmpeg fills the first fragments. Nothing that reads that once
+   * and gives up is deciding by anything but luck. */
+  const videoComing = () => {
+    pickVideoCached();
+    return sawPlayer;
+  };
 
   /* A page with a video on it is not the same as a page you are watching.
    *
@@ -4762,6 +4797,8 @@
     const lead = attached[0] || state.tracks[PRIMARY];
     return {
       hasVideo: hasPlayableVideo(),
+      // Not the same question. See videoComing.
+      videoComing: videoComing(),
       attached: attached.length > 0,
       trackCount: attached.length,
       cueCount: lead.cues.length,

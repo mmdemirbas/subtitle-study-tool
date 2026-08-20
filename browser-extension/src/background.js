@@ -213,18 +213,26 @@ async function onProgrammeChange(sender, mark) {
 
   if (!(await autoSiteEnabled(tab.url))) return { ok: false, reason: "not this site" };
 
+  /* No hasVideo gate here any more, and it is removed as a hazard rather than
+   * as the bug.
+   *
+   * The frame does not announce a programme until it has picked a film, so in
+   * practice this gate agreed. But the mark is written down as handled at the
+   * top of this function, so any moment it disagreed - a stream restarting
+   * mid-seek is one, where the arrived length goes short again - cost the one
+   * attempt for that programme with no way back. autoAttach waits for the film
+   * itself now, and refuses only when the page says none is coming. */
   const status = await tabStatus(tab.id);
-  if (!status?.hasVideo) return { ok: false, reason: "no video" };
-  const frameId = status.frameId ?? TOP_FRAME;
+  const frameId = status?.frameId ?? TOP_FRAME;
 
   /* Whatever is on screen belongs to the programme that just ended, so it goes
    * before the search starts rather than after it arrives. Leaving it up would
    * put the last episode's lines over this one for however long the download
    * takes, and lines that are confidently wrong read as a sync fault rather
    * than as the wrong file. The panel keeps the way back for half a minute. */
-  if (status.attached) await send(tab.id, frameId, { type: "sso:detach" });
+  if (status?.attached) await send(tab.id, frameId, { type: "sso:detach" });
 
-  await autoAttach(tab, frameId, { ...status, attached: false });
+  await autoAttach(tab, frameId, status ? { ...status, attached: false } : null);
   return { ok: true };
 }
 
@@ -577,6 +585,37 @@ async function runCommand(command) {
   }
 }
 
+/* How long to wait for a film to turn up, and how often to look.
+ *
+ * A page with a play button has a programme long before it has a picture, and
+ * a stream produced as it is sent is not a film to this extension until enough
+ * of it has arrived to be worth subtitling. Measured on the catalogue app,
+ * same file and same machine: playable 409ms after pressing play on one run,
+ * still not playable after five seconds on the next. Twenty seconds covers
+ * both with room, and costs nothing when the film is already there.
+ *
+ * Only while the page says a film is coming. `videoComing` is a <video> of a
+ * player's size that is simply too short so far, so a page with nothing to
+ * subtitle is still refused at once rather than after a silent wait. */
+const VIDEO_WAIT_MS = 20000;
+const VIDEO_POLL_MS = 250;
+
+async function waitForVideo(tabId, first) {
+  if (first?.hasVideo) return first;
+  let last = first;
+  const until = Date.now() + VIDEO_WAIT_MS;
+  while (Date.now() < until) {
+    await new Promise((resume) => setTimeout(resume, VIDEO_POLL_MS));
+    const status = await tabStatus(tabId);
+    if (status) last = status;
+    if (status?.hasVideo) return status;
+    // The player went away while this waited - a page navigated, a preview
+    // stopped. Nothing is coming, so stop waiting for it.
+    if (status && !status.videoComing) return status;
+  }
+  return last;
+}
+
 /* Work out what auto-attach should do, without doing any of it.
  *
  * Split out from autoAttach so the diagnostic report can state what the
@@ -684,18 +723,51 @@ async function planAutoAttach(tab, frameId) {
 }
 
 async function autoAttach(tab, frameId, status) {
-  if (status && !status.hasVideo) {
+  /* No film, and the page itself says none is on its way.
+   *
+   * Refused here rather than after the search, and not inside the try below:
+   * a search that fails for its own reasons would otherwise report ITS error
+   * for a page that simply has nothing to subtitle, which is how this first
+   * came back wrong - "Something went wrong" where "No video playing on this
+   * page" is the whole answer. */
+  if (status && !status.hasVideo && !status.videoComing) {
     await notify(tab.id, frameId, "No video playing on this page");
     return;
   }
 
   try {
+    /* The search needs the page, not the picture.
+     *
+     * This used to read hasVideo once, up here, and give up for good if the
+     * film had not started - which on a page with a play button is every time,
+     * and a few hundred milliseconds after pressing play is most times. What
+     * it cost was the whole feature: "it fails to find subtitles, and even
+     * video for a while - I need to try multiple times".
+     *
+     * Nothing about finding a subtitle needs a video. The title, the season
+     * and the episode are on the page before anything plays, so the search
+     * starts now and the wait for a film is spent on it rather than in front
+     * of it. By the time a download is back there is nearly always somewhere
+     * to put it. */
+    const film = waitForVideo(tab.id, status);
     await notify(tab.id, frameId, "Looking for subtitles…");
 
     const plan = await planAutoAttach(tab, frameId);
     // The whole decision, including the results it ranked, so "it picked the
     // wrong subtitle" can be answered without running the search again.
     trace.record("autoAttach", { frameId, plan });
+
+    /* Before any of the plan is acted on, including the branches that open the
+     * panel: a page with no film is not a page to ask somebody to choose a
+     * subtitle for. The frame is re-read from the answer, because the film may
+     * have appeared in one that had nothing in it when this started. */
+    const ready = await film;
+    if (!ready?.hasVideo) {
+      await notify(tab.id, ready?.frameId ?? frameId, "No video playing on this page");
+      return;
+    }
+    frameId = ready.frameId ?? frameId;
+    status = ready;
 
     if (plan.decision === "error" || plan.decision === "nothing-found") {
       await notify(tab.id, frameId, plan.reason);
@@ -712,7 +784,15 @@ async function autoAttach(tab, frameId, status) {
 
     const { best, second, found, secondReason } = plan;
 
-    if (!(await attachOne(tab, frameId, best, found, 0))) return;
+    /* The second is tried whatever the first did.
+     *
+     * `return` here meant one failed download cost both subtitles, and the
+     * second one is a different file - often a different language, sometimes
+     * already in the cache - so there was no reason for it to share the first
+     * one's luck. Reported as "sometimes it fails to put both of them
+     * correctly". Each says for itself what went wrong; attachOne marks the
+     * second so two failures do not read as one repeated. */
+    await attachOne(tab, frameId, best, found, 0);
 
     /* The second language, chosen by planAutoAttach above.
      *

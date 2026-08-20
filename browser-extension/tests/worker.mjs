@@ -216,6 +216,43 @@ t("the same episode is not handled twice",
   !sentToTab.some((m) => m.type === "sso:detach"),
   sentToTab.map((m) => m.type).join(","));
 
+/* 5b. A film that has not started yet must not cost the one attempt.
+ *
+ * Reported as "subtitles should be immediately loaded in video start without
+ * much delay - but it fails to find subtitles, and even video for a while, I
+ * need to try multiple times".
+ *
+ * The mark is written down as handled before anything else happens, so a bail
+ * on "no video" spent the attempt on a reading taken before the film started
+ * and nothing ever tried again. On any page with a play button that is every
+ * time. The search does not need a picture, so it runs while the film is
+ * still arriving, and the wait is only for somewhere to put the answer.
+ */
+sentToTab.length = 0;
+tabStatusReply = { ok: true, hasVideo: false, videoComing: true, attached: false };
+const late = ask({ type: "sso:programme", mark: "2400|Ep 6" }, sender);
+// The film turns up a moment later, the way a remuxed stream does.
+setTimeout(() => { tabStatusReply = { ok: true, hasVideo: true, videoComing: true, attached: false }; }, 400);
+await late;
+t("a film that starts a moment late is still searched for",
+  toasts().some((m) => /Looking for subtitles/.test(m)),
+  JSON.stringify(toasts()));
+t("and it is not refused for having had no video when the page said so",
+  !toasts().some((m) => /No video playing/.test(m)),
+  JSON.stringify(toasts()));
+
+// 5c. ...and a page with no film coming is still refused at once, rather than
+//     after a silent wait for something that is not on its way.
+sentToTab.length = 0;
+tabStatusReply = { ok: true, hasVideo: false, videoComing: false, attached: false };
+const startedAt = Date.now();
+await ask({ type: "sso:programme", mark: "2400|Ep 7" }, sender);
+const waited = Date.now() - startedAt;
+t("a page with no film is refused without waiting for one",
+  toasts().some((m) => /No video playing/.test(m)) && waited < 2000,
+  `${waited}ms: ${JSON.stringify(toasts())}`);
+tabStatusReply = { ok: true, hasVideo: true, videoComing: true, attached: false };
+
 // 6. The panel can read the state back.
 const read = await ask({ type: "sso:daemon", op: "autoSite", args: {} }, sender);
 t("the panel can read it back", read?.enabled === true && read?.origin === "https://example.tv",

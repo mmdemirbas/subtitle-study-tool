@@ -874,6 +874,55 @@
             throw new Error(`the line at 11:00 was not the one drawn: "${drawn.trim().slice(0, 40)}"`);
         }));
 
+      /* A film still arriving, told apart from a page with no film.
+       *
+       * The worker waits for one and refuses the other, and `hasVideo` is
+       * false for both - so this is the whole basis of that decision. Reported
+       * as "it fails to find subtitles, and even video for a while - I need to
+       * try multiple times": the search used to read hasVideo once and give
+       * up, and on a stream produced as it is sent that reading is false for
+       * anywhere between a fraction of a second and several seconds.
+       *
+       * The size test is what says "somebody's player"; the length test is
+       * what says "enough of it has arrived". Only the second may be false
+       * while the extension waits. */
+      check("a film that has not arrived yet says it is on its way", async () => {
+        const was = Object.getOwnPropertyDescriptor(video, "duration");
+        // Eight seconds of a film is a player with hardly any film in it.
+        Object.defineProperty(video, "duration", { get: () => 8, configurable: true });
+        try {
+          await sleep(400);
+          const status = window.__ssoApi.status();
+          if (status.hasVideo)
+            throw new Error("eight seconds of arrived stream was taken for the whole film");
+          if (!status.videoComing)
+            throw new Error("the player is there and the right size, and it said nothing is coming");
+        } finally {
+          Object.defineProperty(video, "duration", was);
+          video.dispatchEvent(new Event("loadstart"));
+          await sleep(400);
+        }
+      });
+
+      check("a page with no player says so, so the search is refused at once", async () => {
+        const wasWidth = video.style.width;
+        const wasHeight = video.style.height;
+        // Too small to be anybody's player, which is the one signal that means
+        // "there is nothing here to wait for".
+        video.style.width = "80px";
+        video.style.height = "40px";
+        try {
+          await sleep(400);
+          const status = window.__ssoApi.status();
+          if (status.videoComing)
+            throw new Error("an 80x40 video was reported as a film on its way");
+        } finally {
+          video.style.width = wasWidth;
+          video.style.height = wasHeight;
+          await sleep(400);
+        }
+      });
+
       /* What the page says it is showing, asked for the way the worker asks.
        *
        * The worker sends `sso:pageInfo` to every frame and chooses between the
