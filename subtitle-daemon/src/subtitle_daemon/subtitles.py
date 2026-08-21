@@ -37,6 +37,30 @@ _EXPECTED_LETTERS = re.compile(
     "âîû]"
 )
 
+# Something to read: any letter in any script, or any digit.
+#
+# A cue whose whole content is punctuation is a mark the subtitler left to say
+# something is happening that they are not writing down - and the overlay draws
+# it as a box over the picture at the exact moment the picture is carrying the
+# words instead of the file. Reported as a subtitle that is "only - or _ ...
+# blocking the view unnecessarily".
+#
+# Measured over the 180 files in the download cache: 415 of 170,252 cues have
+# nothing to read in them, spread over 16 files. 232 are a lone "_", 88 a run of
+# asterisks, 73 are music marks with no lyrics, 8 a lone copyright sign, and the
+# rest are stray dots and dashes. The Americans is the worked example: the show
+# burns English subtitles into the picture for the Russian dialogue, and the
+# English .srt writes "_" through those scenes so the reader can see the file
+# has not given up. One episode spends 67 of its 626 cues that way.
+#
+# Letters and digits rather than a list of the marks actually seen, because the
+# next file will use a different one and an allowlist has to be extended for
+# every one of them. `[^\W_]` is `\w` without the underscore, which CPython
+# defines as `str.isalnum()`; the JavaScript port writes the same test as
+# `/[\p{L}\p{N}]/u`, and over all 1,114,112 code points the two disagree on
+# none.
+_READABLE = re.compile(r"[^\W_]")
+
 _TIMECODE = re.compile(
     r"(?P<sh>\d{1,3}):(?P<sm>\d{2}):(?P<ss>\d{2})[,.](?P<sms>\d{1,3})"
     r"\s*-->\s*"
@@ -119,7 +143,11 @@ def parse_srt(text: str) -> list[Cue]:
         # line above it, when present, is discarded.
         timecode_line = next(i for i, line in enumerate(lines) if _TIMECODE.search(line))
         content = "\n".join(lines[timecode_line + 1 :]).strip()
-        if not content:
+        # Markup comes off first. The copyright cues are written
+        # `<font color=orange>(c)`, so the letters in the tag would answer for
+        # the text if this read the raw block. This also covers the empty block
+        # the check here used to test for on its own.
+        if not _READABLE.search(markup.parse(content).plain):
             continue
 
         start = _to_ms(match.group("sh"), match.group("sm"), match.group("ss"), match.group("sms"))

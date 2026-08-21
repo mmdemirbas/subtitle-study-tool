@@ -347,6 +347,60 @@ Two guards exist now and both must be kept honest:
 - `tests/fallback.html` exercises `local.js` end to end. If you fix something in
   the daemon, ask what the same input does there.
 
+## A cue with nothing to read is not a cue
+
+`parseSrt` drops any block whose text carries no letter and no digit, and the
+daemon's `parse_srt` does the same. It is one guard widened, not a new one: the
+check there already dropped a block with empty content, and a block holding only
+`_` is empty in every sense the reader cares about.
+
+Reported as a subtitle that is "only - or _ ... blocking the view
+unnecessarily", and the diagnosis in the report was right. These marks stand in
+for dialogue the file is deliberately not writing down - usually because the
+picture is already carrying it - so the overlay drew an empty box over the
+words, at the one moment those words were burnt into the frame underneath it.
+
+Measured over the 180 files in the download cache: **415 of 170,252 cues**,
+across 16 files. 232 are a lone `_`, 88 a run of asterisks, 73 are music marks
+with no lyrics under them, 8 a lone copyright sign, the rest stray dots and
+dashes. The Americans is the worked example, and it is the same fact the
+aligner section above already carries from the other side: the show burns
+English subtitles into the picture for the Russian dialogue, and the English
+`.srt` writes `_` through those scenes. One episode spends 67 of its 626 cues
+that way.
+
+Three things about it are load-bearing.
+
+- **Letters and digits, not a list of the marks seen.** The next file uses a
+  different one - the corpus already has four families - and an allowlist has to
+  be extended for each. The test is `/[\p{L}\p{N}]/u` in JavaScript and
+  `[^\W_]` in Python, which is `\w` without the underscore, which CPython
+  defines as `str.isalnum()`. Checked over all 1,114,112 code points, the two
+  disagree on **none** - so the two copies of this parser cannot drift here.
+- **The markup comes off first.** The copyright cues are written
+  `<font color=orange>(c)`, so a check reading the raw block finds the letters
+  in the tag and keeps it. That costs a second markup parse per cue: measured
+  over the corpus, `parseSrt` goes from 1.16ms to 2.03ms per file, paid once at
+  attach. A cheap letter test on the raw block first is 40x faster and misses 9
+  of the 415, which is the wrong trade for work nobody waits on.
+- **A music mark is dropped alone and kept over lyrics.** `♪♪` is a box with
+  nothing in it; `♪ Why don't you tell me` is a line, and `annotations.js` still
+  colours it. Sound descriptions are words and are untouched - `[sighs]` stays,
+  under `dimNonSpeech` as before.
+
+**It is dropped at parse, so nothing downstream sees it**: not the overlay, not
+the study strips, not next-line navigation, not the cue counts, and not the
+aligner. That last one is why it was measured rather than argued - a placeholder
+has a time and no counterpart, so it is a noise anchor. Over the 137 pairs
+`bench/align` can settle with a text-derived truth, dropping them left the
+shipped aligner's answer **unchanged on 132 and moved none**: no pair better, no
+pair worse, no answer gained or lost.
+
+**`bench/align/srt.mjs` reads subtitles itself** and did not get this guard, so
+the bench still measures the unfiltered input. That is the measurement above,
+not an oversight to fix blind - but a bench that stops matching what ships is
+worth remembering before the next alignment change.
+
 ## Why the surfaces are built the way they are
 
 Each of these was a reported bug. Undoing one brings the bug back.

@@ -95,6 +95,56 @@ def test_parse_srt_skips_bad_blocks_without_losing_good_ones() -> None:
     assert cues == [Cue(5000, 6000, "kept")]
 
 
+def test_parse_srt_drops_a_cue_with_nothing_to_read() -> None:
+    """A mark standing in for dialogue the file is not writing down.
+
+    The Americans burns English subtitles into the picture for its Russian
+    scenes and writes "_" through them; other files use a run of asterisks, or a
+    music mark with no lyrics under it. Every one of them draws an empty box
+    over the picture at the moment the picture is the thing to read.
+    """
+    cues = parse_srt(
+        "1\n00:00:01,000 --> 00:00:02,000\n_\n"
+        "\n"
+        "2\n00:00:03,000 --> 00:00:04,000\n********\n"
+        "\n"
+        "3\n00:00:05,000 --> 00:00:06,000\n\u266a\u266a\n"
+        "\n"
+        "4\n00:00:07,000 --> 00:00:08,000\n-\n"
+        "\n"
+        "5\n00:00:09,000 --> 00:00:10,000\n...\n"
+        "\n"
+        "6\n00:00:11,000 --> 00:00:12,000\nkept\n"
+    )
+    assert cues == [Cue(11000, 12000, "kept")]
+
+
+def test_parse_srt_reads_the_text_and_not_the_markup() -> None:
+    # Written `<font color=orange>(c)` in the wild, with the sign itself as the
+    # whole of the text. Reading the raw block would find the letters in the tag
+    # and keep it.
+    cues = parse_srt("1\n00:00:01,000 --> 00:00:02,000\n<font color=orange>\u00a9\n")
+    assert cues == []
+
+
+def test_parse_srt_keeps_anything_with_a_word_in_it() -> None:
+    """The other side of the same rule, which is where it could do damage.
+
+    A music mark is dropped alone and kept over lyrics; a dialogue dash is only
+    ever half a line; and letters means letters in any script, not Latin ones.
+    """
+    for text in [
+        "\u266a Why don't you tell me",
+        "- Hello.\n- Hi.",
+        "1999",
+        "[sighs]",
+        "\u4f60\u597d",
+        "\u0428\u0442\u043e?",
+    ]:
+        cues = parse_srt(f"1\n00:00:01,000 --> 00:00:02,000\n{text}\n")
+        assert [cue.text for cue in cues] == [text], text
+
+
 def test_parse_srt_sorts_by_start_time() -> None:
     cues = parse_srt(
         "1\n00:00:10,000 --> 00:00:11,000\nlate\n"

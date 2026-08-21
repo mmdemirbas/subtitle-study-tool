@@ -22,6 +22,30 @@ const MOJIBAKE = /[\uFFFD\u0080-\u009F]/g;
  * circumflex vowels of older orthography. */
 const EXPECTED_LETTERS = /[çğıİöşüÇĞÖŞÜâîû]/g;
 
+/* Something to read: any letter in any script, or any digit.
+ *
+ * A cue whose whole content is punctuation is a mark the subtitler left to say
+ * something is happening that they are not writing down - and the overlay draws
+ * it as a box over the picture at the exact moment the picture is carrying the
+ * words instead of the file. Reported as a subtitle that is "only - or _ ...
+ * blocking the view unnecessarily".
+ *
+ * Measured over the 180 files in the download cache: 415 of 170,252 cues have
+ * nothing to read in them, spread over 16 files. 232 are a lone "_", 88 a run
+ * of asterisks, 73 are music marks with no lyrics, 8 a lone copyright sign, and
+ * the rest are stray dots and dashes. The Americans is the worked example and
+ * the one already documented elsewhere in this repository: the show burns
+ * English subtitles into the picture for the Russian dialogue, and the English
+ * .srt writes "_" through those scenes so the reader can see the file has not
+ * given up. One episode spends 67 of its 626 cues that way.
+ *
+ * Letters and digits rather than a list of the marks actually seen, because the
+ * next file will use a different one and an allowlist has to be extended for
+ * every one of them. This is exactly Python's `[^\W_]` - checked over all
+ * 1,114,112 code points, the two disagree on none - so the daemon's copy of
+ * this parser cannot drift from it. */
+const READABLE = /[\p{L}\p{N}]/u;
+
 const TIMECODE =
   /(\d{1,3}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d{1,3}):(\d{2}):(\d{2})[,.](\d{1,3})/;
 
@@ -129,7 +153,11 @@ export function parseSrt(text) {
     // above it, when present, is discarded.
     const timecodeLine = lines.findIndex((line) => TIMECODE.test(line));
     const content = lines.slice(timecodeLine + 1).join("\n").trim();
-    if (!content) continue;
+    /* Markup comes off first. The copyright cues are written
+     * `<font color=orange>©`, so the letters in the tag would answer for the
+     * text if this read the raw block. This also covers the empty block the
+     * check here used to test for on its own. */
+    if (!READABLE.test(plainText(parse(content)))) continue;
 
     const start = toMs(match[1], match[2], match[3], match[4]);
     const end = toMs(match[5], match[6], match[7], match[8]);

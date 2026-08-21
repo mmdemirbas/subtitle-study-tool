@@ -70,7 +70,32 @@
         "00:00:03,000 --> 00:00:04,000",
         "<i>[sighs]</i> Fine.",
         "",
+        /* Three marks standing in for dialogue the file does not write down.
+         * They reach the overlay as a box with nothing in it, over the picture,
+         * at the moment the picture is carrying the words - which is what put
+         * the guard in parseSrt. The last one is the awkward case: its letters
+         * are all inside the tag. */
+        "3",
+        "00:00:05,000 --> 00:00:06,000",
+        "_",
+        "",
+        "4",
+        "00:00:07,000 --> 00:00:08,000",
+        "\u266a\u266a",
+        "",
+        "5",
+        "00:00:09,000 --> 00:00:10,000",
+        "<font color=orange>\u00a9",
+        "",
       ].join("\n");
+
+      /* The daemon sends base64 of the file's BYTES. Putting the string
+       * straight through btoa cannot carry anything outside Latin-1 - not the
+       * music mark above, and not the s-cedilla, g-breve and dotless i in every
+       * Turkish subtitle there is - so the stub encodes the way the daemon
+       * does. sync.js already did; only this stub was narrower than the thing
+       * it stands for. */
+      const base64 = (text) => btoa(String.fromCharCode(...new TextEncoder().encode(text)));
 
       // Counters are the assertion surface for quota.
       const calls = { download: 0, features: 0, subtitles: 0, daemonSearch: 0, imported: [], forgotten: [] };
@@ -291,6 +316,17 @@
           throw new Error("italics were lost");
       });
 
+      check("a subtitle that stands in for a burnt-in one is not put on screen", async () => {
+        reset();
+        const result = await provider.fetchSubtitle(11, { imdb_id: "32430579", language: "en" });
+        if (result.error) throw new Error(result.error);
+        const unreadable = result.cues.filter((cue) => !/[\p{L}\p{N}]/u.test(cue.text));
+        if (unreadable.length)
+          throw new Error(`${unreadable.length} cues with nothing to read: ` +
+            unreadable.map((cue) => JSON.stringify(cue.text)).join(", "));
+        if (result.cues.length !== 2) throw new Error(`${result.cues.length} cues, not 2`);
+      });
+
       check("the same file is not downloaded twice", async () => {
         reset();
         const result = await provider.fetchSubtitle(11, { imdb_id: "32430579", language: "en" });
@@ -428,7 +464,7 @@
         await setDaemon(true);
         daemonCache.set(77, {
           file_id: 77,
-          content: btoa(SRT),
+          content: base64(SRT),
           meta: { imdb_id: "tt777", language: "en", movie_name: "Elsewhere" },
         });
         const moved = await provider.syncNow();
