@@ -5190,6 +5190,9 @@
   let mirror = null;
   let mirrorSettings = ""; // so an unchanged settings object is not re-applied
   let mirrorSeenAt = 0;
+  // Which frame the held mirror describes, so it is only thrown away when the
+  // film actually moves. See setFrameRole.
+  let mirrorFrameId = null;
   /* How long a silence means the video's frame is gone.
    *
    * It pushes at least once a second while it is there, so three seconds of
@@ -5204,8 +5207,28 @@
       videoFrameId = frameId ?? null;
       if (role === "chrome") return;
       role = "chrome";
-      mirror = null;
-      mirrorSettings = "";
+      /* Thrown away only when the film is in a different frame than the one
+       * the held mirror came from.
+       *
+       * It used to be cleared on every claim, and the claim comes back on
+       * every exit from fullscreen: the player's frame stops claiming the
+       * subject while it is fullscreen - see reportFrameRole - so the top
+       * frame drops to solo and takes the job again on the way out. With the
+       * mirror gone, status() answered out of THIS document, which holds no
+       * film and no tracks, so the panel handed straight back by
+       * handBackPanel drew "No video on this page" over an empty list until
+       * the next push landed, and then two subtitles appeared. Reported as
+       * "once the list is empty, and next moment it has two subtitles".
+       *
+       * The film's frame going quiet for a moment is not evidence that the
+       * subtitles went away. A push is at most 150ms behind while something
+       * is attached, and three seconds of silence still drops this frame to
+       * solo, so nothing here can outlive the film it describes. */
+      if (mirrorFrameId !== videoFrameId) {
+        mirror = null;
+        mirrorSettings = "";
+      }
+      mirrorFrameId = videoFrameId;
       // The clock starts now, not at whatever the last arrangement left
       // behind, or the silence check below would fire before the first push.
       mirrorSeenAt = Date.now();
@@ -5220,8 +5243,10 @@
     if (role !== "chrome") return;
     role = "solo";
     videoFrameId = null;
-    mirror = null;
-    mirrorSettings = "";
+    /* The mirror is kept, and it costs nothing to keep: status() reads it only
+     * while this frame is the one drawing the controls, and going solo is
+     * usually the film's frame taking the screen for a moment rather than the
+     * film going away. Held for the claim that follows. */
     mirrorSeenAt = 0;
     if (handle) handle.dataset.visible = "false";
     /* Whatever was open here is about a film this frame no longer knows
@@ -5292,7 +5317,11 @@
   }
 
   function mirroredStatus() {
-    const base = mirror?.status || localStatus();
+    /* Nothing pushed yet is not "no film on this page". This frame draws the
+     * controls only because another one said it holds the subject, so
+     * answering out of this document - which has no video in it - put "No
+     * video on this page" in the panel of a page that was playing one. */
+    const base = mirror?.status || { ...localStatus(), hasVideo: true };
     return { ...base, mirrored: true, videoFrameId };
   }
 

@@ -449,6 +449,53 @@ try {
     return all.find((f) => f.frameId === 0)?.surfaces?.length ? all : null;
   });
 
+  /* A subtitle in the film's frame before any of this, and a recorder in the
+   * top one, because the question at the end of the round trip is what the TOP
+   * frame was saying about the film while the controls changed hands. */
+  const fsFilmFrameId = (await frames()).find((f) => f.hasVideo && !f.isTopFrame)?.frameId ?? 1;
+  await sw.evaluate(async (frameId) => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const cues = Array.from({ length: 40 }, (_, i) => ({
+      start: i * 1000,
+      end: i * 1000 + 900,
+      text: `fullscreen line ${i}`,
+    }));
+    await chrome.tabs.sendMessage(
+      tab.id,
+      { type: "sso:attach", payload: { cues, label: "EN fullscreen", fileId: 707, language: "en", slot: 0 } },
+      { frameId },
+    );
+  }, fsFilmFrameId);
+  await page.waitForTimeout(600);
+
+  await sw.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [0] },
+      func: () => {
+        window.__ssoSeen = [];
+        const note = (s) =>
+          window.__ssoSeen.push({
+            mirrored: Boolean(s.mirrored),
+            tracks: s.trackCount,
+            video: Boolean(s.hasVideo),
+          });
+        /* Both ways this frame's account of the film is read: pushed at the
+         * panel by notify(), and pulled by the panel itself. The pull is the
+         * one that matters here - show() and goTo() each redraw from
+         * api.status(), and the panel is handed back at exactly the moment
+         * the roles change. Recording only the pushes missed it entirely. */
+        window.__ssoApi?.subscribe?.(note);
+        const real = window.__ssoApi.status;
+        window.__ssoApi.status = (...args) => {
+          const seen = real(...args);
+          note(seen);
+          return seen;
+        };
+      },
+    });
+  });
+
   const film = page.frames().find((f) => f.url().includes("player.html"));
   await film.evaluate(() => {
     /* What a player's own fullscreen button does: its container, not the
@@ -568,6 +615,39 @@ try {
     t("leaving fullscreen brings the panel back out of the player's frame", false,
       "never got a panel in fullscreen to bring back");
   }
+
+  /* --- and it has to bring the film back with it ----------------------------
+   *
+   * Reported as "once the list is empty, and next moment it has two
+   * subtitles". Leaving fullscreen is a solo -> chrome round trip - the
+   * player's frame stops claiming the subject while it is fullscreen, so the
+   * top frame drops the job and takes it again on the way out - and taking it
+   * again used to throw the mirror away. For one push, plus two hops through
+   * the worker, status() was then answered out of the top document, which
+   * holds no film and no tracks: the panel handed straight back by
+   * handBackPanel drew "No video on this page" over an empty list, and then
+   * the subtitles arrived.
+   *
+   * The assertion is over EVERY status the top frame's subscribers were handed
+   * across the whole round trip, not the one showing when the dust settled.
+   * The settled one was always right, which is why this only ever reached the
+   * reader as a flicker. Rounds taken while the frame was solo are not counted
+   * - answering out of its own document is exactly right then, and that is
+   * what `mirrored` distinguishes. */
+  const roundsSeen = await sw.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const got = await chrome.scripting
+      .executeScript({ target: { tabId: tab.id, frameIds: [0] }, func: () => window.__ssoSeen || [] })
+      .catch(() => null);
+    return got?.[0]?.result || [];
+  });
+  const held = roundsSeen.filter((r) => r.mirrored);
+  const blind = held.filter((r) => r.tracks === 0 || !r.video);
+  t("and the frame holding the controls never says the film is gone",
+    held.length > 0 && blind.length === 0,
+    held.length === 0
+      ? `nothing recorded while it held the controls (${roundsSeen.length} rounds in all)`
+      : `${blind.length} of ${held.length} rounds said ${JSON.stringify(blind[0] ?? null)}`);
 
   /* --- and the switch that has to reach the film from wherever it is thrown --
    *
