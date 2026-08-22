@@ -3620,15 +3620,24 @@
      * subtitle attached - go and search for one" answers a question the reader
      * did not ask; the useful thing is the way back, and it stands down on its
      * own after half a minute. */
-    el.none.hidden = status.attached || Boolean(gone);
+    const emptyState = !status.attached && !gone;
+    el.none.hidden = !emptyState;
     el.noneTitle.textContent = status.hasVideo ? "No subtitle attached" : "No video on this page";
     el.noneNote.textContent = status.hasVideo
       ? "Search for the film or series and pick a result — it goes straight onto the video."
       : "Open something that plays, then come back.";
     el.noneAction.hidden = !status.hasVideo;
-    // Both slots full means the plus has nowhere to put anything; replacing one
-    // is what a double-click on a card's name is for.
-    el.add.hidden = !status.attached || status.trackCount >= api.trackCount;
+    /* Both slots full means the plus has nowhere to put anything; replacing one
+     * is what a double-click on a card's name is for.
+     *
+     * Otherwise it shows whenever the empty state above is not showing, and
+     * that INCLUDES having nothing attached. It used to be hidden on
+     * `!status.attached`, which is the same condition the empty state stands
+     * down on for the undo row - so taking off the last subtitle left a panel
+     * holding one row, an Undo, and no way at all to add a subtitle for the
+     * next thirty seconds. Reported as "how am I supposed to add new subtitles
+     * in that state". */
+    el.add.hidden = emptyState || status.trackCount >= api.trackCount;
 
     // In the title bar, so it is drawn whether or not the body is showing -
     // being visible while folded is the whole point of it.

@@ -3963,6 +3963,51 @@
         await sleep(40);
       });
 
+      check("taking off the last subtitle still leaves a way to add one", async () => {
+        /* The empty state - "No subtitle attached", carrying the button that
+         * ends it - stands down while there is something to put back, so that
+         * the panel makes one statement of absence rather than two. The plus
+         * was hidden on the same condition from the other side (`!attached`),
+         * so removing the last subtitle left a panel holding one row, an Undo,
+         * and no way at all to add a subtitle for the thirty seconds the offer
+         * lasts. Reported as "how am I supposed to add new subtitles in that
+         * state", with a screenshot of a panel that had nothing else in it. */
+        const shadow = panelShadow();
+        const had = window.__ssoApi.status().tracks.map((t) => t.attached);
+        if (had[1]) {
+          window.__ssoApi.detach(1);
+          await sleep(80);
+        }
+        window.__ssoApi.detach(0);
+        await sleep(120);
+
+        if (window.__ssoApi.status().attached) throw new Error("something is still attached");
+        if (!window.__ssoApi.removedTrack())
+          throw new Error("nothing to put back, so this is not the state being tested");
+        if (shadow.querySelector(".sso-undo").hidden) throw new Error("no undo row to crowd it out");
+        if (!shadow.querySelector(".sso-empty").hidden)
+          throw new Error("both statements of absence are on screen at once");
+
+        const add = shadow.querySelector(".sso-add");
+        if (add.hidden || add.getBoundingClientRect().height === 0)
+          throw new Error("nothing on the panel adds a subtitle while the undo is offered");
+        add.click();
+        await sleep(80);
+        const said = shadow.querySelector(".sso-find__for").textContent;
+        if (!/subtitle 1\b/i.test(said)) throw new Error(`the plus went to "${said}"`);
+        shadow.querySelector(".sso-panel__back").click();
+        await sleep(60);
+
+        // Put back exactly what was there: the undo restores slot 0 as it was,
+        // and slot 1 goes back the way the check above rebuilds it.
+        window.__ssoApi.undoRemove();
+        await sleep(80);
+        if (had[1]) {
+          await window.__ssoApi.attach({ cues: CUES, label: "second", fileId: 99, language: "tr", slot: 1 });
+          await sleep(80);
+        }
+      });
+
       const toastEl = () =>
         [...document.querySelectorAll("div")]
           .find((d) => d.shadowRoot?.querySelector(".sso-toast"))
