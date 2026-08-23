@@ -50,9 +50,9 @@ const threshold = Number(flag("rank", 4000));
  * tokens in the Turkish file, 61 of them words the table knows once folded. */
 const fold = (word) => String(word).toLocaleLowerCase(lang);
 
-const { WORDS } = await import(`../src/study/frequency-${lang}.generated.js`);
+const table = await readFile(new URL(`../src/study/frequency-${lang}.generated.txt`, import.meta.url), "utf-8");
 const ranks = new Map();
-WORDS.split("\n").forEach((word, rank) => ranks.set(word, rank));
+table.split("\n").forEach((word, rank) => { if (word) ranks.set(word, rank); });
 
 /** The extension's rule: a contraction falls back to its stem. Null is rarer
  *  than anything the table holds, not "unknown". */

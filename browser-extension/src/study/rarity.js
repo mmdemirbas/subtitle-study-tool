@@ -20,6 +20,24 @@ const loading = new Map();
 /** Rank tables ship per language; anything else has no answer to give. */
 export const SUPPORTED = ["en", "tr"];
 
+/* Fetched as text, not imported as a module, and that is the whole reason this
+ * feature worked in the harness and never once in a browser.
+ *
+ * The tables used to be `.generated.js` behind `import(...)`, which reads as
+ * the obvious way to load something lazily. A service worker is the one place
+ * it cannot be: the HTML specification disallows dynamic import on
+ * ServiceWorkerGlobalScope (w3c/ServiceWorker#1356), so every call threw
+ * `TypeError: import() is disallowed`. Measured in a loaded extension: EN and
+ * TR both, on the first word of the first cue.
+ *
+ * The throw was caught and written down as "this language has no table", so
+ * study mode said "No word-frequency list for EN, so nothing is marked
+ * automatically" and stopped asking for the rest of the session. Both shipped
+ * languages, every session - the focus box was correctly built, correctly
+ * placed and permanently empty, and the sentence inside it blamed the data.
+ *
+ * fetch on a packaged file needs no web_accessible_resources entry: that gates
+ * pages and content scripts, not the extension's own worker. */
 async function table(language) {
   const lang = normaliseLanguage(language);
   if (!lang) return null;
@@ -28,23 +46,38 @@ async function table(language) {
   if (!loading.has(lang)) {
     loading.set(
       lang,
-      import(`./frequency-${lang}.generated.js`)
-        .then((module) => {
-          const ranks = new Map();
-          module.WORDS.split("\n").forEach((word, rank) => ranks.set(word, rank));
+      load(lang)
+        .then((ranks) => {
           tables.set(lang, ranks);
           return ranks;
         })
-        .catch(() => {
-          // A missing table is "no opinion", never a broken feature: study mode
-          // still marks nothing and everything else keeps working.
-          tables.set(lang, null);
-          return null;
-        })
+        /* Not cached as a failure, and not swallowed.
+         *
+         * A language with no table is answered above, before anything is
+         * loaded, so everything that reaches here is a table that ships and
+         * would not load - which is a defect, never a fact about the language.
+         * Letting it out means the surface says something is wrong instead of
+         * quietly promising rare words for two hours; not remembering it means
+         * the next cue tries again rather than the session being lost to one
+         * bad fetch. */
         .finally(() => loading.delete(lang)),
     );
   }
   return loading.get(lang);
+}
+
+async function load(lang) {
+  const url = chrome.runtime.getURL(`src/study/frequency-${lang}.generated.txt`);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`frequency table for ${lang}: HTTP ${response.status}`);
+  const ranks = new Map();
+  // Rank is the line number, so the split has to keep every line but the
+  // trailing empty one the file ends with.
+  const words = (await response.text()).split("\n");
+  if (words[words.length - 1] === "") words.pop();
+  if (words.length === 0) throw new Error(`frequency table for ${lang} is empty`);
+  words.forEach((word, rank) => ranks.set(word, rank));
+  return ranks;
 }
 
 function normaliseLanguage(language) {

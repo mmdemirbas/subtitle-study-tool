@@ -674,17 +674,23 @@ try {
             target: { tabId: tab.id, frameIds: [f.frameId] },
             func: () => {
               let focus = null;
+              let cards = 0;
+              let note = "";
               for (const node of document.querySelectorAll("*")) {
                 const first = node.shadowRoot?.firstElementChild;
                 if (typeof first?.className === "string" && first.className.includes("sso-focus")) {
                   const box = node.getBoundingClientRect();
                   focus = [Math.round(box.width), Math.round(box.height)];
+                  cards = node.shadowRoot.querySelector(".sso-focus__body")?.children.length || 0;
+                  note = node.shadowRoot.querySelector(".sso-focus__note")?.textContent || "";
                 }
               }
               return {
                 on: Boolean(window.__ssoStudy?.settings?.().enabled),
                 attached: Boolean(window.__ssoApi?.status?.().attached),
                 focus,
+                cards,
+                note,
               };
             },
           })
@@ -731,6 +737,41 @@ try {
   t("study switched on away from the film still builds the box where the film is",
     Boolean(studyReached),
     JSON.stringify(await studyState()));
+
+  /* And whether anything ever lands in it, which is a different question from
+   * whether it was built.
+   *
+   * The box was built, placed and empty for the whole life of the feature: the
+   * rarity tables were `.generated.js` behind a dynamic `import()`, and a
+   * service worker is the one scope where the specification forbids that. The
+   * throw was caught and recorded as "this language has no table", so the box
+   * carried "No word-frequency list for EN" over a subtitle full of English.
+   *
+   * Nothing else could have caught it. The harness stubs the rank channel
+   * outright - what it tests is what the overlay does with an answer - and the
+   * worker check stubs the browser away, so both were green while the real
+   * runtime had never once returned a rank. This vehicle is the only one that
+   * loads the extension into a browser, which is where the ban lives.
+   *
+   * The cue is "the quixotic ephemeral line N": two words past rank 4000 in a
+   * table of 30,000, so an empty box here means the ranking is not answering,
+   * not that the fixture was too common. */
+  /* Any frame will do, and asking that way is the point. The top frame mirrors
+   * `attached` so that the panel can draw the study controls, and it builds a
+   * box of its own - but the cues are in the film's frame, so that is the box a
+   * word can land in. Looking for the first attached frame finds the mirror and
+   * calls a working feature broken. */
+  const ranked = studyReached
+    ? await until(async () => {
+        await wake();
+        return (await studyState()).find((f) => f.cards > 0) || null;
+      }, 12000)
+    : null;
+  t("a rare word from the cue reaches the focus box",
+    Boolean(ranked),
+    ranked
+      ? `${ranked.cards} card(s) in frame ${ranked.frameId}`
+      : JSON.stringify(await studyState()));
 
   /* And whether a press on it is ours, with the site painting over everything.
    *
