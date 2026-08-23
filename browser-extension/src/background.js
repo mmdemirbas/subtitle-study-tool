@@ -226,13 +226,21 @@ async function onProgrammeChange(sender, mark) {
   const frameId = status?.frameId ?? TOP_FRAME;
 
   /* Whatever is on screen belongs to the programme that just ended, so it goes
-   * before the search starts rather than after it arrives. Leaving it up would
-   * put the last episode's lines over this one for however long the download
-   * takes, and lines that are confidently wrong read as a sync fault rather
-   * than as the wrong file. The panel keeps the way back for half a minute. */
-  if (status?.attached) await send(tab.id, frameId, { type: "sso:detach" });
-
-  await autoAttach(tab, frameId, status ? { ...status, attached: false } : null);
+   * - but not until there is something to put up in its place.
+   *
+   * It used to go first, on the argument that the last episode's lines over
+   * this one read as a sync fault rather than as the wrong file. True, and it
+   * traded a wrong subtitle for no subtitle every time the search that follows
+   * came back empty. Twice in one evening on 2026-08-23 that is exactly what
+   * happened - "Nothing matched "The Americans" well" against a film that had
+   * had both languages on it a second earlier, 39 and 26 minutes in. Reported
+   * as "my subtitles are gone again in the middle of the movie".
+   *
+   * autoAttach drops them at the point it has a result to attach, so a search
+   * that finds nothing now costs nothing. The window where the old lines are
+   * still up is the download, which is the same window the reader would spend
+   * looking at an empty picture otherwise. */
+  await autoAttach(tab, frameId, status, { replacing: Boolean(status?.attached) });
   return { ok: true };
 }
 
@@ -722,7 +730,7 @@ async function planAutoAttach(tab, frameId) {
   return { ...plan, second, secondReason, decision: "attach", reason: "" };
 }
 
-async function autoAttach(tab, frameId, status) {
+async function autoAttach(tab, frameId, status, { replacing = false } = {}) {
   /* No film, and the page itself says none is on its way.
    *
    * Refused here rather than after the search, and not inside the try below:
@@ -783,6 +791,16 @@ async function autoAttach(tab, frameId, status) {
     }
 
     const { best, second, found, secondReason } = plan;
+
+    /* The moment the last programme's subtitles stop being the best thing on
+     * screen: there is a result, and there is a film to put it on. Every way
+     * of finding nothing has already returned above without touching them.
+     *
+     * Both slots, not only the ones about to be filled - a pair replaced by a
+     * single language would otherwise leave the other slot holding the last
+     * episode. The content script stashes what it takes off for half a minute,
+     * so the panel still offers it back. */
+    if (replacing) await send(tab.id, frameId, { type: "sso:detach" });
 
     /* The second is tried whatever the first did.
      *

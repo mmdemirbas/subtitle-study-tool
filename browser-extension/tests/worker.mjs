@@ -17,6 +17,10 @@ const posted = [];
 let downloadsFail = false;
 let daemonUp = true;
 let foreignOnPort = false;
+/* What the subtitle daemon answers, for the cases that need a search to come
+ * back with something. null is "nothing is listening", which is what every
+ * other case here wants and what the fetch below produces by rejecting. */
+let daemonAnswers = null;
 
 /* The daemon is a socket, so it is stubbed as one. The extension does not
  * health-check it: the POST is the check, and "not running" arrives as a fetch
@@ -30,6 +34,10 @@ globalThis.fetch = async (url, options) => {
     if (foreignOnPort) return { ok: true, status: 200, json: async () => ({}) };
     posted.push(JSON.parse(options.body));
     return { ok: true, status: 200, json: async () => ({ ok: true, file: "logs/today.jsonl" }) };
+  }
+  if (daemonAnswers) {
+    const answer = daemonAnswers(String(url));
+    if (answer) return { ok: true, status: 200, json: async () => answer };
   }
   throw new TypeError("Failed to fetch");
 };
@@ -200,14 +208,60 @@ const off = await ask({ type: "sso:programme", mark: "2400|Ep 4" }, sender);
 t("a new episode is ignored where it is off", off?.ok === false && !sentToTab.some(
   (m) => m.type === "sso:detach"), JSON.stringify(off));
 
-// 4. Switched on, the last episode's subtitles come off before the search.
+/* 4. Switched on, and the search comes back with nothing.
+ *
+ * The last episode's subtitles used to come off before the search started, on
+ * the argument that lines from the wrong file read as a sync fault. They do -
+ * and it traded a wrong subtitle for no subtitle every time the search that
+ * followed found nothing. Twice in one evening on 2026-08-23, on a film that
+ * had both languages on it a second earlier: reported as "my subtitles are
+ * gone again in the middle of the movie". */
 await ask({ type: "sso:daemon", op: "autoSiteSet", args: { enabled: true } }, sender);
 tabStatusReply = { ok: true, hasVideo: true, attached: true };
+// A daemon that is there and has nothing, rather than a daemon that is not
+// there: the search has to fail on its answer, not on the transport.
+daemonAnswers = (url) => {
+  if (url.endsWith("/health")) return { default_languages: ["en"] };
+  if (url.includes("/search")) return { used: { query: "Ep 5" }, results: [] };
+  return null;
+};
 sentToTab.length = 0;
 await ask({ type: "sso:programme", mark: "2400|Ep 5" }, sender);
-t("the last episode's subtitles are taken off first",
-  sentToTab.some((m) => m.type === "sso:detach"),
+t("a search that finds nothing leaves the last episode's subtitles alone",
+  !sentToTab.some((m) => m.type === "sso:detach"),
   sentToTab.map((m) => m.type).join(","));
+t("and says why",
+  toasts().some((m) => /No subtitles found/i.test(m)),
+  JSON.stringify(toasts()));
+
+/* 4b. ...and when there IS something to put up, the old one still goes first.
+ *
+ * Both halves matter. Without the detach, a pair replaced by a single language
+ * leaves the other slot holding the last episode - which is the confidently
+ * wrong subtitle the old ordering existed to prevent. */
+daemonAnswers = (url) => {
+  if (url.endsWith("/health")) return { default_languages: ["en"] };
+  if (url.includes("/search")) {
+    return {
+      used: { query: "A Film" },
+      resolved: { type: "movie", imdb_id: "tt1" },
+      auto_attach_threshold: 0.75,
+      results: [{
+        file_id: 7, language: "en", release: "A.Film.1080p", movie_name: "A Film",
+        match_score: 0.99, download_count: 10,
+      }],
+    };
+  }
+  if (url.endsWith("/fetch")) return { cues: [{ start: 0, end: 1000, text: "hello" }] };
+  return null;
+};
+sentToTab.length = 0;
+await ask({ type: "sso:programme", mark: "2400|Ep 5b" }, sender);
+const order = sentToTab.map((m) => m.type);
+t("a search that finds one takes the last episode's off first",
+  order.indexOf("sso:detach") >= 0 && order.indexOf("sso:detach") < order.indexOf("sso:attach"),
+  order.join(","));
+daemonAnswers = null;
 
 // 5. The same programme reported by every frame is handled once.
 sentToTab.length = 0;
