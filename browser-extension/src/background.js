@@ -9,6 +9,7 @@
 import {
   DaemonDownError,
   attachToTab,
+  forEpisode,
   pageContextForTab,
   pickBest,
   pickSecondLanguage,
@@ -659,7 +660,17 @@ async function planAutoAttach(tab, frameId) {
 
   const query = found.used?.query || title;
   const threshold = found.auto_attach_threshold ?? 0.75;
-  const best = pickBest(found.results, languages);
+  /* Among the results that are this episode, when the search asked for one.
+   *
+   * pickBest ranks by language and then by score and does not look at the
+   * episode at all, so on the one path where a resolved search comes back with
+   * other instalments - the episode has no subtitles, so the daemon falls back
+   * to the series as a whole - it could pick any of them. The second language
+   * has filtered first all along; this is the same rule for the first. With
+   * nothing left after the filter the old behaviour stands: rank everything,
+   * and let the score below decide. */
+  const forThis = forEpisode(found.results, found.used);
+  const best = pickBest(forThis.length ? forThis : found.results, languages);
   Object.assign(plan, { query, threshold, best });
 
   if (!best) {
@@ -692,8 +703,43 @@ async function planAutoAttach(tab, frameId) {
   /* Refuse to spend a download on something that does not look like what was
    * asked for. Searching "Prime Video: Crime 101" once returned "Ekusute" and
    * "Major Crimes", both of which were downloaded and displayed because
-   * nothing checked. Open the panel instead and let a human decide. */
-  if ((best.match_score ?? 0) < threshold) {
+   * nothing checked. Open the panel instead and let a human decide.
+   *
+   * ...but not when the daemon already answered that question, and better.
+   *
+   * `match_score` compares the query against the uploader's own movie_name and
+   * release string. That is the only guard there is on the fuzzy path, where
+   * the search was `query=` and OpenSubtitles will confidently return an
+   * unrelated film. It is not a guard at all once the title has RESOLVED: the
+   * index matched the title at this very threshold, the search then went out by
+   * the feature's own id with the season and episode on it, and every row that
+   * came back is that programme by construction. What the score measures there
+   * is how an uploader chose to name their file.
+   *
+   * Measured on The Americans, from the log on 2026-08-23. Season 3 episode 13
+   * resolved to tt2149175 with no rivals, and all seven results were S03E13 -
+   * every one of them refused at 0.70. Episode 12 the same day attached at 0.85,
+   * and the whole of the difference is that one uploader had called their file
+   * "The Americans S03E12" while the rest carried a release name: "The
+   * Americans - S03E13  March 8, 1983" has three words after the series name,
+   * "I Am Abassin Zadran" has four, and the coverage term divides by them. So
+   * the gate was passing or failing on the length of the episode's title.
+   *
+   * The same argument was already written down one function over, for the
+   * second language of a pair, and acted on there. This is it applied to the
+   * first.
+   *
+   * What it gives up: a title that resolves to the WRONG programme is now
+   * attached without a second opinion. The second opinion was worth nothing -
+   * the release names of the wrong programme describe the wrong programme, and
+   * score exactly as well as the right one's would. `ambiguous_title` is the
+   * case where the daemon says it could not tell two titles apart, and there
+   * the score still decides.
+   *
+   * `identified` carries all of that, and is set on every row by the provider
+   * rather than worked out here: the panel asks the same question of the same
+   * rows, in a process this module cannot be imported into. */
+  if (!best.identified && (best.match_score ?? 0) < threshold) {
     return {
       ...plan,
       decision: "too-weak",

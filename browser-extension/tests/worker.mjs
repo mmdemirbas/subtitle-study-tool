@@ -263,6 +263,97 @@ t("a search that finds one takes the last episode's off first",
   order.join(","));
 daemonAnswers = null;
 
+/* 4c. A resolved title is the guard. The uploader's file name is not.
+ *
+ * Reported as an episode that would not attach by itself. From the log on
+ * 2026-08-23: The Americans season 3 episode 13 resolved to tt2149175 with no
+ * rivals, the search went out by that id with the season and episode on it, and
+ * all seven results that came back were S03E13 - every one of them refused at
+ * match_score 0.70 against a threshold of 0.75. Episode 12 the same day
+ * attached at 0.85, and the whole of the difference was that one uploader had
+ * called their file "The Americans S03E12" while the rest carried a release
+ * name. The score was deciding on the length of the episode's title.
+ */
+const seriesPage = {
+  ok: true,
+  year: 2015,
+  candidates: [
+    {
+      source: "json-ld",
+      text: "The Americans S03E13 March 8, 1983.mkv",
+      episode: { season: 3, episode: 13, matched: "S03E13" },
+    },
+    { source: "json-ld-series", text: "The Americans", episode: null },
+  ],
+  episode: { fromMetadata: { season: 3, episode: 13, matched: "schema.org episodeNumber" } },
+};
+
+/* One badly-named result for the right episode, and the switches that decide
+ * whether the daemon knew which programme it was answering about. */
+const americans = ({ resolved = true, ambiguous = false, episode = 13 } = {}) => (url) => {
+  if (url.endsWith("/health")) return { default_languages: ["en"] };
+  if (url.includes("/search")) {
+    const answer = {
+      used: { query: "The Americans", season: 3, episode: 13, languages: ["en"] },
+      auto_attach_threshold: 0.75,
+      results: [{
+        file_id: 13, language: "en", season: 3, episode,
+        movie_name: "The Americans - S03E13  March 8, 1983",
+        release: "The.Americans.2013.S03E13.HDTV.x264-KILLERS",
+        download_count: 74396, from_trusted: true, match_score: 0.7, year: 2015,
+      }],
+    };
+    if (resolved) {
+      answer.resolved = { title: "the americans", year: 2013, imdb_id: "2149175", type: "Tvshow" };
+    }
+    if (ambiguous) answer.ambiguous_title = true;
+    return answer;
+  }
+  if (url.endsWith("/fetch")) return { cues: [{ start: 0, end: 1000, text: "hello" }] };
+  return null;
+};
+
+const attempt = async (mark, answers) => {
+  pageInfoReply = () => seriesPage;
+  daemonAnswers = answers;
+  tabStatusReply = { ok: true, hasVideo: true, attached: false };
+  sentToTab.length = 0;
+  await ask({ type: "sso:programme", mark }, sender);
+  const out = { types: sentToTab.map((m) => m.type), said: toasts() };
+  daemonAnswers = null;
+  pageInfoReply = () => ({ ok: true });
+  return out;
+};
+
+let tried = await attempt("2900|E13", americans());
+t("a resolved episode attaches however its uploader named the file",
+  tried.types.includes("sso:attach"),
+  JSON.stringify(tried));
+
+/* The other side of it, and the reason the score is still there. Without a
+ * resolved title the search was `query=` and OpenSubtitles will confidently
+ * return an unrelated film - which is how "Ekusute" was once downloaded for a
+ * Crime 101 search. */
+tried = await attempt("2901|E13", americans({ resolved: false }));
+t("an unresolved title is still refused on the name score",
+  !tried.types.includes("sso:attach") && tried.said.some((m) => /Nothing matched/.test(m)),
+  JSON.stringify(tried));
+
+/* And where the daemon says it could not tell two titles apart, "resolved" is
+ * a coin toss rather than an answer. */
+tried = await attempt("2902|E13", americans({ ambiguous: true }));
+t("an ambiguous title is still refused on the name score",
+  !tried.types.includes("sso:attach") && tried.said.some((m) => /Nothing matched/.test(m)),
+  JSON.stringify(tried));
+
+/* Resolved is not the same question as the right instalment. When the episode
+ * has no subtitles at all the daemon falls back to the series as a whole, so a
+ * resolved answer can be every episode but this one. */
+tried = await attempt("2903|E13", americans({ episode: 4 }));
+t("a resolved title carrying another episode is refused",
+  !tried.types.includes("sso:attach") && tried.said.some((m) => /Nothing matched/.test(m)),
+  JSON.stringify(tried));
+
 // 5. The same programme reported by every frame is handled once.
 sentToTab.length = 0;
 await ask({ type: "sso:programme", mark: "2400|Ep 5" }, sender);

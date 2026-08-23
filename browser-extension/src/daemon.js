@@ -418,30 +418,49 @@ export function pickBest(results, languages) {
  * Without a resolved title there is no such guarantee and the score is still
  * the only guard there is.
  *
+ * The same reasoning now covers the FIRST subtitle - see planAutoAttach in
+ * background.js. It was written here because this is where the silence was
+ * reported; it was never true only of the second one.
+ *
  * Returns `{ result, reason }`. `reason` is empty when a subtitle was found and
  * otherwise says what to do about it, because silence here reads as the pair
  * being broken rather than as one language being unavailable.
  */
-export function pickSecondLanguage({ results, languages, taken, used, resolved, threshold, query }) {
-  const others = (languages || []).filter((language) => language !== taken);
-  if (!others.length) return { result: null, reason: "" };
-
-  const wantsEpisode = used?.season != null || used?.episode != null;
-  const rightEpisode = (item) => {
-    if (!wantsEpisode) return true;
-    // A result that does not say which episode it is cannot be ruled out by it.
+/**
+ * The results that are the episode being watched.
+ *
+ * "The result does not say" is not a mismatch: an upload carrying no episode
+ * metadata cannot be ruled out by it. With nothing asked for, every result
+ * qualifies.
+ *
+ * One function, because both halves of a pair need the same answer and a
+ * second copy of this rule is how the two come to disagree - and because a
+ * search that resolved to a title can still hand back other episodes. When the
+ * episode has no subtitles at all the daemon falls back to the series as a
+ * whole rather than reporting nothing, so "resolved" and "the right instalment"
+ * are two questions, not one.
+ */
+export function forEpisode(results, used) {
+  const list = results || [];
+  if (used?.season == null && used?.episode == null) return [...list];
+  return list.filter((item) => {
     if (item.season == null && item.episode == null) return true;
     return (
       (used.season == null || item.season === used.season) &&
       (used.episode == null || item.episode === used.episode)
     );
-  };
+  });
+}
+
+export function pickSecondLanguage({ results, languages, taken, used, resolved, threshold, query }) {
+  const others = (languages || []).filter((language) => language !== taken);
+  if (!others.length) return { result: null, reason: "" };
 
   let reason = `no ${others.join(" or ").toUpperCase()} subtitle came back for this`;
   for (const language of others) {
     const inLanguage = (results || []).filter((r) => r.language === language);
     if (!inLanguage.length) continue;
-    const usable = inLanguage.filter(rightEpisode);
+    const usable = forEpisode(inLanguage, used);
     if (!usable.length) {
       reason = `every ${language.toUpperCase()} subtitle found is for another episode`;
       continue;

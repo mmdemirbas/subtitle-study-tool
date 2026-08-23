@@ -134,26 +134,46 @@ export async function preferredLanguages() {
   return [...wanted, ...configured.filter((language) => !wanted.includes(language))];
 }
 
+/* Whether each row is a programme the search actually identified, rather than
+ * something a fuzzy query returned.
+ *
+ * "Does the name score say anything about this row?" is asked in two processes
+ * - the auto-attach gate in the worker and the "weak match" tag on every row in
+ * the panel - and a content script cannot import this module. So the answer is
+ * derived once, here, where every search passes whichever side produced it, and
+ * both read the same boolean. planAutoAttach in background.js carries the
+ * reasoning for why a resolved title answers a question the score cannot.
+ */
+function markIdentified(response) {
+  const rows = response?.results;
+  if (!Array.isArray(rows)) return response;
+  const known = Boolean(response.resolved?.imdb_id) && !response.ambiguous_title;
+  const asked = new Set(known ? daemon.forEpisode(rows, response.used) : []);
+  return { ...response, results: rows.map((row) => ({ ...row, identified: asked.has(row) })) };
+}
+
 export async function search(args) {
   if (await daemonUp()) {
     await settled();
     try {
-      return { served_by: "daemon", ...(await daemon.search(args)) };
+      return markIdentified({ served_by: "daemon", ...(await daemon.search(args)) });
     } catch (error) {
       if (!(error instanceof DaemonDownError)) throw error;
       // Stopped between the probe and the call. Answer it here instead.
       probe = { at: 0, up: false };
     }
   }
-  return (await local()).search({
-    title: args.title,
-    query: args.query,
-    languages: args.languages,
-    year: args.year,
-    season: args.season,
-    episode: args.episode,
-    imdb_id: args.imdb_id,
-  });
+  return markIdentified(
+    await (await local()).search({
+      title: args.title,
+      query: args.query,
+      languages: args.languages,
+      year: args.year,
+      season: args.season,
+      episode: args.episode,
+      imdb_id: args.imdb_id,
+    }),
+  );
 }
 
 export async function fetchSubtitle(fileId, context = {}) {

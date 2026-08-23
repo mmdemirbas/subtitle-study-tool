@@ -3290,7 +3290,15 @@
 
         top.append(lang, name);
         if (result.cached) top.append(tag("cached", "sso-tag--free"));
-        if (result.match_score != null && result.match_score < threshold) {
+        /* Not on a row the search identified. The score compares the query
+         * against the uploader's own file name, and once the title has resolved
+         * and the episode agrees, every row is this programme whatever it was
+         * called - so the tag was marking correct results as poor ones, on
+         * every episode whose title happens to be long. It is what sends a
+         * reader back to reading release names by eye, which is how the
+         * previous episode's file came to be attached to this one. See
+         * markIdentified in provider.js. */
+        if (!result.identified && result.match_score != null && result.match_score < threshold) {
           top.append(tag("weak match", "sso-tag--weak"));
         }
         if (result.hearing_impaired) top.append(tag("HI"));

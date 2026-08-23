@@ -257,6 +257,35 @@
         if (!calls.features) throw new Error("/features was never consulted");
       });
 
+      check("the extension's own search says which results it identified", async () => {
+        /* What separates a result that can be attached without asking from one
+         * a human has to look at. It is not the uploader's file name: once
+         * /features has recognised the title and the search has gone out by its
+         * id, every row is that programme whatever it was called. Measured on
+         * The Americans: season 3 episode 13 resolved with no rivals, all seven
+         * results were the right episode, and all seven were refused at 0.70
+         * because the episode's own title is three words long.
+         *
+         * Asserted on this side as well as in the worker's suite, because this
+         * is the code that answers whenever the daemon is not running - which
+         * is the ordinary case. */
+        await setDaemon(false);
+        reset();
+        const found = await provider.search({ title: "Prime Video: Crime 101", languages: ["en"] });
+        if (!found.results.length) throw new Error("no results to mark");
+        if (!found.results.every((result) => result.identified === true))
+          throw new Error("a resolved title's results were not marked as identified");
+
+        /* And the other way. A title the index does not recognise is searched
+         * for fuzzily, OpenSubtitles returns something regardless, and there
+         * the name score is the only guard there is. */
+        const guessed = await provider.search({ query: "Something Else Entirely", languages: ["en"] });
+        if (guessed.resolved) throw new Error("the unrelated title resolved after all");
+        if (!guessed.results.length) throw new Error("the fuzzy search returned nothing to judge");
+        if (guessed.results.some((result) => result.identified))
+          throw new Error("a fuzzy search's results were marked as identified");
+      });
+
       check("the title is cleaned before it is searched for", async () => {
         const found = await provider.search({ title: "Prime Video: Crime 101", languages: ["en"] });
         if (found.used.query !== "Crime 101")
