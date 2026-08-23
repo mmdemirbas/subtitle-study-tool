@@ -6936,6 +6936,101 @@
         await sleep(120);
       });
 
+      check("a page that says it can seek is asked, rather than written to", async () => {
+        /* A stream produced as it is sent cannot be seeked by the element: the
+         * write comes back as 0 whatever it asked for. The page fetching a new
+         * stream is the only thing that CAN seek one, so a page that says so
+         * gets asked instead. */
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+
+        const cues = [
+          { start: 1000, end: 3000, text: "one" },
+          { start: 5000, end: 7000, text: "two" },
+          { start: 9000, end: 11000, text: "three" },
+        ];
+        await api.attach({ cues, label: "asking", fileId: 6110, language: "en", slot: 0 });
+        api.setKeyTrack(0);
+        await sleep(120);
+
+        const asks = [];
+        const hear = () => asks.push(video.dataset.ssoSeekTo);
+        video.addEventListener("sso:seek", hear);
+        video.dataset.ssoSeek = "film";
+        video.dataset.ssoTimeOffset = "0";
+        video.currentTime = 10;
+
+        api.stepLine(-1);
+        await sleep(60);
+        video.removeEventListener("sso:seek", hear);
+        delete video.dataset.ssoSeek;
+        delete video.dataset.ssoSeekTo;
+        delete video.dataset.ssoTimeOffset;
+
+        if (asks.length !== 1)
+          throw new Error(`the page was asked ${asks.length} times, not once`);
+        // Line 3 starts at 9s and the seek lands a little before it.
+        const asked = Number(asks[0]);
+        if (!(asked > 8.5 && asked <= 9))
+          throw new Error(`the page was asked for ${asked}s, not the start of line 3`);
+        if (Math.abs(video.currentTime - 10) > 0.01)
+          throw new Error(`the clock was written as well, to ${video.currentTime}s`);
+
+        video.currentTime = wasTime;
+        if (wasAttached[0]) {
+          await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+        } else {
+          api.detach(0);
+        }
+        await sleep(120);
+      });
+
+      check("a film that refuses to move says so, instead of looking like a jump", async () => {
+        /* Measured against the local player on 2026-08-23: seekable was the
+         * empty range [0, 0] and every write to currentTime came back as 0,
+         * with `seeking` and `seeked` fired to say it had happened. Reading the
+         * clock straight back is what tells the two apart, and it is worth a
+         * word to the reader: a key that silently does nothing is a key that
+         * looks broken. */
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const own = Object.getOwnPropertyDescriptor(video, "currentTime");
+
+        const cues = [
+          { start: 1000, end: 3000, text: "one" },
+          { start: 5000, end: 7000, text: "two" },
+          { start: 9000, end: 11000, text: "three" },
+        ];
+        await api.attach({ cues, label: "refusing", fileId: 6111, language: "en", slot: 0 });
+        api.setKeyTrack(0);
+        await sleep(120);
+
+        let stuck = 10;
+        Object.defineProperty(video, "currentTime", {
+          get: () => stuck,
+          set: () => { stuck = 0; },   // what the element really does: back to zero
+          configurable: true,
+        });
+
+        api.stepLine(-1);
+        await sleep(80);
+        const said = toastEl()?.textContent || "";
+        Object.defineProperty(video, "currentTime", own);
+
+        if (!/will not jump/i.test(said))
+          throw new Error(`a refused seek said "${said.trim().slice(0, 60)}"`);
+
+        if (wasAttached[0]) {
+          await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+        } else {
+          api.detach(0);
+        }
+        await sleep(120);
+      });
+
       check("a correction carries to the next episode of the same release", async () => {
         /* A saved offset belongs to one file, and the next episode is a
          * different file - so a season asks for the same correction eight times

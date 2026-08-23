@@ -580,6 +580,18 @@ Each of these was a reported bug. Undoing one brings the bug back.
     ffmpeg `-copyts` does not survive the MP4 muxer (Chrome reports
     currentTime 0 and buffered.start(0) 0 either way, measured side by side),
     and `MediaSession.setPositionState` has no getter.
+  - **`data-sso-seek="film"` on the video**, the other half of that, and the
+    second invented thing. Such a stream cannot be seeked by writing the
+    element either: measured 2026-08-23 against the local player, `seekable`
+    was the empty range [0, 0] while `buffered` held [0.08, 8.02], and every
+    write came back 0 on the next read - backwards inside the buffer, forwards
+    past it, past zero - each firing `seeking` and `seeked`. T and Y therefore
+    threw the picture to the start of the stream, further back the longer it
+    had played. A page carrying this attribute is ASKED: the moment goes on
+    `data-sso-seek-to` in film seconds and a bubbling `sso:seek` event is
+    dispatched on the video. Always at or before the moment given. `seekFilm`
+    in `content.js` is the only place that writes or asks, and it reads the
+    clock straight back to tell a player that moved from one that did not.
 - **Nothing may assume the element's clock is the film's clock, or that its
   duration is the film's length.** `streamNowMs()` and `elementSeconds()` in
   `content.js` are the two directions and the only places that know; use them

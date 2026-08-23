@@ -761,8 +761,8 @@
    *
    * It is read live, because a player that seeks this way changes it.
    * Everything in this file is on the film's clock; the element's is that
-   * clock less `startSeconds`, and the two writes to `currentTime` are the only
-   * places that have to go back the other way. */
+   * clock less `startSeconds`, and `seekFilm` below is the only place that has
+   * to go back the other way. */
   function timingHint(video, key) {
     const said = Number.parseFloat(video?.dataset?.[key] ?? "");
     return Number.isFinite(said) && said >= 0 ? said : null;
@@ -772,6 +772,71 @@
     ((video?.currentTime || 0) + startSeconds(video)) * 1000;
   const elementSeconds = (streamMs, video = state.video) =>
     Math.max(0, streamMs / 1000 - startSeconds(video));
+
+  /* Asking for a moment of the film, when writing the clock will not get there.
+   *
+   * Everything above assumes the element can be put where it is asked to go. On
+   * a stream produced as it is sent it cannot. Measured on 2026-08-23 against
+   * the local player, on a remux of a .mkv: `seekable` was the single empty
+   * range [0, 0] while `buffered` held [0.08, 8.02], and every write came back
+   * as 0 on the very next read - 2.52s backwards inside the buffer, 28.75s
+   * forwards past it, 60s backwards past its start - each one firing `seeking`
+   * and then `seeked` to say it had happened. Playback carried on from 2.2s,
+   * the start of the stream.
+   *
+   * So T and Y did not step a line there. They threw the picture back to
+   * wherever the page last opened the stream, which is further back the longer
+   * it had been playing - reported as "T jumps too much previous subtitle
+   * positions". Y went backwards for the same reason.
+   *
+   * A page that seeks by fetching a new stream is the only thing that can seek
+   * one, so it is asked. This is the other half of the timing contract, and the
+   * only other invented thing here:
+   *
+   *   <video data-sso-seek="film">          the page accepts asks, on the film's clock
+   *   video.dataset.ssoSeekTo = "1234.500"  the moment wanted, in film seconds
+   *   video.dispatchEvent(new Event("sso:seek", { bubbles: true }))
+   *
+   * A string on the element rather than a CustomEvent detail, because an object
+   * built in this world is not reliably readable in the page's and the DOM is
+   * the one thing both worlds share. The ask is always AT OR BEFORE the moment
+   * given: every seek here is the start of a line, and landing after it clips
+   * the first word off the line it was meant to repeat.
+   *
+   * A page that says nothing is written to as before, and the write is read
+   * straight back to see whether it took. Setting `currentTime` moves the
+   * official playback position immediately, so an element that can go there
+   * says so on the next line and one that cannot reports where it stayed. That
+   * read-back is the only test that works on every player: `seekable` cannot
+   * tell a stream still arriving from a short file, which is why nothing here
+   * asks it. */
+  const SEEK_MISS_S = 1;
+
+  function seekFilm(filmMs, { how = "", tell = false } = {}) {
+    const video = state.video;
+    if (!video) return false;
+    const fromMs = Math.round(streamNowMs(video));
+    const toMs = Math.max(0, Math.round(filmMs));
+
+    if (video.dataset?.ssoSeek === "film") {
+      video.dataset.ssoSeekTo = (toMs / 1000).toFixed(3);
+      video.dispatchEvent(new Event("sso:seek", { bubbles: true }));
+      trace("seek", { how, asked: "page", fromMs, toMs });
+      return true;
+    }
+
+    const target = elementSeconds(toMs, video);
+    video.currentTime = target;
+    const took = Math.abs(video.currentTime - target) <= SEEK_MISS_S;
+    /* A landing is only worth a line in the log when somebody asked for it or
+     * when it did not happen. Stopping at the end of every line seeks once per
+     * line, and a record of that is a record of the film playing. */
+    if (!took || how !== "stop") {
+      trace("seek", { how, asked: "element", fromMs, toMs, landedMs: Math.round(streamNowMs(video)), took });
+    }
+    if (!took && tell) showToast("This player will not jump - the film stayed where it was");
+    return took;
+  }
 
   /* Long enough to be worth subtitling, or of a length nothing can know.
    *
@@ -3538,9 +3603,7 @@
      * this mode is for. Put it back just inside. The move is one step at most,
      * which is 200ms of film even at 4x. */
     if (now > target.end) {
-      state.video.currentTime = elementSeconds(
-        streamTimeMs(track, target.end - LINE_END_MARGIN_MS),
-      );
+      seekFilm(streamTimeMs(track, target.end - LINE_END_MARGIN_MS), { how: "stop" });
     }
   }
 
@@ -3600,7 +3663,7 @@
       return true;
     }
 
-    state.video.currentTime = elementSeconds(streamTimeMs(track, cue.start) - LINE_PREROLL_MS);
+    seekFilm(streamTimeMs(track, cue.start) - LINE_PREROLL_MS, { how: "line", tell: true });
     /* Draw it now rather than up to a tick later. Setting currentTime moves the
      * official playback position immediately, so the tick reads the new time
      * even while the frames are still on their way. */

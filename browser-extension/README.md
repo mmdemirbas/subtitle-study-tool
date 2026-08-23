@@ -399,6 +399,38 @@ does not survive the MP4 muxer, so there is nothing else to read.
 </script>
 ```
 
+**Asking the page to seek** - `data-sso-seek="film"` on the same `<video>`. The
+other half of the same problem: a stream that cannot be seeked also cannot be
+seeked BY the extension, so "say that line again" has nowhere to go. Measured
+on 2026-08-23 against a local player streaming a remux of a `.mkv`: `seekable`
+was the single empty range `[0, 0]` while `buffered` held `[0.08, 8.02]`, and
+every write to `currentTime` came back as 0 on the next read - 2.52s backwards
+inside the buffer, 28.75s forwards past it, 60s backwards past its start - each
+one firing `seeking` and then `seeked` to say it had happened. The film carried
+on from the start of the stream.
+
+A page that says it accepts asks is asked instead of written to. The moment goes
+on the element in film seconds, and a bare event says it is there:
+
+```html
+<video data-sso-time-offset="1231" data-sso-seek="film"></video>
+```
+
+```js
+// what the page implements
+video.addEventListener("sso:seek", () => {
+  const seconds = Number(video.dataset.ssoSeekTo);
+  if (Number.isFinite(seconds)) seekTo(seconds);   // the film's clock, not the element's
+});
+```
+
+A string on the element rather than a `CustomEvent` detail, because an object
+built in an extension's isolated world is not reliably readable in the page's,
+and the DOM is the one thing both worlds share. The ask is always **at or
+before** the moment given: every seek the extension makes is the start of a
+line, and landing after it clips the first word off the line it was meant to
+repeat. A page that says nothing is written to as before.
+
 ## Why the panel is in a shadow root
 
 Injected UI competes with the host page's stylesheet, and the page usually
