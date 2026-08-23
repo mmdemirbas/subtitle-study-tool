@@ -3794,6 +3794,15 @@
    * that the subtitles are up before the recap ends. */
   const PROGRAMME_SETTLE_MS = 1500;
   let programme = { mark: "", since: 0, told: "" };
+  /* The mark once it has stopped moving, which is what "a different programme"
+   * means to anything outside this file.
+   *
+   * `told` is not that, and the difference matters: attach() writes to `told`
+   * as well, to say this programme's search has already been answered. A reader
+   * of `told` would see a subtitle arriving as a new episode - which would wipe
+   * the panel's result list between attaching the first language and the second
+   * one, out of the same list. */
+  let settledProgramme = "";
   /* Which programme the accumulated ad time was measured against.
    *
    * The correction is stream seconds that were not film, so it is true of one
@@ -3814,8 +3823,17 @@
       programme = { mark, since: performance.now(), told: programme.told };
       return;
     }
-    if (programme.told === mark) return;
-    if (performance.now() - programme.since < PROGRAMME_SETTLE_MS) return;
+    const settled = performance.now() - programme.since >= PROGRAMME_SETTLE_MS;
+    if (settled && settledProgramme !== mark) {
+      settledProgramme = mark;
+      /* A different film is a change in what the status describes, and the
+       * panel's Find screen is drawn from it. The tick does not notify by
+       * itself - it has nothing to say most of the time - so without this the
+       * panel hears about the new episode only when something else happens to
+       * change. Once per programme. */
+      notify();
+    }
+    if (programme.told === mark || !settled) return;
 
     /* A different programme, so last one's ad time is not this one's. Here
      * rather than in attach(), because it is the programme changing that makes
@@ -5396,6 +5414,11 @@
         language: track.language,
         visible: track.visible,
       })),
+      /* Which programme the page has settled on, for the surfaces that are
+       * ABOUT the film rather than about the picture. The panel's Find screen
+       * is one: its box and its list of results belong to one episode, and it
+       * had no way of noticing that a different one had started under it. */
+      programme: settledProgramme,
       keyTrack: state.keyTrack,
       // Which subtitle moves the others with it. See carryFollowers.
       leadSlot: leadSlot(),

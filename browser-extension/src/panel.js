@@ -60,6 +60,31 @@
   let lastResolved = null;
   let sheets = null;
 
+  /* Which programme the Find screen is about.
+   *
+   * The box and the list of results below it answer a question about ONE
+   * episode, and on a streaming site the next episode starts without a page
+   * load. Nothing here noticed. The box was filled with the page's title once,
+   * when it was empty, and kept that value for the rest of the session; the
+   * results kept whatever the last search returned. So the episode after the
+   * one you searched for opened a screen that said the previous film's name,
+   * searched for it when pressed, and offered the previous film's files to
+   * attach. Reported as "I have clicked the next episode button ... but the
+   * subtitle tool still finds the previous title and searches for it", and seen
+   * in the log at 21:06 on 2026-08-23: S03E12's subtitles attached by hand to
+   * S03E13, then taken off again two minutes later.
+   *
+   * Whose words are in the box decides what happens to them. What this filled
+   * in is this file's guess and gets refreshed; what a person typed is theirs
+   * and is left alone. The results are dropped either way - they are files for
+   * a film that is no longer playing. */
+  let searchedFor = null;
+  let queryFromPage = false;
+  /* An in-flight fill that has been overtaken - by typing, or by another
+   * programme - must not land. The answer comes from the worker, so there is
+   * always a moment between asking and writing. */
+  let fillToken = 0;
+
   /* Which of the two subtitles the next attach lands on. Not stored: it is a
    * property of the search you are doing right now, and a remembered value
    * would silently overwrite a track you had already set up. Reset to the first
@@ -3058,6 +3083,13 @@
       event.stopPropagation(); // typing must not trigger nudge bindings
       if (event.key === "Enter") api.detached(runSearch(el.query.value.trim()), "The search");
     });
+    /* From here on the words are the reader's, and the next episode does not
+     * get to replace them. An answer already on its way from the worker is
+     * cancelled by the same stroke. */
+    el.query.addEventListener("input", () => {
+      queryFromPage = false;
+      fillToken += 1;
+    });
 
     const grow = document.createElement("div");
     grow.className = "sso-grow";
@@ -3141,6 +3173,40 @@
     );
   }
 
+  /* Put the page's own title in the box, unless somebody else got there
+   * first. */
+  function fillQueryFromPage() {
+    const mine = ++fillToken;
+    bestPageTitle().then(
+      (title) => {
+        if (mine !== fillToken || !title || !el.query) return;
+        el.query.value = title;
+        queryFromPage = true;
+      },
+      // Filling in the box is a convenience; failing to must not be an error.
+      () => {},
+    );
+  }
+
+  /* A different film is playing, so nothing on the Find screen is about it. */
+  function forgetSearch(mark, { refill = false } = {}) {
+    searchedFor = mark;
+    lastResults = [];
+    lastResolved = null;
+    languageChoice = "";
+    el.results?.replaceChildren();
+    if (el.languageFilter) el.languageFilter.hidden = true;
+    if (el.tryBest) el.tryBest.hidden = true;
+    if (el.searchNote) {
+      el.searchNote.className = "sso-note";
+      el.searchNote.textContent = "";
+    }
+    // Only what this file put there, and only while there is a screen to put
+    // it on - the panel is refreshed whether it is open or shut, and asking
+    // the worker for a title nobody is looking at is a round trip for nothing.
+    if (refill && el.query && (queryFromPage || !el.query.value)) fillQueryFromPage();
+  }
+
   async function runSearch(query) {
     el.results.replaceChildren();
     el.tryBest.hidden = true;
@@ -3176,6 +3242,7 @@
 
     lastResults = response.results || [];
     lastResolved = response.resolved || null;
+    searchedFor = api.status().programme ?? null;
     /* Nothing to choose between with one result, and nothing to choose FROM
      * with none. Both are cases where a button offering to try three would be
      * a button that cannot do what it says. */
@@ -3820,6 +3887,11 @@
 
   function refresh(status) {
     if (!host) return;
+    /* The film can change without a page load, and when it does the Find
+     * screen is answering about the last one. See searchedFor. */
+    if ((status.programme ?? null) !== searchedFor) {
+      forgetSearch(status.programme ?? null, { refill: isPanelVisible() });
+    }
     const settings = status.settings;
     const showing = (name) => atScreen === name;
     /* Attaching a second subtitle adds a whole card, so the panel gets taller
@@ -4213,15 +4285,14 @@
      * not again let a panel restored halfway down the screen hang off the
      * bottom, taking the second tier of settings with it. */
     fitToViewport();
-    // Asynchronous now that it crosses to the worker, so it fills in a moment
-    // after the panel appears rather than holding it up.
-    if (!el.query.value) {
-      // Filling in the box is a convenience; failing to must not be an error.
-      bestPageTitle().then(
-        (title) => { if (!el.query.value) el.query.value = title; },
-        () => {},
-      );
-    }
+    /* Asynchronous now that it crosses to the worker, so it fills in a moment
+     * after the panel appears rather than holding it up.
+     *
+     * Ours to refresh, theirs to leave alone: a title this file guessed is
+     * re-guessed for whatever is playing now, and words a person typed stay
+     * where they typed them. It used to fill only an EMPTY box, which is why a
+     * panel reopened on the next episode still named the last one. */
+    if (!el.query.value || queryFromPage) fillQueryFromPage();
   }
 
   function hide() {

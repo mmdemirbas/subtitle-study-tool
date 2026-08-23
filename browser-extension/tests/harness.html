@@ -7669,6 +7669,68 @@
         }
       });
 
+      check("the find screen stops being about the last episode", async () => {
+        /* Reported as "I have clicked the next episode button ... but the
+         * subtitle tool still finds the previous title and searches for it".
+         *
+         * The box was filled with the page's title once, while it was empty,
+         * and kept that value for the rest of the session; the results under it
+         * kept whatever the last search returned. So the episode after the one
+         * you searched for opened a screen naming the previous film, searched
+         * for it when pressed, and offered the previous film's files. Seen in
+         * the log at 21:06 on 2026-08-23: S03E12's two subtitles attached by
+         * hand to S03E13, and taken off again two minutes later. */
+        const shadow = panelShadow();
+        const wasTitle = document.title;
+        const wasDuration = Object.getOwnPropertyDescriptor(video, "duration");
+        const setDuration = (seconds) =>
+          Object.defineProperty(video, "duration", { get: () => seconds, configurable: true });
+        let onNow = "Harness — S05E01";
+        window.__stubDaemon = { pageContext: () => ({ title: onNow }) };
+        try {
+          video.dispatchEvent(new Event("loadstart"));
+          document.title = onNow;
+          setDuration(3100);
+          await sleep(2200);          // long enough for the mark to settle
+
+          // Opened the way a reader opens it, so the box is filled the way a
+          // reader's box is filled.
+          window.__ssoPanel.hide();
+          await window.__ssoPanel.show();
+          await sleep(300);
+          const find = [...shadow.querySelectorAll(".sso-screen")]
+            .find((node) => node.querySelector(".sso-find__for"));
+          const box = find.querySelector('input[type="text"]');
+          if (box.value !== onNow) throw new Error(`the box opened saying "${box.value}"`);
+
+          [...shadow.querySelectorAll("button")].find((b) => b.textContent === "Search").click();
+          await sleep(200);
+          if (!shadow.querySelector(".sso-result"))
+            throw new Error("the search returned nothing to go stale");
+
+          // The next episode, without a page load, which is how they all start.
+          onNow = "Harness — S05E02";
+          document.title = onNow;
+          /* Shorter, not longer. A length that GROWS is how a stream still
+           * arriving looks, and a page that has one and states no length of its
+           * own reports no length at all - so a longer next episode would be
+           * testing that rule rather than this one. */
+          setDuration(2600);
+          await sleep(2600);
+
+          if (shadow.querySelector(".sso-result"))
+            throw new Error("the last episode's results are still there to be attached");
+          if (box.value !== onNow)
+            throw new Error(`the box still says "${box.value}"`);
+        } finally {
+          window.__stubDaemon = null;
+          document.title = wasTitle;
+          Object.defineProperty(video, "duration", wasDuration);
+          await sleep(1800);
+          window.__sent.length = 0;
+        }
+      });
+
       check("a length that dips mid-film is not the next episode", async () => {
         /* Every jump on a player that cannot seek is a new resource on the
          * element, and for the moment before enough of it has arrived
