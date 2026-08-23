@@ -120,8 +120,11 @@ instead of silently throwing the picture backwards.
 
 A string on the element rather than a `CustomEvent` detail is deliberate: an
 object built in an extension's isolated world is not reliably readable in the
-page's, and the DOM is the one thing both worlds share. Any other party can
-implement the same two lines.
+page's, and the DOM is the one thing both worlds share. That much was executed
+rather than assumed - a content script in a real loaded extension wrote
+`dataset.ssoSeekTo = "42.000"` and dispatched the bubbling event, and a listener
+in the page's own world read back `42.000` from the attribute and saw the event
+reach `document`. Any other party can implement the same two lines.
 
 ## How to check it worked
 
@@ -135,6 +138,17 @@ implement the same two lines.
    any seek on this tier.
 4. With the extension installed and two subtitles attached, T should repeat the
    line being spoken and a second press should reach the line before it.
+
+`browser-extension/tools/probe-seek.mjs` asks the same question without the
+extension and prints the answer:
+
+```
+PLAYWRIGHT_PATH=/opt/homebrew/lib/node_modules/@playwright/mcp/node_modules \
+  node tools/probe-seek.mjs http://localhost:5173/title/tt4331672
+```
+
+Today it ends `VERDICT the element refuses and the page says nothing - this page
+needs data-sso-seek`. After the change it should say the page takes asks.
 
 ## What not to change
 
