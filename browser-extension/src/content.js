@@ -1183,6 +1183,9 @@
    * it 1.087x as far as the pointer for the rest of the drag. */
   function makeMovable(handle, { host, place, probe = place, onMove, onEnd, keepOnScreen = null }) {
     let origin = null;
+    // So a subtitle can be lined up with this window, and this window with the
+    // next one. See guidesFor.
+    movableHosts.add(host);
 
     handle.addEventListener("pointerdown", (event) => {
       if (event.button !== 0) return;
@@ -1197,6 +1200,9 @@
       place(back.x, back.y);
 
       origin = { map, grabX: event.clientX - box.left, grabY: event.clientY - box.top };
+      // After the probe has put the host back, so the lines are measured
+      // against where everything actually is.
+      openGuides(host);
       // The bar carries the state, because the bar is what changes cursor.
       (keepOnScreen || handle).dataset.dragging = "true";
       /* Capture is how the drag keeps receiving moves once the pointer leaves
@@ -1217,16 +1223,30 @@
       }
       const box = host.getBoundingClientRect();
       const handleHeight = (keepOnScreen || handle).getBoundingClientRect().height || 34;
-      const left = clamp(
-        event.clientX - origin.grabX,
-        0,
-        Math.max(0, window.innerWidth - box.width),
-      );
-      const top = clamp(
-        event.clientY - origin.grabY,
-        0,
-        Math.max(0, window.innerHeight - handleHeight),
-      );
+      const onScreenX = (value) => clamp(value, 0, Math.max(0, window.innerWidth - box.width));
+      const onScreenY = (value) => clamp(value, 0, Math.max(0, window.innerHeight - handleHeight));
+      let left = onScreenX(event.clientX - origin.grabX);
+      let top = onScreenY(event.clientY - origin.grabY);
+
+      /* Held to the same lines the subtitle boxes are held to, and let go by
+       * the same key. A window is placed against the picture and against the
+       * boxes standing on it, so there was never a reason for it to be the one
+       * surface that could not be lined up with anything - it only missed out
+       * because it drags through here instead of through beginDrag. */
+      let atX = null;
+      let atY = null;
+      if (!event.altKey) {
+        const hitX = guideNear([left, left + box.width / 2, left + box.width], "x");
+        const hitY = guideNear([top, top + box.height / 2, top + box.height], "y");
+        if (hitX) { left += hitX.delta; atX = hitX.at; }
+        if (hitY) { top += hitY.delta; atY = hitY.at; }
+        // A snap that would put it out of reach is not one, and a line drawn
+        // for a move that did not happen is worse than no line at all.
+        if (onScreenX(left) !== left) { left = onScreenX(left); atX = null; }
+        if (onScreenY(top) !== top) { top = onScreenY(top); atY = null; }
+      }
+      showGuides(atX, atY);
+
       const local = origin.map.toLocal(left, top);
       place(local.x, local.y);
       onMove?.();
@@ -1235,6 +1255,7 @@
     const end = (event) => {
       if (!origin) return;
       origin = null;
+      closeGuides();
       (keepOnScreen || handle).dataset.dragging = "false";
       try {
         handle.releasePointerCapture?.(event.pointerId);
@@ -1837,7 +1858,33 @@
    * strip does not have to hold a sentence. */
   const MIN_STRIP_PERCENT = 14;
   const MAX_WIDTH_PERCENT = 100;
+  /* How close a box has to come to a line before it is taken by it, in screen
+   * pixels.
+   *
+   * Screen pixels rather than a percentage of anything, because the accuracy
+   * being compensated for belongs to the hand: the same eight pixels is the
+   * same gesture on a 1136px player and on a 2560px one. Eight also leaves the
+   * positions between the lines reachable - the two boxes of a stacked pair
+   * are 8% of the height apart, which is 45px on a 568px player - so a reader
+   * who wants a subtitle a little off centre can still put it there. */
+  const SNAP_PX = 8;
   let drag = null;
+  // The two hairlines, built with the overlay. See showGuides.
+  let guides = null;
+  /* The lines for the gesture in progress, and the map that draws them.
+   *
+   * Held here rather than on `drag` because `drag` is the subtitle boxes' own
+   * gesture and the panel and the focus box do not have one - they move through
+   * makeMovable, which is a different code path in the same file. One session
+   * either way: only one thing is ever being dragged. */
+  let guideLines = null;
+  let guideMap = null;
+  /* Every floating window that can be placed by hand, so the boxes on the film
+   * can be lined up with them and they with each other. Filled by makeMovable,
+   * never emptied: a host that has been taken off the page is skipped by
+   * isConnected, and a registry that three files have to remember to clear is a
+   * registry one of them will forget. */
+  const movableHosts = new Set();
 
   /* Either vertical edge of the cue resizes it; the middle moves it. On a box
    * narrower than four edge-widths the two zones would meet in the middle and
@@ -1891,6 +1938,178 @@
     // draggable by everything around them, which is most of it.
     if (event.target.closest?.(".sso-trail__word, .sso-strip__close")) return;
     beginDrag(surfaceOf(slot, "strip"), event);
+  }
+
+  // --- the lines a box can be held to ---------------------------------------
+
+  /* Placing things by hand is four boxes - two subtitles and two strips - that
+   * have to agree with each other and with the picture, and a hand on a 1136px
+   * player cannot hit 50.0% twice. Arrangements answer that in one press for
+   * the four layouts they know; this answers it for every layout they do not,
+   * by offering the positions that mean something and taking the nearest one.
+   *
+   * What means something is an edge or a middle: of the picture, and of every
+   * other box on screen. Every one of a box's own three edges per axis is
+   * offered against every one of those, so the pairs nobody would think to
+   * name are all in it - my top against their bottom is how a box comes to sit
+   * flush under another one, and it is the same rule as my left against their
+   * left, not a case anybody had to write down.
+   */
+
+  /* The frame, which is up to two rectangles.
+   *
+   * A 2.39:1 film in a 16:9 player is letterboxed, and the black bar belongs
+   * to the element and not to the picture. Both edges are worth offering: over
+   * the bar is where some readers want the subtitle and on the picture is
+   * where the rest do, and neither is a preference this can settle. `contain`
+   * only, because that is the one fit whose geometry this arithmetic
+   * describes - a player in a zoom mode is cropping rather than letterboxing,
+   * so its element edge already is its picture edge. */
+  function pictureRects() {
+    const video = state.video;
+    const box = video?.getBoundingClientRect();
+    if (!box || box.width < 40 || box.height < 40) {
+      // Nothing to speak of on screen: the window is the only frame there is.
+      return [{ left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }];
+    }
+    const out = [{ left: box.left, top: box.top, right: box.right, bottom: box.bottom }];
+
+    const { videoWidth, videoHeight } = video;
+    if (videoWidth > 0 && videoHeight > 0 && getComputedStyle(video).objectFit === "contain") {
+      const scale = Math.min(box.width / videoWidth, box.height / videoHeight);
+      const width = videoWidth * scale;
+      const height = videoHeight * scale;
+      const left = box.left + (box.width - width) / 2;
+      const top = box.top + (box.height - height) / 2;
+      // Within a pixel of the element means there is no letterbox at all, and
+      // two lines drawn on top of each other are one line nobody can read.
+      if (Math.abs(left - box.left) > 1 || Math.abs(top - box.top) > 1) {
+        out.push({ left, top, right: left + width, bottom: top + height });
+      }
+    }
+    return out;
+  }
+
+  /* Worked out once, when the gesture starts, and that is what makes it free.
+   *
+   * Every line here costs a getBoundingClientRect, which is a forced layout,
+   * and this runs behind a pointermove that already fires about 240 times a
+   * second - see the cost note in CLAUDE.md. Nothing that is not being dragged
+   * moves while the drag is on, so there is nothing to recompute. */
+  function guidesFor(exclude) {
+    const x = [];
+    const y = [];
+    const offer = (rect) => {
+      x.push(rect.left, (rect.left + rect.right) / 2, rect.right);
+      y.push(rect.top, (rect.top + rect.bottom) / 2, rect.bottom);
+    };
+    for (const rect of pictureRects()) offer(rect);
+
+    /* Every other placeable thing, and not only the other subtitles.
+     *
+     * The four boxes in the overlay and the two windows - the control panel and
+     * the focus box - are one set as far as a reader is concerned: they are the
+     * things standing on the film. Lining the focus box up with the subtitle
+     * under it is the same wish as lining the two subtitles up with each other,
+     * and the only reason the windows were left out is that they are built in
+     * other files. */
+    for (const root of [...views.flatMap((view) => [view.root, view.stripRoot]), ...movableHosts]) {
+      if (root === exclude || !root?.isConnected) continue;
+      const rect = root.getBoundingClientRect();
+      // A box with nothing in it is drawn nowhere, and lining something up
+      // with a surface the reader cannot see is a move with no reason.
+      if (rect.width < 4 || rect.height < 4) continue;
+      offer(rect);
+    }
+    return { x, y };
+  }
+
+  /* The nearest line to any of a box's own edges, or null.
+   *
+   * All three edges are offered at once and the closest wins, so a box carried
+   * near a corner takes whichever alignment the hand is actually closer to
+   * rather than whichever this happened to test first. */
+  function nearestGuide(anchors, lines) {
+    let best = null;
+    for (const anchor of anchors) {
+      for (const at of lines) {
+        const delta = at - anchor;
+        if (Math.abs(delta) > SNAP_PX) continue;
+        if (!best || Math.abs(delta) < Math.abs(best.delta)) best = { delta, at };
+      }
+    }
+    return best;
+  }
+
+  /* Drawn only while a gesture is actually sitting on one.
+   *
+   * A snap with nothing to see is a box that moved on its own: the hand went
+   * one pixel and the box went five, and from the outside that is
+   * indistinguishable from the extension being wrong. The line is the answer
+   * to "why did it do that", and it is why this is worth two elements.
+   *
+   * Positions are written as percentages through a map of the lines' own, for
+   * the same reason writePosition is: the shadow root sits inside whatever the
+   * page has transformed, so a viewport pixel is not a pixel here. Their own,
+   * and not the box's, because the box's has the box's translate(-50%, -100%)
+   * baked into it - which is the whole point of measuring rather than
+   * assuming. Measured with the box's map instead: every line landed 604.8px
+   * to the right of the edge it claimed to be, which is exactly half of an
+   * 80vw box. */
+  function showGuides(atX, atY) {
+    if (!guides) return;
+    const map = guideMap;
+    if (atX != null && map) guides.vertical.style.left = `${map.toLocal(atX, 0).x}%`;
+    guides.vertical.dataset.on = atX != null && map ? "true" : "false";
+    if (atY != null && map) guides.horizontal.style.top = `${map.toLocal(0, atY).y}%`;
+    guides.horizontal.dataset.on = atY != null && map ? "true" : "false";
+  }
+
+  /* Opened when a gesture starts and closed when it ends.
+   *
+   * Both halves cost a forced layout, and nothing that is not being dragged
+   * moves in between, so once is the right number of times. Answers false when
+   * there is nothing to draw with - a frame with no overlay in it - and a
+   * caller that cannot draw a line must not snap either: a box that moves five
+   * pixels for a hand that moved one, with nothing on screen saying why, is
+   * indistinguishable from the extension being wrong. */
+  function openGuides(exclude) {
+    if (!guides) return false;
+    // A window that has been torn down and rebuilt leaves its old host behind.
+    // Once per gesture is often enough to sweep them, and it keeps the set the
+    // size of what is actually on the page.
+    for (const host of movableHosts) if (!host?.isConnected) movableHosts.delete(host);
+    /* The lines get a map of their own. They sit in the same shadow root and
+     * therefore in the same containing block, so one measurement covers both of
+     * them and both axes - and it has to be taken on a line that is on screen,
+     * because a hidden element measures zero everywhere. Put back before this
+     * returns, so no frame is painted showing it. */
+    const line = guides.vertical;
+    const shown = line.dataset.on;
+    line.dataset.on = "true";
+    guideMap = measurePlacement(line, (x, y) => {
+      line.style.left = `${x}%`;
+      line.style.top = `${y}%`;
+    });
+    // The stylesheet owns the other end of each line; only the axis it is drawn
+    // on is written from here.
+    line.style.top = "";
+    line.dataset.on = shown;
+    // Last, after the map has been measured and the line put back where the
+    // probe found it, so nothing here reads a box that is mid-measurement.
+    guideLines = guidesFor(exclude);
+    return true;
+  }
+
+  function closeGuides() {
+    showGuides(null, null);
+    guideLines = null;
+    guideMap = null;
+  }
+
+  /** The nearest line to any of these anchors on one axis, or null. */
+  function guideNear(anchors, axis) {
+    return guideLines ? nearestGuide(anchors, guideLines[axis]) : null;
   }
 
   function beginDrag(surface, event) {
@@ -1981,8 +2200,32 @@
      * map reports; the bottom-centre anchor the CSS uses differs from it by a
      * transform the map has already absorbed. */
     const box = drag.surface.root.getBoundingClientRect();
-    const x = clamp(event.clientX - drag.grabX, 0, Math.max(0, window.innerWidth - box.width));
-    const y = clamp(event.clientY - drag.grabY, 0, Math.max(0, window.innerHeight - box.height));
+    const onScreenX = (value) => clamp(value, 0, Math.max(0, window.innerWidth - box.width));
+    const onScreenY = (value) => clamp(value, 0, Math.max(0, window.innerHeight - box.height));
+    let x = onScreenX(event.clientX - drag.grabX);
+    let y = onScreenY(event.clientY - drag.grabY);
+
+    /* Held to the lines, unless the reader says otherwise.
+     *
+     * Alt is read on every move rather than once when the gesture starts, so
+     * "no, exactly there" is a thing that can be decided halfway through a
+     * drag - which is when a reader finds out they need it. */
+    let atX = null;
+    let atY = null;
+    if (!event.altKey) {
+      const hitX = guideNear([x, x + box.width / 2, x + box.width], "x");
+      const hitY = guideNear([y, y + box.height / 2, y + box.height], "y");
+      if (hitX) { x += hitX.delta; atX = hitX.at; }
+      if (hitY) { y += hitY.delta; atY = hitY.at; }
+      /* A snap that would put the box off the screen is not one. Staying
+       * reachable is a fact about the screen and it wins; drawing a line the
+       * box did not actually go to would be the extension explaining a move
+       * it did not make. */
+      if (onScreenX(x) !== x) { x = onScreenX(x); atX = null; }
+      if (onScreenY(y) !== y) { y = onScreenY(y); atY = null; }
+    }
+    showGuides(atX, atY);
+
     const local = drag.map.toLocal(x, y);
 
     updateTrackSettings(drag.slot, {
@@ -2023,6 +2266,10 @@
     // Fixed for the gesture: the box grows about its centre, and reading the
     // centre back off a box that is being resized would have it chase itself.
     drag.centreX = corner.x + root.getBoundingClientRect().width / 2;
+
+    // Last, after the box's own map has been measured and the box put back
+    // where its probe found it, so nothing here reads a box mid-measurement.
+    openGuides(root);
   }
 
   /* The box grows about its centre, so the width is twice the distance from
@@ -2037,11 +2284,35 @@
      * containing block is - so unlike the move, this converts with the host's
      * own scale and not with the placement's. A scaled ancestor still renders
      * those vw larger, which is the part that has to be divided back out. */
-    const half = Math.abs(event.clientX - drag.centreX);
+    let half = Math.abs(event.clientX - drag.centreX);
+
+    /* The same lines the move is held to, met by whichever edge reaches one
+     * first. The box grows about its centre, so an edge taken to a line puts
+     * the other edge the same distance the other side of it - which is why the
+     * line drawn is the one that was met and not the one under the pointer.
+     * Only the vertical ones: a resize does not move the box's bottom, which
+     * is what the horizontal lines are about. */
+    let atX = null;
+    if (!event.altKey && guideLines) {
+      let best = null;
+      for (const at of guideLines.x) {
+        const delta = Math.abs(at - drag.centreX) - half;
+        if (Math.abs(delta) > SNAP_PX) continue;
+        if (!best || Math.abs(delta) < Math.abs(best.delta)) best = { delta, at };
+      }
+      if (best) {
+        half = Math.abs(best.at - drag.centreX);
+        atX = best.at;
+      }
+    }
+
     const percent = (((half * 2) / window.innerWidth) * 100) / hostScale();
     const { keys, minWidth } = drag.surface;
+    const held = clamp(percent, minWidth, MAX_WIDTH_PERCENT);
+    // A width the box is not allowed to take is not a width it lined up at.
+    showGuides(held === percent ? atX : null, null);
     updateTrackSettings(drag.slot, {
-      [keys.width]: round1(clamp(percent, minWidth, MAX_WIDTH_PERCENT)),
+      [keys.width]: round1(held),
       [keys.placed]: true,
     });
   }
@@ -2056,6 +2327,8 @@
     if (!drag || event.pointerId !== drag.pointerId) return;
     const { moved, startX, startY, slot, surface } = drag;
     drag = null;
+    // Before anything else: the lines answer a gesture, and the gesture is over.
+    closeGuides();
     surface.box.releasePointerCapture?.(event.pointerId);
     surface.root.dataset.dragging = "false";
     surface.root.dataset.sizing = "false";
@@ -2148,8 +2421,31 @@
 
     views = Array.from({ length: TRACK_COUNT }, (_, slot) => buildView(slot));
 
+    /* Two hairlines, one per axis, built with the overlay and hidden until a
+     * drag is being held to one. They paint under both boxes, which is what
+     * the z-index in the stylesheet is for - a line drawn over the text it is
+     * helping to place would have to be got out of the way to see the result.
+     *
+     * LAST in the shadow root, and that is not cosmetic: describeSurfaces
+     * names a surface after its shadow root's first element child, so putting
+     * these first renamed the overlay to "sso-guide" in every diagnostic and
+     * every line of the running log. Order here settles nothing about
+     * painting; all three are positioned, so the z-index does. */
+    const guideLine = (kind) => {
+      const node = document.createElement("div");
+      node.className = `sso-guide sso-guide--${kind}`;
+      node.dataset.on = "false";
+      return node;
+    };
+    guides = { vertical: guideLine("v"), horizontal: guideLine("h") };
+
     handle = buildHandle();
-    shadow.append(...views.flatMap((view) => [view.root, view.stripRoot]), handle);
+    shadow.append(
+      ...views.flatMap((view) => [view.root, view.stripRoot]),
+      handle,
+      guides.vertical,
+      guides.horizontal,
+    );
 
     applySettings();
     attachToCorrectParent();
@@ -2175,7 +2471,7 @@
 
     const cueBox = document.createElement("div");
     cueBox.className = "sso-cue";
-    cueBox.title = "Drag to move the subtitles";
+    cueBox.title = "Drag to move the subtitles — hold Alt to place it freely";
     cueBox.addEventListener("pointerdown", (event) => onCuePointerDown(slot, event));
     cueBox.addEventListener("pointermove", (event) => onCuePointerMove(slot, event));
     cueBox.addEventListener("pointerup", onCuePointerUp);
@@ -2202,7 +2498,8 @@
 
     const stripBox = document.createElement("div");
     stripBox.className = "sso-strip__box";
-    stripBox.title = "Drag to move this strip — its edges resize it";
+    stripBox.title =
+      "Drag to move this strip — its edges resize it, and Alt places it freely";
     stripBox.addEventListener("pointerdown", (event) => onStripPointerDown(slot, event));
     stripBox.addEventListener("pointermove", (event) => onStripPointerMove(slot, event));
     stripBox.addEventListener("pointerup", onSurfacePointerUp);
@@ -2724,16 +3021,48 @@
       grip.title = "Drag to resize";
       let from = null;
       grip.addEventListener("pointerdown", (event) => {
-        from = { x: event.clientX, y: event.clientY, ...size, left: at.x, top: at.y };
+        const box = root.getBoundingClientRect();
+        from = {
+          x: event.clientX, y: event.clientY, ...size, left: at.x, top: at.y,
+          /* Where the corner is relative to the hand that took hold of it.
+           *
+           * The grip is a few pixels across and the press lands somewhere
+           * inside it, so the corner and the pointer are never at the same
+           * point. Snapping the pointer would line the wrong thing up - by
+           * however far into the grip the press happened to land, which is a
+           * different number every time. */
+          offX: (corner.dx < 0 ? box.left : box.right) - event.clientX,
+          offY: (corner.dy < 0 ? box.top : box.bottom) - event.clientY,
+        };
+        openGuides(layer.host);
         grip.setPointerCapture?.(event.pointerId);
         event.stopPropagation();
       });
       grip.addEventListener("pointermove", (event) => {
         if (!from) return;
-        if (event.buttons === 0) { from = null; return; }
-        size.width = from.width + corner.dx * (event.clientX - from.x);
-        size.height = from.height + corner.dy * (event.clientY - from.y);
+        if (event.buttons === 0) { from = null; closeGuides(); return; }
+
+        // Held to the lines by the corner being dragged, and only that corner:
+        // the other three are not moving, so they have nothing to line up with.
+        let pointerX = event.clientX;
+        let pointerY = event.clientY;
+        let atX = null;
+        let atY = null;
+        if (!event.altKey) {
+          const hitX = guideNear([pointerX + from.offX], "x");
+          const hitY = guideNear([pointerY + from.offY], "y");
+          if (hitX) { pointerX += hitX.delta; atX = hitX.at; }
+          if (hitY) { pointerY += hitY.delta; atY = hitY.at; }
+        }
+
+        const wantedWidth = from.width + corner.dx * (pointerX - from.x);
+        const wantedHeight = from.height + corner.dy * (pointerY - from.y);
+        size.width = wantedWidth;
+        size.height = wantedHeight;
         applySize();
+        // A size the window is not allowed to take is not a size it lined up
+        // at. applySize clamps in place, so this reads the answer, not the ask.
+        showGuides(size.width === wantedWidth ? atX : null, size.height === wantedHeight ? atY : null);
         // Dragging a left or top corner moves the window, so the opposite
         // corner stays where it is - which is what makes a corner a corner.
         place(
@@ -2741,7 +3070,7 @@
           corner.dy < 0 ? from.top + (from.height - size.height) : from.top,
         );
       });
-      const stop = () => { if (from) { from = null; remember(); } };
+      const stop = () => { if (from) { from = null; closeGuides(); remember(); } };
       grip.addEventListener("pointerup", stop);
       grip.addEventListener("pointercancel", stop);
       root.append(grip);
@@ -5726,6 +6055,10 @@
     // page whose coordinate system is not necessarily the viewport's.
     measurePlacement,
     makeMovable,
+    /* The lines a box can be held to, for the gestures this file does not own.
+     * makeMovable covers every window's MOVE, but each window builds its own
+     * corner grips, so the resize has to be able to ask the same question. */
+    guides: { open: openGuides, near: guideNear, show: showGuides, close: closeGuides },
     makeLayer,
     makeWindow,
     // Shared with the panel and the study rail, which have hosts of their own
@@ -6183,6 +6516,7 @@
     host?.remove();
     host = null;
     shadow = null;
+    guides = null;
     views = [];
     listeners.clear();
     window.__ssoPanelTeardown?.();

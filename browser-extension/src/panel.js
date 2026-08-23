@@ -402,11 +402,21 @@
         left: box.left,
         top: box.top,
         map: api.measurePlacement(host, (x, y) => setPosition(`${x}px`, `${y}px`)),
+        /* Where the corner is relative to the hand that took hold of it. The
+         * grip is a few pixels across and the press lands somewhere inside it,
+         * so snapping the pointer would line the panel up off by however far
+         * into the grip the press happened to land. */
+        offX: (corner.dx < 0 ? box.left : box.right) - event.clientX,
+        offY: (corner.dy < 0 ? box.top : box.bottom) - event.clientY,
       };
       // measurePlacement moved it; put it back before the drag begins.
       const back = from.map.toLocal(box.left, box.top);
       setPosition(`${back.x}px`, `${back.y}px`);
 
+      // After the put-back, so the lines are measured against where the panel
+      // actually is. The panel itself is left out of them: a box cannot be
+      // lined up with the edge it is currently dragging.
+      api.guides?.open?.(host);
       grip.setPointerCapture?.(event.pointerId);
       event.preventDefault();
       event.stopPropagation();
@@ -418,15 +428,34 @@
         end(event);
         return;
       }
-      const movedX = (event.clientX - from.x) * corner.dx;
-      const movedY = (event.clientY - from.y) * corner.dy;
+      /* Held to the picture's edges and to the other surfaces on it, by the
+       * corner being dragged. The same lines the subtitle boxes are held to and
+       * the same key lets go of them - a panel edge that lines up with the
+       * subtitle under it is the reason any of this exists. */
+      let pointerX = event.clientX;
+      let pointerY = event.clientY;
+      let atX = null;
+      let atY = null;
+      if (!event.altKey) {
+        const hitX = api.guides?.near?.([pointerX + from.offX], "x");
+        const hitY = api.guides?.near?.([pointerY + from.offY], "y");
+        if (hitX) { pointerX += hitX.delta; atX = hitX.at; }
+        if (hitY) { pointerY += hitY.delta; atY = hitY.at; }
+      }
 
-      const width = clamp(from.width + movedX, MIN_WIDTH, MAX_WIDTH);
+      const movedX = (pointerX - from.x) * corner.dx;
+      const movedY = (pointerY - from.y) * corner.dy;
+
+      const wantedWidth = from.width + movedX;
+      const wantedHeight = from.height + movedY;
+      const width = clamp(wantedWidth, MIN_WIDTH, MAX_WIDTH);
       const height = clamp(
-        from.height + movedY,
+        wantedHeight,
         MIN_BODY,
         Math.max(MIN_BODY, window.innerHeight - 120),
       );
+      // A size the panel is not allowed to take is not a size it lined up at.
+      api.guides?.show?.(width === wantedWidth ? atX : null, height === wantedHeight ? atY : null);
       applySize(width, height);
 
       /* Pulling a left or top edge grows the panel away from the pointer unless
@@ -443,6 +472,7 @@
     const end = (event) => {
       if (!from) return;
       from = null;
+      api.guides?.close?.();
       grip.releasePointerCapture?.(event.pointerId);
       api.writeStored({
         [SIZE_KEY]: {
@@ -3661,8 +3691,8 @@
       step.hint.hidden = !key;
     }
     el.moveButton.title = status.placing
-      ? "Drag the stand-in to where the subtitle should be, then press Done"
-      : "Drag a subtitle around the picture: the middle moves it, an edge makes it wider";
+      ? "Drag the stand-in to where the subtitle should be, then press Done — hold Alt to place it freely"
+      : "Drag a subtitle around the picture: the middle moves it, an edge makes it wider — hold Alt to place it freely";
 
     // A toggle has to look like one while it is holding something open, or the
     // second press is a guess.

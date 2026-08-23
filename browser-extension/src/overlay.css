@@ -642,3 +642,46 @@
     transition: none;
   }
 }
+
+/* --- the lines a box is held to -------------------------------------------
+ *
+ * Drawn only while a drag or a resize is actually sitting on one, and drawn
+ * right across the frame rather than only between the two edges that agree. A
+ * segment between two boxes says "these two" and leaves the reader working out
+ * which two; a full line says "here", which is the thing that was chosen.
+ *
+ * Below both boxes in the stacking order on purpose - that is what the z-index
+ * a notch under theirs is for. A guide that covers the text it is helping to
+ * place would have to be got out of the way to see the result of placing it.
+ */
+.sso-guide {
+  position: fixed;
+  z-index: 2147483645;
+  pointer-events: none;
+  display: none;
+  /* Cyan, because neither subtitle can be. The colour well offers every colour
+   * there is, so a guide in white or yellow is a guide that disappears into
+   * the text at exactly the moment two boxes are on top of each other - which
+   * is the moment it exists for. The shadow is what keeps a one-pixel line
+   * readable over a bright frame. */
+  --sso-guide-ink: #4dd8ff;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9));
+}
+
+.sso-guide[data-on="true"] {
+  display: block;
+}
+
+.sso-guide--v {
+  top: 0;
+  height: 100%;
+  width: 0;
+  border-left: 1px solid var(--sso-guide-ink);
+}
+
+.sso-guide--h {
+  left: 0;
+  width: 100%;
+  height: 0;
+  border-top: 1px solid var(--sso-guide-ink);
+}

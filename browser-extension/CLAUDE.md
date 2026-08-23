@@ -448,6 +448,23 @@ Each of these was a reported bug. Undoing one brings the bug back.
   This is safe precisely because every one of our own document listeners is
   capture-phase. Apply it to any new host — including non-interactive ones; the
   toast is `interactive: false` and its Undo button is the thing people press.
+- **Every placeable surface is held to the same lines, through one session.**
+  Four boxes in the overlay (two subtitles, two word strips) plus two windows
+  (the control panel, the study focus box), and a reader does not care which
+  file built which. `openGuides(exclude)` / `guideNear(anchors, axis)` /
+  `showGuides(atX, atY)` / `closeGuides()` in `content.js` are the whole of it:
+  opened once when a gesture starts because every line costs a forced layout,
+  and closed when it ends. The boxes reach them through `beginDrag`, the windows
+  through `makeMovable`, and each window's own corner grips through
+  `api.guides` — `panel.js` builds its grips itself, so it has to ask.
+  `guidesFor` offers the picture's edges and middle (both rectangles when the
+  film is letterboxed), every other box, and every host `makeMovable` has ever
+  been given. **Alt suspends it**, read on every move rather than once, because
+  "no, exactly there" is decided halfway through a drag. A snap with no line
+  drawn is forbidden: a box that moves five pixels for a hand that moved one,
+  with nothing on screen saying why, is indistinguishable from a bug — so a
+  frame with no overlay in it does not snap at all, and a snap the clamp undoes
+  draws nothing.
 - **A subtitle card is two rows, and the map's width is the reason.** Head with
   the identity, the reading and the verbs; then the map with Line up at the
   card's right edge, under "Line up all". The ask was for the reading, its clear

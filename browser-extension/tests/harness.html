@@ -1293,6 +1293,166 @@
           throw new Error(`reset left it at ${s.posX},${s.posY} placed=${s.placed}`);
       });
 
+      /* --- the lines a box is held to ---------------------------------------
+       *
+       * Placing four boxes - two subtitles and two strips - so that they agree
+       * with each other and with the picture is arithmetic a hand cannot do:
+       * 50.0% twice, or two left edges at the same pixel. So a gesture offers
+       * the positions that mean something and takes the nearest one within
+       * SNAP_PX, and draws the line it took so the move has a visible reason.
+       *
+       * Every check below aims a few pixels OFF a line, because that is the
+       * whole question. Aiming at one and landing on it proves nothing: an
+       * extension that ignored the feature entirely would pass. */
+      const rootBox = (slot = 0) =>
+        shadowOf().querySelector(`.sso-root[data-slot="${slot}"]`).getBoundingClientRect();
+      const guideLine = (kind) => shadowOf().querySelector(`.sso-guide--${kind}`);
+
+      /* Carry the box by an exact delta, holding the button all the way.
+       *
+       * `hold` leaves the gesture open, because half of what is being checked
+       * only exists while a finger is down - the lines are drawn for the
+       * gesture and go with it. `alt` is the escape hatch the feature offers,
+       * so both behaviours can be asked for through one helper. */
+      const carry = async (byX, byY, { alt = false, hold = false } = {}) => {
+        const cue = shadowOf().querySelector('.sso-root[data-slot="0"] .sso-cue');
+        cue.setPointerCapture = () => {};
+        cue.releasePointerCapture = () => {};
+        const from = cue.getBoundingClientRect();
+        const atX = from.left + 24;
+        const atY = from.top + 6;
+        const ev = (type, x, y, buttons) => new PointerEvent(type,
+          { pointerId: 21, clientX: x, clientY: y, button: 0, buttons, bubbles: true, altKey: alt });
+        cue.dispatchEvent(ev("pointerdown", atX, atY, 1));
+        // Several moves, the way a pointer actually arrives.
+        for (let step = 1; step <= 3; step++) {
+          cue.dispatchEvent(ev("pointermove", atX + (byX * step) / 3, atY + (byY * step) / 3, 1));
+        }
+        const release = async () => {
+          cue.dispatchEvent(ev("pointerup", atX + byX, atY + byY, 0));
+          await sleep(120);
+        };
+        await sleep(120);
+        if (!hold) await release();
+        return release;
+      };
+
+      check("a box carried near the middle of the picture is taken by it", async () => {
+        window.__ssoApi.resetPosition();
+        await showSpeakerCue();
+        const film = video.getBoundingClientRect();
+        const middle = film.left + film.width / 2;
+        const before = rootBox();
+        // Five pixels short of the middle: near enough that nobody meant it,
+        // far enough that no hand would ever correct it.
+        const release = await carry(middle - 5 - (before.left + before.width / 2), 0, { hold: true });
+        const held = rootBox();
+        const landed = held.left + held.width / 2 - middle;
+        if (Math.abs(landed) > 2)
+          throw new Error(`aimed 5px off the middle and stopped ${landed.toFixed(1)}px off it`);
+
+        const line = guideLine("v");
+        if (line.dataset.on !== "true") throw new Error("nothing said why the box moved on its own");
+        const drawn = line.getBoundingClientRect().left - middle;
+        if (Math.abs(drawn) > 2)
+          throw new Error(`the line is ${drawn.toFixed(1)}px from the middle it claims to be`);
+
+        await release();
+        if (guideLine("v").dataset.on !== "false") throw new Error("the line outlived the gesture");
+      });
+
+      check("and one put down away from every line is left where it was put", async () => {
+        /* The other half of a magnet, and the half that gets lost: a snap that
+         * is always on is a grid, and a grid takes away every position between
+         * its lines. Twenty pixels off the middle is a position somebody
+         * chose. */
+        window.__ssoApi.resetPosition();
+        await showSpeakerCue();
+        const film = video.getBoundingClientRect();
+        const middle = film.left + film.width / 2;
+        const before = rootBox();
+        await carry(middle - 20 - (before.left + before.width / 2), 0);
+        const after = rootBox();
+        const off = middle - (after.left + after.width / 2);
+        if (Math.abs(off - 20) > 2)
+          throw new Error(`put down 20px off the middle and it sat ${off.toFixed(1)}px off`);
+      });
+
+      check("holding Alt puts it exactly where the hand is", async () => {
+        window.__ssoApi.resetPosition();
+        await showSpeakerCue();
+        const film = video.getBoundingClientRect();
+        const middle = film.left + film.width / 2;
+        const before = rootBox();
+        const release = await carry(middle - 5 - (before.left + before.width / 2), 0,
+          { alt: true, hold: true });
+        const held = rootBox();
+        const off = middle - (held.left + held.width / 2);
+        if (Math.abs(off - 5) > 2)
+          throw new Error(`Alt was held and it still moved to ${off.toFixed(1)}px off the middle`);
+        if (guideLine("v").dataset.on !== "false")
+          throw new Error("a line was drawn for a snap that did not happen");
+        await release();
+      });
+
+      check("two boxes line up with each other, not only with the picture", async () => {
+        /* The lines that matter most are not the picture's. Two subtitles read
+         * as one thing, and two left edges six pixels apart is the difference
+         * between a pair and two subtitles that happen to be near each other. */
+        await window.__ssoApi.attach(
+          { cues: CUES, label: "second", fileId: 1301, language: "tr", slot: 1 });
+        window.__ssoApi.updateTrackSettings(1, { posX: 70, posY: 60, widthPercent: 40 });
+        /* Narrower than the default 80%, or this asks something the box cannot
+         * do: a box 80% of the screen wide can only have its left edge in the
+         * leftmost 20% of it, and the other box's edge is at 50%. The drag's
+         * own on-screen clamp would win and the check would be measuring that
+         * instead. */
+        window.__ssoApi.updateTrackSettings(0, { posX: 50, posY: 92, widthPercent: 30 });
+        await showSpeakerCue();
+
+        const other = rootBox(1);
+        if (other.width < 4 || other.height < 4) throw new Error("no second box to line up with");
+        const before = rootBox(0);
+        const release = await carry(other.left + 6 - before.left, 0, { hold: true });
+        const apart = rootBox(0).left - other.left;
+        if (Math.abs(apart) > 2)
+          throw new Error(`the two left edges ended ${apart.toFixed(1)}px apart`);
+        await release();
+      });
+
+      check("an edge dragged near another box's edge is taken by it", async () => {
+        /* Resizing is the same question asked of a width. The box grows about
+         * its centre, so an edge taken to a line puts the other edge the same
+         * distance the other side of it - and the line drawn is the one that
+         * was met, which is not always the one under the hand. */
+        window.__ssoApi.updateTrackSettings(0, { posX: 50, posY: 92, widthPercent: 70 });
+        await showSpeakerCue();
+        const other = rootBox(1);
+        const cue = shadowOf().querySelector('.sso-root[data-slot="0"] .sso-cue');
+        cue.setPointerCapture = () => {};
+        cue.releasePointerCapture = () => {};
+        const ink = cue.getBoundingClientRect();
+        if (ink.width < 80) throw new Error("the cue is too narrow to have edges to grab");
+
+        // Pressed ON the edge, which is what makes this a resize and not a move.
+        const ev = (type, x, buttons) => new PointerEvent(type,
+          { pointerId: 22, clientX: x, clientY: ink.top + ink.height / 2, button: 0, buttons, bubbles: true });
+        cue.dispatchEvent(ev("pointerdown", ink.right - 4, 1));
+        cue.dispatchEvent(ev("pointermove", other.right - 60, 1));
+        cue.dispatchEvent(ev("pointermove", other.right - 5, 1));
+        await sleep(120);
+        const apart = rootBox(0).right - other.right;
+        if (Math.abs(apart) > 2.5)
+          throw new Error(`the two right edges ended ${apart.toFixed(1)}px apart`);
+        if (guideLine("v").dataset.on !== "true") throw new Error("nothing said why it stopped there");
+        cue.dispatchEvent(ev("pointerup", other.right - 5, 0));
+        await sleep(120);
+
+        window.__ssoApi.detach(1);
+        window.__ssoApi.resetPosition();
+        await sleep(120);
+      });
+
       check("placement mode gives something to drag between lines", async () => {
         // Park the playhead past the last cue, where nothing is rendered.
         // (Cue 1 covers 0-600s and cue 2 covers 600-900s, so 500 is not a gap.)
@@ -1461,7 +1621,15 @@
        * Both are checked, because they are one mapping with two failure shapes
        * and a fix for the first alone leaves the second exactly as it was.
        */
-      const dragPanelTo = async (targetX, targetY) => {
+      /* With Alt held, and that is what makes this a check about the mapping.
+       *
+       * The panel is held to the same lines the subtitle boxes are, so a drag
+       * that ends within eight pixels of one lands ON it - correctly, and up to
+       * eight pixels from where the pointer was. That is indistinguishable here
+       * from the drift these two checks exist to catch. Alt is the reader's own
+       * "no, exactly there", so using it asks the coordinate question with the
+       * placement question taken out. The lines have their own checks. */
+      const dragPanelTo = async (targetX, targetY, { free = true } = {}) => {
         const host = panelShadow().host;
         const head = panelShadow().querySelector(".sso-win__head");
         // A synthetic PointerEvent has no live pointer behind it, so the real
@@ -1473,7 +1641,8 @@
         const startY = before.top + 10;
         const send = (type, x, y, buttons) =>
           head.dispatchEvent(new PointerEvent(type,
-            { bubbles: true, composed: true, pointerId: 7, clientX: x, clientY: y, buttons }));
+            { bubbles: true, composed: true, pointerId: 7, clientX: x, clientY: y, buttons,
+              altKey: free }));
         send("pointerdown", startX, startY, 1);
         await sleep(20);
         send("pointermove", targetX, targetY, 1);
@@ -1522,6 +1691,140 @@
         } finally {
           document.body.style.transform = "";
           parkPanel();
+        }
+      });
+
+      /* --- the windows are held to those lines too --------------------------
+       *
+       * The control panel and the focus box are placed by hand like everything
+       * else on the film, and they were the two surfaces that could not be
+       * lined up with anything. Not a decision: they move through makeMovable
+       * and the lines were wired into the subtitle's own gesture, so which file
+       * built a surface decided whether it could be aligned.
+       *
+       * Both directions are checked, because they are two different pieces of
+       * wiring. A window taken to a line is makeMovable asking; a subtitle
+       * taken to a window is guidesFor offering.
+       */
+      const panelPointer = () => {
+        const shadow = panelShadow();
+        const head = shadow.querySelector(".sso-win__head");
+        // Same synthetic-pointer stub as every other drag here.
+        head.setPointerCapture = () => {};
+        head.releasePointerCapture = () => {};
+        return { shadow, host: shadow.host, head };
+      };
+
+      /* A picture line this window can actually be taken to, given where it is
+       * and how wide it is. Aiming at the middle and finding the panel clamped
+       * against the right edge of the window would fail for a reason that has
+       * nothing to do with snapping. */
+      const reachableLine = (film, box, low, high) =>
+        [film.left, film.left + film.width / 2, film.right].find(
+          (x) => x - box.left >= low && x - box.left <= high);
+
+      check("the control panel is held to the lines the subtitles are held to", async () => {
+        const { host, head } = panelPointer();
+        const film = video.getBoundingClientRect();
+        const box = host.getBoundingClientRect();
+        const want = reachableLine(film, box, -box.left, window.innerWidth - box.left - box.width);
+        if (want == null) throw new Error("no picture line this panel can reach in this window");
+
+        const grabY = box.top + 10;
+        const send = (type, x, buttons) =>
+          head.dispatchEvent(new PointerEvent(type,
+            { bubbles: true, composed: true, pointerId: 9, clientX: x, clientY: grabY, buttons }));
+        const line = shadowOf().querySelector(".sso-guide--v");
+
+        // Five pixels short of the line: near enough that nobody meant it, far
+        // enough that no hand would ever correct it.
+        send("pointerdown", box.left + 60, 1);
+        await sleep(20);
+        send("pointermove", want - 5 + 60, 1);
+        await sleep(60);
+        try {
+          const off = host.getBoundingClientRect().left - want;
+          if (Math.abs(off) > 2)
+            throw new Error(`aimed 5px off the line and stopped ${off.toFixed(1)}px off it`);
+          if (line.dataset.on !== "true")
+            throw new Error("nothing said why the panel moved on its own");
+        } finally {
+          send("pointerup", want - 5 + 60, 0);
+          await sleep(60);
+        }
+        if (line.dataset.on !== "false") throw new Error("the line outlived the gesture");
+        parkPanel();
+        await sleep(80);
+      });
+
+      check("and a corner dragged to make it wider stops on the line too", async () => {
+        const { shadow, host } = panelPointer();
+        const grip = shadow.querySelector(".sso-grip--se");
+        grip.setPointerCapture = () => {};
+        grip.releasePointerCapture = () => {};
+        const body = shadow.querySelector(".sso-panel__body");
+        const film = video.getBoundingClientRect();
+        const box = host.getBoundingClientRect();
+        const wasWidth = box.width;
+        const wasBody = body.getBoundingClientRect().height;
+        // Inside the width the grips allow (panel.js clamps to 280-640), with
+        // room either side so the clamp is never what decides the answer.
+        const want = reachableLine(film, box, 300, 620);
+        if (want == null)
+          throw new Error(`no line 300-620px right of a panel whose left edge is ${Math.round(box.left)}`);
+
+        const line = shadowOf().querySelector(".sso-guide--v");
+        const send = (type, x, buttons) =>
+          grip.dispatchEvent(new PointerEvent(type,
+            { bubbles: true, composed: true, pointerId: 11, clientX: x, clientY: box.bottom, buttons }));
+
+        // Pressed exactly on the corner, so the pointer and the edge are the
+        // same point and five pixels short of the line really is five pixels.
+        send("pointerdown", box.right, 1);
+        await sleep(20);
+        send("pointermove", want - 5, 1);
+        await sleep(60);
+        try {
+          const off = host.getBoundingClientRect().right - want;
+          if (Math.abs(off) > 2)
+            throw new Error(`aimed 5px short and the edge sat ${off.toFixed(1)}px from the line`);
+          if (line.dataset.on !== "true") throw new Error("nothing said why the edge stopped there");
+        } finally {
+          send("pointerup", want - 5, 0);
+          await sleep(60);
+          // Put the panel back: later cases measure a card at the widths the
+          // grips allow, and starting them from whatever this left behind
+          // makes their numbers about this check instead.
+          window.__ssoPanel.applySize(wasWidth, wasBody);
+          await sleep(80);
+        }
+      });
+
+      check("and a subtitle can be lined up with the panel, not only with the other subtitle", async () => {
+        const film = video.getBoundingClientRect();
+        // Somewhere the picture's own lines are not, so a snap here can only
+        // have come from the panel.
+        await dragPanelTo(film.left + film.width * 0.31 + 60, 120);
+        await sleep(60);
+        const panel = panelShadow().host.getBoundingClientRect();
+        if (panel.width < 4) throw new Error("the panel is not on screen to line up with");
+
+        window.__ssoApi.resetPosition();
+        // Narrow, or the box cannot get its left edge that far right - the same
+        // reason the two-subtitle check narrows it.
+        window.__ssoApi.updateTrackSettings(0, { posX: 50, posY: 92, widthPercent: 30 });
+        await showSpeakerCue();
+        const before = rootBox(0);
+        const release = await carry(panel.left + 6 - before.left, 0, { hold: true });
+        try {
+          const apart = rootBox(0).left - panel.left;
+          if (Math.abs(apart) > 2)
+            throw new Error(`the subtitle's edge ended ${apart.toFixed(1)}px from the panel's`);
+        } finally {
+          await release();
+          window.__ssoApi.resetPosition();
+          parkPanel();
+          await sleep(80);
         }
       });
 
@@ -3548,9 +3851,13 @@
         const sheet = await openSettings();
         const host = sheet.host;
         const body = sheet.querySelector(".sso-sheet__body");
+        /* Alt held: this is about the coordinate system, and the window is now
+         * held to the same lines everything else is - a snap on the way would
+         * be a correct placement and a failed measurement. */
         const pev = (type, x, y, buttons) =>
           new PointerEvent(type,
-            { pointerId: 44, clientX: x, clientY: y, button: 0, buttons, bubbles: true });
+            { pointerId: 44, clientX: x, clientY: y, button: 0, buttons, bubbles: true,
+              altKey: true });
 
         const start = host.getBoundingClientRect();
         body.dispatchEvent(pev("pointerdown", start.left + 30, start.top + 60, 1));
