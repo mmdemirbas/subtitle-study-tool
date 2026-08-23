@@ -885,7 +885,23 @@ button.sso-quick__move[data-on="true"] {
  * rendering artifact and colour alone is not available to everybody. */
 .sso-track {
   cursor: default;
-  transition: background 140ms ease, border-color 140ms ease;
+  /* transform is in here for the reorder: the cards that are not being dragged
+   * slide out of the way, and a slide the eye can follow is what says the list
+   * is being rearranged rather than redrawn. The dragged one turns it off - it
+   * is following a pointer, and a 140ms lag behind the hand reads as the card
+   * being heavy. */
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+/* A card can be moved to another number, and says so where it is held.
+ *
+ * The whole card takes the press, but the cursor sits on the head: over the
+ * map below it the hand already means "slide the subtitle along the film", and
+ * two grab hands on one card meaning two different things is worse than one.
+ * Only with something to change places with - a single subtitle has nowhere to
+ * go, and a hand offering a gesture that does nothing is a broken control. */
+.sso-track[data-movable="true"] .sso-track__head {
+  cursor: grab;
 }
 
 /* The edge and the surface, and no longer the whole outline.
@@ -908,6 +924,21 @@ button.sso-quick__move[data-on="true"] {
 .sso-track:focus-visible {
   outline: 2px solid var(--sso-accent);
   outline-offset: 2px;
+}
+
+/* Lifted, and out of the flow to the eye without leaving it in the DOM: the
+ * cards keep their order in the document all the way through the gesture, so a
+ * pointer capture cannot end on a node that has been rebuilt underneath it. */
+.sso-track[data-dragging="true"] {
+  position: relative;
+  z-index: 2;
+  transition: none;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.45), inset 3px 0 0 var(--sso-accent);
+  background: rgba(255, 255, 255, 0.11);
+}
+
+.sso-track[data-dragging="true"] .sso-track__head {
+  cursor: grabbing;
 }
 
 /* Which subtitle study reads. Amber, because that is what a marked word is in

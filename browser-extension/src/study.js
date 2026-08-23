@@ -394,6 +394,40 @@
     return settings;
   }
 
+  /* The subtitles have been renumbered, so everything here that names one has
+   * to follow. `order` is the new slot for each old one, built by the same
+   * splice that moved the tracks - see reorderTracks in content.js.
+   *
+   * Which subtitles are being learnt, and which strips are put away, are facts
+   * about the FILE, so they travel with it. The words currently on screen are
+   * dropped rather than moved: the marks live in a cue box that content.js is
+   * about to clear and redraw, and a strip is per subtitle number on this side
+   * too, so every one of them is rebuilt from the next line either way. */
+  function reorderSlots(order) {
+    if (!Array.isArray(order) || order.length === 0) return { ok: false };
+    const now = (was) => {
+      const at = order.indexOf(was);
+      return at < 0 ? was : at;
+    };
+    const followed = (list) => [...new Set((list || []).map(now))].sort((a, b) => a - b);
+
+    for (const line of lines.values()) {
+      for (const span of line.words) {
+        span.dataset.rare = "false";
+        span.dataset.selected = "false";
+      }
+    }
+    lines.clear();
+    latestSlot = latestSlot == null ? null : now(latestSlot);
+    emptyTrails();
+
+    updateSettings({
+      studySlots: followed(settings.studySlots),
+      trailOff: followed(settings.trailOff),
+    });
+    return { ok: true };
+  }
+
   function updateSettings(patch) {
     const was = studiedSlots().join(",");
     settings = { ...settings, ...patch, ...slotsAndSwitchAgree(patch) };
@@ -2564,6 +2598,7 @@
     setEnabled,
     updateSettings,
     toggleStudySlot,
+    reorderSlots,
     closeStrip,
     settings: () => ({ ...settings }),
     defaults: DEFAULT_SETTINGS,

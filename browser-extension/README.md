@@ -200,6 +200,15 @@ the keys move, which one is being learnt, where they all go — turns into a
 question that has to be asked. Two is what a learner uses and it leaves all of
 those answers implicit.
 
+**Which one is number one is a drag away.** The number on a card is not a label:
+it is which box on the picture the lines go in, what colour and size they are
+drawn at, and where that subtitle's strip of studied words sits. Drag a card onto
+the other's place and the subtitles change numbers - the file travels with its
+lines, its offset, its language and the keys pointed at it, and the place stays
+exactly as it was arranged. So adding the translation first and the original
+second is a mistake that costs one drag rather than two removals. `Alt` with the
+up or down arrow, while the card's name has focus, does the same thing.
+
 The offsets are separate, because they belong to the files: two subtitles for
 the same film are routinely timed against different releases, so syncing one
 says nothing about the other. Ad breaks are shared, because an ad interrupts the

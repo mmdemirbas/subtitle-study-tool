@@ -5271,6 +5271,66 @@
   const lastRemoved = () =>
     removed && { slot: removed.slot, label: removed.track.label, at: removed.at };
 
+  /* Move a subtitle to another number - the subtitle travels, the place stays.
+   *
+   * Asked for as: "I normally add EN as #1 and TR as #2. But I added TR as #1
+   * by mistake. Now I should either remove it and add EN as #1 first, or add EN
+   * as #2 and then move it to the position #1."
+   *
+   * So the two halves of a subtitle come apart here, and which half is which is
+   * the whole design. Everything about the FILE moves with it: its cues, its
+   * offset, its rate, its acts, its language, whether it is hidden, whether the
+   * keys point at it, whether its words are being learnt. Everything about the
+   * PLACE stays: where the box sits, how wide it is, its colour, its font, its
+   * size, where its strip of words is. Those live in `settings.tracks[slot]`,
+   * which this deliberately never touches - number one is a place on the
+   * screen that has been arranged to be read first, and a subtitle arriving
+   * there should look like the thing that was there.
+   *
+   * Written as a move rather than a swap, so a third subtitle would work the
+   * way a list works, and every number in between shifts by one.
+   */
+  function reorderTracks(from, to) {
+    const a = clamp(Number(from) || 0, 0, TRACK_COUNT - 1);
+    const b = clamp(Number(to) || 0, 0, TRACK_COUNT - 1);
+    if (a === b) return { ok: false, reason: "same slot" };
+
+    /* Which slot each subtitle ended up in, built the same way the tracks are
+     * moved. Everything else that names a slot is remapped through it, so the
+     * arithmetic exists once rather than once per caller. */
+    const order = state.tracks.map((_, slot) => slot);
+    order.splice(b, 0, ...order.splice(a, 1));
+    const now = (was) => {
+      const at = order.indexOf(was);
+      return at < 0 ? was : at;
+    };
+
+    state.tracks.splice(b, 0, ...state.tracks.splice(a, 1));
+    const moved = state.tracks[b];
+
+    state.keyTrack = now(state.keyTrack);
+    // The stash is "the subtitle that was in slot N", and N has moved.
+    if (removed) removed = { ...removed, slot: now(removed.slot) };
+    /* The words being marked, and the strips they are marked into, are per
+     * subtitle number on both sides of the gap. Study keeps its own copy of
+     * which numbers it is following, so it is told rather than guessed at. */
+    window.__ssoStudy?.reorderSlots?.(order);
+
+    for (const track of state.tracks) track.activeIndexes = NEEDS_REDRAW;
+    // Cleared rather than left to the next tick: two boxes holding each
+    // other's line for 50ms is exactly the frame somebody looks at.
+    for (const view of views) view.cueBox.textContent = "";
+    syncRootVisibility();
+    trace("reorder", {
+      from: a,
+      to: b,
+      tracks: state.tracks.map((track, slot) => ({ slot, label: track.label, fileId: track.fileId })),
+    });
+    if (moved.cues.length) showToast(`${moved.label || "That subtitle"} is subtitle ${b + 1} now`);
+    notify();
+    return { ok: true, slot: b };
+  }
+
   function setVisible(visible, { slot = null } = {}) {
     if (slot == null) {
       state.visible = visible;
@@ -5781,6 +5841,7 @@
   const FORWARDED = [
     "attach",
     "detach",
+    "reorderTracks",
     "setVisible",
     "setOffset",
     "setRate",
@@ -6157,6 +6218,7 @@
     status,
     attach,
     detach,
+    reorderTracks,
     setVisible,
     setOffset,
     setRate,

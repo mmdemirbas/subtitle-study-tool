@@ -2772,6 +2772,55 @@
         }
       });
 
+      check("a subtitle moved to another number takes its lines and leaves its place", async () => {
+        /* The ask: "I normally add EN as #1 and TR as #2. But I added TR as #1
+         * by mistake ... add EN as #2 and then move it to the position #1."
+         *
+         * Which half goes and which half stays is the whole of it. The file
+         * travels - its lines, its offset, its language, the keys pointed at
+         * it. The place stays - where the box is, how wide, what size. A move
+         * that carried the geometry with the file would be a no-op with extra
+         * steps: the reader wants what is in box one to be read in box one. */
+        const api = window.__ssoApi;
+        try {
+          await api.attach({ cues: [{ start: 0, end: 600000, text: "first box" }],
+            label: "TR · wrong way round", fileId: 4401, language: "tr", slot: 0 });
+          await api.attach({ cues: [{ start: 0, end: 600000, text: "second box" }],
+            label: "EN · wanted first", fileId: 4402, language: "en", slot: 1 });
+          api.updateTrackSettings(0, { posY: 92, fontScale: 1.4 });
+          api.updateTrackSettings(1, { posY: 40, fontScale: 0.7 });
+          api.setKeyTrack(1);
+          await showSpeakerCue();
+
+          const moved = api.reorderTracks(1, 0);
+          if (!moved?.ok) throw new Error(`the move was refused: ${JSON.stringify(moved)}`);
+          await sleep(200);
+
+          const status = api.status();
+          if (status.tracks[0].fileId !== 4402 || status.tracks[1].fileId !== 4401)
+            throw new Error(`the files ended up ${status.tracks.map((t) => t.fileId).join(" and ")}`);
+          if (status.keyTrack !== 0)
+            throw new Error(`the keys stayed on subtitle ${status.keyTrack + 1} instead of following the file`);
+
+          const place = status.settings.tracks;
+          if (place[0].posY !== 92 || place[0].fontScale !== 1.4)
+            throw new Error(`number one's place moved with the file: ${JSON.stringify(place[0])}`);
+          if (place[1].posY !== 40 || place[1].fontScale !== 0.7)
+            throw new Error(`number two's place moved with the file: ${JSON.stringify(place[1])}`);
+
+          const drawn = shadowOf().querySelector('.sso-root[data-slot="0"] .sso-cue')?.textContent || "";
+          if (!drawn.includes("second box"))
+            throw new Error(`box one is still reading "${drawn.trim().slice(0, 30)}"`);
+        } finally {
+          api.detach(1);
+          api.detach(0);
+          api.setKeyTrack(0);
+          api.updateTrackSettings(0, { posY: 92, fontScale: 1 });
+          api.updateTrackSettings(1, { posY: 92, fontScale: 0.88 });
+          await sleep(150);
+        }
+      });
+
       check("the playhead is not pinned to the end of a strip by a part-loaded stream", async () => {
         /* A stream that cannot be seeked is seeked by fetching another one that
          * starts at the moment asked for, so the element holds the film from

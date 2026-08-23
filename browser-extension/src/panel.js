@@ -718,6 +718,7 @@
     el.none.append(el.noneTitle, el.noneNote, el.noneAction);
 
     el.trackCards = [0, 1].map(buildTrackCard);
+    makeCardsReorderable();
 
     /* Ad time is measured and subtracted automatically, but the detection
      * leans on player class names that change, so the total is shown and can
@@ -764,6 +765,161 @@
       el.adRow,
     );
     return wrap;
+  }
+
+  /* Moving a subtitle to another number, by dragging its card.
+   *
+   * Asked for as "I added TR as #1 by mistake ... I should either remove it and
+   * add EN as #1 first, or add EN as #2 and then move it to the position #1",
+   * and the second of those is the one that should not need saying. The number
+   * on a card is not a label: it is which box on the picture the lines go in,
+   * which colour and size they are drawn at, and where that subtitle's strip of
+   * studied words sits. Getting them the wrong way round meant taking both off
+   * and starting again.
+   *
+   * The card is the handle, and so is its name - a click on the name already
+   * means "point the keys here", so a drag on it means "move this", which is
+   * the same double duty the card itself has carried since the radio chip was
+   * removed from it. Everything else on the card is a control and keeps its
+   * press. The press is only taken when there is somewhere to move to, so a
+   * panel with one subtitle still drags the window from anywhere on it.
+   *
+   * The cards do not change places in the DOM while the gesture runs - the
+   * dragged one follows the pointer on a transform and the others slide out of
+   * its way. Rebuilding the list under a live pointer capture is how a drag
+   * comes to end on a node that no longer exists.
+   */
+  function makeCardsReorderable() {
+    // Under this, the press was a click. Both gestures start the same way.
+    const GRAB_PX = 5;
+    let drag = null;
+    // Whether the press that is about to become a click moved the card. A
+    // click after a drag would select whichever card the pointer ended over.
+    let dragged = false;
+
+    const rows = () =>
+      el.trackCards
+        .map((card, slot) => ({ card, slot, box: card.root.getBoundingClientRect() }))
+        .filter((row) => !row.card.root.hidden && row.box.height > 0);
+
+    function clear() {
+      for (const card of el.trackCards) {
+        card.root.style.transform = "";
+        delete card.root.dataset.dragging;
+      }
+    }
+
+    /* Where the card would land, as a position in the list on screen: the
+     * number of other cards whose middle it has been carried past. */
+    function landing() {
+      const centre = drag.row.box.top + drag.row.box.height / 2 + drag.dy;
+      let at = 0;
+      for (const row of drag.rows) {
+        if (row === drag.row) continue;
+        if (row.box.top + row.box.height / 2 < centre) at += 1;
+      }
+      return at;
+    }
+
+    function show() {
+      const at = landing();
+      drag.row.card.root.style.transform = `translateY(${Math.round(drag.dy)}px)`;
+      for (const row of drag.rows) {
+        if (row === drag.row) continue;
+        const was = drag.rows.indexOf(row);
+        let by = 0;
+        if (at > drag.pos && was > drag.pos && was <= at) by = -drag.step;
+        if (at < drag.pos && was >= at && was < drag.pos) by = drag.step;
+        row.card.root.style.transform = by ? `translateY(${by}px)` : "";
+      }
+    }
+
+    function finish(event, { commit = true } = {}) {
+      if (!drag) return;
+      const { row, rows: all, started } = drag;
+      const at = started ? landing() : drag.pos;
+      drag = null;
+      clear();
+      try {
+        row.card.root.releasePointerCapture?.(event.pointerId);
+      } catch {}
+      if (!commit || !started) return;
+      // The slot standing at that position is the one this subtitle takes; the
+      // set of numbers is the same, only which subtitle is under each changes.
+      const to = all[at].slot;
+      if (to === row.slot) return;
+      api.detached(Promise.resolve(api.reorderTracks(row.slot, to)), "Moving the subtitle");
+      refresh(api.status());
+    }
+
+    for (const { root } of el.trackCards) {
+      root.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || drag) return;
+        const control = event.target.closest("button, input, select, textarea, .sso-map");
+        if (control && !control.classList.contains("sso-track__label")) return;
+        const all = rows();
+        if (all.length < 2) return;
+        const pos = all.findIndex((row) => row.card.root === root);
+        if (pos < 0) return;
+        // The window is the handle for a press on any empty part of it, so a
+        // press that is going to move a card has to stop being one.
+        event.stopPropagation();
+        dragged = false;
+        drag = {
+          rows: all,
+          row: all[pos],
+          pos,
+          y: event.clientY,
+          dy: 0,
+          started: false,
+          // What one place is worth: a card, plus the gap the stylesheet keeps
+          // between two of them.
+          step: Math.round(all[pos].box.height + Math.max(0, all[1].box.top - all[0].box.bottom)),
+        };
+        /* Capture throws for a pointer id that is not live, which is what a
+         * synthetic pointerdown produces. Same guard the map's drag carries. */
+        try {
+          root.setPointerCapture?.(event.pointerId);
+        } catch {}
+      });
+
+      root.addEventListener("pointermove", (event) => {
+        if (!drag || drag.row.card.root !== root) return;
+        /* No button down means the press ended somewhere this never heard
+         * about - a pointerup swallowed by the page, a lost capture, an
+         * alt-tab. Without this the card follows the mouse forever. */
+        if (event.buttons === 0) {
+          finish(event, { commit: false });
+          return;
+        }
+        drag.dy = event.clientY - drag.y;
+        if (!drag.started) {
+          if (Math.abs(drag.dy) < GRAB_PX) return;
+          drag.started = true;
+          dragged = true;
+          drag.row.card.root.dataset.dragging = "true";
+        }
+        event.preventDefault();
+        show();
+      });
+
+      root.addEventListener("pointerup", (event) => finish(event));
+      root.addEventListener("lostpointercapture", (event) => finish(event, { commit: false }));
+
+      /* The click the press turns into, cancelled once the press moved
+       * something. Capturing, because the card's own selection handler and the
+       * name button's are both below this. */
+      root.addEventListener(
+        "click",
+        (event) => {
+          if (!dragged) return;
+          dragged = false;
+          event.stopPropagation();
+          event.preventDefault();
+        },
+        true,
+      );
+    }
   }
 
   /* What both subtitles share, above the two cards that do not.
@@ -1962,6 +2118,20 @@
       // The selection the first click of the pair made stands: replacing a
       // subtitle is also a good reason to be pointing the keys at it.
       openFind(slot);
+    });
+    /* The same move as dragging the card, for a hand that is not on a mouse.
+     * The name is the card's keyboard entry point - it is the real button in
+     * there - so it is where the card's own verbs have to be reachable from.
+     * Alt with an arrow is what a reorderable list is moved with everywhere
+     * else, and it is not a binding the page or the player can take. */
+    label.addEventListener("keydown", (event) => {
+      if (!event.altKey || (event.key !== "ArrowUp" && event.key !== "ArrowDown")) return;
+      const to = slot + (event.key === "ArrowUp" ? -1 : 1);
+      if (to < 0 || to >= (api.trackCount || 0)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      api.detached(Promise.resolve(api.reorderTracks(slot, to)), "Moving the subtitle");
+      refresh(api.status());
     });
     /* Three facts, three treatments.
      *
@@ -3776,10 +3946,15 @@
       // With one subtitle there is nothing to choose between, so the name is
       // not offering a choice either.
       card.label.disabled = status.trackCount < 2;
-      card.root.title =
-        status.trackCount > 1 && status.keyTrack !== slot
-          ? "Click to point the keys and the study rail at this subtitle"
-          : "";
+      /* Two subtitles is what makes either gesture mean anything: with one
+       * there is nothing to choose between and nowhere to move it to. */
+      const movable = status.trackCount > 1;
+      card.root.dataset.movable = movable ? "true" : "false";
+      card.root.title = !movable
+        ? ""
+        : status.keyTrack === slot
+          ? "Drag this card to change its number - the place and the style stay with the number"
+          : "Click to point the keys and the study rail at this subtitle, or drag it to change its number";
       /* A toggle has to look like one while it is holding something open, or
        * the second press is a guess. Only the card whose subtitle the window is
        * actually showing is lit - the other card's Aa switches to that one. */
