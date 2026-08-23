@@ -681,7 +681,22 @@
     if (seen && seen.grew >= LENGTH_GROWTHS) return statedSeconds();
     const own = video?.duration;
     if (!Number.isFinite(own) || own <= 0) return null;
-    return own;
+    /* On the film's clock, which is not the element's.
+     *
+     * `duration` is the length of what the element is HOLDING, and a page that
+     * says where its stream starts (`startSeconds`, below) is saying the
+     * element holds the film from that moment on - so its duration is what is
+     * left of the film, not the film. The two numbers were read off the same
+     * element and reported side by side without ever being put on the same
+     * clock.
+     *
+     * Measured from a panel capture on the local catalogue app, 39 minutes into
+     * a 45-minute episode after the player had re-opened the stream:
+     * currentTime 2363, duration 11. The map drew an axis eleven seconds wide
+     * and pinned the playhead against its right-hand edge, where it stayed -
+     * reported as "the play marker on the subtitle maps becomes frozen at the
+     * right edge of the map area". */
+    return startSeconds(video) + own;
   }
 
   /* How long the page SAYS the film is, from schema.org.
@@ -3730,11 +3745,48 @@
   const programmeTitle = () =>
     document.title.replace(/^[\s(\[]*\d+[\s)\]]*/, "").replace(/^[▶►❚■•\s-]+/, "").trim();
 
+  /* The length in the mark is the longest this programme has reported, and a
+   * film that is already playing is never allowed to get shorter.
+   *
+   * A film's length does not shrink while it plays. What does shrink is the
+   * element's number, every time the page loads a new resource into it - and on
+   * the local catalogue app every jump is a new resource, because a stream
+   * produced as it is sent cannot be seeked and the app fetches another one
+   * starting at the moment asked for. For the moment before enough of it has
+   * arrived, `duration` is a few seconds.
+   *
+   * Read straight into the mark, each of those is a different programme.
+   * Measured from the extension's own log on 2026-08-23, one evening on one
+   * episode of The Americans: the reported length went 2701, 146, 2701, 530,
+   * 2701, 113, 2701, 111, 2701 - and each step settled long enough to be
+   * believed. Every one of them took both subtitles off and searched again, and
+   * the two searches that came back with nothing left the film unsubtitled 39
+   * and 26 minutes in. Reported as "my subtitles are gone again in the middle
+   * of the movie".
+   *
+   * The memory is reset by the two things that really are a new programme: the
+   * title changing, and the film going back to its beginning. Which leaves one
+   * case uncovered - a shorter episode, on a site that never changes its title,
+   * resumed part-way through - and that is the same direction this has always
+   * been willing to be wrong in: nothing happens, and the reader attaches by
+   * hand as before. */
+  const PROGRAMME_RESTART_S = 20;
+  let programmeLength = { title: "", seconds: 0 };
+
   function programmeMark() {
     const video = state.video;
     const seconds = filmSeconds(video);
     if (!video || seconds === null || seconds < MIN_VIDEO_SECONDS) return "";
-    return `${Math.round(seconds)}|${programmeTitle()}`;
+    const title = programmeTitle();
+    // Ad time is stream seconds that were not film, so it comes off before the
+    // clock is asked whether this film has just started.
+    const watched = (streamNowMs(video) - state.adDriftMs) / 1000;
+    if (title !== programmeLength.title || watched < PROGRAMME_RESTART_S) {
+      programmeLength = { title, seconds };
+    } else if (seconds > programmeLength.seconds) {
+      programmeLength.seconds = seconds;
+    }
+    return `${Math.round(programmeLength.seconds)}|${title}`;
   }
 
   /* Long enough for a player that is still settling - the duration arrives

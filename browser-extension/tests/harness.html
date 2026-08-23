@@ -2772,6 +2772,54 @@
         }
       });
 
+      check("the playhead is not pinned to the end of a strip by a part-loaded stream", async () => {
+        /* A stream that cannot be seeked is seeked by fetching another one that
+         * starts at the moment asked for, so the element holds the film from
+         * there on and `duration` is what is LEFT of it - a few seconds, while
+         * it is still arriving. Read as the film's length that put the playhead
+         * hard against the right-hand edge of both strips, where it then stayed
+         * because the clamped position is what the repaint check compares.
+         * Reported as "the play marker becomes frozen at the right edge". */
+        const api = window.__ssoApi;
+        const wasDuration = Object.getOwnPropertyDescriptor(video, "duration");
+        try {
+          await api.attach({ cues: burstyCues(0), label: "TR · offset", fileId: 4403, slot: 1 });
+          await sleep(150);
+          // Resumed 25 minutes in, with three seconds of the rest arrived.
+          Object.defineProperty(video, "duration", { get: () => 3, configurable: true });
+          video.dataset.ssoTimeOffset = "1500";
+          video.currentTime = 8;
+          await sleep(400);
+
+          // The length of the film, not the length of the slice on the element.
+          const status = api.status();
+          if (!(status.duration > 1400))
+            throw new Error(`the stream starts 25:00 in and the film is reported ${status.duration}s long`);
+
+          const strip = mapStrips()[1];
+          const zoom = strip.querySelector(".sso-map__zoom");
+          for (let i = 0; i < 3 && zoom.textContent !== "60s"; i++) {
+            zoom.click();
+            await sleep(180);
+          }
+          const canvas = strip.querySelector(".sso-map__canvas");
+          // The playhead is the opaque full-height column; a cue bar never
+          // reaches the top and a time tick is faint.
+          const top = canvas.getContext("2d").getImageData(0, 0, canvas.width, 1).data;
+          let head = -1;
+          for (let x = canvas.width - 1; x >= 0; x--) if (top[x * 4 + 3] > 200) { head = x; break; }
+          if (head < 0) throw new Error("no playhead was drawn on the strip");
+          if (head > canvas.width - 5)
+            throw new Error(`the playhead is pinned ${canvas.width - head} device pixels from the right edge`);
+        } finally {
+          Object.defineProperty(video, "duration", wasDuration);
+          delete video.dataset.ssoTimeOffset;
+          video.dispatchEvent(new Event("loadstart"));
+          api.detach(1);
+          await sleep(300);
+        }
+      });
+
       /* A caption held across the dialogue under it.
        *
        * A sign, a song lyric or a note stays up for half a minute while short
@@ -7567,6 +7615,59 @@
           document.title = wasTitle;
           setDuration(wasDuration);
           document.getElementById("ad-slot").innerHTML = "";
+          await sleep(1800);
+          window.__sent.length = 0;
+        }
+      });
+
+      check("a length that dips mid-film is not the next episode", async () => {
+        /* Every jump on a player that cannot seek is a new resource on the
+         * element, and for the moment before enough of it has arrived
+         * `duration` is a few seconds. Read straight into the mark, each of
+         * those is a different programme - and each one took both subtitles off
+         * and searched again. Measured from the extension's own log on
+         * 2026-08-23: 2701, 146, 2701, 530, 2701, 113, 2701, 111, 2701 over one
+         * evening on one episode, with two of the searches coming back empty.
+         * Reported as "my subtitles are gone again in the middle of the movie".
+         *
+         * A film's length does not shrink while it plays, so the mark keeps the
+         * longest it has been told about until the title changes or the film
+         * goes back to its beginning. */
+        const wasTitle = document.title;
+        const wasDuration = Object.getOwnPropertyDescriptor(video, "duration");
+        const setDuration = (seconds) =>
+          Object.defineProperty(video, "duration", { get: () => seconds, configurable: true });
+        try {
+          // A resource nothing has been learned about yet, so this starts from
+          // the same place a page load does rather than from whatever the
+          // cases above left on the element.
+          video.dispatchEvent(new Event("loadstart"));
+          document.title = "Harness — S02E01";
+          setDuration(2700);
+          /* Well past the beginning, which is the state this is about: a film
+           * being watched, not one that has just started. The clock only gets
+           * there through the offset - the harness's own clip is ten seconds
+           * long - so the film measures 1400 + 2700 and the mark says 4100. */
+          video.dataset.ssoTimeOffset = "1400";
+          window.__sent.length = 0;
+          await sleep(2200);
+          const first = window.__sent.filter((m) => m.type === "sso:programme");
+          if (first.length !== 1 || !first[0].mark.startsWith("4100"))
+            throw new Error(`opened with ${JSON.stringify(first.map((m) => m.mark))}`);
+
+          // The player re-opens the stream: eleven seconds of it have arrived.
+          window.__sent.length = 0;
+          setDuration(11);
+          await sleep(2200);
+          setDuration(2700);
+          await sleep(2200);
+          const said = window.__sent.filter((m) => m.type === "sso:programme");
+          if (said.length !== 0)
+            throw new Error(`a re-opened stream was reported as ${JSON.stringify(said.map((m) => m.mark))}`);
+        } finally {
+          document.title = wasTitle;
+          Object.defineProperty(video, "duration", wasDuration);
+          delete video.dataset.ssoTimeOffset;
           await sleep(1800);
           window.__sent.length = 0;
         }

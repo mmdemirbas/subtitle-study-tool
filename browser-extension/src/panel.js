@@ -1215,7 +1215,12 @@
        * rule the cards' strips follow, and it matters more here: this draws on
        * every status round whether or not anybody has opened the panel body. */
       const perPixel = PREVIEW_SPAN_MS / Math.max(1, width - 1);
-      const durationMs = Number.isFinite(status.duration) ? status.duration * 1000 : 0;
+      // At least as far as the playhead, for the reason setWindow gives: the
+      // played fraction under this strip is otherwise pinned at 1.
+      const durationMs = Math.max(
+        Number.isFinite(status.duration) ? status.duration * 1000 : 0,
+        now,
+      );
       /* The second is in the key because the clock is: the rows only need
        * repainting when they would land on different pixels, but a clock that
        * repaints four times a second and a clock that repaints once a second
@@ -1367,19 +1372,47 @@
     const spanMs = () => MAP_SPANS[spanStep].ms;
 
     function setWindow(status) {
+      const at = Number.isFinite(status.currentTime) ? status.currentTime * 1000 : 0;
       durationMs = Number.isFinite(status.duration) ? status.duration * 1000 : 0;
+      /* A length behind the clock is not this film's length.
+       *
+       * A player that cannot be seeked is seeked by fetching another stream
+       * that begins at the moment asked for, and until enough of it has arrived
+       * the element reports a few seconds of film while the picture is half an
+       * hour in. Measured on the local catalogue app: currentTime 2363,
+       * duration 11.
+       *
+       * Everything below then agrees on the wrong picture. At the scale this
+       * opens at, 60 seconds is longer than the whole "film", so the strip
+       * falls into its whole-film branch and draws an axis eleven seconds wide;
+       * the playhead is clamped into it and sits on the last pixel; and it
+       * STAYS there, because the clamped position is what the repaint check
+       * compares - so nothing is redrawn however far the film runs. Reported as
+       * "the play marker on the subtitle maps becomes frozen at the right edge
+       * of the map area".
+       *
+       * A film is at least as long as the part of it being watched, so the axis
+       * runs at least that far - and the end of it is not held onto below,
+       * because there is no end here to hold onto. */
+      const behind = at > durationMs;
+      if (behind) durationMs = at;
       const span = spanMs();
       if (!span || span >= durationMs) {
         from = 0;
         to = durationMs;
         return;
       }
-      const at = Number.isFinite(status.currentTime) ? status.currentTime * 1000 : 0;
+      from = Math.max(0, at - span / 2);
       /* Clamped to the film rather than allowed to run off it, so the last
        * fifteen seconds are still fifteen seconds wide. A window that shrank at
        * the ends would change the scale exactly where a reader is checking the
-       * end credits line up. */
-      from = Math.min(Math.max(0, at - span / 2), Math.max(0, durationMs - span));
+       * end credits line up.
+       *
+       * Only against a real end. Held against a length the playhead has already
+       * passed, this clamp is what puts the mark on the last pixel and keeps it
+       * there; without it the window is simply centred on the playhead, which
+       * is what every scale but the widest is for and needs no length at all. */
+      if (!behind) from = Math.min(from, Math.max(0, durationMs - span));
       to = from + span;
     }
 
