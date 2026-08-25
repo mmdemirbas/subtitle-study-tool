@@ -3745,6 +3745,63 @@
   const programmeTitle = () =>
     document.title.replace(/^[\s(\[]*\d+[\s)\]]*/, "").replace(/^[▶►❚■•\s-]+/, "").trim();
 
+  /* schema.org lets `url` and `sameAs` be one string or a list of them. */
+  const firstString = (value) => {
+    const one = Array.isArray(value) ? value.find((item) => typeof item === "string") : value;
+    return typeof one === "string" ? one.trim() : "";
+  };
+
+  /* What the page SAYS is playing - its identity, not its encode.
+   *
+   * `statedSeconds` above prefers a VideoObject, and this deliberately refuses
+   * one. The asymmetry is the point. A VideoObject describes the file on the
+   * page, so it is the right place to ask how long the film is - and its `name`
+   * is the media file's own name, written on the local catalogue app only once
+   * playback has started. An identity built from it changes in the middle of an
+   * episode, which is the one thing an identity may never do. The WORK - Movie,
+   * TVEpisode, TVSeries - is what the page is ABOUT, and it is in <head> before
+   * the first frame is decoded.
+   *
+   * The series name with the stated season and episode, because that is what
+   * the search sends. This is the whole repair: the detector and the search
+   * were reading two different answers to "what is playing" - this one keyed on
+   * the element's duration, the search on the page's metadata - and the window
+   * where the two disagreed was exactly the window after an episode changed.
+   * A mark built from the search's own input moves when the query would move,
+   * and not otherwise.
+   *
+   * `url`/`sameAs` is taken when the page offers one: on the catalogue app it
+   * is a per-episode id, which separates two episodes that share a title. */
+  /* Memoised, because the tick asks twenty times a second and this parses every
+   * JSON-LD block on the page. Not for a second, the way `statedSeconds` is:
+   * that one is consulted only when the element's own duration cannot be
+   * trusted, while this is on the path whose LATENCY is the bug being fixed,
+   * and a stale answer here is time the last episode's subtitles stay up. 250ms
+   * is what `pickVideo` already uses for the same kind of question, it is
+   * negligible against the 1500ms the mark then has to settle for, and the work
+   * is a querySelectorAll and a JSON.parse - no layout, which is the cost that
+   * actually matters in this file. */
+  let statedWork = { at: -Infinity, mark: "" };
+  const STATED_WORK_MS = VIDEO_CACHE_MS;
+
+  function statedProgramme() {
+    const now = performance.now();
+    if (now - statedWork.at < STATED_WORK_MS) return statedWork.mark;
+    let mark = "";
+    for (const item of readJsonLd()) {
+      const type = schemaType(item);
+      if (!SCHEMA_VIDEO_TYPE.test(type) || /VideoObject/i.test(type)) continue;
+      const episode = statedEpisode(item);
+      const name = String(item.partOfSeries?.name || item.name || "").trim();
+      const id = firstString(item.url ?? item.sameAs ?? item["@id"]);
+      if (!name && !id && !episode) continue;
+      mark = `${id}|${name}|${episode ? `S${episode.season}E${episode.episode}` : ""}`;
+      break;
+    }
+    statedWork = { at: now, mark };
+    return mark;
+  }
+
   /* The length in the mark is the longest this programme has reported, and a
    * film that is already playing is never allowed to get shorter.
    *
@@ -3775,9 +3832,35 @@
 
   function programmeMark() {
     const video = state.video;
-    const seconds = filmSeconds(video);
-    if (!video || seconds === null || seconds < MIN_VIDEO_SECONDS) return "";
+    if (!video) return "";
     const title = programmeTitle();
+
+    /* A page that states what it is playing has already answered this, and its
+     * answer arrives with the navigation rather than with the stream.
+     *
+     * Everything below can only answer once a length is known, and on a stream
+     * produced as it is sent there is no length for the first seconds of every
+     * episode: `loadstart` clears what was learned about the last resource and
+     * the element restarts at NaN, then climbs. So the mark was empty exactly
+     * when the episode had just changed - and `noticeProgrammeChange` reads an
+     * empty mark as "ask again later", which keeps the LAST episode's identity
+     * for the whole of that window. Measured on the catalogue app 2026-08-25:
+     * the tab title moved to the next episode between 09:30:32 and 09:30:42 and
+     * the new subtitles went up at 09:30:47, with the previous episode's lines
+     * over the new picture until then. Reported as "I switch to the next
+     * episode and it still finds the previous title".
+     *
+     * The stated identity carries no length on purpose. A length that grows as
+     * the stream arrives is what used to churn the mark - 2701, 146, 2701, 530
+     * over one evening, each flip taking both subtitles off - and a page that
+     * names what it is playing does not need one to be believed. The title
+     * rides along in both shapes, so a page whose metadata is stale can still
+     * be caught by the one signal every player updates. */
+    const stated = statedProgramme();
+    if (stated) return `${stated}|${title}`;
+
+    const seconds = filmSeconds(video);
+    if (seconds === null || seconds < MIN_VIDEO_SECONDS) return "";
     // Ad time is stream seconds that were not film, so it comes off before the
     // clock is asked whether this film has just started.
     const watched = (streamNowMs(video) - state.adDriftMs) / 1000;

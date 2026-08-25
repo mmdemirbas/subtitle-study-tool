@@ -568,6 +568,34 @@ Each of these was a reported bug. Undoing one brings the bug back.
     "Baggage" and "The Americans", and only the second can be looked up
     anywhere. `episodeNumber` is read as a NUMBER, so it never competes with
     `matchEpisode` scraping a digit out of a title.
+
+    **It is also what says the programme CHANGED**, and the two readings have to
+    stay the same reading. `statedProgramme()` builds the mark out of the series
+    name and the stated season and episode - the search's own input - so the
+    mark moves exactly when the query would move. They used to disagree: the
+    detector keyed on the element's duration and the search on the page's
+    metadata, and the window where the two disagreed was the window right after
+    an episode changed. A stream produced as it is sent has no length for the
+    first seconds of every episode, `noticeProgrammeChange` reads a lengthless
+    mark as "ask again later", and so the last episode's identity was held over
+    the new picture. Measured on the catalogue app 2026-08-25, one transition:
+    the tab title moved between 09:30:32 and 09:30:42, the new subtitles went up
+    at 09:30:47. Over 37 transitions in that log 31 were noticed unprompted and
+    6 followed the reader touching something.
+
+    **`statedSeconds` prefers a `VideoObject` and `statedProgramme` refuses
+    one**, and that asymmetry is deliberate. A VideoObject describes the encode,
+    so it knows the length to the millisecond - and its `name` is the media
+    file's own name, written only once playback starts, so an identity built
+    from it changes in the middle of an episode. The work (`Movie`, `TVEpisode`,
+    `TVSeries`) is in `<head>` before a frame is decoded. Do not "simplify" the
+    two into one reader.
+
+    **The stated mark carries no duration on purpose.** A length that grows as
+    the stream arrives is what used to churn it - 2701, 146, 2701, 530 over one
+    evening, each flip taking both subtitles off. The length-and-title mark
+    stays as the fallback for the sites that state nothing, which is most of
+    them, and a harness check pins that shape so it cannot be quietly dropped.
   - **Media Session** for identity on sites with no structured data. Measured:
     an isolated world CAN read `navigator.mediaSession.metadata` that the page
     set. All three of `title`, `artist` and `album` are offered as candidates,

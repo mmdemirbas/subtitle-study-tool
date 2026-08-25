@@ -7784,6 +7784,155 @@
         }
       });
 
+      check("a stated episode is noticed before the stream has a length", async () => {
+        /* The repair for "I switch to the next episode and it still finds the
+         * previous title", and it is about WHEN rather than about what.
+         *
+         * The mark used to be the element's duration and the tab title, so it
+         * could not be formed at all until a length was known. On a stream
+         * produced as it is sent there is none for the first seconds of every
+         * episode - `loadstart` clears what was learned about the last resource
+         * and the element restarts at NaN - and an empty mark is read as "ask
+         * again later", which holds the LAST episode's identity through exactly
+         * the window in which the episode changed. Measured on the catalogue
+         * app 2026-08-25: the tab title moved to the next episode between
+         * 09:30:32 and 09:30:42 and the new subtitles went up at 09:30:47, with
+         * the previous episode's lines over the new picture until then.
+         *
+         * A page that states what it is playing has answered this already, in
+         * <head>, before a frame is decoded. */
+        const wasTitle = document.title;
+        const wasDuration = Object.getOwnPropertyDescriptor(video, "duration");
+        const script = document.createElement("script");
+        script.type = "application/ld+json";
+        const states = (episode, name) => {
+          script.textContent = JSON.stringify({
+            "@context": "https://schema.org",
+            "@type": "TVEpisode",
+            name,
+            url: `https://example.invalid/title/tt000000${episode}`,
+            episodeNumber: episode,
+            partOfSeason: { "@type": "TVSeason", seasonNumber: 4 },
+            partOfSeries: { "@type": "TVSeries", name: "The Americans" },
+          });
+        };
+        try {
+          // No length at all, which is where the old mark gave up.
+          Object.defineProperty(video, "duration", { get: () => NaN, configurable: true });
+          states(2, "Pastor Tim");
+          document.head.append(script);
+          document.title = "Pastor Tim (2016) - Catalogue";
+          window.__sent.length = 0;
+          await sleep(2400);
+
+          const first = window.__sent.filter((m) => m.type === "sso:programme");
+          if (first.length !== 1)
+            throw new Error(
+              `a stated episode with no length was reported ${first.length} times`,
+            );
+          if (!first[0].mark.includes("S4E2") || !first[0].mark.includes("The Americans"))
+            throw new Error(`reported the wrong programme: ${first[0].mark}`);
+
+          /* The next episode, the way the app starts one: new metadata, new
+           * title, and an element whose length is still unknown. */
+          window.__sent.length = 0;
+          states(3, "Experimental Prototype City of Tomorrow");
+          document.title = "Experimental Prototype City of Tomorrow (2016) - Catalogue";
+          await sleep(2400);
+          const next = window.__sent.filter((m) => m.type === "sso:programme");
+          if (next.length !== 1)
+            throw new Error(`the next episode was reported ${next.length} times`);
+          if (!next[0].mark.includes("S4E3"))
+            throw new Error(`still about the last episode: ${next[0].mark}`);
+        } finally {
+          script.remove();
+          document.title = wasTitle;
+          Object.defineProperty(video, "duration", wasDuration);
+          await sleep(1800);
+          window.__sent.length = 0;
+        }
+      });
+
+      check("a stated episode does not move when the stream's length does", async () => {
+        /* The other direction, and the reason the stated identity carries no
+         * length of its own. The element's number climbs as the stream arrives
+         * and drops back to a few seconds every time the player re-opens it:
+         * 2701, 146, 2701, 530, 2701 over one evening on one episode. Each flip
+         * used to be a different programme, and each one took both subtitles off
+         * and searched again - "my subtitles are gone again in the middle of the
+         * movie". A page that names what it is playing is believed through all
+         * of it.
+         *
+         * This is the check that stops the fix above being "read the length
+         * sooner", which would have made that report worse. */
+        const wasTitle = document.title;
+        const wasDuration = Object.getOwnPropertyDescriptor(video, "duration");
+        const setDuration = (seconds) =>
+          Object.defineProperty(video, "duration", { get: () => seconds, configurable: true });
+        const script = document.createElement("script");
+        script.type = "application/ld+json";
+        script.textContent = JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "TVEpisode",
+          name: "Pastor Tim",
+          episodeNumber: 2,
+          partOfSeason: { "@type": "TVSeason", seasonNumber: 4 },
+          partOfSeries: { "@type": "TVSeries", name: "The Americans" },
+        });
+        try {
+          setDuration(2701);
+          document.head.append(script);
+          document.title = "Pastor Tim (2016) - Catalogue";
+          await sleep(2400);
+
+          window.__sent.length = 0;
+          for (const seconds of [146, 2701, 113]) {
+            setDuration(seconds);
+            await sleep(1900);
+          }
+          const said = window.__sent.filter((m) => m.type === "sso:programme");
+          if (said.length !== 0)
+            throw new Error(
+              `a re-opening stream was reported as ${JSON.stringify(said.map((m) => m.mark))}`,
+            );
+        } finally {
+          script.remove();
+          document.title = wasTitle;
+          Object.defineProperty(video, "duration", wasDuration);
+          await sleep(1800);
+          window.__sent.length = 0;
+        }
+      });
+
+      check("a page that states nothing is still keyed on its length", async () => {
+        /* The fallback has to survive the fix. Most sites ship no usable
+         * schema.org at all, and for those the duration and the tab title are
+         * still the only two things that change when the programme does.
+         *
+         * Asserted on the SHAPE of the mark rather than on a report, because a
+         * mark that quietly stopped carrying the length would leave every one of
+         * those sites unable to tell two episodes apart, and nothing else here
+         * would notice. */
+        const wasTitle = document.title;
+        const wasDuration = Object.getOwnPropertyDescriptor(video, "duration");
+        try {
+          video.dispatchEvent(new Event("loadstart"));
+          Object.defineProperty(video, "duration", { get: () => 2400, configurable: true });
+          document.title = "Harness - S09E01";
+          window.__sent.length = 0;
+          await sleep(2400);
+          const said = window.__sent.filter((m) => m.type === "sso:programme");
+          if (said.length !== 1) throw new Error(`reported ${said.length} times`);
+          if (!said[0].mark.startsWith("2400|"))
+            throw new Error(`a page stating nothing lost its length: ${said[0].mark}`);
+        } finally {
+          document.title = wasTitle;
+          Object.defineProperty(video, "duration", wasDuration);
+          await sleep(1800);
+          window.__sent.length = 0;
+        }
+      });
+
       check("a translation timed by somebody else still needs no click", async () => {
         /* The reason the pair is worth anything: the second subtitle is not a
          * copy of the first with a constant shift, it is a different person's
