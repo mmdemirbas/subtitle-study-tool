@@ -783,6 +783,105 @@ t(
   pageInfoReply = () => ({ ok: true });
 }
 
+/* A page that announces what it is playing is not guessed at.
+ *
+ * The ranking above exists because a page states several names and labels none
+ * of them. `data-sso-now-playing` labels them, so there is nothing left to
+ * rank - and it carries an IMDb id, which is what turns the search from a
+ * /features round trip plus a fuzzy match into one exact call.
+ */
+{
+  const { pageContextForTab } = await import("../src/daemon.js");
+  const announcement = {
+    kind: "episode",
+    title: "The Americans",
+    year: 2013,
+    season: 3,
+    episode: 9,
+    imdb: "tt4331672",
+    durationSeconds: 2701.44,
+  };
+
+  frameList = [{ frameId: 0 }, { frameId: 2 }];
+  pageInfoReply = (message, options) => {
+    const frameId = options?.frameId ?? 0;
+    if (frameId === 0) {
+      // The page around the player, saying the wrong thing as loudly as it can.
+      return {
+        ok: true,
+        year: 1999,
+        announced: null,
+        candidates: [{ source: "json-ld", text: "Do Mail Robots Dream", episode: null }],
+        episode: { fromTitle: { season: 9, episode: 9 } },
+      };
+    }
+    return {
+      ok: true,
+      year: 1999,
+      announced: announcement,
+      candidates: [{ source: "document.title", text: "Catalogue", episode: null }],
+      episode: null,
+    };
+  };
+
+  const context = await pageContextForTab({ id: 1, title: "Catalogue" }, 2);
+  t(
+    "an announced programme is used as stated, not ranked against the page",
+    context.title === "The Americans" && context.year === 2013,
+    JSON.stringify({ title: context.title, year: context.year, source: context.titleSource }),
+  );
+  t(
+    "and its season and episode outrank a number scraped from a title",
+    context.season === 3 && context.episode === 9,
+    JSON.stringify({ season: context.season, episode: context.episode }),
+  );
+  t(
+    "and its IMDb id reaches the search, which is what makes it exact",
+    context.imdbId === "tt4331672",
+    JSON.stringify({ imdbId: context.imdbId }),
+  );
+  t(
+    "and what the page said is still recorded, so a wrong announcement is visible",
+    context.candidates.some((candidate) => candidate.text.includes("Do Mail Robots")),
+    JSON.stringify(context.candidates),
+  );
+
+  /* Two frames announcing is a player embedded in a page that also knows what
+   * it is showing. The player's frame is describing what was actually loaded. */
+  pageInfoReply = (message, options) => ({
+    ok: true,
+    year: null,
+    announced:
+      (options?.frameId ?? 0) === 2 ? announcement : { ...announcement, title: "The page's idea" },
+    candidates: [],
+    episode: null,
+  });
+  const both = await pageContextForTab({ id: 1, title: "Catalogue" }, 2);
+  t(
+    "where two frames announce, the one holding the video wins",
+    both.title === "The Americans",
+    JSON.stringify({ title: both.title }),
+  );
+
+  /* A page with no announcement is served exactly as it was before there was
+   * one to make. */
+  pageInfoReply = () => ({
+    ok: true,
+    year: 2015,
+    candidates: [{ source: "json-ld-series", text: "The Americans", episode: null }],
+    episode: { fromMetadata: { season: 3, episode: 2, matched: "schema.org episodeNumber" } },
+  });
+  const guessed = await pageContextForTab({ id: 1, title: "Baggage" }, 0);
+  t(
+    "and a page that announces nothing is still guessed at, with no id to send",
+    guessed.title === "The Americans" && guessed.season === 3 && guessed.imdbId === null,
+    JSON.stringify({ title: guessed.title, season: guessed.season, imdbId: guessed.imdbId }),
+  );
+
+  frameList = [{ frameId: 0 }];
+  pageInfoReply = () => ({ ok: true });
+}
+
 /* A failure inside the worker is invisible from the page and from the report,
  * and it is exactly what makes a control do nothing. */
 await resetTrace();

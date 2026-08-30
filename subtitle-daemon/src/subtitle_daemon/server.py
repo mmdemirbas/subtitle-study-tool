@@ -35,7 +35,7 @@ from . import matching, subtitles, titles
 from .cache import Cache
 from .config import CACHE_DIR, LOG_DIR, Config
 from .lookups import Lookups
-from .opensubtitles import Client, OpenSubtitlesError, QuotaExceededError
+from .opensubtitles import Client, Feature, OpenSubtitlesError, QuotaExceededError
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +74,24 @@ _CACHED_FIELDS = (
     "error",
     "auto_attach_threshold",
 )
+
+
+def _stated_feature(imdb_id: str, title: str, year: int | None, season: int | None) -> Feature:
+    """The index entry /features would have returned for an id the page gave.
+
+    Everything downstream asks "was this title resolved?" and means "is this
+    result set this programme, or a fuzzy guess at it". An id from the page
+    answers yes as firmly as the index does, so it answers in the index's own
+    shape rather than through a second flag nothing else reads. The count is
+    zero because it only ever breaks ties between rivals, and an id has none.
+    """
+    return Feature(
+        imdb_id=imdb_id,
+        title=title,
+        year=year,
+        feature_type="Movie" if season is None else "Episode",
+        subtitles_count=0,
+    )
 
 
 class Service:
@@ -360,10 +378,30 @@ class Service:
         client = self.client
         assert client is not None  # callers check has_api_key first
 
+        # An id names one thing, so it is asked for by itself.
+        #
+        # The season and episode do not go with it. `imdb_id` matches a
+        # feature, and for an episode the feature IS the episode - the numbers
+        # are already in it. Sending both is a combination the API does not
+        # document, and the failure would be silent: an empty result set that
+        # reads as "nobody has subtitled this". They still travel in `used`,
+        # where the episode filter and the "which episode is this" guard read
+        # them.
+        #
+        # The Feature is stated rather than left None, and that is the
+        # difference between this path working and only looking as though it
+        # does. A result set with no resolved title is scored against the
+        # uploader's file name and refused below the threshold - on a search
+        # that by construction cannot have found the wrong programme. The id
+        # came from the page; every row is that programme.
+        #
+        # And an id that turns up nothing falls through to the title path
+        # rather than reporting "not in the database". The id is a shortcut,
+        # not the only route.
         if imdb_id:
-            return client.search(
-                imdb_id=imdb_id, languages=languages, season=season, episode=episode
-            ), None, []
+            found = client.search(imdb_id=imdb_id, languages=languages)
+            if found:
+                return found, _stated_feature(imdb_id, query, year, season), []
 
         resolved, rivals = self._pick_feature(query, year, want_series=season is not None)
 

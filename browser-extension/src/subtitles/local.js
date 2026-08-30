@@ -71,6 +71,24 @@ function byTuple(keyOf) {
 /** Python's round(x, 1), which is what the ranking buckets scores with. */
 const bucket = (value) => Math.round(value * 10) / 10;
 
+/* The entry /features would have returned for an id the page supplied.
+ *
+ * Everything downstream asks "was this title resolved?" and means "is this
+ * result set this programme, or a fuzzy guess at it". An id from the page
+ * answers yes as firmly as the index does, so it answers in the index's own
+ * shape rather than through a second flag nothing else reads. The title is the
+ * one the page announced, which is what the search asked for; the count is
+ * zero because it is only ever used to break ties between rivals, and an id
+ * has none. */
+const statedFeature = (imdbId, title, year, season) => ({
+  imdb_id: imdbId,
+  title,
+  year,
+  feature_type: season === null ? "Movie" : "Episode",
+  subtitles_count: 0,
+  is_series: season !== null,
+});
+
 export class LocalService {
   constructor({ apiKey, languages = DEFAULT_LANGUAGES }) {
     this.client = apiKey ? new Client(apiKey) : null;
@@ -244,9 +262,29 @@ export class LocalService {
    * is the title index. Both calls are free - only downloading is metered.
    */
   async searchUpstream({ query, languages, year, season, episode, imdbId }) {
+    /* An id names one thing, so it is asked for by itself.
+     *
+     * The season and episode do not go with it. `imdb_id` matches a feature,
+     * and for an episode the feature IS the episode - the numbers are already
+     * in it. Sending both is a combination the API does not document, and the
+     * failure would be silent: an empty result set that reads as "nobody has
+     * subtitled this". They still travel in `used`, where the episode filter
+     * and the "which episode is this" guard read them.
+     *
+     * `resolved` is stated rather than left null, and that is the difference
+     * between this path working and only looking as though it does. A result
+     * set with no resolved title is scored against the uploader's file name
+     * and refused below the threshold - the refusal planAutoAttach describes
+     * at length, on a search that by construction cannot have found the wrong
+     * programme. The id came from the page; every row is that programme.
+     *
+     * And an id that turns up nothing falls through to the title path rather
+     * than reporting "not in the database". The id is a shortcut, not the only
+     * route, and it can be right about the film while OpenSubtitles has it
+     * indexed under a parent it does not share. */
     if (imdbId) {
-      const found = await this.client.search({ imdbId, languages, season, episode });
-      return { found, resolved: null, rivals: [] };
+      const found = await this.client.search({ imdbId, languages });
+      if (found.length) return { found, resolved: statedFeature(imdbId, query, year, season), rivals: [] };
     }
 
     const { best: resolved, rivals } = await this.pickFeature(query, year, season !== null);

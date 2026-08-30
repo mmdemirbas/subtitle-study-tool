@@ -70,7 +70,7 @@ export async function health() {
 }
 
 /** Search for subtitles. Free — this never costs download quota. */
-export function search({ title, query, languages, year, season, episode }) {
+export function search({ title, query, languages, year, season, episode, imdb_id: imdbId }) {
   const params = new URLSearchParams();
   if (title) params.set("title", title);
   if (query) params.set("query", query);
@@ -78,6 +78,12 @@ export function search({ title, query, languages, year, season, episode }) {
   if (year) params.set("year", String(year));
   if (season != null) params.set("season", String(season));
   if (episode != null) params.set("episode", String(episode));
+  /* The daemon has always accepted this and nothing ever sent it, so the one
+   * caller that had an id - the panel, re-searching after a title resolved -
+   * silently got the fuzzy path back whenever the daemon was up, while the
+   * no-daemon path used the id. Two answers to one question, decided by
+   * whether a background process happened to be running. */
+  if (imdbId) params.set("imdb_id", imdbId);
   return call(`/search?${params.toString()}`);
 }
 
@@ -295,6 +301,64 @@ export async function pageContextForTab(tab, videoFrameId = null) {
     return Number(b.frameId === videoFrameId) - Number(a.frameId === videoFrameId);
   });
 
+  /* What the page actually offered, not just how many things it offered.
+   *
+   * The count alone cannot answer the question it gets asked. Recorded on
+   * 2026-08-12: auto-attach refused with `Nothing matched "The Americans Full
+   * Episodes"`, context `candidateCount: 4, episodeSource: null` - four
+   * candidates, and no way to tell whether the page named the episode
+   * somewhere this missed, or genuinely never said. Those are different bugs
+   * and the log could not separate them.
+   *
+   * Capped and trimmed: this rides every autoAttach entry, and the entry
+   * already carries the ranked results. */
+  const offered = candidates.slice(0, 8).map((candidate) => ({
+    source: candidate.source,
+    frameId: candidate.frameId,
+    text: String(candidate.text || "").slice(0, 120),
+    episode: candidate.episode ?? null,
+  }));
+
+  /* A page that announces what it is playing has answered all of this, and
+   * better than a ranking can.
+   *
+   * The ranking exists because a page states several names and labels none of
+   * them: "Baggage" and "The Americans" are both on an episode page and only
+   * the second finds a subtitle. An announcement is labelled - the title is
+   * the one subtitles are indexed under, the season and episode are numbers
+   * rather than digits scraped out of a string, and an IMDb id turns the
+   * search from fuzzy into exact. There is nothing here for a rank to improve
+   * on, so nothing is ranked.
+   *
+   * Still gathered from every frame rather than from the top one, for the
+   * reason everything else here is: a player embedded from another host
+   * announces in its own frame and the page around it knows nothing. Where two
+   * frames announce, the one holding the video wins - it is describing what
+   * was actually loaded, not what the page is about.
+   *
+   * The candidates travel with it unchanged. They are what makes "it announced
+   * the wrong thing" answerable from the log, and dropping them would leave a
+   * wrong announcement looking exactly like a right one. */
+  const announced =
+    reports.find((report) => report.frameId === videoFrameId && report.info.announced)?.info
+      .announced ?? reports.find((report) => report.info.announced)?.info.announced ?? null;
+
+  if (announced) {
+    return {
+      title: announced.title,
+      titleSource: "the page's now-playing announcement",
+      year: announced.year,
+      season: announced.season,
+      episode: announced.episode,
+      episodeSource: announced.season === null ? null : "the page's now-playing announcement",
+      imdbId: announced.imdb,
+      announced,
+      candidateCount: candidates.length,
+      framesAsked: reports.length,
+      candidates: offered,
+    };
+  }
+
   const best = candidates[0];
   const episode = pickEpisode(reports, videoFrameId);
 
@@ -309,25 +373,11 @@ export async function pageContextForTab(tab, videoFrameId = null) {
     season: episode?.season ?? null,
     episode: episode?.episode ?? null,
     episodeSource: episode?.source ?? null,
+    imdbId: null,
+    announced: null,
     candidateCount: candidates.length,
     framesAsked: reports.length,
-    /* What the page actually offered, not just how many things it offered.
-     *
-     * The count alone cannot answer the question it gets asked. Recorded on
-     * 2026-08-12: auto-attach refused with `Nothing matched "The Americans Full
-     * Episodes"`, context `candidateCount: 4, episodeSource: null` - four
-     * candidates, and no way to tell whether the page named the episode
-     * somewhere this missed, or genuinely never said. Those are different bugs
-     * and the log could not separate them.
-     *
-     * Capped and trimmed: this rides every autoAttach entry, and the entry
-     * already carries the ranked results. */
-    candidates: candidates.slice(0, 8).map((candidate) => ({
-      source: candidate.source,
-      frameId: candidate.frameId,
-      text: String(candidate.text || "").slice(0, 120),
-      episode: candidate.episode ?? null,
-    })),
+    candidates: offered,
   };
 }
 

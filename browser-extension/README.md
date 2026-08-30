@@ -382,8 +382,64 @@ subtitles for an unrelated 2007 Japanese horror film.
 
 ### If you are building the site
 
-Two things the extension cannot work out on its own, and it only asks for the
-second one.
+Four things the extension cannot work out on its own. The first is a standard
+and costs you nothing; the other three are three attributes on one element,
+none of them named after this extension and none of them an arrangement with
+it.
+
+**What is playing** — `data-sso-now-playing` on the `<video>`, a JSON object
+written whole. Everything in the table above is a way of *guessing* this, and
+each of them guesses for the same reason: a page states several names and
+labels none of them, so "Baggage" and "The Americans" arrive as two equal
+strings and only one of them can be looked up anywhere. A statement labels
+them.
+
+The cost of not stating it is not the guessing, it is the **waiting**. Because
+the signals are unlabelled they also arrive at different moments, so a reader
+has to watch the answer stop moving before believing it — 1.5 seconds here,
+restarted every time any of the inputs changes again. Measured against a local
+catalogue app on 2026-08-25: its metadata named the next episode at 09:30:32,
+its tab title followed at 09:30:42, and the new subtitles went up at 09:30:47,
+with the previous episode's lines over the new picture for the whole of it.
+
+An announcement has nothing to settle, because it cannot flicker: it is one
+attribute, written once, and the next value is as final as the last. So it is
+acted on in the turn it arrives in.
+
+```html
+<video
+  data-sso-now-playing='{"v":1,"kind":"episode","title":"The Americans",
+    "year":2013,"season":3,"episode":9,"imdb":"tt4331672",
+    "durationSeconds":2701.44}'
+></video>
+```
+
+```js
+// what the page implements, whenever what is in the player changes
+video.dataset.ssoNowPlaying = JSON.stringify(nowPlaying);
+video.dispatchEvent(new Event("sso:nowplaying", { bubbles: true }));
+```
+
+| Field | Meaning |
+|---|---|
+| `v` | `1`. A reader that does not know a version ignores the whole announcement rather than the fields it does not recognise — a later version may change what an existing field *means* |
+| `kind` | `"movie"` or `"episode"`. Anything else is not an announcement |
+| `title` | **The name subtitles are indexed under** — the series for an episode, never the episode's own name. This is the field that exists because nothing else can carry the distinction |
+| `season`, `episode` | Numbers, both or neither. A season without an episode would search a whole series, so it is refused |
+| `year` | The release year. Eighteen films are called "Mercy" |
+| `imdb` | `tt…`, of **the thing playing** — the episode's own id for an episode. This is what turns the search from a title lookup plus a fuzzy match into one exact call |
+| `durationSeconds` | The **film's** whole length, not what has arrived. Optional, and omit it rather than send a number that grows: a length read as identity is a new film several times an episode |
+
+Announce it **as soon as you commit to playing it**, before the stream is open.
+Which film this is was never a property of the bytes, and a reader given it
+early spends the stream-opening on the search instead of after it. Write the
+whole object in one assignment — a reader may observe between two writes. Omit
+what you do not know; an empty string is not a value.
+
+The event is an optimisation and the attribute is the contract: a reader must
+also watch the attribute, so a page that dispatches nothing still works, and a
+page that dispatches without changing anything costs nothing. Implement either
+half honestly.
 
 **How long the film is** — publish it in schema.org. A `VideoObject` describes
 the video actually on the page, so its `duration` can be exact

@@ -7669,6 +7669,80 @@
         }
       });
 
+      check("a page that says what it is playing is not waited for", async () => {
+        /* The check above is the same episode change on a page that states
+         * nothing: it has to settle for 1.5s first, and it restarts that wait
+         * every time any of the signals it reads moves again. On the local
+         * catalogue app the tab title moved ten seconds after the metadata did.
+         *
+         * `data-sso-now-playing` removes the wait rather than shortening it,
+         * and that is what is asserted here - not "faster", but reported before
+         * the settle window could possibly have elapsed. Nothing else may join
+         * in either: the title is the signal that lags, so a title change on
+         * its own must not be a new episode once the page is announcing. */
+        const video = document.getElementById("v");
+        const wasTitle = document.title;
+        const say = (fields) =>
+          (video.dataset.ssoNowPlaying = JSON.stringify({
+            v: 1,
+            kind: "episode",
+            title: "The Americans",
+            year: 2013,
+            season: 3,
+            episode: 9,
+            imdb: "tt4331672",
+            durationSeconds: 2701.44,
+            ...fields,
+          }));
+
+        try {
+          window.__sent.length = 0;
+          say({});
+          await sleep(300);
+          const quick = window.__sent.filter((m) => m.type === "sso:programme");
+          if (quick.length !== 1)
+            throw new Error(`reported ${quick.length} times inside the settle window`);
+          if (!quick[0].mark.startsWith("sso:1|episode|tt4331672|The Americans"))
+            throw new Error(`the mark was not the announcement: ${quick[0].mark}`);
+
+          /* The tab title is half the mark on a page that states nothing, and
+           * none of it on a page that announces. */
+          document.title = "Harness — something else entirely";
+          await sleep(2000);
+          if (window.__sent.filter((m) => m.type === "sso:programme").length !== 1)
+            throw new Error("the tab title was read as a new episode");
+
+          window.__sent.length = 0;
+          say({ episode: 10 });
+          await sleep(300);
+          const next = window.__sent.filter((m) => m.type === "sso:programme");
+          if (next.length !== 1 || !next[0].mark.endsWith("S3E10"))
+            throw new Error(`the next episode was not noticed: ${JSON.stringify(next)}`);
+
+          /* A version this build does not know is not read field by field. It
+           * falls back to the guessing, which still needs its settle - so the
+           * absence of a report inside the window IS the assertion. */
+          window.__sent.length = 0;
+          say({ v: 99, episode: 11 });
+          await sleep(300);
+          if (window.__sent.some((m) => m.type === "sso:programme"))
+            throw new Error("an announcement from an unknown version was acted on");
+
+          /* And neither is one that names a season without an episode, which
+           * would search a whole series. */
+          window.__sent.length = 0;
+          say({ episode: null });
+          await sleep(300);
+          if (window.__sent.some((m) => m.type === "sso:programme"))
+            throw new Error("a season with no episode was accepted as an announcement");
+        } finally {
+          delete video.dataset.ssoNowPlaying;
+          document.title = wasTitle;
+          await sleep(1800);
+          window.__sent.length = 0;
+        }
+      });
+
       check("the find screen stops being about the last episode", async () => {
         /* Reported as "I have clicked the next episode button ... but the
          * subtitle tool still finds the previous title and searches for it".

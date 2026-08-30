@@ -643,8 +643,13 @@ async function planAutoAttach(tab, frameId) {
    * whichever frame names the episode, which on an embedded player is often
    * the player's frame and nowhere else. */
   const context = await pageContextForTab(tab, frameId);
-  const { title, year, season, episode } = context;
-  const found = await search({ title, year, season, episode, languages });
+  const { title, year, season, episode, imdbId } = context;
+  /* An id, where the page announced one, is what turns the search from two
+   * calls into one: the daemon resolves a title through /features before it
+   * can search exactly, and an id it was given needs no resolving. It also
+   * ends the whole class of wrong-film failures - "Prime Video: Crime 101"
+   * returning Ekusute - because there is no fuzzy step left to be wrong. */
+  const found = await search({ title, year, season, episode, languages, imdb_id: imdbId });
 
   const plan = {
     languages,

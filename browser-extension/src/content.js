@@ -725,6 +725,14 @@
   const LONGEST_FILM_S = 24 * 3600;
 
   function statedSeconds() {
+    /* An announced length is the film's own, from the party that opened the
+     * stream, and it is there before the first frame is decoded. Everything
+     * below is how to find one on a page that does not announce - including
+     * the VideoObject the catalogue app only writes once playback has started,
+     * which is after the moment this is most needed. */
+    const announced = announcedProgramme()?.durationSeconds;
+    if (announced) return announced;
+
     const now = performance.now();
     if (now - statedLength.at < STATED_LENGTH_MS) return statedLength.seconds;
     let best = null;
@@ -1092,6 +1100,12 @@
       year,
       url: location.href,
       isTopFrame: window === window.top,
+      /* Reported beside the candidates rather than instead of them, so a frame
+       * that announces and a frame that does not are the same message and the
+       * worker decides. A page that announces still contributes its guesses:
+       * the log keeps them, which is how "it announced the wrong thing" can be
+       * told apart from "it announced nothing". */
+      announced: announcedProgramme(state.video?.isConnected ? state.video : pickVideo()),
       episode: {
         fromMetadata,
         fromTitle: matchEpisode(document.title),
@@ -3751,6 +3765,115 @@
     return typeof one === "string" ? one.trim() : "";
   };
 
+  /* What the page ANNOUNCES it is playing, or null.
+   *
+   * `data-sso-now-playing` on the element that already carries the offset: one
+   * JSON object, written whole, every time the page changes what is in the
+   * player. Everything below this is a way of GUESSING that, and each of them
+   * is a guess for the same reason - a page states several names and labels
+   * none of them, so the reader has to work out which is the programme, which
+   * is the episode and which is the site. An announcement is labelled.
+   *
+   * The presence of the attribute is itself the promise. A page that writes it
+   * is saying its statement is complete and changes atomically, which is the
+   * one thing no scraped signal can promise and the whole reason the settle
+   * window below exists. There is no second attribute declaring the
+   * capability: two things to keep in step is one thing that can disagree.
+   *
+   * A string in the DOM rather than a `CustomEvent` detail, for the reason
+   * `sso:seek` is one: an object built in an extension's isolated world is not
+   * reliably readable in the page's, and the DOM is what both worlds share.
+   *
+   * Memoised on the raw text and the element it came off, not on a clock. The
+   * identity of the string IS the identity of the answer, so this is exact
+   * where the 250ms window `statedProgramme` uses is a guess - and that guess
+   * sat on the path whose LATENCY is the bug this contract exists to fix. */
+  let announcedWork = { video: null, raw: null, value: null };
+
+  function announcedProgramme(video = state.video) {
+    const raw = video?.getAttribute?.("data-sso-now-playing") ?? null;
+    if (video === announcedWork.video && raw === announcedWork.raw) return announcedWork.value;
+    announcedWork = { video, raw, value: readAnnouncement(raw) };
+    return announcedWork.value;
+  }
+
+  /* A version this does not know is not read at all, field by field or
+   * otherwise. That is what makes the contract safe to extend: a later version
+   * may change what an existing field MEANS, and a reader that helped itself
+   * to the fields it recognised would then be confidently wrong instead of
+   * falling back to the guessing, which still works. */
+  const ANNOUNCEMENT_VERSION = 1;
+
+  /* Parsed, then checked, because a malformed announcement has to fall through
+   * to the guessing rather than send a search for half of one. Every rule here
+   * is one the guessing already had to learn:
+   *
+   * - `title` is the name subtitles are INDEXED under, so for an episode it is
+   *   the series. An episode page names "Baggage" and "The Americans" and only
+   *   the second finds anything; the contract puts the answer in the field
+   *   rather than leaving each reader to rank two unlabelled strings.
+   * - a season with no episode is not an answer - it would search a whole
+   *   series - so `statedEpisode` refuses that pair and so does this.
+   * - numbers are numbers. A site generator emitting the whole vocabulary with
+   *   empty strings in it reads as episode zero of season zero, which outranks
+   *   the real one; `statedNumber` is why that is not possible here either.
+   * - a length is checked against the range a film can have, because it goes
+   *   into the drift estimator's divisor with nothing downstream to catch it.
+   */
+  function readAnnouncement(raw) {
+    if (!raw) return null;
+    let stated;
+    try {
+      stated = JSON.parse(raw);
+    } catch {
+      // A page mid-write, or one that emitted something else entirely.
+      return null;
+    }
+    if (!stated || stated.v !== ANNOUNCEMENT_VERSION) return null;
+    const kind = stated.kind === "episode" || stated.kind === "movie" ? stated.kind : "";
+    const title = String(stated.title ?? "").trim();
+    if (!kind || !title) return null;
+
+    const season = statedNumber(stated.season);
+    const episode = statedNumber(stated.episode);
+    if (kind === "episode" && (season === null || episode === null)) return null;
+
+    const imdb = String(stated.imdb ?? "").trim();
+    const year = statedNumber(stated.year);
+    const seconds = Number(stated.durationSeconds);
+    const usable = seconds >= MIN_VIDEO_SECONDS && seconds <= LONGEST_FILM_S;
+    return {
+      kind,
+      title,
+      year: year !== null && year > 1800 ? year : null,
+      season: kind === "episode" ? season : null,
+      episode: kind === "episode" ? episode : null,
+      imdb: /^tt\d+$/.test(imdb) ? imdb : null,
+      durationSeconds: usable ? seconds : null,
+    };
+  }
+
+  /* The identity an announcement carries, and nothing else it carries.
+   *
+   * The length is deliberately not in here. A length that grows as the stream
+   * arrives is what used to churn the mark - 2701, 146, 2701, 530 over one
+   * evening, each flip taking both subtitles off - and the announcement states
+   * one only so the rest of the overlay can have the film's real length before
+   * the first frame. Putting it in the identity would reintroduce exactly the
+   * churn the announcement exists to end, and it would make switching to
+   * another copy of the same episode read as a different programme. */
+  const ANNOUNCED_PREFIX = "sso:1|";
+
+  const announcedMark = (announced) =>
+    ANNOUNCED_PREFIX +
+    [
+      announced.kind,
+      announced.imdb || "",
+      announced.title,
+      announced.year ?? "",
+      announced.season === null ? "" : `S${announced.season}E${announced.episode}`,
+    ].join("|");
+
   /* What the page SAYS is playing - its identity, not its encode.
    *
    * `statedSeconds` above prefers a VideoObject, and this deliberately refuses
@@ -3833,6 +3956,20 @@
   function programmeMark() {
     const video = state.video;
     if (!video) return "";
+
+    /* A page that ANNOUNCES what it is playing has answered this, alone.
+     *
+     * Nothing joins in - and in particular not the tab title. The title rides
+     * along in both shapes below, because on a site that states nothing it is
+     * the one signal every player updates; it is also the LAST thing to
+     * update. Measured on the catalogue app 2026-08-25: the metadata named the
+     * next episode and the tab title did not follow for ten seconds, and every
+     * second of that was the mark moving again and the settle in
+     * `noticeProgrammeChange` starting over. An identity that has to wait for
+     * the slowest signal on the page is not an announcement. */
+    const announced = announcedProgramme(video);
+    if (announced) return announcedMark(announced);
+
     const title = programmeTitle();
 
     /* A page that states what it is playing has already answered this, and its
@@ -3876,6 +4013,19 @@
    * before the title on some sites and after it on others - and short enough
    * that the subtitles are up before the recap ends. */
   const PROGRAMME_SETTLE_MS = 1500;
+
+  /* An announcement does not settle, because it cannot flicker.
+   *
+   * The wait above is not caution about the page, it is caution about the
+   * SIGNAL. A mark built from a duration that is still arriving and a title
+   * that is still being written moves several times before it means anything,
+   * and acting on each move takes the subtitles off. A page that writes its
+   * identity as one attribute, whole, has nothing to settle: the next value is
+   * as final as the one before it. Waiting for it is pure latency, and it is
+   * the difference between subtitles a few seconds after the episode changes
+   * and subtitles at the moment it changes. */
+  const settleFor = (mark) => (mark.startsWith(ANNOUNCED_PREFIX) ? 0 : PROGRAMME_SETTLE_MS);
+
   let programme = { mark: "", since: 0, told: "" };
   /* The mark once it has stopped moving, which is what "a different programme"
    * means to anything outside this file.
@@ -3902,11 +4052,17 @@
 
     const mark = programmeMark();
     if (!mark) return;
+    const wait = settleFor(mark);
     if (mark !== programme.mark) {
       programme = { mark, since: performance.now(), told: programme.told };
-      return;
+      /* An inferred mark is given the window to stop moving. An announced one
+       * is acted on in the turn it arrived in: returning here unconditionally
+       * cost a whole tick even where the wait is zero, and the tick during an
+       * episode change is the idle one - half a second of the last episode's
+       * lines over the new picture, for nothing. */
+      if (wait > 0) return;
     }
-    const settled = performance.now() - programme.since >= PROGRAMME_SETTLE_MS;
+    const settled = performance.now() - programme.since >= wait;
     if (settled && settledProgramme !== mark) {
       settledProgramme = mark;
       /* A different film is a change in what the status describes, and the
@@ -6748,6 +6904,39 @@
   };
   document.addEventListener("fullscreenchange", onFullscreenChange);
   document.addEventListener("webkitfullscreenchange", onFullscreenChange);
+
+  /* Noticing a new episode at the page's moment rather than at the next tick.
+   *
+   * The tick is 50ms with subtitles up and 500ms without, and an episode
+   * change is very often the second case - the last episode's lines have just
+   * come off. Half a second was small next to the 1500ms settle that used to
+   * follow it, and it is the whole remaining wait once an announcement removes
+   * that settle.
+   *
+   * Two ways in, because a page may honestly implement either half and neither
+   * is load-bearing on its own. The event is what a page dispatches after
+   * writing the attribute; the observer catches a page that only writes it.
+   * Both call the same function the tick calls, which still runs - so all
+   * three agree by construction, and a page that does neither is exactly as
+   * well served as before.
+   *
+   * Attributes only, filtered to the one name. `childList` would have caught
+   * an element that arrives with the attribute already on it, and would also
+   * have fired this on every DOM insertion a single-page app makes; that case
+   * is a page load rather than an episode change, there is nothing attached to
+   * be wrong, and the tick has it within one interval. */
+  const onAnnouncement = () => {
+    if (!state.video || !state.video.isConnected) state.video = pickVideo();
+    if (state.video) noticeProgrammeChange();
+  };
+  document.addEventListener("sso:nowplaying", onAnnouncement, true);
+  const announcements = new MutationObserver(onAnnouncement);
+  announcements.observe(document.documentElement, {
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["data-sso-now-playing"],
+  });
+
   loadOverlayStyles();
   loadSettings();
   startTicking();
@@ -6782,6 +6971,8 @@
     document.removeEventListener("mousemove", onPointerMove, { capture: true });
     document.removeEventListener("fullscreenchange", onFullscreenChange);
     document.removeEventListener("webkitfullscreenchange", onFullscreenChange);
+    document.removeEventListener("sso:nowplaying", onAnnouncement, true);
+    announcements.disconnect();
     /* Guarded, because the commonest reason to be tearing down is that the
      * extension has just been reloaded - and reaching into chrome.runtime is
      * then the very thing that throws. A teardown that threw here left every
