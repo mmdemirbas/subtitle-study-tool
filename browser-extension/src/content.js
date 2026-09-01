@@ -5771,6 +5771,28 @@
 
   const NO_SPANS = { starts: [], ends: [], chars: [], reach: [] };
 
+  /* The same lines with only their text, cached the same way and for the same
+   * reason.
+   *
+   * Study mode's name test is the caller, and whether "Adama" is a name is not
+   * a question one line can answer - it is answered by how the word is spelt
+   * across the whole film. Asked once per cue with a film playing, so the array
+   * is built once per file and handed back by reference; study.js uses that
+   * reference as its own cache key, which is what makes attaching a different
+   * file drop the old answer without anything having to notice the attach. */
+  const textsCache = new Map();
+
+  function cueTextsFor(slot) {
+    const cues = state.tracks[slot]?.cues || [];
+    const cached = textsCache.get(slot);
+    if (cached && cached.cues === cues) return cached.texts;
+    const texts = cues.map((cue) => cue.text || "");
+    textsCache.set(slot, { cues, texts });
+    return texts;
+  }
+
+  const NO_TEXTS = [];
+
   function notify() {
     writeStripTags();
     pushMirror();
@@ -6645,6 +6667,12 @@
     },
     cueSpans(slot) {
       return role === "chrome" ? (mirror?.cueSpans?.[slot] || NO_SPANS) : cueSpansFor(slot);
+    },
+    /* Every line of this subtitle, for the work that needs the file rather than
+     * the moment. Empty in a mirrored frame for the reason pairedCues is: the
+     * mirror carries cue TIMES, not text, and study runs where the film is. */
+    cueTexts(slot) {
+      return role === "chrome" ? NO_TEXTS : cueTextsFor(slot);
     },
     /* File clock to stream clock, for a track that may not be attached yet.
      *

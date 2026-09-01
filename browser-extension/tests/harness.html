@@ -5210,6 +5210,46 @@
           throw new Error('"about" (rank 90) was marked, so the threshold is not being applied');
       });
 
+      check("a name is marked as a name, not as a word to learn", async () => {
+        /* 239 of the 860 words the overlay marked in the Battlestar Galactica
+         * miniseries were proper nouns - 27.8% of a two-per-line budget spent
+         * on words nobody can learn, and on lookups that answered "viper" with
+         * the Turkish for the snake and "adama" with a street in Warsaw.
+         *
+         * Which is which is not decidable from one line: the third cue here
+         * OPENS with the name, and a line-at-a-time test would read that as an
+         * ordinary capital. It is decidable from the file, which is why this
+         * attaches three lines rather than one. */
+        window.__ssoStudy.updateSettings({ rarityRank: 4000, auto: false });
+        await window.__ssoStudy.setEnabled(true);
+        try {
+          await window.__ssoApi.attach({
+            cues: [
+              { start: 0, end: 100000, text: "Commander Adama took the frankly impossible watch." },
+              { start: 100000, end: 200000, text: "Tell Adama the fleet is ready." },
+              { start: 200000, end: 300000, text: "Adama will not answer." },
+            ],
+            label: "EN \u00b7 names", fileId: 9101, language: "en", slot: 0,
+          });
+          video.currentTime = 50;
+          await sleep(250);
+          const adama = wordsIn(0).find((w) => w.dataset.w === "adama");
+          if (!adama) throw new Error("the line carrying the name never rendered");
+          if (adama.dataset.name !== "true")
+            throw new Error('"Adama" was not read as a name, though it is capitalised mid-sentence in two of its three lines');
+          if (adama.dataset.rare === "true")
+            throw new Error('"Adama" is still taking one of the two vocabulary places');
+          const frankly = wordsIn(0).find((w) => w.dataset.w === "frankly");
+          if (frankly?.dataset.rare !== "true")
+            throw new Error('"frankly" (rank 14200) stopped being marked, so the name test is eating vocabulary');
+          if (frankly?.dataset.name === "true")
+            throw new Error('"frankly" was called a name');
+        } finally {
+          await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
+          video.currentTime = 1;
+        }
+      });
+
       check("study can follow two subtitles at once", async () => {
         /* Study read exactly one subtitle: one slot in the settings, one record
          * for the line on screen, and "the other subtitle" wherever a paired

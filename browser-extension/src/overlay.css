@@ -225,6 +225,18 @@
   text-underline-offset: 0.18em;
 }
 
+/* A name, not a word to learn. Marked because a subtitle strips the fact that
+ * Caprica is a place and Adama is a person, and that is worth keeping - but in
+ * its own colour, so the eye stops asking what it means. The same geometry as
+ * the vocabulary underline: it is the same kind of mark about a different kind
+ * of word, not a louder one. */
+.sso-w[data-name="true"] {
+  text-decoration: underline;
+  text-decoration-color: rgba(198, 170, 255, 0.8);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.18em;
+}
+
 /* Already in the deck. Still marked, because knowing you have met this word
  * before is itself the useful signal, but marked as settled rather than as
  * something to look at. */

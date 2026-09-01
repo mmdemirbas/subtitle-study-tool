@@ -351,6 +351,7 @@
       if (isStudied(slot)) continue;
       for (const span of lines.get(slot)?.words || []) {
         span.dataset.rare = "false";
+        span.dataset.name = "false";
         span.dataset.selected = "false";
       }
       lines.delete(slot);
@@ -414,6 +415,7 @@
     for (const line of lines.values()) {
       for (const span of line.words) {
         span.dataset.rare = "false";
+        span.dataset.name = "false";
         span.dataset.selected = "false";
       }
     }
@@ -607,6 +609,81 @@
     }
   }
 
+  /* Anything a subtitle puts in brackets is a speaker label or a sound, not
+   * spoken words, and neither should vote on how a word is normally spelt. */
+  const NOT_SPOKEN = /\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|<[^>]*>/g;
+  const CAPITAL = /^[\p{Lu}]/u;
+
+  /* Which words in this subtitle are names, decided from the whole file.
+   *
+   * Measured over the Battlestar Galactica miniseries: 239 of the 860 words the
+   * overlay marked were proper nouns - 27.8% of a two-per-line budget spent on
+   * words nobody can learn. They win that budget every time they are said,
+   * because a name is not in the frequency table and "not in the table" ranks
+   * rarer than everything that is.
+   *
+   * They also cannot be translated, and asking is worse than not asking.
+   * Measured against the twelve most-marked words of that file, English into
+   * Turkish: "viper" came back as "Engerek!" (the snake), "adama" as "Adama
+   * Mickiewicza" (a street in Warsaw), "boomer" as "Kahrolasi bir Boomer mi?",
+   * and four of the twelve - galactica, caprica, gaius, frak - came back empty
+   * after a round trip that cost 634ms on average. So a name is marked as a
+   * name, in its own colour, and no lookup is spent on it.
+   *
+   * The test is capitalisation, which is the only signal a subtitle file
+   * carries: capitalised where a sentence did not just start, in at least half
+   * of its occurrences. One line cannot answer this - "Fire!" opens a line, and
+   * every name opens one sooner or later - and the file answers it well. It
+   * misses a lower-case name and catches a stray emphatic capital.
+   *
+   * The same rule, character for character, as tools/measure-script.mjs, so the
+   * figures in docs/reports/what-the-script-is-worth.md keep describing what
+   * the overlay actually does.
+   *
+   * One pass over the file, on the first line marked after an attach - about
+   * 8,000 tokens for a feature film - and then held by the identity of the
+   * array content.js built once for the same file. */
+  const namesByTrack = new Map();
+
+  function namesIn(slot, language) {
+    const texts = api.cueTexts?.(slot) || [];
+    const held = namesByTrack.get(slot);
+    if (held && held.texts === texts && held.language === language) return held.names;
+
+    const seen = new Map();
+    for (const text of texts) {
+      const spoken = String(text).replace(NOT_SPOKEN, " ");
+      /* Walked with real match positions rather than indexOf, which returns the
+       * FIRST occurrence of a surface form and so reads the wrong context for
+       * any word said twice in one line. */
+      WORD_PATTERN.lastIndex = 0;
+      for (const match of spoken.matchAll(WORD_PATTERN)) {
+        const word = fold(match[0], language);
+        /* Sentence-start is generous on purpose: the opening of a line, the
+         * word after . ! ? : or an ellipsis, and the word after a dash, which
+         * is how a subtitle marks the second speaker. Each of those would
+         * otherwise read as a mid-sentence capital and call half the film a
+         * name. */
+        const before = spoken
+          .slice(0, match.index)
+          .replace(/["'\u201c\u201d\u2018\u2019()[\]]+\s*$/, "")
+          .trimEnd();
+        const opens = before === "" || /[.!?\u2026:]$/.test(before) || /(^|\s)[-\u2013\u2014]$/.test(before);
+        const entry = seen.get(word) || { count: 0, capitalMid: 0 };
+        if (!opens && CAPITAL.test(match[0])) entry.capitalMid += 1;
+        entry.count += 1;
+        seen.set(word, entry);
+      }
+    }
+
+    const names = new Set();
+    for (const [word, entry] of seen) {
+      if (entry.capitalMid >= Math.max(1, entry.count * 0.5)) names.add(word);
+    }
+    namesByTrack.set(slot, { texts, language, names });
+    return names;
+  }
+
   async function markWords(line) {
     const language = studyLanguage(line.slot);
     const candidates = [...new Set(line.words.map((span) => span.dataset.w))].filter(
@@ -620,6 +697,7 @@
     if (lines.get(line.slot) !== line || !settings.enabled) return;
 
     const rare = [];
+    const names = namesIn(line.slot, language);
     for (const span of line.words) {
       const word = span.dataset.w;
       const rank = ranks.has(word) ? ranks.get(word) : undefined;
@@ -631,9 +709,15 @@
        * underlining every word of a film in a language we cannot rank. */
       if (rank === undefined || letterCount(word) < settings.minLetters) {
         span.dataset.rare = "false";
+        span.dataset.name = "false";
         continue;
       }
-      const isRare = rank === null || rank >= settings.rarityRank;
+      /* A name is marked as a name and stops there: it keeps the fact that
+       * Caprica is a place, which a bare subtitle strips, without taking one of
+       * the two places a line has for words that can be learnt. */
+      const isName = names.has(word);
+      span.dataset.name = isName ? "true" : "false";
+      const isRare = !isName && (rank === null || rank >= settings.rarityRank);
       span.dataset.rare = isRare ? "true" : "false";
       // Kept on the element so a hover can report how rare the word is without
       // asking again. "" is how a dataset says null.

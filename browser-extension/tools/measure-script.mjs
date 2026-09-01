@@ -102,19 +102,32 @@ if (!cues.length) {
 const seen = new Map(); // word -> {rank, count, firstMs, capitalMid}
 let tokens = 0;
 const perCue = [];
-const marked = new Map(); // what the overlay would actually put on screen
+/* Two maps, because the overlay's rule changed and both numbers are worth
+ * keeping. `marked` is what it put on screen when every rare word competed for
+ * the same two places, which is where the 27.8% name share in
+ * docs/reports/what-the-script-is-worth.md was measured. `markedVocabulary` is
+ * what it puts there now that a name is its own kind and does not enter the
+ * contest. Reporting only the second would make that report unreproducible. */
+const marked = new Map();
+const markedVocabulary = new Map();
+
+/* A name, guessed the only way a subtitle file allows: capitalised where a
+ * sentence did not just start. Walked with real match positions rather than
+ * indexOf, which returns the FIRST occurrence of a surface form and therefore
+ * reads the wrong context for any word said twice in one line.
+ *
+ * Sentence-start is generous on purpose - the opening of a line, the word
+ * after . ! ? or an ellipsis, and the word after a dash, which is how a
+ * subtitle marks the second speaker. Each of those would otherwise be read as
+ * a mid-sentence capital and inflate the count.
+ *
+ * A pass of its own, ahead of the marking, because the verdict is about the
+ * whole file: three cues in, an incremental count has met a name once and has
+ * no opinion worth having. The overlay reads the file before it marks its first
+ * line for exactly this reason, so measuring it any other way would measure
+ * something the overlay does not do. */
 for (const cue of cues) {
   const spoken = cue.text.replace(NOT_SPOKEN, " ");
-  const words = (spoken.match(WORD_PATTERN) || []).map(fold);
-  /* A name, guessed the only way a subtitle file allows: capitalised where a
-   * sentence did not just start. Walked with real match positions rather than
-   * indexOf, which returns the FIRST occurrence of a surface form and therefore
-   * reads the wrong context for any word said twice in one line.
-   *
-   * Sentence-start is generous on purpose - the opening of a line, the word
-   * after . ! ? or an ellipsis, and the word after a dash, which is how a
-   * subtitle marks the second speaker. Each of those would otherwise be read as
-   * a mid-sentence capital and inflate the count. */
   for (const match of spoken.matchAll(WORD_PATTERN)) {
     const raw = match[0];
     const lower = fold(raw);
@@ -125,6 +138,13 @@ for (const cue of cues) {
     entry.count += 1;
     seen.set(lower, entry);
   }
+}
+
+const isName = (it) => it.capitalMid >= Math.max(1, it.count * 0.5);
+
+for (const cue of cues) {
+  const spoken = cue.text.replace(NOT_SPOKEN, " ");
+  const words = (spoken.match(WORD_PATTERN) || []).map(fold);
   let rareHere = 0;
   const candidates = [];
   for (const word of words) {
@@ -141,6 +161,11 @@ for (const cue of cues) {
   for (const pick of candidates.slice(0, MAX_PER_CUE)) {
     marked.set(pick.word, (marked.get(pick.word) || 0) + 1);
   }
+  // The same contest with the names withdrawn: the places they were taking go
+  // to the next-rarest words rather than going unspent.
+  for (const pick of candidates.filter((it) => !isName(seen.get(it.word))).slice(0, MAX_PER_CUE)) {
+    markedVocabulary.set(pick.word, (markedVocabulary.get(pick.word) || 0) + 1);
+  }
   const seconds = Math.max(0.001, (cue.end - cue.start) / 1000);
   perCue.push({
     startMs: cue.start,
@@ -152,7 +177,6 @@ for (const cue of cues) {
   });
 }
 
-const isName = (it) => it.capitalMid >= Math.max(1, it.count * 0.5);
 const rare = [...seen.entries()]
   .filter(([word, it]) =>
     (word.match(LETTERS) || []).length >= MIN_LETTERS &&
@@ -193,6 +217,8 @@ console.log(JSON.stringify({
   // Of the words the overlay would actually put on screen, how many are names.
   markedTokens: [...marked.values()].reduce((a, b) => a + b, 0),
   markedTypes: marked.size,
+  markedVocabularyTokens: [...markedVocabulary.values()].reduce((a, b) => a + b, 0),
+  markedVocabularyTypes: markedVocabulary.size,
   markedNameTokens: [...marked.entries()]
     .filter(([word]) => isName(seen.get(word)))
     .reduce((sum, [, n]) => sum + n, 0),
