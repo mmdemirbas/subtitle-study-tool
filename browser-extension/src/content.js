@@ -4831,6 +4831,58 @@
     return found;
   }
 
+  /* --- lining up against the picture, by ear ----------------------------------
+   *
+   * The case the aligner cannot reach, and the one two thirds of the
+   * corrections are actually about. `align()` answers "where does this file sit
+   * against that one" - a question about the pair - and a reader whose pair
+   * agrees perfectly while both files are eight seconds late has no use for it.
+   * Read out of the running log over 241 alignments: 141 were followed by a
+   * by-hand correction inside fifteen minutes, and of the 629 corrections that
+   * followed one, 419 were on the LEADING subtitle, which is the one Line up
+   * has nothing to say about and which snapTiming deliberately refuses.
+   *
+   * There is exactly one reference for where the film's dialogue is, and it is
+   * the reader's ear. So they say which line they just heard and the arithmetic
+   * is done for them. `proposeAnchors` in align.js has been written and tested
+   * since the aligner shipped and has never had a caller.
+   *
+   * The cue starts are converted to the video's clock BEFORE they are offered,
+   * which is what makes the answer right under a rate or a staircase: what
+   * comes back is then the delta to add rather than an absolute offset computed
+   * from a file clock that this track no longer sits on. `nudge` applies it, so
+   * the addition happens where the value is - see the note there about reading
+   * a value across a frame boundary.
+   *
+   * The moment is captured when the button is pressed, not when the reader
+   * chooses. They are reading eight lines while the film runs on, and an offset
+   * measured from when they finished reading would be wrong by however long
+   * that took. */
+  function anchorChoices(slot = state.keyTrack) {
+    const track = state.tracks[slot];
+    if (!track?.cues.length || !globalThis.__ssoAlign?.proposeAnchors) return null;
+    const at = streamNowMs();
+    if (!Number.isFinite(at)) return null;
+
+    const shown = track.cues.map((cue) => ({
+      start: streamTimeMs(track, cue.start, state.adDriftMs),
+      text: cue.text,
+    }));
+    const choices = globalThis.__ssoAlign.proposeAnchors(at, shown);
+    if (!choices.length) return null;
+    return {
+      atMs: Math.round(at),
+      slot,
+      choices: choices.map((choice) => ({
+        index: choice.index,
+        startMs: choice.startMs,
+        text: choice.text,
+        // What to ADD, not where to land. See above.
+        moveMs: choice.offsetMs,
+      })),
+    };
+  }
+
   /* Relative, and that is the point of it existing beside setOffset.
    *
    * The held nudge buttons repeat every 80ms, and the panel drawing them may
@@ -6366,6 +6418,7 @@
     "setSteps",
     "nudge",
     "snapTiming",
+    "anchorChoices",
     "applyTrackDrift",
     "stepLine",
     "updateSettings",
@@ -6744,6 +6797,7 @@
     setSteps,
     nudge,
     snapTiming,
+    anchorChoices,
     applyTrackDrift,
     stepLine,
     formatOffset,

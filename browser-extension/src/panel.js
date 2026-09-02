@@ -317,6 +317,7 @@
     el.screens = {
       root: screen(buildTracks()),
       find: screen(buildSearch()),
+      ear: screen(buildByEar()),
     };
     body.append(...Object.values(el.screens));
 
@@ -2464,9 +2465,27 @@
 
     /* Lining up is a timing control, so it sits with the timing controls - the
      * reading it produces is the one directly beside it. */
+    /* One button, and what it lines this subtitle up WITH is the difference.
+     *
+     * A follower is measured against the lead, and the aligner answers that
+     * from where the two files say the same things. The lead is measured
+     * against the picture, and nothing in either file answers that - which is
+     * why the aligner cannot help and why the snap refuses to touch it. Its
+     * only reference is the reader's ear, so this asks them.
+     *
+     * It used to be hidden with one subtitle and, with two, to offer the
+     * follower's answer on the lead's card as well: pressing it there moved
+     * the reference onto the thing being referenced, which is the model
+     * inverted. Read out of the running log over 241 alignments, 419 of the
+     * 629 corrections that followed one inside fifteen minutes were on the
+     * lead - the subtitle this button had nothing to say about. Now it does. */
     const lineUpButton = button("Line up", {
-      title: "Work out the gap from where the two subtitles say the same things",
-      onClick: () => api.detached(lineUp(slot), "Lining it up"),
+      onClick: () => api.detached(
+        api.status().leadSlot === null || api.status().leadSlot === slot
+          ? openByEar(slot)
+          : lineUp(slot),
+        "Lining it up",
+      ),
     });
     lineUpButton.className = "sso-sync__align";
 
@@ -2573,6 +2592,94 @@
       offsetField, offsetReset, visible, remove, disarm, lineUpButton, timeline,
       drift, driftSaid,
     };
+  }
+
+  /* --- lining up against the picture, by ear ----------------------------------
+   *
+   * The aligner answers "where does this file sit against that one", and a
+   * reader whose two subtitles agree perfectly while both are eight seconds
+   * late has no use for that answer. Read out of the running log over 241
+   * alignments: 141 were followed by a by-hand correction inside fifteen
+   * minutes, and of the 629 corrections that followed one, 419 were on the
+   * LEADING subtitle - the one Line up has nothing to say about, and the one
+   * the snap deliberately refuses to touch.
+   *
+   * There is one reference for where the film's dialogue is and it is the
+   * reader's ear. So this asks the only question they can answer: of the lines
+   * near the playhead, which one did you just hear. `proposeAnchors` in
+   * align.js has been written and tested since the aligner shipped and until
+   * now had no caller anywhere.
+   *
+   * A list rather than "move so the nearest line starts now", because the
+   * nearest line is only the right one when the subtitle is already close, and
+   * a subtitle that is already close is not the one being fixed. The comment
+   * beside proposeAnchors says the same thing from the other end.
+   */
+  let earSlot = 0;
+  let earMoment = 0;
+
+  function buildByEar() {
+    const wrap = document.createElement("div");
+
+    el.earNote = document.createElement("p");
+    el.earNote.className = "sso-note";
+
+    el.earList = document.createElement("div");
+    el.earList.className = "sso-ear";
+
+    wrap.append(el.earNote, el.earList);
+    return wrap;
+  }
+
+  /* How much to move, said as the thing being done rather than as a number
+   * with a sign. The reading on the card is where the subtitle ended up; this
+   * is the step, and the two want different words. */
+  function describeMove(ms) {
+    const seconds = (Math.abs(ms) / 1000).toFixed(2).replace(/\.?0+$/, "");
+    if (Math.abs(ms) < 10) return "already where you heard it";
+    return ms > 0 ? `hold it back ${seconds}s` : `bring it forward ${seconds}s`;
+  }
+
+  async function openByEar(slot) {
+    /* The moment is taken now, not when the reader picks. They are about to
+     * read eight lines while the film runs on, and an offset measured from
+     * when they finished reading would be out by however long that took. */
+    const answer = await Promise.resolve(api.anchorChoices?.(slot));
+    if (!answer?.choices?.length) {
+      sayInPanel(slot, "No lines near the playhead to choose between", { warn: true });
+      return;
+    }
+    earSlot = slot;
+    earMoment = answer.atMs;
+    el.earNote.textContent =
+      "Pick the line you just heard. Everything else moves with it when this is the first subtitle.";
+    el.earList.replaceChildren(
+      ...answer.choices.map((choice) => {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "sso-ear__line";
+
+        const said = document.createElement("span");
+        said.className = "sso-ear__said";
+        said.textContent = (choice.text || "").replace(/\s+/g, " ").trim();
+
+        const move = document.createElement("span");
+        move.className = "sso-ear__move";
+        move.textContent = describeMove(choice.moveMs);
+
+        row.append(said, move);
+        row.addEventListener("click", () => {
+          /* The STEP, not the sum. The offset may be in another frame and may
+           * have moved since this list was built - see the note on api.nudge. */
+          api.nudge(choice.moveMs, { slot: earSlot, quiet: true, how: "anchor" });
+          goRoot();
+          sayInPanel(earSlot, `Lined up by ear · ${describeMove(choice.moveMs)}`);
+          refresh(api.status());
+        });
+        return row;
+      }),
+    );
+    goTo("ear");
   }
 
   /* Say something on one card, with at most one thing to do about it.
@@ -2770,6 +2877,7 @@
   const SCREEN_TITLES = {
     root: "Subtitle Overlay",
     find: "Find a subtitle",
+    ear: "Which line did you hear?",
   };
 
   let atScreen = "root";
@@ -4122,8 +4230,14 @@
           ? "Click to study this subtitle too"
           : "Mark the rare words in this subtitle and show what they mean";
       card.learnChip.setAttribute("aria-pressed", learning ? "true" : "false");
-      // Nothing to line up against with one subtitle on screen.
-      card.lineUpButton.hidden = status.trackCount < 2;
+      /* What this subtitle is measured against decides the verb. The leading
+       * one - and a lone one, which leads nothing - is measured against the
+       * picture, and only the reader can say where that is. */
+      const byEar = status.leadSlot === null || status.leadSlot === slot;
+      card.lineUpButton.textContent = byEar ? "By ear" : "Line up";
+      card.lineUpButton.title = byEar
+        ? "Say which line you just heard, and this moves to match the picture"
+        : "Work out the gap from where the two subtitles say the same things";
       /* What this file's own corrections say about its speed. It is a
        * measurement and it stands while it holds, so this is the reader's way
        * back to the offer the toast made once and took away. */

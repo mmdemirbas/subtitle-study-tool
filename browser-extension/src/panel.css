@@ -1154,6 +1154,45 @@ button.sso-track__learn[data-on="false"] {
   margin-left: auto;
 }
 
+/* Lining up by ear: the lines near the playhead, one per row.
+ *
+ * The line itself leads and the correction follows it in the quiet colour,
+ * because the reader is scanning for words they recognise and not for numbers -
+ * the number is what they get, not what they are choosing between. One row per
+ * line, all of them the same shape, so the eye reads down one column. */
+.sso-ear {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sso-s1);
+}
+
+button.sso-ear__line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sso-s2);
+  width: 100%;
+  padding: var(--sso-s2);
+  text-align: left;
+}
+
+.sso-ear__said {
+  flex: 1 1 0;
+  min-width: 0;
+  /* Two lines of a subtitle are one line of dialogue, so a row that wraps is
+   * still one choice. Past that it is a held sign and the first words are
+   * enough to recognise it by. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.sso-ear__move {
+  flex: none;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-3);
+}
+
 /* The drift, and the one press that takes it out.
  *
  * A third row on the card, present only while this subtitle's own corrections

@@ -301,6 +301,38 @@ the gesture's starting point travels with the request and a snap larger than
 half the move is refused. A caller with no gesture behind it passes none, and
 the snap stands as before.
 
+## Line up means two different things, and which one is not a setting
+
+`align()` answers "where does this file sit against that one". A reader whose
+two subtitles agree perfectly while both are eight seconds late has no use for
+that answer, and until 2026-09-02 nothing in the extension had one: the aligner
+is about the pair, `snapNear` refuses the lead by design, and `proposeAnchors`
+in `align.js` had been written and tested since the aligner shipped **with no
+caller anywhere in `src/`**.
+
+Read out of the running log over 241 alignments: 141 were followed by a by-hand
+correction inside fifteen minutes, and of the 629 corrections that followed one,
+**419 were on the leading subtitle** - the one the button had nothing to say
+about.
+
+So the card's one button carries the verb and the reference decides the object.
+A follower is measured against the lead, and the aligner answers that. The lead,
+and a lone subtitle that leads nothing, is measured against the **picture**, and
+only the reader's ear can answer that - so it opens the by-ear screen and they
+pick the line they just heard. It is not a mode and not a setting;
+`status.leadSlot` decides, in one place, and the label says which it is.
+
+Two things about the by-ear path are load-bearing:
+
+- **The cue starts are converted to the video's clock before they are offered**,
+  so what comes back is the DELTA to add rather than an offset computed from a
+  file clock this track no longer sits on. That is what makes it right under a
+  rate, a staircase, or any subtitle already corrected once - which is all of
+  them. It is applied through `api.nudge`, so the addition happens where the
+  value is.
+- **The moment is captured when the button is pressed**, not when the reader
+  chooses. They are about to read eight lines while the film runs on.
+
 ## The first subtitle leads and the rest are individuals
 
 Asked for as "the first subtitle should be treated like master, so moving it

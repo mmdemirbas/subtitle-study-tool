@@ -7566,6 +7566,78 @@
         }
       });
 
+      check("a subtitle is lined up with the picture by saying which line you heard", async () => {
+        /* The case the aligner cannot reach, and the one most corrections are
+         * actually about. align() answers "where does this file sit against
+         * that one", and a reader whose two subtitles agree perfectly while
+         * both are eight seconds late has no use for that answer. Over 241
+         * alignments in the running log, 141 were followed by a by-hand
+         * correction inside fifteen minutes, and 419 of the 629 corrections
+         * that followed one were on the LEADING subtitle - the one Line up says
+         * nothing about and the snap refuses to touch.
+         *
+         * The starting offset is deliberately not zero. What comes back has to
+         * be the STEP rather than an offset computed from a file clock this
+         * track no longer sits on, or the answer is wrong for every subtitle
+         * that has already been corrected once - which is all of them. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+        const wasOpen = window.__ssoPanel.isOpen();
+        await window.__ssoPanel.show();
+
+        const HEARD = [
+          { start: 2594000, end: 2596000, text: "first" },
+          { start: 2597000, end: 2599000, text: "second" },
+          { start: 2600000, end: 2602000, text: "third" },
+          { start: 2603000, end: 2605000, text: "fourth" },
+        ];
+        try {
+          api.detach(1);
+          await api.attach({ cues: HEARD, label: "EN · Harness.Ear", fileId: 6901, language: "en", slot: 0 });
+          api.setOffset(5000, { slot: 0, quiet: true });
+          video.currentTime = 2600.5;
+          await sleep(250);
+
+          panelShadow().querySelector(".sso-sync__align").click();
+          await sleep(300);
+
+          const rows = [...panelShadow().querySelectorAll(".sso-ear__line")];
+          if (rows.length !== 4)
+            throw new Error(`${rows.length} lines offered, want the four near the playhead`);
+          const order = rows.map((row) => row.querySelector(".sso-ear__said").textContent);
+          if (order.join(",") !== "first,second,third,fourth")
+            throw new Error(`offered in the order ${order.join(", ")}, want nearest first`);
+
+          /* "third" starts at 2600000 in its own file and the playhead is at
+           * 2600.5s, so after a 300ms allowance for the reader's own reaction
+           * the correction is 200ms - whatever the subtitle's offset was when
+           * the list was built. */
+          rows[order.indexOf("third")].click();
+          await sleep(250);
+          const landed = api.status().tracks[0].offsetMs;
+          if (landed !== 200)
+            throw new Error(`landed on ${landed}ms, want 200 - the step was computed from the wrong clock`);
+        } finally {
+          api.setOffset(0, { slot: 0, quiet: true });
+          video.currentTime = wasTime;
+          await sleep(500);
+          await chrome.storage.local.remove("sso:offset:6901");
+          await chrome.storage.local.remove("sso:usedTiming");
+          for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({
+                cues: CUES, label: slot ? "second" : "first", fileId: slot + 1, language: "en", slot,
+              });
+            } else {
+              api.detach(slot);
+            }
+          }
+          if (!wasOpen) window.__ssoPanel.hide();
+          await sleep(150);
+        }
+      });
+
       check("a label too generic to name a release is not treated as one", async () => {
         /* `tr.srt` reduces to "tr", and every other `tr.srt` on the disk would
          * then be the same release. That is the collision that carries one
