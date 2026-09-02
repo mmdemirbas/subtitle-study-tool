@@ -117,12 +117,25 @@ export function subtitleContext(result, resolved) {
  * A word's dictionary entry, and its translation when the daemon has a
  * translator configured. Free, cached daemon-side, no download quota involved.
  */
-export function lookup(query, language = "en", target = "", sentence = "") {
+export function lookup(
+  query,
+  language = "en",
+  target = "",
+  sentence = "",
+  { film = "", before = "", after = "" } = {},
+) {
   const params = new URLSearchParams({ q: query, lang: language });
   if (target) params.set("to", target);
   // The line the word was said in, which is what tells "spare a minute" from
   // "a spare tyre". Optional: without it the daemon answers what it always did.
   if (sentence) params.set("sentence", sentence);
+  /* The rest of what the caller knows: which programme this is, and the lines
+   * either side of it. Same rule - each one is sent when it is known and left
+   * out when it is not, so a page that says nothing about itself asks exactly
+   * the request it always asked. */
+  if (film) params.set("film", film);
+  if (before) params.set("before", before);
+  if (after) params.set("after", after);
   return call(`/lookup?${params.toString()}`);
 }
 
@@ -134,11 +147,13 @@ export function lookup(query, language = "en", target = "", sentence = "") {
  * are said, and answering them ahead is what turns a lookup that arrives after
  * its line has gone into a disk read.
  */
-export function gloss(items, language = "en", target = "") {
+export function gloss(items, language = "en", target = "", film = "") {
   return call("/gloss", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ language, target, items }),
+    // One request is one programme, so the film is said once rather than on
+    // every item. Each item carries its own two neighbouring lines.
+    body: JSON.stringify({ language, target, film, items }),
   });
 }
 

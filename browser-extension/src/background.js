@@ -472,6 +472,9 @@ async function handleDaemonCall(op, args, sender) {
         language: args.language,
         target: args.target,
         sentence: args.sentence,
+        film: args.film,
+        before: args.before,
+        after: args.after,
       });
     /* Straight to the daemon rather than through study/lookup.js, because there
      * is no in-extension version of this to fall back to: glossing a word in
@@ -479,7 +482,7 @@ async function handleDaemonCall(op, args, sender) {
      * listening on this machine. Neither belongs in a content script. Down, and
      * every word simply falls back to being asked for one at a time. */
     case "gloss":
-      return glossWords(args.items || [], args.language, args.target).catch(() => ({}));
+      return glossWords(args.items || [], args.language, args.target, args.film).catch(() => ({}));
     case "lookupReady":
       return { dictionary: await canReachDictionary() };
     case "deckSave":

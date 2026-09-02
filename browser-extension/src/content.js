@@ -3935,13 +3935,17 @@
    * negligible against the 1500ms the mark then has to settle for, and the work
    * is a querySelectorAll and a JSON.parse - no layout, which is the cost that
    * actually matters in this file. */
-  let statedWork = { at: -Infinity, mark: "" };
+  let statedWork = { at: -Infinity, stated: null };
   const STATED_WORK_MS = VIDEO_CACHE_MS;
 
-  function statedProgramme() {
+  /* The fields, once, so the mark and the description cannot disagree about
+   * what the page said. The mark is what decides a programme changed; the
+   * description is what is told to something that has to read it, and a second
+   * scrape for the second reader is a second answer waiting to drift. */
+  function statedIdentity() {
     const now = performance.now();
-    if (now - statedWork.at < STATED_WORK_MS) return statedWork.mark;
-    let mark = "";
+    if (now - statedWork.at < STATED_WORK_MS) return statedWork.stated;
+    let stated = null;
     for (const item of readJsonLd()) {
       const type = schemaType(item);
       if (!SCHEMA_VIDEO_TYPE.test(type) || /VideoObject/i.test(type)) continue;
@@ -3949,11 +3953,52 @@
       const name = String(item.partOfSeries?.name || item.name || "").trim();
       const id = firstString(item.url ?? item.sameAs ?? item["@id"]);
       if (!name && !id && !episode) continue;
-      mark = `${id}|${name}|${episode ? `S${episode.season}E${episode.episode}` : ""}`;
+      stated = {
+        id,
+        title: name,
+        season: episode ? episode.season : null,
+        episode: episode ? episode.episode : null,
+      };
       break;
     }
-    statedWork = { at: now, mark };
-    return mark;
+    statedWork = { at: now, stated };
+    return stated;
+  }
+
+  function statedProgramme() {
+    const stated = statedIdentity();
+    if (!stated) return "";
+    const at = stated.season === null ? "" : `S${stated.season}E${stated.episode}`;
+    return `${stated.id}|${stated.title}|${at}`;
+  }
+
+  /* What is playing, written for somebody to READ rather than to search with.
+   *
+   * The one consumer today is the model that glosses words: it is answering
+   * "what does this word mean in this line", and a line of dialogue means
+   * different things in different programmes. "Jump", "viper" and "the old man"
+   * are the worked examples out of the Battlestar miniseries, where all three
+   * are the programme's own vocabulary and none of them is what a dictionary
+   * says.
+   *
+   * Two sources and no third, and the refusal is the point. A page that
+   * ANNOUNCES what it is playing has promised; a page that states schema.org
+   * has told its crawlers. Everything below that is a guess - the tab title on
+   * Prime Video is "Prime Video: Crime 101" - and a model told the wrong
+   * programme does not hedge, it answers confidently in the vocabulary of a
+   * film nobody is watching. Nothing said is the honest answer there, and it is
+   * exactly what this did before the field existed.
+   */
+  function describeFilm() {
+    const identity = announcedProgramme() || statedIdentity();
+    const title = String(identity?.title || "").trim();
+    if (!title) return "";
+    const year = identity.year ? ` (${identity.year})` : "";
+    const at =
+      identity.season === null || identity.season === undefined
+        ? ""
+        : `, season ${identity.season} episode ${identity.episode}`;
+    return `${title}${year}${at}`;
   }
 
   /* The length in the mark is the longest this programme has reported, and a
@@ -4067,6 +4112,11 @@
    * the panel's result list between attaching the first language and the second
    * one, out of the same list. */
   let settledProgramme = "";
+  /* The same programme, described rather than marked. Worked out when the mark
+   * settles and not on every read: it changes exactly when the programme does,
+   * and `describeFilm` parses the page's JSON-LD, which is not work for a
+   * function the panel calls once a second. */
+  let settledFilm = "";
   /* Which programme the accumulated ad time was measured against.
    *
    * The correction is stream seconds that were not film, so it is true of one
@@ -4096,6 +4146,7 @@
     const settled = performance.now() - programme.since >= wait;
     if (settled && settledProgramme !== mark) {
       settledProgramme = mark;
+      settledFilm = describeFilm();
       /* A different film is a change in what the status describes, and the
        * panel's Find screen is drawn from it. The tick does not notify by
        * itself - it has nothing to say most of the time - so without this the
@@ -5944,6 +5995,10 @@
        * is one: its box and its list of results belong to one episode, and it
        * had no way of noticing that a different one had started under it. */
       programme: settledProgramme,
+      /* The same programme in words, for the surfaces that have to SAY which
+       * film this is rather than notice that it changed. See describeFilm: ""
+       * where the page only guessed, which is most of the web. */
+      film: settledFilm,
       keyTrack: state.keyTrack,
       // Which subtitle moves the others with it. See carryFollowers.
       leadSlot: leadSlot(),
@@ -6936,6 +6991,25 @@
         });
       }
       return out;
+    },
+    /* The lines either side of this one, in its own subtitle.
+     *
+     * `pairedCues` above answers the other question - what the OTHER language
+     * says at this moment - and a word looked up while its line is on screen
+     * wants both. This one is what the prefetch already has for free, because
+     * it walks the file in order; a lookup made by hand has only the cue, so it
+     * asks here rather than the two paths sending the model different context
+     * for the same word.
+     *
+     * By identity, because that is what the caller was handed: renderCues
+     * passes the track's own cue objects through, and a search by time would
+     * have to decide what to do about two lines that start together. */
+    cueNeighbours(slot, cue) {
+      if (role === "chrome" || !cue) return { before: "", after: "" };
+      const cues = state.tracks[slot]?.cues || [];
+      const at = cues.indexOf(cue);
+      if (at === -1) return { before: "", after: "" };
+      return { before: cues[at - 1]?.text || "", after: cues[at + 1]?.text || "" };
     },
     trackInfo(slot) {
       const track = state.tracks[slot];

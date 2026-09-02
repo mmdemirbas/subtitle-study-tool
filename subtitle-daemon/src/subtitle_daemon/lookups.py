@@ -38,7 +38,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from .config import USER_AGENT
 
@@ -161,9 +161,12 @@ GLOSS_LIVE_TIMEOUT_SECONDS = 4
 GLOSS_REST_SECONDS = 60
 
 GLOSS_SYSTEM = (
-    "You gloss single words for someone watching a film with subtitles and "
-    "learning the language they are in. Each item is one word and the subtitle "
-    "line it was said in. Answer with what that word means IN THAT LINE, in the "
+    "You gloss single words and phrases for someone watching a film with "
+    "subtitles and learning the language they are in. Each item is one word or "
+    "phrase and the subtitle line it was said in, and where the caller knows "
+    'them the lines either side of it, as "before" and "after". Those two are '
+    "there to be read and never to be glossed. Answer with what the item means "
+    "IN THAT LINE, in the "
     "language with ISO 639-1 code '{target}', as a short learner's gloss: one to "
     "three words, in the dictionary form where the language has one, with no "
     "explanation, no punctuation and no quotation marks. If an item is a proper "
@@ -171,6 +174,32 @@ GLOSS_SYSTEM = (
     'key "g", whose value is an array of strings, one per input item, in the '
     "same order and of the same length. No other text."
 )
+
+# Which film these lines are from, said once for the whole request rather than
+# per item, because it is true of all of them.
+#
+# It is only ever said when the PAGE said it - `describeFilm` in content.js
+# refuses to guess - because a wrong film name is worse here than none. A model
+# told the lines are from Battlestar Galactica reads "jump" and "viper" as the
+# programme's own vocabulary; one told the wrong programme reads them as that
+# one's, confidently.
+GLOSS_FILM = " The lines are from {film}."
+
+
+class Ask(NamedTuple):
+    """One question, with everything that helps answer it.
+
+    `term` and `line` are the question, and together they are the key the answer
+    is filed under. `before` and `after` are the subtitle lines either side of
+    it and the film is the programme they are from: both help, neither is part
+    of the question, and `_translation_path` says why that distinction is the
+    one the cache is built on.
+    """
+
+    term: str
+    line: str
+    before: str = ""
+    after: str = ""
 
 
 def clean_translation(text: Any) -> str:
@@ -235,7 +264,14 @@ class Lookups:
         self._gloss_rests_until = 0.0
 
     def get(
-        self, query: str, language: str, target: str = "", sentence: str = ""
+        self,
+        query: str,
+        language: str,
+        target: str = "",
+        sentence: str = "",
+        film: str = "",
+        before: str = "",
+        after: str = "",
     ) -> dict[str, Any]:
         """A word's entry, from disk if it is there and from the web if not.
 
@@ -251,7 +287,8 @@ class Lookups:
 
         payload = self._definition(term, lang)
         if into and into != lang:
-            payload = {**payload, "translation": self.translate(term, lang, into, sentence)}
+            translated = self.translate(term, lang, into, sentence, film, before, after)
+            payload = {**payload, "translation": translated}
             # A word with no dictionary entry but a translation is a useful
             # answer, not an unavailable one - which is the normal case for
             # every language except English, and for every phrase.
@@ -278,7 +315,16 @@ class Lookups:
             self._write(term, lang, payload)
         return payload
 
-    def translate(self, query: str, language: str, target: str, sentence: str = "") -> str:
+    def translate(
+        self,
+        query: str,
+        language: str,
+        target: str,
+        sentence: str = "",
+        film: str = "",
+        before: str = "",
+        after: str = "",
+    ) -> str:
         """What this says in `target`, or "" when nothing trustworthy came back.
 
         Three tiers, best first, each one answering when the one above it
@@ -299,7 +345,10 @@ class Lookups:
             if held is not None:
                 return held
             if time.monotonic() >= self._gloss_rests_until:
-                answer = self._gloss([(term, line)], lang, into, GLOSS_LIVE_TIMEOUT_SECONDS)[0]
+                ask = Ask(term, line, (before or "").strip(), (after or "").strip())
+                answer = self._gloss(
+                    [ask], lang, into, GLOSS_LIVE_TIMEOUT_SECONDS, film=film
+                )[0]
                 if answer:
                     return answer
                 self._gloss_rests_until = time.monotonic() + GLOSS_REST_SECONDS
@@ -313,7 +362,9 @@ class Lookups:
             self._write_translation(term.lower(), lang, into, answer)
         return answer
 
-    def gloss_many(self, items: list[dict[str, Any]], language: str, target: str) -> list[str]:
+    def gloss_many(
+        self, items: list[dict[str, Any]], language: str, target: str, film: str = ""
+    ) -> list[str]:
         """Gloss many words at once, each in the line it was said in.
 
         Why in bulk, and why before they are asked for: the extension holds the
@@ -327,41 +378,55 @@ class Lookups:
         """
         lang = (language or "").strip().lower()[:2]
         into = (target or "").strip().lower()[:2]
-        pairs = [
-            (str(item.get("term", "")).strip(), str(item.get("sentence", "")).strip())
+        asks = [
+            Ask(
+                str(item.get("term", "")).strip(),
+                str(item.get("sentence", "")).strip(),
+                str(item.get("before", "")).strip(),
+                str(item.get("after", "")).strip(),
+            )
             for item in items
             if isinstance(item, dict)
         ]
-        answers = ["" for _ in pairs]
+        answers = ["" for _ in asks]
         if not lang or not into or lang == into:
             return answers
 
         # One entry per distinct question. A word said twice in the same line is
         # asked once; a word said in two different lines is asked twice, which
         # is the whole reason the line travels with it.
+        #
+        # The neighbours ride along on whichever occurrence was seen first,
+        # because they are not part of the question - the same (word, line) is
+        # the same question wherever in the file it turned up, and it already
+        # shares one answer through the cache.
         wanted: dict[tuple[str, str], list[int]] = {}
-        for at, (term, line) in enumerate(pairs):
-            if not term:
+        context: dict[tuple[str, str], Ask] = {}
+        for at, ask in enumerate(asks):
+            if not ask.term:
                 continue
-            held = self._read_translation(term.lower(), lang, into, line)
-            if held is None and not line:
-                held = self._read_translation(term.lower(), lang, into)
+            held = self._read_translation(ask.term.lower(), lang, into, ask.line)
+            if held is None and not ask.line:
+                held = self._read_translation(ask.term.lower(), lang, into)
             if held is not None:
                 answers[at] = held
                 continue
-            wanted.setdefault((term, line), []).append(at)
+            wanted.setdefault((ask.term, ask.line), []).append(at)
+            context.setdefault((ask.term, ask.line), ask)
 
         if not wanted or not self._gloss_model:
             return answers
 
         asked = list(wanted)
         for start in range(0, len(asked), GLOSS_BATCH):
-            chunk = asked[start : start + GLOSS_BATCH]
-            answered = self._gloss(chunk, lang, into, GLOSS_BATCH_TIMEOUT_SECONDS)
-            for (term, line), text in zip(chunk, answered):
+            keys = asked[start : start + GLOSS_BATCH]
+            answered = self._gloss(
+                [context[key] for key in keys], lang, into, GLOSS_BATCH_TIMEOUT_SECONDS, film=film
+            )
+            for key, text in zip(keys, answered):
                 if not text:
                     continue
-                for at in wanted[(term, line)]:
+                for at in wanted[key]:
                     answers[at] = text
         return answers
 
@@ -395,6 +460,13 @@ class Lookups:
         A word with no line keeps the flat name it always had, so the archive's
         context-free answers and the model's contextual ones share a directory
         without ever being mistaken for each other.
+
+        The film and the neighbouring lines are deliberately NOT in the key,
+        though they are in the request. They help the model answer the question;
+        they do not change what the question is. Putting them in would split the
+        cache per position in the file, so a word said twice in one film would
+        be asked twice and a line an episode repeats would never hit at all -
+        and the answers being split apart are answers to the same question.
         """
         safe = urllib.parse.quote(term, safe="")
         if sentence:
@@ -504,27 +576,63 @@ class Lookups:
         return _short_gloss(answer, term)
 
     def _gloss(
-        self, pairs: list[tuple[str, str]], language: str, target: str, timeout: float
+        self,
+        asks: list[Ask],
+        language: str,
+        target: str,
+        timeout: float,
+        film: str = "",
     ) -> list[str]:
-        """One request, one gloss per pair, "" for every pair on any failure."""
-        blank = ["" for _ in pairs]
-        if not self._gloss_model or not pairs:
+        """One request, one gloss per ask, "" for every ask on any failure."""
+        blank = ["" for _ in asks]
+        if not self._gloss_model or not asks:
             return blank
+
+        system = GLOSS_SYSTEM.format(target=target)
+        if film:
+            system += GLOSS_FILM.format(film=film)
+
+        # Omitted rather than sent empty. A first or last line has no neighbour
+        # on one side, and a key whose value is "" reads as a line that was
+        # silent rather than one nobody looked up.
+        asked = []
+        for ask in asks:
+            item: dict[str, str] = {"word": ask.term, "line": ask.line}
+            if ask.before:
+                item["before"] = ask.before
+            if ask.after:
+                item["after"] = ask.after
+            asked.append(item)
 
         body = json.dumps(
             {
                 "model": self._gloss_model,
                 "messages": [
-                    {"role": "system", "content": GLOSS_SYSTEM.format(target=target)},
+                    {"role": "system", "content": system},
                     {
                         "role": "user",
-                        "content": json.dumps(
-                            [{"word": term, "line": line} for term, line in pairs],
-                            ensure_ascii=False,
-                        ),
+                        "content": json.dumps(asked, ensure_ascii=False),
                     },
                 ],
-                "temperature": 0.2,
+                # Greedy, because a gloss is a lookup rather than a
+                # composition, and because the answer is written to disk the
+                # first time it is given - so whichever sample landed first is
+                # the one the reader keeps for good.
+                #
+                # At 0.2, one word in one line of the Battlestar miniseries
+                # came back as "temsil eden" in one request and "temsil etmek"
+                # in another; "tamir" and "tamir etmek" for another; and
+                # "itaatsiz" written "itaetsiz", which is a spelling nobody
+                # would choose. To a learner reading one chip those are not
+                # synonyms. What separates the sampling from the rest of the
+                # request in those pairs is exactly what could not be told
+                # apart while the decode was sampled, which is the point.
+                #
+                # It also makes `tools/gloss_context.py` able to measure
+                # anything: greedy, two identical requests must agree, so a
+                # difference between two runs is a difference in what was sent
+                # rather than a difference in what was drawn.
+                "temperature": 0,
                 "response_format": {"type": "json_object"},
                 # Honoured by the local runtimes and ignored by the hosted ones,
                 # which is why THINKING exists as well.
@@ -557,27 +665,27 @@ class Lookups:
             # most likely cause and it has to be findable in the log, because
             # from the overlay it looks exactly like a word with no translation.
             logger.warning(
-                "gloss unavailable for %s words from %s: %s", len(pairs), self._gloss_url, error
+                "gloss unavailable for %s words from %s: %s", len(asks), self._gloss_url, error
             )
             return blank
 
         # A short array would pair every gloss after the gap with the wrong
         # word, which is worse than no gloss at all - a wrong meaning under a
         # word is not read as a failure, it is read as the meaning.
-        if not isinstance(answers, list) or len(answers) != len(pairs):
+        if not isinstance(answers, list) or len(answers) != len(asks):
             logger.warning(
                 "gloss returned %s answers for %s words",
                 len(answers) if isinstance(answers, list) else type(answers).__name__,
-                len(pairs),
+                len(asks),
             )
             return blank
 
         # Written here rather than by the callers, so the single-word path and
         # the batch cannot disagree about what a cached gloss looks like.
-        glossed = [_short_gloss(text, term) for text, (term, _) in zip(answers, pairs)]
-        for (term, line), text in zip(pairs, glossed):
+        glossed = [_short_gloss(text, ask.term) for text, ask in zip(answers, asks)]
+        for ask, text in zip(asks, glossed):
             if text:
-                self._write_translation(term.lower(), language, target, text, line)
+                self._write_translation(ask.term.lower(), language, target, text, ask.line)
         return glossed
 
 

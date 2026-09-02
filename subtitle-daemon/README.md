@@ -49,7 +49,10 @@ Study mode's word meanings come from here, in three tiers.
 
 Naming a `gloss_model` turns on the only tier that sees the **line a word was
 said in**, which is what separates "can you spare a minute" from "one spare
-engine". `gloss_url` defaults to `http://127.0.0.1:11434/v1/chat/completions`,
+engine" - and, where the page said so, **which film it is and the lines either
+side**. A line of dialogue means different things in different programmes:
+"jump", "viper" and "the old man" are all three of them Battlestar Galactica's
+own vocabulary and none of them is what a dictionary says. `gloss_url` defaults to `http://127.0.0.1:11434/v1/chat/completions`,
 which is [ollama](https://ollama.com) on this machine: no key, no quota, and
 nothing about what you are watching leaves the house. Any endpoint speaking the
 OpenAI chat-completions shape works, with `gloss_api_key` for a hosted one.
@@ -122,8 +125,8 @@ Downloaded subtitle files are not versioned: those are raw bytes.
 | `POST` | `/fetch` | Body `{"file_id": N}`. Returns cues, VTT and metadata. Costs quota only on a cache miss. |
 | `GET` | `/cached` | Everything already on disk. |
 | `GET` | `/cached/{file_id}` | Cues for one cached subtitle. |
-| `GET` | `/lookup?q=...` | A word's dictionary entry and its meaning. `lang`, `to` and `sentence`. Free. |
-| `POST` | `/gloss` | Body `{"language", "target", "items": [{"term", "sentence"}]}`. Many words with their lines, answered before they are asked. Free. |
+| `GET` | `/lookup?q=...` | A word's dictionary entry and its meaning. `lang`, `to`, `sentence`, and optionally `film`, `before` and `after`. Free. |
+| `POST` | `/gloss` | Body `{"language", "target", "film", "items": [{"term", "sentence", "before", "after"}]}`. Many words with their lines, answered before they are asked. Free. |
 
 `/search` also accepts `languages`, `year`, `season`, `episode` and `imdb_id`.
 

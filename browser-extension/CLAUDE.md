@@ -586,6 +586,22 @@ Each of these was a reported bug. Undoing one brings the bug back.
   raw one, because tidying it files every answer where nothing will look for it
   and the whole prefetch silently does nothing. Nothing fails if you get this
   wrong; it just stops working.
+
+  **What travels with the question is not the question.** The film the page
+  announced and the two subtitle lines either side of this one go into the
+  request as well - a line of dialogue means different things in different
+  programmes, and a subtitle line is four or five words with the rest of the
+  exchange around it. None of the three is in the key, on disk or in
+  `chrome.storage`: they help ANSWER the question rather than changing which
+  question it is, and keying by them would split one answer across every
+  position in the file the word turned up in. `describeFilm` in `content.js`
+  says nothing at all on a page that only guessed - a model told the wrong
+  programme does not hedge, it answers confidently in that film's vocabulary -
+  so the announcement and schema.org are the only two sources, and the tab
+  title is not one. `glossAhead` has the neighbours for nothing because it
+  walks the file in order; `lookUp` asks `api.cueNeighbours` for exactly the
+  same two, or a word clicked by hand would be a different question from the
+  one the prefetch answered.
 - **The film's words are answered before they are said, and that is the design,
   not an optimisation.** A lookup made as its line arrived took 634ms on average
   and up to 1.4s over 22 words, against a line on screen for about two seconds -
@@ -652,6 +668,19 @@ Each of these was a reported bug. Undoing one brings the bug back.
   server and neither belongs in a content script - so with the daemon down it
   keys answers by word alone, because the archive allows about 600 words a day
   and keying by line would spend that on one film.
+
+  **The top tier was unreachable from the by-hand path for months, and a name
+  is the whole of it.** `study/lookup.js` imports the daemon's client as
+  `daemon`; `resolve`'s fifth parameter was called `daemon` too and held the
+  BOOLEAN `daemonUp()` returns, so `daemon.lookup(...)` threw "up.lookup is not
+  a function" inside a try whose catch reads "went down between the probe and
+  the call". Every word a reader clicked went to the free archive while the
+  daemon and its model answered nothing, and it was invisible because the
+  archive answers. `Serme<x id="1"/>` under a word is what it looked like from
+  the reader's side. The prefetch was never affected - `background.js` sends
+  `gloss` straight to the daemon - which is why a film's marked words were
+  glossed well and the ones clicked by hand were not. The parameter is `up`
+  now. Do not rename it back.
 - **Lowercasing a word is a property of its language, so it takes the
   subtitle's language.** `study.js` folds every word through `fold(word,
   language)` rather than `toLowerCase()`, because Turkish disagrees with the

@@ -870,7 +870,7 @@ def test_many_words_are_glossed_in_one_request(service, http, monkeypatch) -> No
     base, _ = http
     asked: list[tuple[str, str]] = []
 
-    def gloss_many(items, language, target):
+    def gloss_many(items, language, target, film=""):
         asked.extend((it["term"], it["sentence"]) for it in items)
         return [f"{it['term']}-{target}" for it in items]
 

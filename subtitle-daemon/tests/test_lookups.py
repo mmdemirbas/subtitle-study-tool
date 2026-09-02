@@ -327,6 +327,111 @@ def test_a_word_said_twice_in_one_line_is_asked_once(glosser: Lookups, monkeypat
     assert len(sent) == 1
 
 
+# --- the rest of what the caller knows ------------------------------------------
+#
+# A subtitle line is four or five words with the rest of the exchange in the
+# lines around it, and every one of those lines belongs to a programme with its
+# own vocabulary. Both were sitting in the extension unused: `glossAhead` walks
+# the file in order, so the neighbours cost it nothing, and the page had already
+# said which episode it was playing so the auto-attach could search for it.
+#
+# What is worth testing is that they reach the model, that they are omitted
+# rather than sent empty when nobody knows them, and - the one that decides
+# whether this feature costs anything - that neither of them is in the key.
+
+
+def test_the_film_is_named_once_for_the_whole_request(
+    glosser: Lookups, monkeypatch: Any
+) -> None:
+    """Once, in the system message, because one request is one programme.
+
+    Per item it would be the same string forty times in a body with a 64KB
+    ceiling, and it would read as something that could differ between them.
+    """
+    sent = _answers(monkeypatch, json.dumps({"g": ["sıçrama", "avcı"]}))
+    items = [
+        {"term": "jump", "sentence": "Prepare for the jump."},
+        {"term": "viper", "sentence": "Get the viper out there."},
+    ]
+    glosser.gloss_many(items, "en", "tr", film="Battlestar Galactica (2003), season 0 episode 1")
+    body = json.loads(sent[0])
+    assert "Battlestar Galactica (2003), season 0 episode 1" in body["messages"][0]["content"]
+    assert "Battlestar" not in body["messages"][1]["content"], (
+        "the film was repeated on every item"
+    )
+
+
+def test_the_lines_either_side_travel_with_the_word(
+    glosser: Lookups, monkeypatch: Any
+) -> None:
+    sent = _answers(monkeypatch, json.dumps({"g": ["sıçrama"]}))
+    items = [
+        {
+            "term": "jump",
+            "sentence": "Prepare for the jump.",
+            "before": "Are we clear of the fleet?",
+            "after": "Coordinates laid in, sir.",
+        }
+    ]
+    glosser.gloss_many(items, "en", "tr")
+    asked = json.loads(json.loads(sent[0])["messages"][1]["content"])
+    assert asked[0]["before"] == "Are we clear of the fleet?"
+    assert asked[0]["after"] == "Coordinates laid in, sir."
+    assert asked[0]["line"] == "Prepare for the jump.", "the line itself was displaced"
+
+
+def test_what_nobody_knows_is_left_out_rather_than_sent_empty(
+    glosser: Lookups, monkeypatch: Any
+) -> None:
+    """The first line of a file has no line before it, and most of the web never
+    says what it is playing. An empty string reads as a line that was silent."""
+    sent = _answers(monkeypatch, json.dumps({"g": ["ayırmak"]}))
+    glosser.gloss_many([{"term": "spare", "sentence": "Can you spare a minute?"}], "en", "tr")
+    body = json.loads(sent[0])
+    asked = json.loads(body["messages"][1]["content"])
+    assert asked == [{"word": "spare", "line": "Can you spare a minute?"}]
+    assert "The lines are from" not in body["messages"][0]["content"]
+
+
+def test_the_context_is_not_part_of_the_key(glosser: Lookups, monkeypatch: Any) -> None:
+    """The distinction the whole cache is built on. The line is the question and
+    is in the key; the film and the neighbours help answer it and are not. Were
+    they in the key, a word said twice in one film would be asked twice and a
+    line an episode repeats would never hit at all - and every one of those
+    answers is an answer to the same question."""
+    sent = _answers(monkeypatch, json.dumps({"g": ["ayırmak"]}))
+    line = "Can you spare a minute?"
+    glosser.gloss_many([{"term": "spare", "sentence": line, "before": "One."}], "en", "tr")
+    again = glosser.gloss_many(
+        [{"term": "spare", "sentence": line, "after": "Two."}], "en", "tr", film="Something Else"
+    )
+    assert again == ["ayırmak"]
+    assert len(sent) == 1, "different neighbours asked the same question twice"
+
+
+def test_the_word_looked_up_by_hand_carries_the_same_context(
+    glosser: Lookups, monkeypatch: Any
+) -> None:
+    """`translate` is the path a reader's click takes when the prefetch has not
+    reached that word. Sending it less than the prefetch sends would gloss the
+    same word two ways depending on who asked."""
+    sent = _answers(monkeypatch, json.dumps({"g": ["sıçrama"]}))
+    glosser.translate(
+        "jump",
+        "en",
+        "tr",
+        "Prepare for the jump.",
+        film="Battlestar Galactica (2003)",
+        before="Are we clear of the fleet?",
+        after="Coordinates laid in, sir.",
+    )
+    body = json.loads(sent[0])
+    assert "Battlestar Galactica (2003)" in body["messages"][0]["content"]
+    asked = json.loads(body["messages"][1]["content"])
+    assert asked[0]["before"] == "Are we clear of the fleet?"
+    assert asked[0]["after"] == "Coordinates laid in, sir."
+
+
 def test_a_reasoning_model_that_narrates_is_still_understood(
     glosser: Lookups, monkeypatch: Any
 ) -> None:
@@ -383,7 +488,7 @@ def test_the_tiers_fall_in_order(tmp_path: Path, monkeypatch: Any) -> None:
     lookups = Lookups(tmp_path, gloss_model="a-model", google_key="a-key")
 
     monkeypatch.setattr(
-        lookups, "_gloss", lambda pairs, *a: asked.append("gloss") or ["" for _ in pairs]
+        lookups, "_gloss", lambda asks, *a, **kw: asked.append("gloss") or ["" for _ in asks]
     )
     monkeypatch.setattr(
         lookups, "_fetch_google", lambda *a: asked.append("google") or "yedek"

@@ -156,14 +156,20 @@ class Service:
         """A word's dictionary entry. Free, cached on disk, no quota involved.
 
         `sentence` is the subtitle line the word was said in, and it is what
-        separates "spare a minute" from "a spare tyre". Optional: a caller that
-        does not have it gets the context-free answer it always got.
+        separates "spare a minute" from "a spare tyre". `film`, `before` and
+        `after` are the rest of what the caller knows about that line - which
+        programme it is from and the lines either side of it. All four are
+        optional: a caller that has none of them gets the context-free answer it
+        always got.
         """
         return self.lookups.get(
             _first(params, "q") or "",
             _first(params, "lang") or "en",
             _first(params, "to") or "",
             _first(params, "sentence") or "",
+            _first(params, "film") or "",
+            _first(params, "before") or "",
+            _first(params, "after") or "",
         )
 
     def gloss(self, body: dict[str, Any]) -> dict[str, Any]:
@@ -172,6 +178,10 @@ class Service:
         The extension holds the whole subtitle file before the film starts, so
         it knows which words it is going to mark. Answering them ahead is what
         turns a 634ms lookup into a disk read - see `gloss_many`.
+
+        `film` is said once for the whole request rather than per item, because
+        one request is one programme. Each item may carry `before` and `after`,
+        the subtitle lines either side of its own.
         """
         items = body.get("items")
         if not isinstance(items, list):
@@ -181,6 +191,7 @@ class Service:
                 items,
                 str(body.get("language") or "en"),
                 str(body.get("target") or ""),
+                str(body.get("film") or ""),
             )
         }
 

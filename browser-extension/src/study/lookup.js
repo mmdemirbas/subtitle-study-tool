@@ -165,7 +165,15 @@ async function granted(origin) {
  * Always resolves. `definitions` empty plus `unavailable` set is the normal
  * shape when nothing could answer, and the caller shows the word anyway.
  */
-export async function lookup({ query, language = "en", target = "", sentence = "" }) {
+export async function lookup({
+  query,
+  language = "en",
+  target = "",
+  sentence = "",
+  film = "",
+  before = "",
+  after = "",
+}) {
   const term = String(query || "").trim().toLowerCase();
   if (!term) return { query: "", definitions: [], unavailable: "nothing to look up" };
 
@@ -189,17 +197,40 @@ export async function lookup({ query, language = "en", target = "", sentence = "
   const hit = cache.get(key);
   if (hit) return { ...hit, source: `${hit.source} (cached)` };
 
-  const result = await resolve(term, language, target, sentence, daemon);
+  /* The film and the neighbouring lines are not in the key, for the reason the
+   * daemon's `_translation_path` gives at length: they help answer the
+   * question, they are not part of it. Keying by them would ask again for every
+   * position in the file the same word turned up in. */
+  const result = await resolve(term, language, target, sentence, daemon, {
+    film,
+    before,
+    after,
+  });
   // Only a real answer is worth keeping. Caching "the daemon was down" would
   // mean starting the daemon changed nothing until the cache was cleared.
   if (result.definitions.length > 0 || result.translation) remember(key, result);
   return result;
 }
 
-async function resolve(term, language, target, sentence, daemon) {
-  if (daemon) {
+/* `up`, not `daemon`, and the name is the whole of a bug that ran for months.
+ *
+ * This file imports the daemon's client as `daemon` at the top. A parameter of
+ * the same name shadows it, so `daemon.lookup(...)` was called on the BOOLEAN
+ * `daemonUp()` returns - "up.lookup is not a function", a TypeError, thrown
+ * inside a try whose catch says "went down between the probe and the call".
+ * Every word a reader clicked therefore went to the free archive while the
+ * daemon and its model sat there answering nothing, and the failure was
+ * invisible because the archive answers. `Serme<x id="1"/>` under a word is
+ * what it looks like from the reader's side: XLIFF markup out of a translation
+ * memory, on the path that was never supposed to be running.
+ *
+ * The prefetch was unaffected - background.js sends `gloss` straight to the
+ * daemon - which is why the film's marked words were glossed well and the words
+ * looked up by hand were not. */
+async function resolve(term, language, target, sentence, up, context = {}) {
+  if (up) {
     try {
-      const payload = await daemon.lookup(term, language, target, sentence);
+      const payload = await daemon.lookup(term, language, target, sentence, context);
       if (payload && !payload.error) {
         return {
           query: term,

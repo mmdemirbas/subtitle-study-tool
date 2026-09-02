@@ -951,6 +951,72 @@ chrome.storage.local.set = instant.set;
   daemonUp = true;
 }
 
+/* --- what a word costs when there IS a daemon ---------------------------------
+ *
+ * With a model behind it the line is part of the answer, so it is part of the
+ * key - and the rest of what the reader's page knows is neither. The film and
+ * the two lines either side help the model answer the question; they do not
+ * change which question it is, so they travel with the request and stay out of
+ * the key. Filed by them, a word said twice in one film would be asked twice
+ * and a line an episode repeats would never hit at all.
+ */
+{
+  const asked = [];
+  daemonUp = true;
+  daemonAnswers = (url) => {
+    const at = String(url);
+    // The probe is the daemon's own, and without it this whole block runs the
+    // no-daemon path above and asserts nothing about the daemon.
+    if (at.endsWith("/health")) return { default_languages: ["en"] };
+    if (!at.includes("/lookup")) return null;
+    asked.push(at);
+    return { definitions: [], translation: "sıçrama", source: "gloss" };
+  };
+  await (await import("../src/provider.js")).daemonUp({ force: true });
+
+  const { lookup } = await import("../src/study/lookup.js");
+  const line = "Prepare for the jump.";
+  const answer = await lookup({
+    query: "jump", language: "en", target: "tr", sentence: line,
+    film: "Battlestar Galactica (2003), season 0 episode 1",
+    before: "Are we clear of the fleet?",
+    after: "Coordinates laid in, sir.",
+  });
+  const sent = new URL(asked[0] || "http://127.0.0.1:8791/lookup").searchParams;
+  t(
+    "the film and the lines around it reach the daemon",
+    sent.get("film") === "Battlestar Galactica (2003), season 0 episode 1" &&
+      sent.get("before") === "Are we clear of the fleet?" &&
+      sent.get("after") === "Coordinates laid in, sir." &&
+      sent.get("sentence") === line &&
+      answer.translation === "sıçrama",
+    `asked ${asked[0]}`,
+  );
+
+  await lookup({
+    query: "jump", language: "en", target: "tr", sentence: line,
+    film: "Something Else", before: "A different line entirely.",
+  });
+  t(
+    "a word in the same line is one question however it was surrounded",
+    asked.length === 1,
+    `asked ${asked.length} time(s)`,
+  );
+
+  /* And a page that says nothing about itself asks exactly the request it
+   * always asked - an empty film is left out rather than sent as "". */
+  await lookup({ query: "chamber", language: "en", target: "tr", sentence: "The chamber." });
+  const bare = new URL(asked[1] || "http://127.0.0.1:8791/lookup").searchParams;
+  t(
+    "what nobody knows is left out rather than sent empty",
+    asked.length === 2 && !bare.has("film") && !bare.has("before") && !bare.has("after"),
+    `asked ${asked[1]}`,
+  );
+
+  daemonAnswers = null;
+  daemonUp = true;
+}
+
 /* --- the next episode, warmed before anybody asks for it ---------------------
  *
  * The page says what follows what it is playing. A search costs nothing and is

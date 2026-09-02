@@ -5426,6 +5426,79 @@
         }
       });
 
+      check("the model is told which film these lines are from", async () => {
+        /* A gloss answers "what does this word mean in this line", and a line of
+         * dialogue means different things in different programmes. "Jump",
+         * "viper" and "the old man" are all three of them the Battlestar
+         * miniseries' own vocabulary and none of them is what a dictionary
+         * says. The page had already announced which episode it was playing so
+         * the auto-attach could search for it, and the walk that sends the words
+         * ahead has the neighbouring lines for nothing - it goes through the
+         * file in order. Both were sitting there unused.
+         *
+         * The second half is the one worth guarding: a page that only GUESSES
+         * says nothing at all. A model told the wrong programme does not hedge,
+         * it answers confidently in the vocabulary of a film nobody is watching.
+         */
+        const video = document.getElementById("v");
+        const was = window.__ssoStudy.settings().studySlots;
+        const wasTitle = document.title;
+        const AHEAD = CUES.map((cue) => ({ ...cue }));
+        const NAMED = "The Americans (2013), season 3 episode 9";
+        try {
+          await attachSecond();
+          window.__ssoStudy.updateSettings({ studySlots: [0], rarityRank: 4000, auto: false });
+          await window.__ssoStudy.setEnabled(true);
+
+          video.dataset.ssoNowPlaying = JSON.stringify({
+            v: 1, kind: "episode", title: "The Americans", year: 2013,
+            season: 3, episode: 9, imdb: "tt4331672", durationSeconds: 2701.44,
+          });
+          await until(() => window.__ssoApi.status().film, "the announcement never reached the status");
+          if (window.__ssoApi.status().film !== NAMED)
+            throw new Error(`the film reads ${JSON.stringify(window.__ssoApi.status().film)}`);
+
+          glossAsks.length = 0;
+          await window.__ssoApi.attach({
+            cues: AHEAD, label: "EN \u00b7 announced", fileId: 9203, language: "en", slot: 0,
+          });
+          video.currentTime = 1;
+          await until(() => glossAsks.length > 0, "no words were sent ahead");
+          if (glossAsks[0].film !== NAMED)
+            throw new Error(`the request carried ${JSON.stringify(glossAsks[0].film)}`);
+
+          const items = glossAsks.flatMap((ask) => ask.items || []);
+          const texts = AHEAD.map((cue) => cue.text);
+          /* Every item, against the file it came out of. Asserting that SOME
+           * item has neighbours as well, because "" on both sides passes the
+           * comparison for a word on the first line and would pass it for every
+           * word if nothing were sent at all. */
+          const wrong = items.find((item) => {
+            const at = texts.indexOf(item.sentence);
+            return (item.before || "") !== (texts[at - 1] || "")
+              || (item.after || "") !== (texts[at + 1] || "");
+          });
+          if (wrong)
+            throw new Error(`a word was sent with the wrong lines around it: ${JSON.stringify(wrong)}`);
+          if (!items.some((item) => item.before || item.after))
+            throw new Error("no word was sent with the lines around it");
+
+          /* And the refusal. Nothing announced, so nothing is said - the tab
+           * title is a guess and a guess is worse than silence here. */
+          delete video.dataset.ssoNowPlaying;
+          document.title = "Harness \u2014 Prime Video: Crime 101";
+          await until(() => !window.__ssoApi.status().film, "a guessed title was passed off as the film");
+        } finally {
+          delete video.dataset.ssoNowPlaying;
+          document.title = wasTitle;
+          window.__ssoStudy.updateSettings({ studySlots: was, auto: false });
+          await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
+          video.currentTime = 1;
+          await sleep(1800);
+          window.__sent.length = 0;
+        }
+      });
+
       check("study can follow two subtitles at once", async () => {
         /* Study read exactly one subtitle: one slot in the settings, one record
          * for the line on screen, and "the other subtitle" wherever a paired

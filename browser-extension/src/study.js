@@ -738,7 +738,11 @@
   const glossedTracks = new Map();
   // Forty lines' worth of words per request, against a 64KB body ceiling on the
   // daemon side. Small enough that the first answers land early, large enough
-  // that a feature film is about sixteen requests.
+  // that a feature film is about sixteen requests. Each item now carries three
+  // subtitle lines rather than one: measured over the 858 words the Battlestar
+  // miniseries would mark, a chunk goes from 3.3KB to 7.6KB on average and from
+  // 3.9KB to 8.9KB at its largest - still seven times inside the ceiling, so the
+  // count did not move.
   const GLOSS_CHUNK = 40;
 
   async function glossAhead(slot, language) {
@@ -773,6 +777,12 @@
       return { line: text, words, sequence };
     });
 
+    /* Which programme this is, said once for the whole file. Empty on a page
+     * that never said what it was playing, which is most of them - see
+     * describeFilm in content.js for why nothing is the answer there rather
+     * than a guess. */
+    const film = api.status?.().film || "";
+
     const [ranks, byLine] = await Promise.all([
       ranksFor([...everyWord], language),
       phrasesAhead(perCue.map((cue) => cue.sequence), language),
@@ -794,10 +804,17 @@
      * whichever ran first silence the other. */
     const aheadSeen = new Set();
     perCue.forEach(({ line, words }, at) => {
+      /* The lines either side of this one. A subtitle line is four or five
+       * words with the rest of the exchange in the lines around it, and this
+       * walk is the one place that has them for nothing - it is going through
+       * the file in order. `lookUp` asks content.js for the same two, so a word
+       * clicked by hand is answered with the context the prefetch would have
+       * sent. */
+      const around = { before: texts[at - 1] || "", after: texts[at + 1] || "" };
       for (const hit of byLine[at] || []) {
         if (hit.rank < settings.phraseRank || aheadSeen.has(hit.phrase)) continue;
         aheadSeen.add(hit.phrase);
-        items.push({ term: hit.phrase, sentence: line });
+        items.push({ term: hit.phrase, sentence: line, ...around });
       }
       const rare = [];
       for (const word of words) {
@@ -808,7 +825,7 @@
       }
       rare.sort((a, b) => (b.rank ?? Infinity) - (a.rank ?? Infinity));
       for (const item of rare.slice(0, settings.maxPerCue)) {
-        items.push({ term: item.word, sentence: line });
+        items.push({ term: item.word, sentence: line, ...around });
       }
     });
 
@@ -820,6 +837,7 @@
         items: items.slice(at, at + GLOSS_CHUNK),
         language,
         target,
+        film,
       });
     }
   }
@@ -1552,7 +1570,14 @@
     drawPopup(term, null);
     placePopup(word);
 
-    const entry = await lookUp(term, language, Number(word.dataset.slot), lineOf(word)?.cue?.text || "");
+    const line = lineOf(word);
+    const entry = await lookUp(
+      term,
+      language,
+      Number(word.dataset.slot),
+      line?.cue?.text || "",
+      line?.cue || null,
+    );
     // The pointer moved on while the lookup was in flight; answering now would
     // put this word's meaning beside a different one.
     if (popupTerm !== term || hoveredWord !== word || !word.isConnected) return;
@@ -2171,7 +2196,7 @@
     focusCard(card);
     trim();
 
-    card.lookup = await lookUp(term, language, from, card.sentence);
+    card.lookup = await lookUp(term, language, from, card.sentence, cue);
     drawChip(card);
     if (focused === card) drawFocus();
     return card;
@@ -2182,7 +2207,7 @@
    * language the reader has already chosen to read this film in. */
   const lookupCache = new Map();
 
-  async function lookUp(term, language, slot, sentence = "") {
+  async function lookUp(term, language, slot, sentence = "", cue = null) {
     const target = translationTarget(slot);
     /* The line is part of the key because it is part of the answer: the same
      * word means one thing in "can you spare a minute" and another in "one
@@ -2191,12 +2216,20 @@
     const key = `${language}>${target}:${term}${sentence ? `@${sentence}` : ""}`;
     if (lookupCache.has(key)) return lookupCache.get(key);
 
+    /* The rest of the context, which is NOT in the key above - it helps answer
+     * the question rather than changing which question it is, and the daemon's
+     * `_translation_path` says why the cache is built on that distinction.
+     * Asked for here so that a word clicked by hand is answered with the same
+     * context glossAhead sent when it walked the file. */
+    const around = (cue && api.cueNeighbours?.(slot, cue)) || { before: "", after: "" };
+    const film = api.status?.().film || "";
+
     /* A transportError is an answer now, not a rejection, so it needs reading
      * here or it arrives as an entry with no definitions and no translation and
      * the popup says "nothing found for that word" about a word it never asked
      * about. The catch stays for anything else that can go wrong. */
     const pending = api
-      .daemon("lookup", { query: term, language, target, sentence })
+      .daemon("lookup", { query: term, language, target, sentence, film, ...around })
       .then((response) => {
         if (!response) return { definitions: [], unavailable: "Lookup failed." };
         if (response.transportError) {
