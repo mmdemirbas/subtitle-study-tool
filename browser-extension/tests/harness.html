@@ -7428,6 +7428,101 @@
         await sleep(120);
       });
 
+      check("a drifting subtitle offers its speed on the card, for as long as it drifts", async () => {
+        /* Reported as "during an episode, I need to fix the sync multiple
+         * times". A subtitle timed against another framerate is the one error
+         * no offset can fix - right where it was last corrected and wrong again
+         * ten minutes later - and the extension has been measuring it from the
+         * reader's own corrections all along. It had one way to say so: a
+         * toast, offered once, about half an hour in, gone in six seconds.
+         *
+         * Two things are checked and the second was broken twice over. The
+         * measurement reaches the card, and it belongs to the file it was made
+         * on: neither the corrections nor the offered-once flag used to be
+         * cleared when a different subtitle took the slot, so a second film
+         * could be called drifting on the strength of the first one's
+         * corrections, or never be told at all. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+        const wasOpen = window.__ssoPanel.isOpen();
+        await window.__ssoPanel.show();
+        const offered = () =>
+          [...panelShadow().querySelectorAll(".sso-sync__drift")].filter((row) => !row.hidden);
+
+        try {
+          // Alone in the slot, so nothing is carried anywhere while this
+          // corrects the leading subtitle.
+          api.detach(1);
+          await api.attach({ cues: CUES, label: "EN · Harness.Speed", fileId: 6801, language: "en", slot: 0 });
+          await sleep(200);
+          if (offered().length)
+            throw new Error("a subtitle nobody has corrected is described as drifting");
+
+          // A second late at the start, nine seconds late twenty-five minutes on.
+          video.currentTime = 120;
+          await sleep(150);
+          api.setOffset(1000, { slot: 0, quiet: true });
+          video.currentTime = 120 + 1500;
+          await sleep(150);
+          api.setOffset(9000, { slot: 0, quiet: true });
+          await sleep(250);
+
+          const rows = offered();
+          if (rows.length !== 1)
+            throw new Error(`eight seconds gained over twenty-five minutes put ${rows.length} offers on the cards`);
+          const said = rows[0].querySelector(".sso-sync__driftsaid").textContent;
+          if (!/^Drifting \d+\.\d% fast · about \d+s out by the end$/.test(said))
+            throw new Error(`the card says "${said}"`);
+
+          rows[0].querySelector(".sso-sync__driftfix").click();
+          await sleep(250);
+          const rate = api.status().tracks[0].rate;
+          if (!(rate > 1.001)) throw new Error(`the speed was not applied - the file still runs at ${rate}`);
+          if (offered().length) throw new Error("the offer stood after it had been taken");
+
+          /* And the measurement does not outlive the file. Correct this one
+           * twice more, put a different subtitle in the slot, and the new one
+           * starts with nothing measured about it. */
+          api.setRate(1, { slot: 0, quiet: true });
+          video.currentTime = 120;
+          await sleep(150);
+          api.setOffset(1000, { slot: 0, quiet: true });
+          video.currentTime = 120 + 1500;
+          await sleep(150);
+          api.setOffset(9000, { slot: 0, quiet: true });
+          await sleep(250);
+          if (!offered().length) throw new Error("the same drift was not offered a second time");
+
+          await api.attach({ cues: CUES, label: "EN · Harness.Speed.Two", fileId: 6802, language: "en", slot: 0 });
+          await sleep(250);
+          if (offered().length)
+            throw new Error("a new subtitle inherited the last one's corrections and was called drifting");
+        } finally {
+          api.setRate(1, { slot: 0, quiet: true });
+          api.setOffset(0, { slot: 0, quiet: true });
+          video.currentTime = wasTime;
+          // After the throttled write, or it lands on a key just removed and
+          // the next check attaching this id inherits nine seconds.
+          await sleep(500);
+          for (const fileId of [6801, 6802]) {
+            await chrome.storage.local.remove(`sso:offset:${fileId}`);
+          }
+          await chrome.storage.local.remove("sso:usedTiming");
+          for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({
+                cues: CUES, label: slot ? "second" : "first", fileId: slot + 1, language: "en", slot,
+              });
+            } else {
+              api.detach(slot);
+            }
+          }
+          if (!wasOpen) window.__ssoPanel.hide();
+          await sleep(150);
+        }
+      });
+
       check("a label too generic to name a release is not treated as one", async () => {
         /* `tr.srt` reduces to "tr", and every other `tr.srt` on the disk would
          * then be the same release. That is the collision that carries one

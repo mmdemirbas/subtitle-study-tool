@@ -5000,25 +5000,40 @@
      * After eight nudges the span collapsed toward the recent few and a real
      * drift stopped clearing the twenty-minute bar a rate needs. */
     if (track.corrections.length > DRIFT_MAX_NOTES) track.corrections.splice(1, 1);
-    offerDrift(track, slot, durationMs);
+    offerDrift(track, slot);
+    /* And again, because the correction is state that surfaces show.
+     *
+     * setOffset notifies before it gets here, so the round that a correction
+     * triggers is the one round that cannot see it. Nothing depended on that
+     * while the drift was only ever a toast raised from inside this function;
+     * the card reads it off status(), and with the film paused - which is
+     * exactly when a reader is fixing the sync - there is no later round to
+     * carry it. */
+    notify();
   }
 
-  function offerDrift(track, slot, durationMs) {
-    // Once. A reader who declines has declined; a second toast saying the same
-    // thing is the film interrupting them to repeat itself.
-    if (track.driftOffered) return;
+  /* The drift this file's corrections describe, or null while they describe
+   * none. A measurement rather than a message, so the toast that announces it
+   * once and the control that stands on the card cannot disagree about what it
+   * says or about whether there is anything to say. */
+  function driftEstimate(track) {
+    // Cheapest first: this runs on every status(), twenty times a second, and
+    // almost every call has nothing to measure.
+    if (!track || track.corrections.length < 2) return null;
+    const durationMs = (filmSeconds() || 0) * 1000;
+    if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
     const first = track.corrections[0];
     const last = track.corrections[track.corrections.length - 1];
     const spanMs = last.fileMs - first.fileMs;
     /* Far enough apart to extrapolate from - the aligner's own bar, for the
      * same reason. Two nudges a minute apart measure the reader's patience. */
-    if (!(spanMs >= (globalThis.__ssoAlign?.RATE_MIN_SPAN_MS ?? 1200000))) return;
+    if (!(spanMs >= (globalThis.__ssoAlign?.RATE_MIN_SPAN_MS ?? 1200000))) return null;
 
     const rate = track.rate + (last.offsetMs - first.offsetMs) / spanMs;
-    if (!(rate > 0)) return;
+    if (!(rate > 0)) return null;
     // Would leaving it alone cost anything by the end? Two nudges that happen
     // to differ are taste, not drift.
-    if (Math.abs(rate - track.rate) * durationMs < DRIFT_WORTH_SAYING_MS) return;
+    if (Math.abs(rate - track.rate) * durationMs < DRIFT_WORTH_SAYING_MS) return null;
 
     /* A framerate conversion if one accounts for it, because then the number
      * stops being a measurement and becomes a known ratio - and saying which
@@ -5030,24 +5045,53 @@
       .find((candidate) => Math.abs(rate - candidate) * durationMs <= DRIFT_EXPLAINED_MS);
     const fixed = named ?? rate;
 
+    return {
+      rate: fixed,
+      named: Boolean(named),
+      percent: Number(Math.abs((fixed - 1) * 100).toFixed(1)),
+      fast: fixed > 1,
+      /* What leaving it costs by the credits, which is the unit the reader
+       * lives in and the one both gates above are written in. */
+      byMs: Math.round(Math.abs(fixed - track.rate) * durationMs),
+      atMs: last.fileMs,
+      offsetMs: last.offsetMs,
+    };
+  }
+
+  function offerDrift(track, slot) {
+    // Once. A reader who declines has declined; a second toast saying the same
+    // thing is the film interrupting them to repeat itself. The card carries it
+    // for as long as it is true, which is the surface a decline leaves alone.
+    if (track.driftOffered) return;
+    const drift = driftEstimate(track);
+    if (!drift) return;
+
     track.driftOffered = true;
-    const percent = Math.abs((fixed - 1) * 100).toFixed(1);
-    const way = fixed > 1 ? "fast" : "slow";
+    const way = drift.fast ? "fast" : "slow";
     showToast(
-      named
-        ? `Subtitle running ${percent}% ${way} — a framerate mismatch, not a delay`
-        : `Subtitle drifting ${percent}% ${way} across the film`,
-      { action: { label: "Fix the drift", onClick: () => applyDrift(track, slot, fixed, last) } },
+      drift.named
+        ? `Subtitle running ${drift.percent}% ${way} — a framerate mismatch, not a delay`
+        : `Subtitle drifting ${drift.percent}% ${way} across the film`,
+      { action: { label: "Fix the drift", onClick: () => applyTrackDrift(slot) } },
     );
   }
 
   /* Apply the speed and keep the line the reader last lined up where they put
    * it. Speed alone would move every line including that one, so the correction
-   * they just made by ear would be undone by the button offering to help. */
-  function applyDrift(track, slot, fixed, last) {
-    const offsetMs = last.offsetMs + (track.rate - fixed) * last.fileMs;
-    setRate(fixed, { slot });
+   * they just made by ear would be undone by the button offering to help.
+   *
+   * It re-measures rather than being handed an answer, because the two callers
+   * are a toast raised at one moment and a control on the card pressed at
+   * another, and by the second one the reader may have corrected the film
+   * twice more. Returns what it did, so the panel can say so. */
+  function applyTrackDrift(slot = state.keyTrack) {
+    const track = state.tracks[slot];
+    const drift = driftEstimate(track);
+    if (!drift) return null;
+    const offsetMs = drift.offsetMs + (track.rate - drift.rate) * drift.atMs;
+    setRate(drift.rate, { slot });
     setOffset(offsetMs, { slot, quiet: true, byHand: false });
+    return drift;
   }
 
   function formatOffset(ms) {
@@ -5247,6 +5291,19 @@
     track.steps = timing.steps ?? [];
     track.activeIndexes = NEEDS_REDRAW;
     track.visible = true;
+    /* Both drift measurements belong to the file that has just been replaced.
+     *
+     * A correction is "at this moment of THIS file, the reader put it here",
+     * and a moment of the last file says nothing about this one - so keeping
+     * the list means the slope is fitted across two subtitles that have never
+     * shared a timeline. `driftOffered` is worse, because it is the flag that
+     * says the offer has been made: kept, the second film of an evening can
+     * never be told it is drifting, and the reader spends it correcting by
+     * hand. Read out of the running log: 25 films whose own corrections meet
+     * the bar against 33 offers made, which is not even the same shape of
+     * number, because both of these outlived the file they were measured on. */
+    track.corrections = [];
+    track.driftOffered = false;
     /* Ad time is NOT cleared here, and that is the whole point of it being on
      * `state` rather than on a track.
      *
@@ -5736,6 +5793,11 @@
         fileId: track.fileId,
         language: track.language,
         visible: track.visible,
+        /* What this file's own corrections say about its speed, for the control
+         * that offers to fix it. A single toast, offered once and half an hour
+         * into the film, was the only way to reach the one correction that
+         * stops the reader making all the others. */
+        drift: driftEstimate(track),
       })),
       /* Which programme the page has settled on, for the surfaces that are
        * ABOUT the film rather than about the picture. The panel's Find screen
@@ -6216,6 +6278,7 @@
     "setSteps",
     "nudge",
     "snapTiming",
+    "applyTrackDrift",
     "stepLine",
     "updateSettings",
     "updateTrackSettings",
@@ -6593,6 +6656,7 @@
     setSteps,
     nudge,
     snapTiming,
+    applyTrackDrift,
     stepLine,
     formatOffset,
     describeOffset,

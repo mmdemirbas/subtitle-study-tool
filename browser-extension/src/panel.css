@@ -1154,6 +1154,41 @@ button.sso-track__learn[data-on="false"] {
   margin-left: auto;
 }
 
+/* The drift, and the one press that takes it out.
+ *
+ * A third row on the card, present only while this subtitle's own corrections
+ * describe a drift - which on a well-timed file is never, so the card is the
+ * two measured rows it has always been. It reads as news rather than as
+ * chrome: this is the correction that stops the reader making all the others,
+ * and the alternative was a toast half an hour into the film. */
+.sso-sync__drift {
+  display: flex;
+  align-items: center;
+  gap: var(--sso-s2);
+  margin-top: var(--sso-s1);
+  padding: var(--sso-s1) var(--sso-s2);
+  border-radius: var(--sso-r-ctl);
+  background: var(--sso-fill);
+  box-shadow: inset 0 0 0 1px var(--sso-accent);
+}
+
+.sso-sync__driftsaid {
+  flex: 1 1 0;
+  min-width: 0;
+  font-size: var(--sso-t-small);
+  color: var(--sso-accent-ink);
+  /* One line. The sentence is a measurement and a consequence, and a card that
+   * grows a line when a film starts drifting moves the map under the hand
+   * that is correcting it. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.sso-sync__driftfix {
+  flex: none;
+}
+
 /* Back to the file's own timing, beside the timing it clears. Quiet, and only
  * there when there is something to clear - which is also exactly when the
  * subtitle needs no reset. */

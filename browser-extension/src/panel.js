@@ -2522,14 +2522,56 @@
     const timeline = buildTimeline(slot);
     offsets.append(timeline.root, timing);
 
+    /* The drift, on the card, for as long as the corrections describe one.
+     *
+     * A subtitle timed against a different framerate is the one error no offset
+     * can fix: it is right where the reader last corrected it and wrong again
+     * ten minutes later, which is what "I need to fix the sync multiple times"
+     * is. The extension has been measuring it from the reader's own corrections
+     * all along and had exactly one way to say so - a toast, offered once,
+     * about half an hour into the film, gone in six seconds. Read out of the
+     * running log: 33 of those offers, and 6 speeds ever applied, none of them
+     * to the leading subtitle, while films drifting 0.8% to 1.4% were being
+     * corrected by hand ten to twenty-five times each.
+     *
+     * A third row rather than a place on either of the other two, because the
+     * card's two rows are measured to the pixel and this one is not there at
+     * all on a subtitle that does not need it. */
+    const driftFix = button("Fix the drift", {
+      title: "Stretch this subtitle to the film's own speed, keeping the last line you lined up",
+      /* Nothing said on success: setRate already puts "Subtitle running 0.9%
+       * fast" on screen, and this row takes itself away, which between them
+       * are the whole answer. The failure is the one worth a sentence, and it
+       * has a cause the reader can act on. */
+      onClick: () => api.detached(
+        Promise.resolve(api.applyTrackDrift?.(slot)).then((done) => {
+          if (!done) {
+            sayInPanel(slot, "There is no longer a drift to measure - correct this subtitle once more", { warn: true });
+          }
+          refresh(api.status());
+        }),
+        "Fixing the drift",
+      ),
+    });
+    driftFix.className = "sso-sync__driftfix";
+
+    const driftSaid = document.createElement("span");
+    driftSaid.className = "sso-sync__driftsaid";
+
+    const drift = document.createElement("div");
+    drift.className = "sso-sync__drift";
+    drift.hidden = true;
+    drift.append(driftSaid, driftFix);
+
     const body = document.createElement("div");
     body.className = "sso-track__body";
-    body.append(offsets);
+    body.append(offsets, drift);
 
     root.append(head, body);
     return {
       root, learnChip, label, labelNo, labelLang, labelHead, labelTail, styleButton,
       offsetField, offsetReset, visible, remove, disarm, lineUpButton, timeline,
+      drift, driftSaid,
     };
   }
 
@@ -4069,6 +4111,16 @@
       card.learnChip.setAttribute("aria-pressed", learning ? "true" : "false");
       // Nothing to line up against with one subtitle on screen.
       card.lineUpButton.hidden = status.trackCount < 2;
+      /* What this file's own corrections say about its speed. It is a
+       * measurement and it stands while it holds, so this is the reader's way
+       * back to the offer the toast made once and took away. */
+      card.drift.hidden = !track.drift;
+      if (track.drift) {
+        const way = track.drift.fast ? "fast" : "slow";
+        card.driftSaid.textContent = track.drift.named
+          ? `Running ${track.drift.percent}% ${way} · a framerate mismatch, not a delay`
+          : `Drifting ${track.drift.percent}% ${way} · about ${Math.round(track.drift.byMs / 1000)}s out by the end`;
+      }
       const stretched = track.rate && track.rate !== 1;
       const acts = track.steps?.length ?? 0;
       card.offsetField.dataset.set = track.offsetMs ? "true" : "false";
