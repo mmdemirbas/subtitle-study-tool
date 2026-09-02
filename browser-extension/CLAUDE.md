@@ -290,6 +290,17 @@ the reference, so snapping it onto a follower would pull the reader's own aim
 back toward a subtitle that is only where it is because of the lead - silently,
 in the moment after they let go.
 
+**And never more than half of the move it is steadying** (`SNAP_KEEPS` in
+`content.js`). The search is a fixed point: its answer does not depend on where
+the hand let go, so once a correction sits on it, every deliberate move away is
+met by a move of the same size back. Reported as the drag "fighting back", and
+measured over the 137 snaps that followed a drag in the running log - 76 went
+against the drag, 29 gave back more than half of it, and 15 put the correction
+back within 8ms of where the gesture began, five of them to the millisecond. So
+the gesture's starting point travels with the request and a snap larger than
+half the move is refused. A caller with no gesture behind it passes none, and
+the snap stands as before.
+
 ## The first subtitle leads and the rest are individuals
 
 Asked for as "the first subtitle should be treated like master, so moving it
@@ -595,6 +606,33 @@ Each of these was a reported bug. Undoing one brings the bug back.
   forwarding the click to the player. Without that, tapping a word pinned it
   *and* played or paused the film - measured - and made the "pause when a word
   is clicked" setting impossible to switch off.
+- **A carried release timing claims that one number described the film, and the
+  film has to support that.** The memory hangs on the release rather than on the
+  file, which is right, but it stored the correction as it stood when the reader
+  stopped watching - and on a film they had been re-correcting all evening that
+  is the release's gap plus a film's worth of drift. Measured over 61 handovers
+  between episodes of one release family: overall the memory is a coin flip,
+  beating "carry nothing" in 28 of 61 with a median error of 5.4s against 5.8s.
+  Split by whether the film held still it is two different features. Where the
+  corrections drifted by two seconds or more across twenty minutes of film,
+  carrying the last one missed by a median of **10.2 seconds against 2.6 for
+  carrying nothing**. So `correctionsDrifted` refuses, and deletes the entry
+  rather than leaving a stale one for the next episode. Reported as "after
+  starting a new episode, previous one's sync shift preserved wrongly": six of
+  the last six carried timings in the log were undone by hand within seconds.
+- **The drift is a measurement, not a message, and it does not outlive its
+  file.** `driftEstimate` is read by the toast that announces it once and by the
+  card's third row, which stands for as long as it holds - because a toast
+  offered once, half an hour into the film, was the only route to a speed
+  anywhere in the interface. Read out of the log: 33 offers, 6 speeds ever
+  applied, none of them to the leading subtitle, while films drifting 0.8% to
+  1.4% were corrected by hand ten to twenty-five times each. `attach` clears
+  `corrections` and `driftOffered` now; it did not, so a slope could be fitted
+  across two subtitles that never shared a timeline and the second film of an
+  evening could never be told it drifted at all. **`noteCorrection` notifies**,
+  because `setOffset` notifies before it records the correction and a paused
+  film - which is when a reader is fixing the sync - has no later round to carry
+  it.
 - **Ad time belongs to the playback, not to a subtitle and not to the tab.**
   `state.adDriftMs` is cleared by a new programme (`noticeProgrammeChange`) and
   by nothing else. `attach()` used to clear it, which destroyed the correction
@@ -742,6 +780,16 @@ companion asserts the other direction so the memo cannot be "fixed" by deleting
 the measurement.
 
 Adding work to either path is how this comes back.
+
+**The map drag is not one of them, and that was checked rather than assumed.**
+Reported alongside the drag "fighting back" as "performance problems". Over the
+46 logged ten-second windows that contain a map drag: 0.2 to 0.4ms of script per
+pointer sample, 23.5ms of handler time in the window at the median, and the same
+three long tasks a second a window with no drag in it has. What reads as the
+interface resisting is the springback above, plus a hunt of five or six gestures
+where one should do - 60 seconds of film across a 181px strip is 331ms per
+pixel, and the 15s scale that fixes it is one click away that nothing tells the
+reader to make.
 
 **`samplePerf` in `content.js` is how to measure the real thing.** The vehicle
 is one video and three short documents; the reports are about streaming sites
