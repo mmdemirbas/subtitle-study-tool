@@ -17,6 +17,8 @@
 import { readFile } from "node:fs/promises";
 import { basename } from "node:path";
 
+import { buildIndex, findPhrases } from "../src/study/phrases.js";
+
 const WORD_PATTERN = /[\p{L}\p{M}][\p{L}\p{M}'’-]*/gu;
 const LETTERS = /[\p{L}\p{M}]/gu;
 /* The extension's own floor: below three letters it is function words and
@@ -142,6 +144,24 @@ for (const cue of cues) {
 
 const isName = (it) => it.capitalMid >= Math.max(1, it.count * 0.5);
 
+/* The second marking rule, and the same table and matcher the overlay uses.
+ *
+ * A phrasal verb takes a place before any word does and is shown once per film,
+ * so a count of what the overlay marks that did not know about them would be an
+ * undercount with no way to tell. English only: the table ships for one
+ * language because the construction is one language's problem. */
+const PHRASE_RANK = Number(flag("phrase-rank", 50));
+let phraseIndex = null;
+if (lang === "en") {
+  const list = await readFile(
+    new URL("../src/study/phrases-en.generated.txt", import.meta.url), "utf-8",
+  );
+  const phrases = list.split("\n").filter(Boolean);
+  phraseIndex = buildIndex(phrases);
+}
+const markedPhrases = new Map();
+const phrasesSeen = new Set();
+
 for (const cue of cues) {
   const spoken = cue.text.replace(NOT_SPOKEN, " ");
   const words = (spoken.match(WORD_PATTERN) || []).map(fold);
@@ -156,14 +176,26 @@ for (const cue of cues) {
       candidates.push({ word, rank: rank === null ? Infinity : rank });
     }
   }
-  // Rarest first, which is how the overlay spends its two places.
+  /* Phrases first, once each, because that is the order the overlay spends the
+   * line's places in: a rare noun can be got from the picture and from the rest
+   * of the sentence, and "put up with" cannot be got from anything. */
+  let places = MAX_PER_CUE;
+  if (phraseIndex) {
+    for (const hit of findPhrases(words, phraseIndex)) {
+      if (hit.rank < PHRASE_RANK || phrasesSeen.has(hit.phrase) || places === 0) continue;
+      phrasesSeen.add(hit.phrase);
+      markedPhrases.set(hit.phrase, (markedPhrases.get(hit.phrase) || 0) + 1);
+      places -= 1;
+    }
+  }
+  // Rarest first, which is how the overlay spends whatever places are left.
   candidates.sort((a, b) => b.rank - a.rank);
   for (const pick of candidates.slice(0, MAX_PER_CUE)) {
     marked.set(pick.word, (marked.get(pick.word) || 0) + 1);
   }
   // The same contest with the names withdrawn: the places they were taking go
   // to the next-rarest words rather than going unspent.
-  for (const pick of candidates.filter((it) => !isName(seen.get(it.word))).slice(0, MAX_PER_CUE)) {
+  for (const pick of candidates.filter((it) => !isName(seen.get(it.word))).slice(0, places)) {
     markedVocabulary.set(pick.word, (markedVocabulary.get(pick.word) || 0) + 1);
   }
   const seconds = Math.max(0.001, (cue.end - cue.start) / 1000);
@@ -219,6 +251,11 @@ console.log(JSON.stringify({
   markedTypes: marked.size,
   markedVocabularyTokens: [...markedVocabulary.values()].reduce((a, b) => a + b, 0),
   markedVocabularyTypes: markedVocabulary.size,
+  /* The other rule. One chip each per film, so tokens and types are the same
+   * number by construction - it is here as a count of how many of the line's
+   * places went to a phrase rather than to a word. */
+  markedPhrases: markedPhrases.size,
+  topPhrases: [...markedPhrases.keys()].slice(0, 15),
   markedNameTokens: [...marked.entries()]
     .filter(([word]) => isName(seen.get(word)))
     .reduce((sum, [, n]) => sum + n, 0),

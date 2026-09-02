@@ -38,6 +38,7 @@ import { capture, lastReport, usePlanner } from "./diagnose.js";
 import * as trace from "./trace.js";
 import * as deck from "./study/deck.js";
 import { canReachDictionary, lookup } from "./study/lookup.js";
+import { phrasesIn, phrasesInLines } from "./study/phrases.js";
 import { rank } from "./study/rarity.js";
 
 const TOP_FRAME = 0;
@@ -456,6 +457,15 @@ async function handleDaemonCall(op, args, sender) {
      * be two things to keep in step for no gain. */
     case "rank":
       return { ranks: await rank(args.words || [], args.language) };
+
+    /* The other marking rule, and it is a different question from rarity
+     * rather than a variant of it - see study/phrases.js. Here beside `rank`
+     * for the same reason: one copy of a table behind a message rather than
+     * one per frame of every open tab. */
+    case "phrases":
+      return Array.isArray(args.lines)
+        ? { lines: await phrasesInLines(args.lines, args.language) }
+        : { phrases: await phrasesIn(args.words || [], args.language) };
     case "lookup":
       return lookup({
         query: args.query,

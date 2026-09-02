@@ -595,6 +595,41 @@ Each of these was a reported bug. Undoing one brings the bug back.
   arrives, its words are a disk read. It is keyed on the cue array's identity
   and the two languages, deliberately not on the rarity settings, so moving the
   threshold slider does not send the script again.
+- **A phrasal verb is a second marking rule, not a variant of the first.** The
+  rarity table answers "is this word rare in film dialogue" and is structurally
+  blind to what a learner actually gets stuck on: "put up with" is three of the
+  hundred commonest words in English and means nothing any of them mean, so
+  every part of it ranks far inside any threshold and nothing is ever marked.
+  `study/phrases.js` holds the matcher and the table, in the worker, for the
+  reason `rarity.js` gives. Five things about it are load-bearing:
+  - **`to` is not a particle and `be`/`have`/`do`/`go`/`get`/`let` are not
+    heads.** Wiktionary files "have to", "go to" and "get to" as phrasal verbs;
+    measured over the 174 English files in the daemon's cache, five of the eight
+    commonest matches in the whole corpus were `to`-forms at 1412, 1315, 881,
+    704 and 539 occurrences, and not one is a thing a learner needs pointed out.
+  - **The table holds only what the corpus attests.** The category is broad -
+    "rust out", "deck up", "buck for", "kick over" - and a first version shipped
+    the unattested tail on the theory that never-said means rare. Measured
+    against one episode: every phrase that read as noise came from that tail and
+    every one from the counted part was worth knowing. 1274 phrases ship; 3293
+    were dropped.
+  - **Once per film for the CARD, every time for the UNDERLINE.** They are two
+    promises. "These words are one thing" is true every time it is said; "here
+    is what it means" is worth saying once, and "come on" is said 1305 times in
+    the corpus.
+  - **Only the phrase's own words are marked.** "Pick it up" underlines `pick`
+    and `up` and leaves the pronoun alone, or a reader learns the pronoun
+    belongs to it. A single particle may sit up to three words from its verb; a
+    fixed three-word phrase takes no gap at all.
+  - **A phrase takes a place before a word does.** A rare noun can be got from
+    the picture and the rest of the sentence; a phrasal verb cannot be got from
+    anything. Measured on the Battlestar miniseries: 69 phrases and 636 word
+    marks in part one, 63 and 499 in part two.
+
+  `tools/build-phrases.mjs` builds the table and `tools/measure-script.mjs`
+  applies the same rule with the same matcher, so the report keeps describing
+  what the overlay does. **If you change one, change both** - the same standing
+  requirement the name rule carries.
 - **A name is a kind, not a filter, and there are two sources of evidence.**
   239 of the 860 words the overlay marked in the Battlestar Galactica miniseries
   were proper nouns (27.8%; 193 of 682 in part two), because a name is not in

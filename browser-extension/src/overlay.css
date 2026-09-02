@@ -230,6 +230,22 @@
  * its own colour, so the eye stops asking what it means. The same geometry as
  * the vocabulary underline: it is the same kind of mark about a different kind
  * of word, not a louder one. */
+/* A phrasal verb, marked as one thing across the words that make it.
+ *
+ * The words themselves are common - that is what makes the construction hard
+ * and what makes the rarity underline blind to it - so the mark cannot be the
+ * rare one or it would say something false about each word on its own. A
+ * dotted underline under each of the phrase's own words says "these belong
+ * together" without claiming any of them is unusual, and it skips the object
+ * in "pick it up", which is not part of the phrase. */
+.sso-w[data-phrase="true"] {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: rgba(126, 231, 199, 0.9);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 0.18em;
+}
+
 .sso-w[data-name="true"] {
   text-decoration: underline;
   text-decoration-color: rgba(198, 170, 255, 0.8);

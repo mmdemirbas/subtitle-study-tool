@@ -74,6 +74,24 @@
       };
       const EXT = "../src/";
       // Everything the page reported to the worker, in order.
+      /* A phrase table the size of the cases that use it, in rank order the
+       * way the shipped one is: commonest first, so "come on" at 0 is inside
+       * any threshold and "put up with" at 5 is outside a threshold of 3. */
+      const PHRASE_TABLE = [
+        "come on", "look at", "find out", "back off", "pick up", "put up with", "give in",
+      ];
+      // Rank 3 and 4 are "back off" and "pick up", so a threshold of 3 puts
+      // them outside the commonest band and leaves "come on" inside it.
+      const PHRASE_RANK = 3;
+      let phraseIndex = null;
+      async function matchPhrases(words) {
+        if (!phraseIndex) {
+          const phrases = await import("../src/study/phrases.js");
+          phraseIndex = { at: phrases.buildIndex(PHRASE_TABLE), find: phrases.findPhrases };
+        }
+        return phraseIndex.find(words, phraseIndex.at);
+      }
+
       window.__sent = [];
       // The message listeners the page registered, so a test can ask them.
       window.__listeners = [];
@@ -150,6 +168,21 @@
                 ranks[word] = RANKS[word] === undefined ? null : RANKS[word];
               }
               return { ranks };
+            }
+            /* The real matcher against a small table, which is the same
+             * split the rank op uses: the extension's own code decides what a
+             * line contains, and the page decides what the table holds. A
+             * stubbed matcher would test the wiring and nothing else. */
+            if (msg.op === "phrases") {
+              // Two shapes: one line as the film plays, the whole file at
+              // attach. The extension asks for the second so the meanings are
+              // on disk before anybody reads them.
+              if (Array.isArray(msg.args.lines)) {
+                const lines = [];
+                for (const words of msg.args.lines) lines.push(await matchPhrases(words));
+                return { lines };
+              }
+              return { phrases: await matchPhrases(msg.args.words || []) };
             }
             if (msg.op === "gloss") {
               glossAsks.push(msg.args);
@@ -7401,6 +7434,124 @@
           api.detach(0);
         }
         await sleep(120);
+      });
+
+      check("a phrasal verb is marked as one thing, and only the first time", async () => {
+        /* The question the rarity table cannot answer. "Put up with" is three
+         * of the hundred commonest words in English and means nothing any of
+         * them mean, so every part of it ranks far inside any threshold and
+         * nothing is ever marked - the reader is left to work out that the
+         * three words are one word.
+         *
+         * Three things are asserted and each was a decision. The phrase's own
+         * words are marked and the object between them is not, because a reader
+         * shown "pick it up" as one mark learns that the pronoun belongs to it.
+         * The card arrives once per film, because a phrasal verb is common by
+         * nature - "come on" is said 1305 times in the corpus this was measured
+         * over - and the underline still appears every time, because "these
+         * words are one thing" stays true. And a phrase inside the commonest
+         * band is left alone. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+        const LINES = [
+          { start: 3000, end: 6000, text: "You should back off." },
+          { start: 7000, end: 10000, text: "He picked it up again." },
+          { start: 11000, end: 14000, text: "Back off, both of you." },
+          { start: 15000, end: 18000, text: "Come on, look at me." },
+        ];
+        const at = async (seconds) => {
+          video.currentTime = seconds;
+          await sleep(400);
+        };
+        const words = () => [...shadowOf().querySelectorAll(".sso-w")];
+        const chips = () =>
+          [...shadowOf().querySelectorAll(".sso-trail__term")].map((n) => n.textContent);
+
+        const wasStudy = { ...window.__ssoStudy.settings() };
+        try {
+          api.detach(1);
+          window.__ssoStudy.updateSettings({
+            enabled: true, auto: true, maxPerCue: 2, phraseRank: PHRASE_RANK,
+          });
+          await api.attach({ cues: LINES, label: "EN · Harness.Phrases", fileId: 7301, language: "en", slot: 0 });
+          await sleep(200);
+
+          await at(4);
+          const marked = words().filter((w) => w.dataset.phrase === "true").map((w) => w.dataset.w);
+          if (marked.join(" ") !== "back off")
+            throw new Error(`marked ${JSON.stringify(marked)} rather than the phrase`);
+          if (!chips().includes("back off"))
+            throw new Error(`the trail holds ${JSON.stringify(chips())}`);
+
+          /* Separable: the particle sits two words from its verb and the
+           * pronoun between them is not part of the phrase. */
+          await at(8);
+          const split = words().filter((w) => w.dataset.phrase === "true").map((w) => w.dataset.w);
+          if (split.join(" ") !== "picked up")
+            throw new Error(`"picked it up" marked ${JSON.stringify(split)}`);
+
+          // Said again: still underlined, no second card.
+          const before = chips().filter((term) => term === "back off").length;
+          await at(12);
+          const again = words().filter((w) => w.dataset.phrase === "true").map((w) => w.dataset.w);
+          if (again.join(" ") !== "back off")
+            throw new Error("the second time it was said it was not marked at all");
+          if (chips().filter((term) => term === "back off").length !== before)
+            throw new Error("the same phrase was taught twice");
+
+          // Inside the commonest band, so not marked at all.
+          await at(16);
+          const common = words().filter((w) => w.dataset.phrase === "true").map((w) => w.dataset.w);
+          if (common.length)
+            throw new Error(`"come on" and "look at" were marked: ${JSON.stringify(common)}`);
+
+          /* And the prefetch asks about the same phrases the marking will,
+           * once each, with the line they were said in. A prefetch that
+           * disagreed with the marking would file every answer where nothing
+           * looks for it and the whole of it would silently do nothing. */
+          glossAsks.length = 0;
+          /* A second language is what gives the first one something to be
+           * translated into, and that is what lets the prefetch run at all. */
+          await api.attach({ cues: LINES, label: "TR · Harness.Phrases", fileId: 7302, language: "tr", slot: 1 });
+          await at(4);
+          await sleep(600);
+          const sent = glossAsks.flatMap((ask) => ask.items || []);
+          const ahead = sent.filter((item) => item.term === "back off");
+          if (ahead.length !== 1)
+            throw new Error(`the prefetch asked about "back off" ${ahead.length} times, want once`);
+          if (ahead[0].sentence !== "You should back off.")
+            throw new Error(`it was asked with "${ahead[0].sentence}" rather than its own line`);
+          if (sent.some((item) => item.term === "come on"))
+            throw new Error("a phrase inside the commonest band was sent ahead");
+        } finally {
+          /* Everything this touched, including which subtitles are being
+           * learnt: attaching over a slot is what changes that, and a later
+           * case asserts on exactly it. */
+          window.__ssoStudy.updateSettings({
+            enabled: wasStudy.enabled,
+            auto: wasStudy.auto,
+            maxPerCue: wasStudy.maxPerCue,
+            phraseRank: wasStudy.phraseRank,
+            studySlots: wasStudy.studySlots,
+            trailOff: wasStudy.trailOff,
+          });
+          video.currentTime = wasTime;
+          await sleep(400);
+          for (const fileId of [7301, 7302]) {
+            await chrome.storage.local.remove(`sso:offset:${fileId}`);
+          }
+          for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({
+                cues: CUES, label: slot ? "second" : "first", fileId: slot + 1, language: "en", slot,
+              });
+            } else {
+              api.detach(slot);
+            }
+          }
+          await sleep(200);
+        }
       });
 
       check("a film corrected all the way through carries nothing to the next episode", async () => {

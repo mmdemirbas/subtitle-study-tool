@@ -1050,6 +1050,58 @@ chrome.storage.local.set = instant.set;
   daemonAnswers = null;
 }
 
+/* --- phrasal verbs -----------------------------------------------------------
+ *
+ * The matcher, on its own. It is imported by the build script as well as by the
+ * worker, so a table is ranked by counting the corpus with the same code that
+ * will later match against it - which means these cases are also what the
+ * table's order means.
+ */
+{
+  const { buildIndex, findPhrases, surfaceForms } = await import("../src/study/phrases.js");
+  const index = buildIndex(["back off", "pick up", "put up", "put up with", "give in", "look at"]);
+  const of = (line) => findPhrases(line.split(" "), index);
+  const said = (line) => of(line).map((hit) => `${hit.phrase}@${hit.words.join(",")}`).join(" ");
+
+  t("a phrasal verb is found in every tense a line can say it in",
+    ["he gives up", "he gave up", "he is giving up", "he give up"]
+      .every((line) => findPhrases(line.split(" "), buildIndex(["give up"])).length === 1),
+    JSON.stringify(surfaceForms("give")));
+
+  t("an irregular verb gets no invented past tense",
+    !surfaceForms("put").includes("putted") && surfaceForms("put").includes("put")
+      && surfaceForms("walk").includes("walked"),
+    JSON.stringify(surfaceForms("put")));
+
+  /* Separable, and the object between them is not part of the phrase: a reader
+   * shown "pick it up" as one mark learns that the pronoun belongs to it. */
+  t("the particle is found away from its verb, and what sits between is not the phrase",
+    said("she picked it up") === "pick up@1,3" && said("she picked the whole thing up") === "pick up@1,5",
+    said("she picked it up") + " | " + said("she picked the whole thing up"));
+
+  t("and not so far away that any two words count",
+    of("she picked the whole damn thing up").length === 0,
+    said("she picked the whole damn thing up"));
+
+  /* "Put up with" is fixed - the object goes after the whole thing - so it
+   * takes no gap, and where both could match the longer one wins. */
+  t("the longer phrase wins the same words",
+    said("i cannot put up with this") === "put up with@2,3,4",
+    said("i cannot put up with this"));
+
+  t("and a fixed three-word phrase is not found around an object",
+    of("put the phone up with the others").map((h) => h.phrase).join(",") === "put up",
+    said("put the phone up with the others"));
+
+  t("two phrases in one line are both found and neither eats the other",
+    said("back off and pick up the gun") === "back off@0,1 pick up@3,4",
+    said("back off and pick up the gun"));
+
+  t("a rank comes back with each one, which is what decides whether it is marked",
+    of("back off").every((hit) => hit.rank === 0) && of("give in").every((hit) => hit.rank === 4),
+    JSON.stringify(of("back off").concat(of("give in"))));
+}
+
 for (const r of results) console.log(r.ok ? "PASS" : "FAIL", "-", r.name, r.ok ? "" : `→ ${r.detail}`);
 
 console.log(`\n${results.filter((r) => r.ok).length}/${results.length} passed`);

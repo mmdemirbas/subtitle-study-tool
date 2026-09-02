@@ -76,6 +76,17 @@
      * over the picture. It is a slider because the right value is a property of
      * the reader, not of the film. */
     rarityRank: 4000,
+    /* And a phrasal verb outside the commonest this many, which is a different
+     * question from the one above rather than the same one at another scale.
+     * "Put up with" is three of the commonest words in English and means
+     * nothing any of them mean, so rarity cannot see it; what decides is
+     * whether the reader has met the phrase itself. Measured over the 174
+     * English subtitle files in the daemon's cache: the fifty commonest are
+     * "come on", "look at", "talk about", "find out", "pick up" and their
+     * kind - things a reader at this level knows - and past them the band is
+     * "slow down", "back off", "open up", "give in", "write down". At fifty,
+     * an episode carries a median of 32 of them. */
+    phraseRank: 50,
     /* Two at most per line. It was larger, and the surface became something to
      * read instead of something to glance at: words from four lines ago were
      * still arriving while new ones landed on top of them, so nothing was ever
@@ -754,10 +765,18 @@
        * key the answer is filed under. Tidying it here would file every answer
        * where nothing ever looks for it, and the whole of this would quietly
        * do nothing. */
-      return { line: text, words };
+      /* The ordered words as well as the set. The set is what gets ranked; the
+       * sequence is what a phrase is found in, and a phrasal verb is a fact
+       * about the order. */
+      WORD_PATTERN.lastIndex = 0;
+      const sequence = (spoken.match(WORD_PATTERN) || []).map((w) => fold(w, language));
+      return { line: text, words, sequence };
     });
 
-    const ranks = await ranksFor([...everyWord], language);
+    const [ranks, byLine] = await Promise.all([
+      ranksFor([...everyWord], language),
+      phrasesAhead(perCue.map((cue) => cue.sequence), language),
+    ]);
     if (glossedTracks.get(slot) !== mark) return;
     if (ranks.size === 0) {
       // Nothing could be ranked, so nothing can be chosen. Forget the mark so
@@ -767,7 +786,19 @@
     }
 
     const items = [];
-    for (const { line, words } of perCue) {
+    /* The same once-per-film rule markWords applies, worked out the same way
+     * over the same file in the same order - so what is asked for ahead of time
+     * is what will be asked for when the line arrives, and every one of them is
+     * a disk read by then. Its own set, not the one markWords keeps: this runs
+     * at attach and that one runs as the film plays, and sharing it would have
+     * whichever ran first silence the other. */
+    const aheadSeen = new Set();
+    perCue.forEach(({ line, words }, at) => {
+      for (const hit of byLine[at] || []) {
+        if (hit.rank < settings.phraseRank || aheadSeen.has(hit.phrase)) continue;
+        aheadSeen.add(hit.phrase);
+        items.push({ term: hit.phrase, sentence: line });
+      }
       const rare = [];
       for (const word of words) {
         if (names.has(word) || letterCount(word) < settings.minLetters) continue;
@@ -779,7 +810,7 @@
       for (const item of rare.slice(0, settings.maxPerCue)) {
         items.push({ term: item.word, sentence: line });
       }
-    }
+    });
 
     for (let at = 0; at < items.length; at += GLOSS_CHUNK) {
       // A different file, or a different pair of languages, while this was in
@@ -798,7 +829,12 @@
     const candidates = [...new Set(line.words.map((span) => span.dataset.w))].filter(
       (word) => letterCount(word) >= settings.minLetters,
     );
-    const ranks = await ranksFor(candidates, language);
+    /* Both questions at once, because they are independent and the second one
+     * would otherwise add a round trip to every line. */
+    const [ranks, phrases] = await Promise.all([
+      ranksFor(candidates, language),
+      phrasesFor(line, language),
+    ]);
     // The line changed while the ranks were in flight; marking now would put
     // the previous line's answers on this one's words. Study being switched off
     // in that same window is the other way this arrives too late - the words it
@@ -807,13 +843,29 @@
 
     const rare = [];
     const names = namesIn(line.slot, language);
+    /* Which words this line's phrases have already claimed. A word inside a
+     * phrasal verb is not a word to look up on its own - that is the whole
+     * point of the phrase being marked - so it is passed over below rather
+     * than being marked rare in its own right. */
+    const inPhrase = new Set();
+    for (const hit of phrases) for (const at of hit.words) inPhrase.add(at);
     /* Started from here rather than from attach, because this is the first
      * moment everything it needs is true at once: the file is loaded, study is
      * on, this subtitle is being followed, and the other one has said what
      * language it is. It returns immediately on every line after the first. */
     api.detached?.(glossAhead(line.slot, language), "Glossing ahead");
-    for (const span of line.words) {
+    line.words.forEach((span, at) => {
+      span.dataset.phrase = inPhrase.has(at) ? "true" : "false";
+    });
+
+    for (const [at, span] of line.words.entries()) {
       const word = span.dataset.w;
+      if (inPhrase.has(at)) {
+        span.dataset.rare = "false";
+        span.dataset.name = "false";
+        span.dataset.saved = savedTerms.has(`${language}:${word}`) ? "true" : "false";
+        continue;
+      }
       const rank = ranks.has(word) ? ranks.get(word) : undefined;
       const known = savedTerms.has(`${language}:${word}`);
       span.dataset.saved = known ? "true" : "false";
@@ -850,15 +902,85 @@
      * Two surfaces can show it now, so it takes both being away to stop the
      * work: this subtitle's own trail, and the focus box that any subtitle's
      * word can land in. */
-    if (!settings.auto || rare.length === 0) return;
+    if (!settings.auto || (rare.length === 0 && phrases.length === 0)) return;
     if (!trailShown(line.slot) && !settings.showFocus) return;
+
+    /* Phrases take their places first.
+     *
+     * A rare noun can often be got from the picture and from the rest of the
+     * sentence; "put up with" cannot be got from anything, because every word
+     * in it is common and none of them means what the three of them mean. So
+     * when a line offers both, the phrase is the one worth the place. */
+    const seen = seenIn(line.slot, api.cueTexts?.(line.slot) || []);
+    const wanted = [];
+    for (const hit of phrases) {
+      if (seen.has(hit.phrase) || savedTerms.has(`${language}:${hit.phrase}`)) continue;
+      wanted.push({ term: hit.phrase, rank: hit.rank, phrase: true });
+    }
     /* Rarest first, then capped. When a line has more unfamiliar words than
      * fit, the rarest are the ones a reader is least likely to have got from
      * context. */
     rare.sort((a, b) => (b.rank ?? Infinity) - (a.rank ?? Infinity));
-    for (const item of rare.slice(0, settings.maxPerCue)) {
-      addCard(item.word, { rank: item.rank, language, auto: true, slot: line.slot });
+    for (const item of rare) wanted.push({ term: item.word, rank: item.rank, phrase: false });
+
+    for (const item of wanted.slice(0, settings.maxPerCue)) {
+      // Recorded when it is SHOWN, not when it is found: a phrase whose line
+      // gave its places to something else has not been taught yet.
+      if (item.phrase) seen.add(item.term);
+      addCard(item.term, {
+        rank: item.rank, language, auto: true, slot: line.slot, phrase: item.phrase,
+      });
     }
+  }
+
+  /* --- phrasal verbs ----------------------------------------------------------
+   *
+   * The second marking rule, and it answers a question rarity cannot: "put up
+   * with" is three of the hundred commonest words in English and means nothing
+   * any of them mean. The table and the matcher live in study/phrases.js, in
+   * the worker, for the reason the frequency tables do.
+   *
+   * ONCE PER FILM. A phrasal verb is common by nature - that is what makes it
+   * worth knowing and what makes marking every occurrence unbearable. "Come
+   * on" is said 1305 times in the 174 files this was measured over. A reader
+   * who has been shown what a phrase means has been shown it, so the next
+   * forty times it is said the line's places go to something else.
+   *
+   * Held per track and thrown away with the file, like every other per-film
+   * measurement here: the next episode is a new reader's evening. */
+  const phrasesSeen = new Map();
+
+  function seenIn(slot, cues) {
+    const held = phrasesSeen.get(slot);
+    if (held && held.cues === cues) return held.marked;
+    const marked = new Set();
+    phrasesSeen.set(slot, { cues, marked });
+    return marked;
+  }
+
+  async function phrasesFor(line, language) {
+    if (!settings.enabled) return [];
+    const words = line.words.map((span) => span.dataset.w);
+    if (words.length < 2) return [];
+    const answer = await api.daemon("phrases", { words, language });
+    const found = Array.isArray(answer?.phrases) ? answer.phrases : [];
+    if (found.length === 0) return [];
+
+    /* Everything past the threshold, whether or not it has been shown before.
+     *
+     * The underline and the card are two different promises. Marking the words
+     * says "these three are one thing", which is true every time it is said and
+     * costs nothing to repeat. The card says "here is what it means", which is
+     * worth saying once. So the filtering by what has been seen happens where
+     * the card is added, not here. */
+    return found.filter((hit) => hit.rank >= settings.phraseRank);
+  }
+
+  /* Every line of the film at once, for the prefetch. Five hundred round trips
+   * to the worker is the alternative, and the table is loaded once either way. */
+  async function phrasesAhead(lines, language) {
+    const answer = await api.daemon("phrases", { lines, language });
+    return Array.isArray(answer?.lines) ? answer.lines : lines.map(() => []);
   }
 
   // --- the trail ----------------------------------------------------------------
@@ -1784,6 +1906,22 @@
           "know, so it gets underlined.",
         ["← more words marked", "fewer, rarer words →"],
       ),
+      /* A separate threshold, because it measures a different thing. The
+       * slider above is a position in a list of WORDS; this one is a position
+       * in a list of phrasal verbs, which is four thousand entries rather than
+       * thirty thousand, and a phrase's difficulty has nothing to do with how
+       * rare its words are - "put up with" is made of three of the commonest
+       * words in the language. Marking every phrasal verb would mark "come on"
+       * a thousand times a film; marking none of them leaves the reader to
+       * work out that three words are one word. */
+      phrases: range(
+        "Mark a phrasal verb outside", "phraseRank", 0, 400, 10,
+        (v) => (v === 0 ? "every one of them" : `the ${v} commonest`),
+        "Phrasal verbs are marked once each per film, whatever their words rank. " +
+          "The commonest are \"come on\" and \"look at\"; past them come \"back off\", " +
+          "\"open up\" and \"give in\".",
+        ["← more phrases marked", "fewer, rarer phrases →"],
+      ),
       hover: check("Answer beside the word on hover", "hoverCard",
         "Shows what a word means next to the word itself, with or without the focus box."),
       pause: check("Pause when a word is clicked", "pauseOnPin"),
@@ -1878,8 +2016,8 @@
     }
     if (!setEls) return;
     for (const [key, control] of Object.entries(setEls)) {
-      const name = { auto: "auto", rank: "rarityRank", hover: "hoverCard",
-        pause: "pauseOnPin", text: "textPx", opacity: "opacity" }[key];
+      const name = { auto: "auto", rank: "rarityRank", phrases: "phraseRank",
+        hover: "hoverCard", pause: "pauseOnPin", text: "textPx", opacity: "opacity" }[key];
       const value = name === "opacity" ? Math.round(settings.opacity * 100) : settings[name];
       if (control.input.type === "checkbox") control.input.checked = Boolean(value);
       else {
@@ -1971,7 +2109,10 @@
    */
   async function addCard(
     term,
-    { rank = undefined, language, pinned = false, auto = false, slot = latestSlot } = {},
+    {
+      rank = undefined, language, pinned = false, auto = false, slot = latestSlot,
+      phrase = false,
+    } = {},
   ) {
     /* Guarded on the list, which is what this actually writes into, rather than
      * on the host. They are not the same question: ranking a line is a round
@@ -2011,6 +2152,10 @@
       rank,
       pinned,
       auto,
+      /* Whether the term is a phrasal verb rather than a word. It changes what
+       * the rank MEANS - a position in the phrase table, not in the word one -
+       * and it is what the chip shows to say the three words are one thing. */
+      phrase,
       slot: from,
       sentence: cue?.text || "",
       paired: pairedLines(from, cue),
