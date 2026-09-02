@@ -235,3 +235,172 @@ def test_a_failed_translation_is_not_cached(lookups: Lookups, monkeypatch: Any) 
     monkeypatch.setattr(lookups, "_fetch_translation", lambda *args: "")
     lookups.translate("frankly", "en", "tr")
     assert not lookups._translation_path("frankly", "en", "tr").exists()
+
+
+# --- the gloss ------------------------------------------------------------------
+#
+# The tier that knows the line a word was said in. What is worth testing is not
+# the model - that is somebody else's - but the three things around it: that the
+# line reaches it and comes back in the key, that a malformed answer is refused
+# whole rather than in part, and that every one of the tiers below it still gets
+# its turn when this one cannot answer.
+
+
+class _Answered:
+    """One canned HTTP response, in the shape an OpenAI-compatible endpoint sends."""
+
+    def __init__(self, content: str) -> None:
+        self._body = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _Answered:
+        return self
+
+    def __exit__(self, *_: Any) -> None:
+        return None
+
+
+@pytest.fixture
+def glosser(tmp_path: Path) -> Lookups:
+    """Naming a model is what turns the tier on, so every test here names one."""
+    return Lookups(tmp_path, gloss_model="a-model-that-is-never-called")
+
+
+def _answers(monkeypatch: Any, *replies: str) -> list[bytes]:
+    """Serve `replies` in order, and record every request body that was sent."""
+    sent: list[bytes] = []
+    queue = list(replies)
+
+    def urlopen(request: Any, timeout: float = 0) -> _Answered:
+        sent.append(request.data)
+        return _Answered(queue.pop(0) if queue else queue[-1])
+
+    monkeypatch.setattr("subtitle_daemon.lookups.urllib.request.urlopen", urlopen)
+    return sent
+
+
+def test_the_line_travels_with_the_word(glosser: Lookups, monkeypatch: Any) -> None:
+    sent = _answers(monkeypatch, json.dumps({"g": ["ayırmak"]}))
+    assert glosser.translate("spare", "en", "tr", "Can you spare a minute?") == "ayırmak"
+    asked = json.loads(sent[0])["messages"][1]["content"]
+    assert "Can you spare a minute?" in asked, "the model was asked about the word alone"
+
+
+def test_the_same_word_in_two_lines_is_two_answers(glosser: Lookups, monkeypatch: Any) -> None:
+    """The whole fault this tier exists for. A context-free translator answers
+    "spare" with "parça", from its memory of "spare part", and hands that to a
+    reader who just heard "can you spare a minute"."""
+    _answers(monkeypatch, json.dumps({"g": ["ayırmak"]}), json.dumps({"g": ["yedek"]}))
+    assert glosser.translate("spare", "en", "tr", "Can you spare a minute?") == "ayırmak"
+    assert glosser.translate("spare", "en", "tr", "We have one spare engine.") == "yedek"
+
+
+def test_a_gloss_is_cached_against_its_line(glosser: Lookups, monkeypatch: Any) -> None:
+    sent = _answers(monkeypatch, json.dumps({"g": ["ayırmak"]}))
+    line = "Can you spare a minute?"
+    assert glosser.translate("spare", "en", "tr", line) == "ayırmak"
+    assert glosser.translate("Spare", "en", "tr", line) == "ayırmak"
+    assert len(sent) == 1, "the second ask should have come off the disk"
+    assert glosser._translation_path("spare", "en", "tr", line).exists()
+    assert not glosser._translation_path("spare", "en", "tr").exists(), (
+        "a contextual answer must not be filed where the context-free one is looked for"
+    )
+
+
+def test_a_word_said_twice_in_one_line_is_asked_once(glosser: Lookups, monkeypatch: Any) -> None:
+    sent = _answers(monkeypatch, json.dumps({"g": ["ayırmak", "yedek"]}))
+    items = [
+        {"term": "spare", "sentence": "Spare a minute, spare a thought."},
+        {"term": "spare", "sentence": "Spare a minute, spare a thought."},
+        {"term": "spare", "sentence": "We have one spare engine."},
+    ]
+    assert glosser.gloss_many(items, "en", "tr") == ["ayırmak", "ayırmak", "yedek"]
+    assert len(json.loads(sent[0])["messages"][1]["content"]) > 0
+    assert len(sent) == 1
+
+
+def test_a_reasoning_model_that_narrates_is_still_understood(
+    glosser: Lookups, monkeypatch: Any
+) -> None:
+    _answers(monkeypatch, '<think>The line is about time.</think>\n{"g": ["ayırmak"]}')
+    assert glosser.translate("spare", "en", "tr", "Can you spare a minute?") == "ayırmak"
+
+
+def test_a_short_answer_is_refused_whole(glosser: Lookups, monkeypatch: Any) -> None:
+    """Two answers for three words would put the second word's gloss under the
+    third, and a wrong meaning under a word is not read as a failure. It is read
+    as the meaning."""
+    _answers(monkeypatch, json.dumps({"g": ["ayırmak", "yedek"]}))
+    items = [
+        {"term": "spare", "sentence": "One."},
+        {"term": "chamber", "sentence": "Two."},
+        {"term": "brig", "sentence": "Three."},
+    ]
+    assert glosser.gloss_many(items, "en", "tr") == ["", "", ""]
+
+
+def test_an_explanation_is_not_a_gloss(glosser: Lookups, monkeypatch: Any) -> None:
+    """A model asked for one to three words will sometimes explain itself, and a
+    sentence does not fit on a chip under a subtitle. Refusing it drops through
+    to the tier below, which is why the archive is stubbed silent here."""
+    _answers(
+        monkeypatch,
+        json.dumps({"g": ["Bu kelime burada zaman ayırmak anlamında kullanılmıştır."]}),
+    )
+    monkeypatch.setattr(glosser, "_fetch_translation", lambda *args: "")
+    assert glosser.translate("spare", "en", "tr", "Can you spare a minute?") == ""
+
+
+def test_a_failing_endpoint_is_left_alone_for_a_while(
+    glosser: Lookups, monkeypatch: Any
+) -> None:
+    """Without this every word looked up by hand pays the live timeout before
+    the tier below gets its turn, and a reader who configured nothing would feel
+    the whole feature stall."""
+    tries = []
+
+    def refuse(request: Any, timeout: float = 0) -> _Answered:
+        tries.append(timeout)
+        raise TimeoutError("no model there")
+
+    monkeypatch.setattr("subtitle_daemon.lookups.urllib.request.urlopen", refuse)
+    monkeypatch.setattr(glosser, "_fetch_translation", lambda *args: "parça")
+    assert glosser.translate("spare", "en", "tr", "Spare a minute?") == "parça"
+    assert glosser.translate("chamber", "en", "tr", "In the chamber.") == "parça"
+    assert len(tries) == 1, "the second word asked a model that had just failed"
+
+
+def test_the_tiers_fall_in_order(tmp_path: Path, monkeypatch: Any) -> None:
+    asked: list[str] = []
+    lookups = Lookups(tmp_path, gloss_model="a-model", google_key="a-key")
+
+    monkeypatch.setattr(
+        lookups, "_gloss", lambda pairs, *a: asked.append("gloss") or ["" for _ in pairs]
+    )
+    monkeypatch.setattr(
+        lookups, "_fetch_google", lambda *a: asked.append("google") or "yedek"
+    )
+    monkeypatch.setattr(
+        lookups, "_fetch_translation", lambda *a: asked.append("archive") or "parça"
+    )
+    assert lookups.translate("spare", "en", "tr", "One spare engine.") == "yedek"
+    assert asked == ["gloss", "google"], "the archive answered over a tier that could"
+
+
+def test_the_archive_still_answers_when_nothing_is_configured(
+    lookups: Lookups, monkeypatch: Any
+) -> None:
+    """No model, no key, no daemon-side anything: the feature this replaced has
+    to keep working for whoever cloned the repo and started it."""
+    monkeypatch.setattr(lookups, "_fetch_translation", lambda *args: "parça")
+    assert lookups.translate("spare", "en", "tr", "One spare engine.") == "parça"
+
+
+def test_no_model_named_means_the_batch_asks_nobody(lookups: Lookups, monkeypatch: Any) -> None:
+    def never(*args: Any, **kwargs: Any) -> None:
+        raise AssertionError("the gloss tier is off and was asked anyway")
+
+    monkeypatch.setattr("subtitle_daemon.lookups.urllib.request.urlopen", never)
+    assert lookups.gloss_many([{"term": "spare", "sentence": "One."}], "en", "tr") == [""]

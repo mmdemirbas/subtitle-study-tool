@@ -14,6 +14,7 @@ Endpoints:
     GET  /cached                  what is already on disk
     GET  /cached/{file_id}        cues for a cached subtitle
     GET  /lookup?q=...            a word's dictionary entry, for study mode
+    POST /gloss                   many words with their lines, glossed ahead
 """
 
 from __future__ import annotations
@@ -100,7 +101,13 @@ class Service:
     def __init__(self, config: Config) -> None:
         self.config = config
         self.cache = Cache(CACHE_DIR)
-        self.lookups = Lookups(CACHE_DIR)
+        self.lookups = Lookups(
+            CACHE_DIR,
+            gloss_model=config.gloss_model or "",
+            gloss_url=config.gloss_url or "",
+            gloss_key=config.gloss_api_key,
+            google_key=config.google_api_key,
+        )
         self.client = Client(config.api_key) if config.has_api_key else None
         self._lock = threading.Lock()
 
@@ -146,12 +153,36 @@ class Service:
         }
 
     def lookup(self, params: dict[str, list[str]]) -> dict[str, Any]:
-        """A word's dictionary entry. Free, cached on disk, no quota involved."""
+        """A word's dictionary entry. Free, cached on disk, no quota involved.
+
+        `sentence` is the subtitle line the word was said in, and it is what
+        separates "spare a minute" from "a spare tyre". Optional: a caller that
+        does not have it gets the context-free answer it always got.
+        """
         return self.lookups.get(
             _first(params, "q") or "",
             _first(params, "lang") or "en",
             _first(params, "to") or "",
+            _first(params, "sentence") or "",
         )
+
+    def gloss(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Many words at once, each with the line it was said in.
+
+        The extension holds the whole subtitle file before the film starts, so
+        it knows which words it is going to mark. Answering them ahead is what
+        turns a 634ms lookup into a disk read - see `gloss_many`.
+        """
+        items = body.get("items")
+        if not isinstance(items, list):
+            return {"error": "items must be a list"}
+        return {
+            "glosses": self.lookups.gloss_many(
+                items,
+                str(body.get("language") or "en"),
+                str(body.get("target") or ""),
+            )
+        }
 
     def search(self, params: dict[str, list[str]]) -> dict[str, Any]:
         """Guess what is playing and find candidate subtitles.
@@ -738,7 +769,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._origin_ok():
             return
         parsed = urlparse(self.path)
-        if parsed.path not in ("/fetch", "/cached", "/log"):
+        if parsed.path not in ("/fetch", "/cached", "/log", "/gloss"):
             self._send(HTTPStatus.NOT_FOUND, {"error": "no such endpoint"})
             return
 
@@ -765,6 +796,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, self.service.import_subtitle(body))
         elif parsed.path == "/log":
             self._send(HTTPStatus.OK, self.service.append_log(body))
+        elif parsed.path == "/gloss":
+            self._send(HTTPStatus.OK, self.service.gloss(body))
         else:
             self._send(HTTPStatus.OK, self.service.fetch(body))
 

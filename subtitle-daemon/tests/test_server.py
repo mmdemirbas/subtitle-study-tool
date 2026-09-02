@@ -856,3 +856,39 @@ def test_a_log_without_entries_is_refused_rather_than_written(http, tmp_path, mo
     _status, answer = _post(base, "/log", {"entries": "not a list"})
     assert "error" in answer
     assert not logs.exists()
+
+
+def test_many_words_are_glossed_in_one_request(service, http, monkeypatch) -> None:
+    """The route the overlay uses to answer a film's words before they are said.
+
+    Asked one at a time as each line arrives, a lookup took 634ms on average and
+    up to 1.4s, against a line that is on screen for about two seconds - so the
+    answer landed after the question had gone. The extension holds the whole
+    subtitle file before the film starts, so it does not have to wait to be
+    asked: this is where it sends what it already knows it will need.
+    """
+    base, _ = http
+    asked: list[tuple[str, str]] = []
+
+    def gloss_many(items, language, target):
+        asked.extend((it["term"], it["sentence"]) for it in items)
+        return [f"{it['term']}-{target}" for it in items]
+
+    monkeypatch.setattr(service[0].lookups, "gloss_many", gloss_many)
+
+    status, body = _post(base, "/gloss", {
+        "language": "en", "target": "tr",
+        "items": [{"term": "spare", "sentence": "Can you spare a minute?"},
+                  {"term": "chamber", "sentence": "The chamber is dropping."}],
+    })
+    assert status == 200, body
+    assert body["glosses"] == ["spare-tr", "chamber-tr"]
+    assert asked == [("spare", "Can you spare a minute?"),
+                     ("chamber", "The chamber is dropping.")], "the lines did not travel"
+
+
+def test_a_gloss_request_without_items_is_answered_not_crashed(http) -> None:
+    base, _ = http
+    status, body = _post(base, "/gloss", {"language": "en", "target": "tr"})
+    assert status == 200, body
+    assert "error" in body

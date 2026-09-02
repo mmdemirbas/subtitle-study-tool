@@ -39,6 +39,15 @@ class Config:
     password: str | None
     default_languages: tuple[str, ...]
     port: int
+    # Study mode's three tiers of meaning, best first. Naming a model turns the
+    # top one on; the URL defaults to a model running on this machine, and the
+    # key is only for a hosted one. Without any of it a gloss still arrives,
+    # from a context-free translator, which is what it was before. See
+    # lookups.py for what the difference actually looks like.
+    gloss_model: str | None = None
+    gloss_url: str | None = None
+    gloss_api_key: str | None = None
+    google_api_key: str | None = None
 
     @property
     def has_api_key(self) -> bool:
@@ -80,4 +89,8 @@ def load() -> Config:
         password=pick("OPENSUBTITLES_PASSWORD", "password"),
         default_languages=parsed,
         port=int(port_raw) if port_raw else DEFAULT_PORT,
+        gloss_model=pick("GLOSS_MODEL", "gloss_model"),
+        gloss_url=pick("GLOSS_URL", "gloss_url"),
+        gloss_api_key=pick("GLOSS_API_KEY", "gloss_api_key"),
+        google_api_key=pick("GOOGLE_API_KEY", "google_api_key"),
     )
