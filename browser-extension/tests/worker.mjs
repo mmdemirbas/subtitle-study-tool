@@ -105,6 +105,14 @@ globalThis.chrome = {
       return written.length;
     },
   },
+  /* Optional host permissions, which study mode asks about before reaching a
+     dictionary or a translator. Absent, `contains` threw inside a catch and
+     every such question answered "no" - so the two paths that need one were
+     unreachable from here and looked tested. Granted, because what these cases
+     are about is what happens after permission exists. */
+  permissions: {
+    async contains() { return true; },
+  },
   storage: {
     local: {
       async get(key) {
@@ -902,6 +910,48 @@ t("clearing empties it", (await trace.entries()).length === 0);
 chrome.storage.local.get = instant.get;
 chrome.storage.local.set = instant.set;
 
+/* --- what a word costs when there is no daemon --------------------------------
+ *
+ * Study mode's meanings come from the daemon when it is there, which can gloss a
+ * word in the line it was said in. When it is not, this path asks a free archive
+ * that never sees the line and allows about six hundred words a day.
+ *
+ * So the line must not be part of what an answer is filed under here. Filed by
+ * line, the same word would be asked about again for every new sentence it
+ * turned up in - identical answers, one film spending a day's allowance.
+ */
+{
+  const askedFor = [];
+  daemonUp = false;
+  daemonAnswers = (url) => {
+    if (!url.includes("mymemory")) return null;
+    askedFor.push(url);
+    return { matches: [{ translation: "parça", match: 1, quality: "90" }] };
+  };
+
+  /* The probe is cached for a while, so "the daemon just stopped" is a state
+   * this path really passes through - and in it the key still carries the line
+   * and the archive is asked twice. Forced here so the case is about the
+   * settled behaviour rather than about the probe's timing. */
+  await (await import("../src/provider.js")).daemonUp({ force: true });
+
+  const { lookup } = await import("../src/study/lookup.js");
+  const first = await lookup({
+    query: "spare", language: "en", target: "tr", sentence: "Can you spare a minute?",
+  });
+  const second = await lookup({
+    query: "spare", language: "en", target: "tr", sentence: "We are down to one spare engine.",
+  });
+  t(
+    "with no daemon a word is asked about once, whatever line it turned up in",
+    askedFor.length === 1 && first.translation === "parça" && second.translation === "parça",
+    `asked ${askedFor.length} time(s), answers ${JSON.stringify([first.translation, second.translation])}`,
+  );
+  daemonAnswers = null;
+  daemonUp = true;
+}
+
 for (const r of results) console.log(r.ok ? "PASS" : "FAIL", "-", r.name, r.ok ? "" : `→ ${r.detail}`);
+
 console.log(`\n${results.filter((r) => r.ok).length}/${results.length} passed`);
 process.exit(results.every((r) => r.ok) ? 0 : 1);

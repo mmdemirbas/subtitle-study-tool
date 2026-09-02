@@ -612,6 +612,7 @@
   /* Anything a subtitle puts in brackets is a speaker label or a sound, not
    * spoken words, and neither should vote on how a word is normally spelt. */
   const NOT_SPOKEN = /\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|<[^>]*>/g;
+  const BRACKETED = /\[([^\]]*)\]|\(([^)]*)\)/g;
   const CAPITAL = /^[\p{Lu}]/u;
 
   /* Which words in this subtitle are names, decided from the whole file.
@@ -650,8 +651,23 @@
     const held = namesByTrack.get(slot);
     if (held && held.texts === texts && held.language === language) return held.names;
 
+    /* Who is talking, which a subtitle writes in brackets and which the
+     * capitalisation test above can never see, because the brackets are cut out
+     * of the evidence before it runs. The overlay does not cut them out of what
+     * it renders, though - the words inside a speaker label are wrapped and
+     * marked like any others - so "Ormon" was being sent to a translator as
+     * vocabulary. Inside a bracket, a capitalised word is a name: that is how
+     * caption houses write "[Ormon]" and "[Ormon over radio]", and it leaves
+     * "[sighs]" and "[indistinct chatter]" alone because those are lower case. */
+    const labelled = new Set();
     const seen = new Map();
     for (const text of texts) {
+      for (const bracket of String(text).matchAll(BRACKETED)) {
+        const inside = bracket[1] ?? bracket[2] ?? "";
+        for (const match of inside.matchAll(WORD_PATTERN)) {
+          if (CAPITAL.test(match[0])) labelled.add(fold(match[0], language));
+        }
+      }
       const spoken = String(text).replace(NOT_SPOKEN, " ");
       /* Walked with real match positions rather than indexOf, which returns the
        * FIRST occurrence of a surface form and so reads the wrong context for
@@ -676,12 +692,105 @@
       }
     }
 
-    const names = new Set();
+    const names = new Set(labelled);
     for (const [word, entry] of seen) {
       if (entry.capitalMid >= Math.max(1, entry.count * 0.5)) names.add(word);
     }
     namesByTrack.set(slot, { texts, language, names });
     return names;
+  }
+
+  /* Answering the film's words before anybody says them.
+   *
+   * A word asked for as its line arrived took 634ms on average and up to 1.4s,
+   * measured over twenty-two words. A subtitle is on screen for about two
+   * seconds, so on the slow end the meaning appeared under the NEXT line, and
+   * a reader who looks at a word for a second saw an empty chip most of the
+   * time.
+   *
+   * None of that is a network problem to be tuned. The overlay holds the entire
+   * subtitle file from the moment it attaches, so the words it is going to mark
+   * are knowable forty minutes before they are said. This walks the file once,
+   * works out which words each line would mark, and hands them to the daemon in
+   * film order, one chunk at a time. By the time a line arrives its words are
+   * on disk and the lookup is a file read.
+   *
+   * In film order and one chunk at a time for the same reason: a model that
+   * answers slowly still stays ahead of the playhead, and a fast one is done
+   * before the titles are over. Nothing waits on this, and a word it has not
+   * reached yet is looked up the way it always was.
+   *
+   * Keyed on the file and the two languages, deliberately not on the rarity
+   * settings: moving the threshold slider mid-film does not send the whole
+   * script again. The words that come into range are looked up as they arrive,
+   * which is what happened to every word before this existed. */
+  const glossedTracks = new Map();
+  // Forty lines' worth of words per request, against a 64KB body ceiling on the
+  // daemon side. Small enough that the first answers land early, large enough
+  // that a feature film is about sixteen requests.
+  const GLOSS_CHUNK = 40;
+
+  async function glossAhead(slot, language) {
+    const texts = api.cueTexts?.(slot) || [];
+    const target = translationTarget(slot);
+    if (!texts.length || !target || target === language) return;
+    const held = glossedTracks.get(slot);
+    if (held && held.texts === texts && held.language === language && held.target === target) {
+      return;
+    }
+    const mark = { texts, language, target };
+    glossedTracks.set(slot, mark);
+
+    const names = namesIn(slot, language);
+    const everyWord = new Set();
+    const perCue = texts.map((text) => {
+      const spoken = String(text).replace(NOT_SPOKEN, " ");
+      WORD_PATTERN.lastIndex = 0;
+      const words = [...new Set((spoken.match(WORD_PATTERN) || []).map((w) => fold(w, language)))];
+      for (const word of words) everyWord.add(word);
+      /* The line sent is the cue's own text, brackets, line breaks and all -
+       * NOT the stripped copy the words were found in. It has to be the exact
+       * string `addCard` puts on a card, because that string is half of the
+       * key the answer is filed under. Tidying it here would file every answer
+       * where nothing ever looks for it, and the whole of this would quietly
+       * do nothing. */
+      return { line: text, words };
+    });
+
+    const ranks = await ranksFor([...everyWord], language);
+    if (glossedTracks.get(slot) !== mark) return;
+    if (ranks.size === 0) {
+      // Nothing could be ranked, so nothing can be chosen. Forget the mark so
+      // a helper that comes back later is asked again.
+      glossedTracks.delete(slot);
+      return;
+    }
+
+    const items = [];
+    for (const { line, words } of perCue) {
+      const rare = [];
+      for (const word of words) {
+        if (names.has(word) || letterCount(word) < settings.minLetters) continue;
+        const rank = ranks.has(word) ? ranks.get(word) : undefined;
+        if (rank === undefined) continue;
+        if (rank === null || rank >= settings.rarityRank) rare.push({ word, rank });
+      }
+      rare.sort((a, b) => (b.rank ?? Infinity) - (a.rank ?? Infinity));
+      for (const item of rare.slice(0, settings.maxPerCue)) {
+        items.push({ term: item.word, sentence: line });
+      }
+    }
+
+    for (let at = 0; at < items.length; at += GLOSS_CHUNK) {
+      // A different file, or a different pair of languages, while this was in
+      // flight: the rest of these answers are about a film nobody is watching.
+      if (glossedTracks.get(slot) !== mark) return;
+      await api.daemon("gloss", {
+        items: items.slice(at, at + GLOSS_CHUNK),
+        language,
+        target,
+      });
+    }
   }
 
   async function markWords(line) {
@@ -698,6 +807,11 @@
 
     const rare = [];
     const names = namesIn(line.slot, language);
+    /* Started from here rather than from attach, because this is the first
+     * moment everything it needs is true at once: the file is loaded, study is
+     * on, this subtitle is being followed, and the other one has said what
+     * language it is. It returns immediately on every line after the first. */
+    api.detached?.(glossAhead(line.slot, language), "Glossing ahead");
     for (const span of line.words) {
       const word = span.dataset.w;
       const rank = ranks.has(word) ? ranks.get(word) : undefined;
@@ -1303,7 +1417,7 @@
     drawPopup(term, null);
     placePopup(word);
 
-    const entry = await lookUp(term, language, Number(word.dataset.slot));
+    const entry = await lookUp(term, language, Number(word.dataset.slot), lineOf(word)?.cue?.text || "");
     // The pointer moved on while the lookup was in flight; answering now would
     // put this word's meaning beside a different one.
     if (popupTerm !== term || hoveredWord !== word || !word.isConnected) return;
@@ -1899,7 +2013,7 @@
     focusCard(card);
     trim();
 
-    card.lookup = await lookUp(term, language, from);
+    card.lookup = await lookUp(term, language, from, card.sentence);
     drawChip(card);
     if (focused === card) drawFocus();
     return card;
@@ -1910,9 +2024,13 @@
    * language the reader has already chosen to read this film in. */
   const lookupCache = new Map();
 
-  async function lookUp(term, language, slot) {
+  async function lookUp(term, language, slot, sentence = "") {
     const target = translationTarget(slot);
-    const key = `${language}>${target}:${term}`;
+    /* The line is part of the key because it is part of the answer: the same
+     * word means one thing in "can you spare a minute" and another in "one
+     * spare engine", and a key that cannot tell them apart hands the second
+     * reader the first one's meaning. */
+    const key = `${language}>${target}:${term}${sentence ? `@${sentence}` : ""}`;
     if (lookupCache.has(key)) return lookupCache.get(key);
 
     /* A transportError is an answer now, not a rejection, so it needs reading
@@ -1920,7 +2038,7 @@
      * the popup says "nothing found for that word" about a word it never asked
      * about. The catch stays for anything else that can go wrong. */
     const pending = api
-      .daemon("lookup", { query: term, language, target })
+      .daemon("lookup", { query: term, language, target, sentence })
       .then((response) => {
         if (!response) return { definitions: [], unavailable: "Lookup failed." };
         if (response.transportError) {

@@ -531,6 +531,49 @@ Each of these was a reported bug. Undoing one brings the bug back.
   every moment the box rather than its contents is the thing being used. The
   language tag stays visible throughout, because it is the answer to "I even
   didn't understand it is rails".
+- **A meaning is a (word, line) pair, and both halves have to match byte for
+  byte on both sides.** A word out of its sentence is a different question: a
+  context-free translator answers "spare" with "parça", from its memory of
+  "spare part", to a reader who just heard "can you spare a minute". So the cue
+  text travels with the word - into `lookUp`, into the daemon's `/lookup` and
+  `/gloss`, and into the key the answer is filed under, on disk and in
+  `chrome.storage`. **The line sent must be the cue's own `text`, brackets, line
+  breaks and all** - the same string `addCard` puts in `card.sentence`.
+  `glossAhead` finds its words in a bracket-stripped copy and still sends the
+  raw one, because tidying it files every answer where nothing will look for it
+  and the whole prefetch silently does nothing. Nothing fails if you get this
+  wrong; it just stops working.
+- **The film's words are answered before they are said, and that is the design,
+  not an optimisation.** A lookup made as its line arrived took 634ms on average
+  and up to 1.4s over 22 words, against a line on screen for about two seconds -
+  so the meaning could land under the next line. `glossAhead` walks the whole
+  file once at attach, works out which words each line would mark, and sends
+  them to the daemon in film order a chunk at a time; by the time a line
+  arrives, its words are a disk read. It is keyed on the cue array's identity
+  and the two languages, deliberately not on the rarity settings, so moving the
+  threshold slider does not send the script again.
+- **A name is a kind, not a filter, and there are two sources of evidence.**
+  239 of the 860 words the overlay marked in the Battlestar Galactica miniseries
+  were proper nouns (27.8%; 193 of 682 in part two), because a name is not in
+  the frequency table and "not in the table" ranks rarer than everything that
+  is. They also cannot be translated: MyMemory answered "viper" with "Engerek!",
+  the snake, and "adama" with a street in Warsaw. `namesIn` decides from the
+  WHOLE file - capitalised where a sentence did not just start, in at least half
+  of its occurrences - because every name opens a line sooner or later and one
+  line cannot tell. The second source is brackets: the capitalisation test never
+  sees a speaker label, since brackets are cut from the evidence, but the overlay
+  still renders and marks the words inside them, so a capital inside a bracket is
+  a name too. The rule is character for character the one in
+  `tools/measure-script.mjs`, so `docs/reports/what-the-script-is-worth.md`
+  keeps describing what the overlay does. **If you change one, change both.**
+- **Meaning has three tiers and the bottom one needs nothing.** A model that
+  sees the line (`gloss_model`, an OpenAI-compatible endpoint, by default one
+  running on this machine); Google for a bare word (`google_api_key`); then a
+  free archive that needs no key at all. The extension's own copy in
+  `study/lookup.js` has only the bottom tier - a model needs a key or a local
+  server and neither belongs in a content script - so with the daemon down it
+  keys answers by word alone, because the archive allows about 600 words a day
+  and keying by line would spend that on one film.
 - **Lowercasing a word is a property of its language, so it takes the
   subtitle's language.** `study.js` folds every word through `fold(word,
   language)` rather than `toLowerCase()`, because Turkish disagrees with the

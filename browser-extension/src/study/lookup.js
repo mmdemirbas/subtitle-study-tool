@@ -72,7 +72,11 @@ export function pickTranslation(payload, term) {
 const CACHE_KEY = "sso:lookupCache";
 /* Enough to cover a film's worth of unfamiliar words many times over, small
  * enough that the whole map is one storage read. Definitions do not go stale,
- * so there is no TTL - only a cap, and the oldest entries go first. */
+ * so there is no TTL - only a cap, and the oldest entries go first.
+ *
+ * A daemon that glosses a word in its line files one entry per (word, line)
+ * rather than per word, so a feature film is nearer six hundred entries than
+ * four hundred. Still several films inside the cap. */
 const CACHE_LIMIT = 1500;
 const CACHE_WRITE_DELAY_MS = 2000;
 
@@ -125,29 +129,41 @@ async function granted(origin) {
  * Always resolves. `definitions` empty plus `unavailable` set is the normal
  * shape when nothing could answer, and the caller shows the word anyway.
  */
-export async function lookup({ query, language = "en", target = "" }) {
+export async function lookup({ query, language = "en", target = "", sentence = "" }) {
   const term = String(query || "").trim().toLowerCase();
   if (!term) return { query: "", definitions: [], unavailable: "nothing to look up" };
 
   // The target is part of the key: the same word wanted in a different language
   // is a different answer, and leaving it out served Turkish to a reader who
   // had since switched the other subtitle to something else.
-  const key = `${language}>${target}:${term}`;
+  /* The line is part of the key only when something can actually use it.
+   *
+   * With a daemon, it is part of the answer: it glosses "spare" one way in
+   * "spare a minute" and another in "a spare tyre", and a key that cannot tell
+   * them apart hands the second reader the first one's meaning.
+   *
+   * Without one, this path asks a context-free archive, which returns the same
+   * string whatever line it came from - and that archive allows about six
+   * hundred words a day. Keying those by line would ask it again for every new
+   * sentence the same word turned up in, and spend a day's allowance on one
+   * film. So the daemon being up is what decides the shape of the key. */
+  const daemon = await daemonUp();
+  const key = `${language}>${target}:${term}${daemon && sentence ? `@${sentence}` : ""}`;
   await loadCache();
   const hit = cache.get(key);
   if (hit) return { ...hit, source: `${hit.source} (cached)` };
 
-  const result = await resolve(term, language, target);
+  const result = await resolve(term, language, target, sentence, daemon);
   // Only a real answer is worth keeping. Caching "the daemon was down" would
   // mean starting the daemon changed nothing until the cache was cleared.
   if (result.definitions.length > 0 || result.translation) remember(key, result);
   return result;
 }
 
-async function resolve(term, language, target) {
-  if (await daemonUp()) {
+async function resolve(term, language, target, sentence, daemon) {
+  if (daemon) {
     try {
-      const payload = await daemon.lookup(term, language, target);
+      const payload = await daemon.lookup(term, language, target, sentence);
       if (payload && !payload.error) {
         return {
           query: term,

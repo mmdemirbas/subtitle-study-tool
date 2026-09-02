@@ -145,9 +145,14 @@
               }
               return { ranks };
             }
+            if (msg.op === "gloss") {
+              glossAsks.push(msg.args);
+              return { glosses: (msg.args.items || []).map(() => "") };
+            }
             if (msg.op === "lookup") {
               lookupCalls.push(msg.args.query);
               lookupTargets.push(msg.args.target);
+              lookupSentences.push(msg.args.sentence);
               return {
                 query: msg.args.query,
                 definitions: [{ partOfSpeech: "verb", sense: `to ${msg.args.query}, in a way` }],
@@ -241,6 +246,12 @@
       let rankFails = false;
       const lookupCalls = [];
       const lookupTargets = [];
+      /* The line a word was said in. Recorded because it is the difference
+       * between "spare a minute" and "a spare tyre", and because it is half of
+       * the key an answer is filed under - a call that drops it does not fail,
+       * it quietly fetches a different word's meaning. */
+      const lookupSentences = [];
+      const glossAsks = [];
       const deckSaves = [];
 
       // Cue payloads in the exact shape the daemon emits.
@@ -5247,6 +5258,112 @@
         } finally {
           await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
           video.currentTime = 1;
+        }
+      });
+
+      check("a speaker label is a name, not a word to learn", async () => {
+        /* The capitalisation test never sees these: brackets are cut out of the
+         * evidence before it runs. The overlay does not cut them out of what it
+         * RENDERS, though - the words inside a label are wrapped and marked
+         * like any others - so "[Ormon]" was going to a translator as
+         * vocabulary. Inside a bracket a capital is a name; "[sighs]" beside it
+         * is lower case and stays a word. */
+        window.__ssoStudy.updateSettings({ rarityRank: 4000, auto: false });
+        await window.__ssoStudy.setEnabled(true);
+        video.currentTime = 1;
+        await sleep(250);
+        const ormon = wordsIn(0).find((w) => w.dataset.w === "ormon");
+        if (!ormon) throw new Error("the speaker label did not render as words");
+        if (ormon.dataset.name !== "true") throw new Error('"[Ormon]" was not read as a name');
+        if (ormon.dataset.rare === "true")
+          throw new Error('"[Ormon]" is still taking one of the two vocabulary places');
+        video.currentTime = 700;
+        await sleep(250);
+        const sighs = wordsIn(0).find((w) => w.dataset.w === "sighs");
+        if (sighs && sighs.dataset.name === "true")
+          throw new Error('"[sighs]" was called a name, so every bracket reads as a label');
+      });
+
+      check("a word is looked up with the line it was said in", async () => {
+        /* The fault this is about: "spare" out of its sentence comes back as
+         * "parça", a translation memory's recollection of "spare part", handed
+         * to a reader who just heard "can you spare a minute". The line is the
+         * only thing that separates them, and it was being dropped at the call
+         * even though the card had already stored it.
+         *
+         * Its own cue and its own word, because a lookup is cached for the
+         * session: a case that spends a word another case is waiting for leaves
+         * that one with nothing to observe. */
+        window.__ssoStudy.updateSettings({ rarityRank: 4000, auto: true, maxPerCue: 2 });
+        await window.__ssoStudy.setEnabled(true);
+        const said = "Can you spare a minute, Colonel?";
+        try {
+          await window.__ssoApi.attach({
+            cues: [{ start: 0, end: 600000, text: said }],
+            label: "EN \u00b7 line", fileId: 9301, language: "en", slot: 0,
+          });
+          const before = lookupSentences.length;
+          video.currentTime = 50;
+          await until(() => lookupSentences.length > before, "no word was looked up at all");
+          const sent = lookupSentences.slice(before);
+          if (!sent.includes(said))
+            throw new Error(`the lookup carried ${JSON.stringify(sent)} rather than the line on screen`);
+        } finally {
+          /* Auto marking off, and off the wordy line, before leaving. A lookup
+           * is cached for the session, so a case that leaves the overlay
+           * marking "frankly" spends it for the case further down that hovers
+           * it and then has nothing to observe. */
+          window.__ssoStudy.updateSettings({ auto: false });
+          await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
+          video.currentTime = 1;
+          await sleep(150);
+        }
+      });
+
+      check("the film's words are answered before they are said", async () => {
+        /* A lookup made as its line arrived took 634ms on average and up to
+         * 1.4s, against a line that is on screen for about two seconds, so the
+         * meaning could land under the next line. The overlay holds the whole
+         * file from the moment it attaches, so it does not have to wait to be
+         * asked. */
+        const was = window.__ssoStudy.settings().studySlots;
+        /* A distinct array, because "have these lines already been sent" is
+         * answered by the identity of the cue list - re-attaching the very same
+         * array is how the overlay knows the file has not changed. */
+        const AHEAD = CUES.map((cue) => ({ ...cue }));
+        try {
+          await attachSecond();
+          /* Auto marking OFF, deliberately. Sending the film's words ahead is
+           * not a consequence of marking them - it happens once the file is
+           * there, whether or not anything on screen is being marked - and
+           * proving that here also keeps this case from spending "frankly",
+           * which a case further down hovers and expects to be fresh. */
+          window.__ssoStudy.updateSettings({ studySlots: [0], rarityRank: 4000, auto: false });
+          await window.__ssoStudy.setEnabled(true);
+          glossAsks.length = 0;
+          await window.__ssoApi.attach({
+            cues: AHEAD, label: "EN \u00b7 ahead", fileId: 9201, language: "en", slot: 0,
+          });
+          video.currentTime = 1;
+          await until(() => glossAsks.length > 0, "no words were sent ahead");
+          const items = glossAsks.flatMap((ask) => ask.items || []);
+          if (!items.some((item) => item.term === "frankly"))
+            throw new Error(`the film's rare words were not sent: ${items.map((i) => i.term).join(", ") || "none"}`);
+          const texts = AHEAD.map((cue) => cue.text);
+          const stray = items.find((item) => !texts.includes(item.sentence));
+          if (stray)
+            throw new Error(`a line was tidied before it was sent, so nothing will ever find the answer again: ${JSON.stringify(stray.sentence)}`);
+          if (items.some((item) => item.term === "ormon"))
+            throw new Error("a speaker label was sent to be glossed");
+        } finally {
+          /* Auto marking off, and off the wordy line, before leaving. A lookup
+           * is cached for the session, so a case that leaves the overlay
+           * marking "frankly" spends it for the case further down that hovers
+           * it and then has nothing to observe. */
+          window.__ssoStudy.updateSettings({ studySlots: was, auto: false });
+          await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
+          video.currentTime = 1;
+          await sleep(150);
         }
       });
 

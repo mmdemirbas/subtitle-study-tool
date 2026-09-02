@@ -117,10 +117,29 @@ export function subtitleContext(result, resolved) {
  * A word's dictionary entry, and its translation when the daemon has a
  * translator configured. Free, cached daemon-side, no download quota involved.
  */
-export function lookup(query, language = "en", target = "") {
+export function lookup(query, language = "en", target = "", sentence = "") {
   const params = new URLSearchParams({ q: query, lang: language });
   if (target) params.set("to", target);
+  // The line the word was said in, which is what tells "spare a minute" from
+  // "a spare tyre". Optional: without it the daemon answers what it always did.
+  if (sentence) params.set("sentence", sentence);
   return call(`/lookup?${params.toString()}`);
+}
+
+/**
+ * Many words at once, each with the line it was said in.
+ *
+ * The one call the overlay makes before it needs anything: it holds the whole
+ * subtitle file, so the words it is going to mark are known long before they
+ * are said, and answering them ahead is what turns a lookup that arrives after
+ * its line has gone into a disk read.
+ */
+export function gloss(items, language = "en", target = "") {
+  return call("/gloss", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ language, target, items }),
+  });
 }
 
 export function cached() {

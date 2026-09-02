@@ -10,6 +10,7 @@ import {
   DaemonDownError,
   attachToTab,
   forEpisode,
+  gloss as glossWords,
   pageContextForTab,
   pickBest,
   pickSecondLanguage,
@@ -444,7 +445,19 @@ async function handleDaemonCall(op, args, sender) {
     case "rank":
       return { ranks: await rank(args.words || [], args.language) };
     case "lookup":
-      return lookup({ query: args.query, language: args.language, target: args.target });
+      return lookup({
+        query: args.query,
+        language: args.language,
+        target: args.target,
+        sentence: args.sentence,
+      });
+    /* Straight to the daemon rather than through study/lookup.js, because there
+     * is no in-extension version of this to fall back to: glossing a word in
+     * its line needs a model, and a model needs either a key or something
+     * listening on this machine. Neither belongs in a content script. Down, and
+     * every word simply falls back to being asked for one at a time. */
+    case "gloss":
+      return glossWords(args.items || [], args.language, args.target).catch(() => ({}));
     case "lookupReady":
       return { dictionary: await canReachDictionary() };
     case "deckSave":
