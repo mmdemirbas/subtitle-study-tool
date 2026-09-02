@@ -105,7 +105,13 @@
             /* The two the page sends to the worker about what is playing, kept
              * so a test can assert what was reported and when. The worker's own
              * half of this is not loaded here. */
-            if (msg?.type === "sso:programme" || msg?.type === "sso:attached") {
+            if (
+              msg?.type === "sso:programme"
+              || msg?.type === "sso:attached"
+              // What the page says comes NEXT, which is a different question
+              // from what it is playing and is answered on its own schedule.
+              || msg?.type === "sso:warmNext"
+            ) {
               window.__sent.push({ ...msg, at: performance.now() });
               return { ok: true };
             }
@@ -8078,6 +8084,93 @@
         } finally {
           delete video.dataset.ssoNowPlaying;
           document.title = wasTitle;
+          await sleep(1800);
+          window.__sent.length = 0;
+        }
+      });
+
+      check("what comes next is said as well, and is not what is playing", async () => {
+        /* The app knows the next episode before anybody asks for it, and an
+         * episode switch spends 10 to 37 seconds finding subtitles - measured
+         * over the twelve switches in the running log since the announcement
+         * landed, median about 18, of which a typical one is 3s of search, 3s
+         * and 6s of downloading and 4s of lining up. All but the last is
+         * spendable while the current episode is still running.
+         *
+         * Two depths, because the two halves are metered differently: a search
+         * is free and goes out at once, a download is five a day and waits for
+         * the middle of the current film. And `upNext` is emphatically NOT part
+         * of the identity - a page that changes only what is next has not
+         * changed what is playing, and reading it as a change would take the
+         * subtitles off mid-episode. */
+        const video = document.getElementById("v");
+        const wasTime = video.currentTime;
+        const say = (fields) =>
+          (video.dataset.ssoNowPlaying = JSON.stringify({
+            v: 1,
+            kind: "episode",
+            title: "Harness Show",
+            year: 2013,
+            season: 5,
+            episode: 11,
+            imdb: "tt7770011",
+            durationSeconds: 2700,
+            ...fields,
+          }));
+        const NEXT = {
+          kind: "episode", title: "Harness Show", year: 2013,
+          season: 5, episode: 12, imdb: "tt7770012",
+        };
+        const warms = () => window.__sent.filter((m) => m.type === "sso:warmNext");
+
+        try {
+          video.currentTime = 5;
+          window.__sent.length = 0;
+          say({ upNext: NEXT });
+          await sleep(300);
+          const early = warms();
+          if (early.length !== 1)
+            throw new Error(`the next episode was named ${early.length} times, want once`);
+          if (early[0].committed)
+            throw new Error("five seconds in was treated as the reader having committed");
+          if (early[0].next?.episode !== 12 || early[0].next?.imdb !== "tt7770012")
+            throw new Error(`what was warmed is not the next episode: ${JSON.stringify(early[0].next)}`);
+
+          /* Past the middle of the film - stated as 2700s, so 1500 is past it -
+           * the same episode is worth downloading rather than only searching
+           * for. One more message, not a stream of them. */
+          window.__sent.length = 0;
+          video.currentTime = 1500;
+          await sleep(400);
+          const committed = warms();
+          if (committed.length !== 1 || !committed[0].committed)
+            throw new Error(`past the middle sent ${JSON.stringify(committed)}`);
+          if (window.__sent.some((m) => m.type === "sso:programme"))
+            throw new Error("moving the playhead was read as a new episode");
+
+          /* A new answer about what is next is not a new answer about what is
+           * playing. */
+          window.__sent.length = 0;
+          say({ upNext: { ...NEXT, episode: 13, imdb: "tt7770013" } });
+          await sleep(300);
+          if (window.__sent.some((m) => m.type === "sso:programme"))
+            throw new Error("a different next episode was read as a new programme");
+          if (warms().length !== 1)
+            throw new Error("the new next episode was not warmed");
+
+          /* And a malformed one costs the prefetch and nothing else: a season
+           * with no episode would search a whole series, so it is refused by
+           * the same rule that refuses it at the top level. */
+          window.__sent.length = 0;
+          say({ upNext: { ...NEXT, episode: null } });
+          await sleep(300);
+          if (warms().length !== 0)
+            throw new Error(`a season with no episode was warmed: ${JSON.stringify(warms())}`);
+          if (!window.__ssoApi.status().attached && !video.dataset.ssoNowPlaying)
+            throw new Error("the announcement itself was lost with it");
+        } finally {
+          delete video.dataset.ssoNowPlaying;
+          video.currentTime = wasTime;
           await sleep(1800);
           window.__sent.length = 0;
         }

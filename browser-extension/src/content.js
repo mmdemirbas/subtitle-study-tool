@@ -3449,6 +3449,10 @@
     /* Before the "nothing attached" exit below, because a page that has never
      * had subtitles on it is exactly where this has something to say. */
     noticeProgrammeChange();
+    /* Beside it, and for the same reason it is above the "nothing attached"
+     * exit: the next episode is worth warming whether or not this one has
+     * subtitles on it. */
+    noticeUpNext();
     if (!state.visible || !anyAttached()) {
       // "Nothing is showing", not "redraw" - otherwise this clears the text on
       // every tick forever.
@@ -3830,6 +3834,36 @@
       return null;
     }
     if (!stated || stated.v !== ANNOUNCEMENT_VERSION) return null;
+    const playing = readIdentity(stated);
+    if (!playing) return null;
+
+    const seconds = Number(stated.durationSeconds);
+    const usable = seconds >= MIN_VIDEO_SECONDS && seconds <= LONGEST_FILM_S;
+    return {
+      ...playing,
+      durationSeconds: usable ? seconds : null,
+      /* What the page says comes after this one, read by exactly the same
+       * rules and refused on its own.
+       *
+       * A malformed `upNext` costs the prefetch and nothing else: the film
+       * playing is still announced, and a reader that does not know the field
+       * carries on as before. That is the whole reason it is a nested identity
+       * rather than more fields on the top level - the two answers are about
+       * different programmes and one of them must not be able to spoil the
+       * other.
+       *
+       * It carries no length. A length describes an encode, and nothing is
+       * encoding what has not been asked for yet. */
+      upNext: readIdentity(stated.upNext),
+    };
+  }
+
+  /* One programme's identity, from an announcement or from the `upNext` inside
+   * one. Written once because the rules are the same rules and a prefetch that
+   * validated more loosely than the attach would search for something the
+   * attach then refuses. */
+  function readIdentity(stated) {
+    if (!stated || typeof stated !== "object") return null;
     const kind = stated.kind === "episode" || stated.kind === "movie" ? stated.kind : "";
     const title = String(stated.title ?? "").trim();
     if (!kind || !title) return null;
@@ -3840,8 +3874,6 @@
 
     const imdb = String(stated.imdb ?? "").trim();
     const year = statedNumber(stated.year);
-    const seconds = Number(stated.durationSeconds);
-    const usable = seconds >= MIN_VIDEO_SECONDS && seconds <= LONGEST_FILM_S;
     return {
       kind,
       title,
@@ -3849,7 +3881,6 @@
       season: kind === "episode" ? season : null,
       episode: kind === "episode" ? episode : null,
       imdb: /^tt\d+$/.test(imdb) ? imdb : null,
-      durationSeconds: usable ? seconds : null,
     };
   }
 
@@ -4086,6 +4117,55 @@
     sendToWorker({ type: "sso:programme", mark }).catch(() => {
       // No worker listening is not this frame's problem to report.
     });
+  }
+
+  /* --- what is next, and when it stops being a guess --------------------------
+   *
+   * A reader watching a series watches the next episode, and the app knows
+   * which one that is before it is asked for. Everything the switch spends is
+   * spendable early: measured over the twelve episode changes in the running
+   * log since the announcement contract landed, from "Looking for subtitles"
+   * to both subtitles up is 10 to 37 seconds, median about 18, and inside a
+   * typical one the search is 3s, the first download 3s, the second 6s and the
+   * lining up 4s. Only the last of those needs the film.
+   *
+   * So the search goes out as soon as the page says what is next, because a
+   * search costs nothing and OpenSubtitles does not meter it. The downloads
+   * wait for the middle of the current film, because that is the point at
+   * which the next episode stops being a guess - a download IS metered, five a
+   * day anonymously and ten with an account, and a reader who stops at twenty
+   * minutes must not have spent two of them on an episode they never saw.
+   *
+   * The worker holds the second half of that rule: it also refuses unless the
+   * last download it made reported enough of the day's allowance left.
+   */
+  const COMMITTED_FRACTION = 0.5;
+  let warmedNext = "";
+
+  function noticeUpNext() {
+    const next = announcedProgramme()?.upNext ?? null;
+    if (!next) {
+      warmedNext = "";
+      return;
+    }
+    /* Two states, and the second includes the first, so the key carries the
+     * depth: warming the search and then warming the downloads are two
+     * different asks about the same episode, and the tick would otherwise send
+     * whichever it reached first, twenty times a second, forever. */
+    const committed = pastTheMiddle();
+    const key = `${announcedMark(next)}|${committed ? "downloads" : "search"}`;
+    if (key === warmedNext) return;
+    warmedNext = key;
+    sendToWorker({ type: "sso:warmNext", next, committed }).catch(() => {
+      // No worker listening costs a prefetch, which is a saving, not a feature.
+    });
+  }
+
+  function pastTheMiddle() {
+    const seconds = filmSeconds();
+    const at = streamNowMs();
+    if (!Number.isFinite(seconds) || !(seconds > 0) || !Number.isFinite(at)) return false;
+    return at / (seconds * 1000) >= COMMITTED_FRACTION;
   }
 
   let lastAdPoll = 0;
@@ -7111,7 +7191,13 @@
    * be wrong, and the tick has it within one interval. */
   const onAnnouncement = () => {
     if (!state.video || !state.video.isConnected) state.video = pickVideo();
-    if (state.video) noticeProgrammeChange();
+    if (!state.video) return;
+    noticeProgrammeChange();
+    /* In the same turn as the announcement, not on the next tick. The point of
+     * warming the next episode's search is that it happens long before the
+     * switch, and a page that announces a new `upNext` mid-film - a season
+     * ending, a queue being reordered - has just changed the answer. */
+    noticeUpNext();
   };
   document.addEventListener("sso:nowplaying", onAnnouncement, true);
   const announcements = new MutationObserver(onAnnouncement);

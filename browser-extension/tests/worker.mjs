@@ -951,6 +951,105 @@ chrome.storage.local.set = instant.set;
   daemonUp = true;
 }
 
+/* --- the next episode, warmed before anybody asks for it ---------------------
+ *
+ * The page says what follows what it is playing. A search costs nothing and is
+ * not metered, so it goes out on the announcement; a download is metered at
+ * five a day anonymously, so it waits for two separate gates. The content
+ * script holds one of them (the middle of the current film, which is where the
+ * next episode stops being a guess) and arrives here as `committed`. This is
+ * the other: the day's allowance has to have more than a pair spare, and until
+ * something has actually been downloaded there is no allowance to read.
+ */
+{
+  const askedFor = [];
+  const forNext = (remaining) => (url) => {
+    const at = String(url);
+    askedFor.push(at);
+    if (at.endsWith("/health")) return { default_languages: ["en"] };
+    if (at.includes("/search")) {
+      return {
+        used: { query: "The Americans", season: 5, episode: 12, languages: ["en"] },
+        auto_attach_threshold: 0.75,
+        resolved: { title: "the americans", year: 2013, imdb_id: "5610032", type: "Tvshow" },
+        results: [{
+          file_id: 512, language: "en", season: 5, episode: 12, identified: true, cached: false,
+          movie_name: "The Americans", release: "The.Americans.2013.S05E12.HDTV.x264-SVA",
+          download_count: 900, from_trusted: true, match_score: 0.95, year: 2013,
+        }],
+      };
+    }
+    if (at.endsWith("/fetch")) {
+      return { cues: [{ start: 0, end: 1000, text: "hello" }], remaining_quota: remaining };
+    }
+    return null;
+  };
+  const upNext = (episode) => ({
+    kind: "episode", title: "The Americans", year: 2013, season: 5, episode, imdb: `tt56100${episode}`,
+  });
+  const searches = () => askedFor.filter((url) => url.includes("/search")).length;
+  const downloads = () => askedFor.filter((url) => url.endsWith("/fetch")).length;
+
+  daemonAnswers = forNext(9);
+  /* The probe is cached, and the block above this one deliberately leaves it
+   * saying "down" - which sends every search to the extension's own path, where
+   * node has no IndexedDB. A real browser has one; this is the stale-probe
+   * window made deterministic. */
+  await (await import("../src/provider.js")).daemonUp({ force: true });
+
+  askedFor.length = 0;
+  await ask({ type: "sso:warmNext", next: upNext(12), committed: false }, sender);
+  t(
+    "the next episode is searched for as soon as the page names it",
+    searches() === 1 && downloads() === 0,
+    `${searches()} search(es), ${downloads()} download(s)`,
+  );
+
+  askedFor.length = 0;
+  await ask({ type: "sso:warmNext", next: upNext(12), committed: true }, sender);
+  t(
+    "and is not downloaded before anything has said what the day's allowance is",
+    downloads() === 0,
+    `${downloads()} download(s) with no allowance known`,
+  );
+
+  /* A real attach is the only way this ever learns what is left: the number
+   * comes back on a download and nowhere else. */
+  const spending = (remaining) => (url) => {
+    const answer = americans()(url);
+    return String(url).endsWith("/fetch") ? { ...answer, remaining_quota: remaining } : answer;
+  };
+  await attempt("2901|E13 allowance", spending(9));
+  daemonAnswers = forNext(9);
+  askedFor.length = 0;
+  await ask({ type: "sso:warmNext", next: upNext(13), committed: true }, sender);
+  t(
+    "and is downloaded once the film is half over and the allowance can spare it",
+    downloads() === 1,
+    `${downloads()} download(s) with nine left`,
+  );
+
+  await attempt("2902|E13 nearly gone", spending(1));
+  daemonAnswers = forNext(1);
+  askedFor.length = 0;
+  await ask({ type: "sso:warmNext", next: upNext(14), committed: true }, sender);
+  t(
+    "and is left alone when the day's last downloads belong to what is playing",
+    downloads() === 0,
+    `${downloads()} download(s) with one left`,
+  );
+
+  askedFor.length = 0;
+  await ask({ type: "sso:warmNext", next: upNext(14), committed: true }, sender);
+  t(
+    "and the same ask twice does not search twice",
+    searches() === 0,
+    `${searches()} search(es) on the repeat`,
+  );
+
+  daemonAnswers = null;
+}
+
 for (const r of results) console.log(r.ok ? "PASS" : "FAIL", "-", r.name, r.ok ? "" : `→ ${r.detail}`);
 
 console.log(`\n${results.filter((r) => r.ok).length}/${results.length} passed`);

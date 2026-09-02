@@ -82,6 +82,7 @@ video.dispatchEvent(new Event("sso:nowplaying", { bubbles: true }));
 | `year` | The release year |
 | `imdb` | `tt...`, of the thing playing - the episode's own id for an episode |
 | `durationSeconds` | The **film's** whole length, not what has arrived. Optional |
+| `upNext` | The programme that follows this one, as the same identity without `v` or `durationSeconds`. Optional. Added 2026-09-02; see below |
 
 Three rules carry as much as the fields do:
 
@@ -185,6 +186,66 @@ the id when the daemon was down and the fuzzy path when it was up. Two answers
 to one question, decided by whether a background process happened to be
 running.
 
+## What is next, and what it is safe to spend on it
+
+Added 2026-09-02, after the end-to-end measurement below existed.
+
+```json
+{"v":1,"kind":"episode","title":"The Americans","season":5,"episode":11,
+ "imdb":"tt5610030","durationSeconds":2701.44,
+ "upNext":{"kind":"episode","title":"The Americans","year":2013,
+           "season":5,"episode":12,"imdb":"tt5610032"}}
+```
+
+It is the same identity, nested, read by the same reader and refused on its own:
+a malformed `upNext` costs the prefetch and nothing else, and the programme
+playing is still announced. It carries no `v` (the one on the outside covers the
+whole object) and no `durationSeconds` (a length describes an encode, and
+nothing is encoding what has not been asked for).
+
+**It is not part of the identity.** A page that changes only what is next has
+not changed what is playing, and a reader that treated it as a change would take
+the subtitles off in the middle of an episode.
+
+**Announce it only for something that can actually be played**, under the name
+subtitles are indexed under. The player omits it when there is no copy on disk,
+when the series has no name - the next episode's own name would be a confident
+wrong answer where the current episode's own name is the best available answer
+about itself - and for a film, because nothing follows one.
+
+### What a reader may do with it, and when
+
+The reservation in the original "left out" note was right about the shape of the
+risk and wrong about it being all-or-nothing. The two halves are metered
+differently, so they wait for different things.
+
+| | Waits for | Why |
+|---|---|---|
+| The search | The announcement | OpenSubtitles does not meter searching, and the daemon caches an answer for six hours - longer than an episode |
+| The downloads | The middle of the current film, **and** a day's allowance with more than a pair spare | Five downloads a day anonymously, ten with an account. A reader who stops at twenty minutes must not have spent two of them on an episode they never saw, and one who watches five must not find the fifth refused |
+
+The extension's half of that is `noticeUpNext` in `content.js` (which holds the
+playhead) and `warmNext` in `background.js` (which holds the allowance, read off
+the `remaining_quota` the last real download reported). Unknown means no
+prefetching: a first run has downloaded nothing and therefore knows nothing.
+
+**Every refusal the attach makes is a refusal to prefetch.** `planFor` is one
+function called from both, deliberately - a prefetch that ranked by its own
+rules would download one file and the attach another, which is two units of the
+allowance spent to save nothing.
+
+## What the click is, and when it is
+
+The contract's first rule is "announce as soon as you commit to playing it", and
+pressing next **is** the commit. Until 2026-09-02 the app announced later than
+that: the click ran `goto`, the server load answered - which on a title opened
+for the first time spends two external API requests on enrichment - the page
+rendered, the player received new props, and only then did the attribute change.
+
+`local-player.svelte` now holds the target from the click and announces it
+straight away, and the override clears itself once the props catch up. Nothing
+has to remember to unset it, including the navigations that never arrive.
+
 ## What is immediate now, and what is not
 
 Worth separating, because only the first half is actually zero.
@@ -202,12 +263,16 @@ that it starts while the stream is still being opened rather than after. The
 daemon caches searches for six hours and downloads on disk, so an episode
 watched before is a local answer.
 
-**Not measured.** The end-to-end improvement has not been timed against the
-running app. What is verified is that the constants on the path are no longer
-consulted for an announced programme, that the worker uses the announcement,
-and that the suites below pass. The honest way to close this is a run against
-`localhost:5173` with the extension's own log, the way the 2026-08-25 numbers
-were produced.
+**Measured, 2026-09-02**, out of the extension's own log, over the twelve
+episode switches on the running app since this contract landed. From "Looking
+for subtitles" to both subtitles on screen: **10 to 37 seconds, median about
+18**. Inside a typical one (2026-09-01, S05E11): 3s to the search's answer, 3s
+for the first download, 6s for the second, 4s to line the pair up. Two outliers
+of 101s and 176s were a cold start rather than a switch.
+
+That is what `upNext` is spending early. The search and both downloads are 12 of
+those 18 seconds and none of them needs the film to exist; only the lining up
+does, because it compares two tracks that both have to be attached first.
 
 Two specifics inside that. The harness runs `content.js` as a script in the
 page itself, so it exercises the announcement but not the crossing of a real
@@ -219,12 +284,10 @@ is what has not been proven end to end, not the noticing.
 
 ## What was deliberately left out
 
-- **`upNext`.** The app knows the next episode before it is asked for - it is
-  already a prop - so a reader could warm its search cache and have the answer
-  in hand at click time. Left out because the useful half of that is the
-  search, the expensive half is the download, and OpenSubtitles allows five to
-  ten downloads a day: prefetching subtitles for episodes nobody watches would
-  spend the quota on guesses. If it is added, it warms the search only.
+- **`upNext` beyond warming the search.** Added 2026-09-02, and the reservation
+  above turned out to be about *when* rather than *whether* - see "What is
+  next" below. The search is warmed on the announcement and the downloads wait
+  for two gates.
 - **A series IMDb id.** OpenSubtitles indexes episodes under `parent_imdb_id`
   with the season and episode beside it, and the app has `parentTconst` in its
   page data but does not pass it to the player. The episode's own id answers

@@ -366,6 +366,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  /* The page named the next programme. Warming it is a saving and never a
+   * feature, so a failure is written down rather than shown: nothing on screen
+   * depends on it, and the switch it would have shortened still works. Written
+   * down and not swallowed, though - a prefetch that never runs looks exactly
+   * like a prefetch that ran and did not help. */
+  if (message?.type === "sso:warmNext") {
+    warmNext(sender.tab?.id, message.next, Boolean(message.committed))
+      .catch((error) => trace.record("warmNext", { next: message.next, error: describe(error) }))
+      .then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
   if (message?.type === "sso:openReport") {
     chrome.tabs
       .create({ url: chrome.runtime.getURL("src/report.html") })
@@ -657,6 +669,19 @@ async function planAutoAttach(tab, frameId) {
    * the player's frame and nowhere else. */
   const context = await pageContextForTab(tab, frameId);
   const { title, year, season, episode, imdbId } = context;
+  return planFor({ title, year, season, episode, imdbId, languages, context });
+}
+
+/* Which files a programme should be given, and whether it should be given any.
+ *
+ * Split from the page-reading above it because `warmNext` asks the same
+ * question about an episode nobody is watching yet, and the two must not be
+ * able to answer it differently. A prefetch that ranked by its own rules would
+ * download one file and the attach another - two units of a five-a-day
+ * allowance spent to save nothing. Every refusal below is a refusal to
+ * prefetch as much as it is a refusal to attach.
+ */
+async function planFor({ title, year, season, episode, imdbId, languages, context = null }) {
   /* An id, where the page announced one, is what turns the search from two
    * calls into one: the daemon resolves a title through /features before it
    * can search exactly, and an id it was given needs no resolving. It also
@@ -668,8 +693,8 @@ async function planAutoAttach(tab, frameId) {
     languages,
     title,
     year,
-    titleSource: context.titleSource,
-    episodeSource: context.episodeSource,
+    titleSource: context?.titleSource ?? null,
+    episodeSource: context?.episodeSource ?? null,
     context,
     found,
   };
@@ -794,6 +819,99 @@ async function planAutoAttach(tab, frameId) {
   return { ...plan, second, secondReason, decision: "attach", reason: "" };
 }
 
+/* --- the next episode, before anybody asks for it ---------------------------
+ *
+ * A page that announces `upNext` has said which programme follows the one
+ * playing, and a reader watching a series watches it. Everything an episode
+ * switch spends can be spent early: measured over the twelve switches in the
+ * running log since the announcement contract landed, "Looking for subtitles"
+ * to both subtitles up runs 10 to 37 seconds with a median around 18, and a
+ * typical one is 3s of search, 3s for the first download, 6s for the second
+ * and 4s to line the pair up. Only the last of those needs the film to exist.
+ *
+ * Two depths, because the two halves are metered differently.
+ *
+ * - **The search** goes out as soon as the page names the next programme.
+ *   OpenSubtitles does not meter searching, the daemon caches an answer for six
+ *   hours, and forty minutes of film is well inside that.
+ * - **The downloads** wait for two things. The content script holds the first,
+ *   the middle of the current film, which is where the next episode stops being
+ *   a guess. This holds the second: the day's allowance is five downloads
+ *   anonymously and ten with an account, a pair costs two, and a reader must
+ *   not find the episode they actually chose refused because two were spent on
+ *   one they did not. So the last download to report an allowance has to have
+ *   left more than a pair spare.
+ *
+ * `allowanceLeft` is only ever what the last download said, which is a floor
+ * rather than a reading: a cache hit costs nothing and reports nothing, so the
+ * number can only be stale in the safe direction for a while and is unknown
+ * until something has been downloaded at all. Unknown means no prefetching,
+ * which is the right answer for a first run and for the extension's own path
+ * when the daemon is not there to report one.
+ */
+const PREFETCH_RESERVE = 2;
+const warmedFor = new Map();
+let allowanceLeft = null;
+
+function noteAllowance(response) {
+  const left = Number(response?.remaining_quota);
+  if (Number.isFinite(left)) allowanceLeft = left;
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => warmedFor.delete(tabId));
+
+async function warmNext(tabId, next, committed) {
+  if (!tabId || !next?.title) return;
+  /* Keyed by depth as well as by programme: warming the search and then
+   * warming the downloads are two asks about the same episode, and without the
+   * depth the second would look like the first already answered. */
+  const key = [
+    next.imdb || "", next.title, next.year ?? "", next.season ?? "", next.episode ?? "",
+    committed ? "downloads" : "search",
+  ].join("|");
+  if (warmedFor.get(tabId) === key) return;
+  warmedFor.set(tabId, key);
+
+  const languages = await preferredLanguages();
+  const plan = await planFor({
+    title: next.title,
+    year: next.year,
+    season: next.season,
+    episode: next.episode,
+    imdbId: next.imdb,
+    languages,
+  });
+
+  /* Every refusal planFor can make is a refusal here too, and deliberately the
+   * same one. A prefetch that downloaded what the attach would decline is two
+   * units of the allowance spent to save nothing. */
+  const files = plan.decision === "attach" ? [plan.best, plan.second].filter(Boolean) : [];
+  const spare = allowanceLeft !== null && allowanceLeft > PREFETCH_RESERVE;
+  const wanted = committed && spare ? files.filter((file) => !file.cached) : [];
+
+  /* Traced whether or not anything was fetched, because "the switch was slow"
+   * and "the prefetch declined and here is which of the three gates said so"
+   * are the same question asked from the two ends. */
+  trace.record("warmNext", {
+    tabId,
+    next,
+    committed,
+    decision: plan.decision,
+    reason: plan.reason || "",
+    allowanceLeft,
+    held: files.filter((file) => file.cached).map((file) => file.file_id),
+    downloading: wanted.map((file) => file.file_id),
+  });
+
+  for (const file of wanted) {
+    const got = await fetchSubtitle(file.file_id, subtitleContext(file, plan.found.resolved));
+    noteAllowance(got);
+    /* A wall does not heal on the next one, and of everything that asks for a
+     * download this has the least right to keep asking. */
+    if (got.error) break;
+  }
+}
+
 async function autoAttach(tab, frameId, status, { replacing = false } = {}) {
   /* No film, and the page itself says none is on its way.
    *
@@ -900,6 +1018,9 @@ async function autoAttach(tab, frameId, status, { replacing = false } = {}) {
 /** Download one result and put it on the named track. False if it did not land. */
 async function attachOne(tab, frameId, result, found, slot) {
   const subtitle = await fetchSubtitle(result.file_id, subtitleContext(result, found.resolved));
+  // What the day's allowance is down to, which is what decides whether the
+  // next episode may be fetched before it is asked for. See warmNext.
+  noteAllowance(subtitle);
   if (subtitle.error) {
     /* A failure on the second subtitle is a note, not an error: the first one
      * is already on screen and the film is watchable. Saying "download failed"

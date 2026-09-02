@@ -677,6 +677,28 @@ Each of these was a reported bug. Undoing one brings the bug back.
     evening, each flip taking both subtitles off. The length-and-title mark
     stays as the fallback for the sites that state nothing, which is most of
     them, and a harness check pins that shape so it cannot be quietly dropped.
+  - **`data-sso-now-playing` on the video**, the announcement, and the one
+    source that is a promise rather than a guess. `docs/reports/now-playing-contract-2026-08-30.md`
+    is the whole of it. Two things about it are easy to undo by accident:
+    **`upNext` is not part of the identity** (a page that changes only what is
+    next has not changed what is playing, and reading it as a change takes the
+    subtitles off mid-episode), and **`readIdentity` is one function** used for
+    the announcement and for the `upNext` inside it, because a prefetch that
+    validated more loosely than the attach would search for something the
+    attach then refuses.
+
+    **What the prefetch may spend is two gates, held in two places.** The search
+    goes out on the announcement - free, unmetered, cached six hours by the
+    daemon. The downloads wait for `noticeUpNext`'s halfway mark in
+    `content.js`, which is where the next episode stops being a guess, AND for
+    `warmNext`'s allowance check in `background.js`: the day is five downloads
+    anonymously and ten with an account, a pair costs two, and a reader who
+    watches five episodes must not find the fifth refused because two were spent
+    on one they did not. `allowanceLeft` is whatever the last real download
+    reported and is unknown until something has been downloaded at all, which
+    means no prefetching on a first run. **`planFor` is called by both the
+    attach and the prefetch on purpose** - a prefetch ranking by its own rules
+    would download one file and the attach another.
   - **Media Session** for identity on sites with no structured data. Measured:
     an isolated world CAN read `navigator.mediaSession.metadata` that the page
     set. All three of `title`, `artist` and `album` are offered as candidates,
