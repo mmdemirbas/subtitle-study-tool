@@ -7370,6 +7370,64 @@
         await sleep(120);
       });
 
+      check("a film corrected all the way through carries nothing to the next episode", async () => {
+        /* Reported as "after starting a new episode, previous one's sync shift
+         * preserved wrongly", and it was the end-of-film number being carried.
+         * The memory above is right that a release has a gap and that the gap
+         * outlives the episode; it is wrong that the last correction is that
+         * gap, once the reader has spent the film moving it. So a film whose
+         * corrections did not agree carries nothing, and takes any entry it had
+         * already written with it - a stale one is the same fault an episode
+         * later. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+        const release = (episode) => `EN · Harness.Drift.S02E0${episode}.1080p.WEB-GRP`;
+
+        // One steady correction, which is exactly what the memory is for.
+        await api.attach({ cues: CUES, label: release(1), fileId: 6401, language: "en", slot: 0 });
+        video.currentTime = 60;
+        await sleep(150);
+        api.setOffset(1000, { slot: 0, quiet: true });
+        await sleep(1100);
+
+        api.detach(0);
+        await api.attach({ cues: CUES, label: release(2), fileId: 6402, language: "en", slot: 0 });
+        await sleep(150);
+        if (api.status().tracks[0].offsetMs !== 1000)
+          throw new Error(`episode 2 started at ${api.status().tracks[0].offsetMs}ms, not 1000`);
+
+        // And now a film that never held still: a second late at the start and
+        // nine seconds late twenty-five minutes on.
+        video.currentTime = 120;
+        await sleep(150);
+        api.setOffset(1000, { slot: 0, quiet: true });
+        video.currentTime = 120 + 1500;
+        await sleep(150);
+        api.setOffset(9000, { slot: 0, quiet: true });
+        await sleep(1100);
+
+        api.detach(0);
+        await api.attach({ cues: CUES, label: release(3), fileId: 6403, language: "en", slot: 0 });
+        await sleep(150);
+        if (api.status().tracks[0].offsetMs !== 0)
+          throw new Error(
+            `episode 3 inherited ${api.status().tracks[0].offsetMs}ms from a film that needed a different answer every act`,
+          );
+
+        await chrome.storage.local.remove("sso:usedTiming");
+        for (const fileId of [6401, 6402, 6403]) {
+          await chrome.storage.local.remove(`sso:offset:${fileId}`);
+        }
+        video.currentTime = wasTime;
+        if (wasAttached[0]) {
+          await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+        } else {
+          api.detach(0);
+        }
+        await sleep(120);
+      });
+
       check("a label too generic to name a release is not treated as one", async () => {
         /* `tr.srt` reduces to "tr", and every other `tr.srt` on the disk would
          * then be the same release. That is the collision that carries one
