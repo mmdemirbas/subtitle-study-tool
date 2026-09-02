@@ -25,6 +25,7 @@ import { normalise } from "./text.js";
 export const SPEAKER = "speaker";
 export const SOUND = "sound";
 export const MUSIC = "music";
+export const LYRIC = "lyric";
 export { SOUND_COLOR, MUSIC_COLOR, SPEAKER_PALETTE };
 
 const GENERIC_SPEAKER_SET = new Set(GENERIC_SPEAKERS);
@@ -254,4 +255,88 @@ export function findAnnotations(text) {
 
   found.sort((a, b) => a.start - b.start);
   return found;
+}
+
+/* What sits between the note marks, which is the song.
+ *
+ * The marks were coloured and the words between them were left as dialogue, so
+ * a line of a song read exactly like a line somebody said. They are not the
+ * same thing to a reader: sung words are frequently a second voice over the
+ * dialogue, they are often the only thing on screen, and a learner meeting them
+ * needs to know the grammar is about to be strange.
+ *
+ * Marks bracket the singing, and the bracketing is per PHYSICAL LINE. Measured
+ * over the 1316 cues carrying a mark in this machine's 277-file cache: 574
+ * lines open and close on their own, 291 open and never close, 251 close
+ * without opening, and in NONE of them does an unmarked line sit between two
+ * marked ones. Every line of a song carries its own mark, so nothing has to be
+ * carried across a line break - and all 44 cues that mix marked and unmarked
+ * lines are a lyric beside something that is not one:
+ *
+ *     - ♪ Who by high ordeal ♪
+ *     - Okay, Claire, meet Paige.
+ *
+ * Which end a lone mark belongs to is the only real question, and the line
+ * answers it. A line that ENDS with a mark and does not begin with one is the
+ * back half of a lyric that started on the line before ("of your town ♪"), so
+ * it starts inside. Anything else starts outside and the first mark opens.
+ * Both tests are needed: "♪ I'm gonna swallow my tears♪♪" ends with a mark and
+ * is plainly not a continuation.
+ */
+export function findLyrics(text) {
+  const source = String(text || "");
+  const spans = [];
+  let at = 0;
+  for (const line of source.split("\n")) {
+    lyricsInLine(line, at, spans);
+    // The newline the split consumed. Offsets are into the whole cue, because
+    // that is what the runs concatenate back to.
+    at += line.length + 1;
+  }
+  return spans;
+}
+
+/* What may sit outside the marks without making a line "not start with one".
+ * The dialogue dash is the common case; `\h` is SSA's hard space and reaches
+ * this parser written out literally. */
+const OUTSIDE_LEFT = /^(?:\s|\\h|[-–—])*/;
+const OUTSIDE_RIGHT = /(?:\s|\\h)*$/;
+// The same, without the dash: a dash inside the marks is being sung.
+const OUTSIDE_LEFT_SPACE = /^(?:\s|\\h)*/;
+
+function lyricsInLine(line, offset, out) {
+  MUSIC_MARK.lastIndex = 0;
+  const marks = [...line.matchAll(MUSIC_MARK)];
+  if (!marks.length) return;
+
+  const opensLine = marks[0].index === OUTSIDE_LEFT.exec(line)[0].length;
+  const last = marks[marks.length - 1];
+  const closesLine =
+    last.index + last[0].length === line.length - OUTSIDE_RIGHT.exec(line)[0].length;
+
+  let inside = closesLine && !opensLine;
+  let from = inside ? 0 : -1;
+
+  /* Trimmed, so the space after a mark is not sung - and so two marks with
+   * nothing between them produce no span at all, which is what keeps a
+   * translator's credit ("Subs @somebody corrected ♪♪by") out of the song. */
+  const take = (start, end) => {
+    const piece = line.slice(start, end);
+    const before = OUTSIDE_LEFT_SPACE.exec(piece)[0].length;
+    const after = OUTSIDE_RIGHT.exec(piece)[0].length;
+    if (start + before < end - after) {
+      out.push({ start: offset + start + before, end: offset + end - after });
+    }
+  };
+
+  for (const mark of marks) {
+    if (inside) {
+      take(from, mark.index);
+      inside = false;
+    } else {
+      from = mark.index + mark[0].length;
+      inside = true;
+    }
+  }
+  if (inside) take(from, line.length);
 }

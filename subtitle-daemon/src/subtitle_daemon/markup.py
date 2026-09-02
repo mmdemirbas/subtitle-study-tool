@@ -223,7 +223,61 @@ def parse(text: str) -> Parsed:
 
     # An empty run carries nothing; drop it rather than making callers filter.
     merged = _merge_adjacent([run for run in runs if run.text])
-    return Parsed(runs=_split_annotations(merged), vertical=vertical)
+    return Parsed(runs=_mark_lyrics(_split_annotations(merged)), vertical=vertical)
+
+
+def _mark_lyrics(runs: list[Run]) -> list[Run]:
+    """Mark the words between the note marks as sung rather than spoken.
+
+    After _split_annotations rather than inside it, and over the WHOLE cue
+    rather than run by run, because the markup and the marks do not line up.
+    The corpus writes `♪ <i>Happy birthday to you</i>`, which is two runs: the
+    mark is in the first and every sung word is in the second. A pass that
+    asked each run what was in it would find a mark with nothing after it and a
+    lyric with no mark, and format neither.
+
+    A run that already knows what it is keeps knowing. `[coughing]` inside a
+    song is still a sound description, and the mark is still the mark.
+    """
+    text = "".join(run.text for run in runs)
+    spans = annotations.find_lyrics(text)
+    if not spans:
+        return runs
+
+    out: list[Run] = []
+    at = 0
+    for run in runs:
+        start, end = at, at + len(run.text)
+        at = end
+        if run.kind:
+            out.append(run)
+            continue
+
+        cursor = start
+        for span_start, span_end in spans:
+            begin, finish = max(span_start, cursor), min(span_end, end)
+            if begin >= finish:
+                continue
+            if begin > cursor:
+                out.append(Run(text[cursor:begin], run.styles, run.color))
+            # The music colour, for the reason _split_annotations gives about
+            # every other annotation: hue says "this is not the dialogue"
+            # faster than anything else can, and a lyric shares the screen with
+            # dialogue often enough that it has to. A colour the file set
+            # itself still wins.
+            out.append(
+                Run(
+                    text[begin:finish],
+                    run.styles,
+                    run.color or annotations.MUSIC_COLOR,
+                    annotations.LYRIC,
+                )
+            )
+            cursor = finish
+        if cursor < end:
+            out.append(Run(text[cursor:end], run.styles, run.color))
+
+    return _merge_adjacent([run for run in out if run.text])
 
 
 def _split_annotations(runs: list[Run]) -> list[Run]:

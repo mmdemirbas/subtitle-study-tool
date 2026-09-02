@@ -10,7 +10,9 @@ from __future__ import annotations
 import pytest
 
 from subtitle_daemon.annotations import (
+    LYRIC,
     MUSIC,
+    MUSIC_COLOR,
     SOUND,
     SPEAKER,
     SOUND_COLOR,
@@ -177,8 +179,101 @@ def test_formatting_survives_annotation_splitting() -> None:
     assert runs[0].kind == SOUND
 
 
+# --- the song, as opposed to the marks around it --------------------------------
+#
+# The marks were coloured and what they bracket was left as dialogue, so a line
+# of a song rendered exactly like a line somebody said. The shapes below are the
+# ones the 277-file cache actually contains, in their measured proportions: 574
+# lines that open and close, 291 that only open, 251 that only close.
+
+
 def test_music_note_markers() -> None:
-    assert [run.kind for run in parse("♪ La la la ♪").runs] == [MUSIC, None, MUSIC]
+    """The marks themselves are still marks, with the song between them."""
+    assert [run.kind for run in parse("♪ La la la ♪").runs] == [
+        MUSIC,
+        None,
+        LYRIC,
+        None,
+        MUSIC,
+    ]
+
+
+def lyrics(text: str) -> list[str]:
+    return [run.text for run in parse(text).runs if run.kind == LYRIC]
+
+
+def test_a_lyric_that_only_opens_runs_to_the_end_of_its_line() -> None:
+    assert lyrics("♪ Why don't you tell me") == ["Why don't you tell me"]
+
+
+def test_a_lyric_that_only_closes_starts_at_the_beginning_of_its_line() -> None:
+    """The back half of a line that began singing on the line before. 251 of
+    them in the cache, and reading the mark as an opening one would format the
+    empty string after it and leave every sung word as dialogue."""
+    assert lyrics("who's on the phone?♪") == ["who's on the phone?"]
+
+
+def test_each_line_of_a_cue_is_bracketed_on_its_own() -> None:
+    assert lyrics("♪ Through the streets\nof your town ♪") == [
+        "Through the streets",
+        "of your town",
+    ]
+
+
+def test_a_line_beside_a_lyric_is_not_one() -> None:
+    """All 44 cues in the cache that mix marked and unmarked lines are this
+    shape - a song under one dash and somebody talking under the other."""
+    assert lyrics("- ♪ Who by high ordeal ♪\n- Okay, Claire, meet Paige.") == [
+        "Who by high ordeal"
+    ]
+
+
+def test_the_markup_and_the_marks_need_not_line_up() -> None:
+    """`♪ <i>Happy birthday to you</i>` is two runs: the mark is in the first
+    and every sung word is in the second. A pass that asked each run what was
+    in it would find a mark with nothing after it and a lyric with no mark."""
+    runs = parse("♪ <i>Happy birthday to you</i>").runs
+    sung = [run for run in runs if run.kind == LYRIC]
+    assert [run.text for run in sung] == ["Happy birthday to you"]
+    assert "i" in sung[0].styles, "the file's own italics were dropped"
+
+
+def test_two_marks_with_nothing_between_them_are_not_a_song() -> None:
+    """A translator's credit, verbatim from the cache. Formatting the whole
+    line would put a violet italic e-mail address over the film."""
+    assert lyrics("Subs @Ivandrofly corrected ♪♪by") == []
+
+
+def test_a_stray_trailing_mark_does_not_swallow_the_line() -> None:
+    """Ends with a mark AND begins with one, so it is not a continuation."""
+    assert lyrics("♪ I'm gonna swallow my tears♪♪") == ["I'm gonna swallow my tears"]
+
+
+def test_a_sound_inside_a_song_is_still_a_sound() -> None:
+    kinds_found = [run.kind for run in parse("♪ [sighs] and singing ♪").runs]
+    assert SOUND in kinds_found and LYRIC in kinds_found
+
+
+def test_a_lyric_carries_the_music_colour() -> None:
+    """The same hue as the marks bracketing it, so the two read as one thing -
+    and the reason every other annotation gets a colour: hue says "this is not
+    the dialogue" faster than anything else can."""
+    sung = [run for run in parse("♪ La la la ♪").runs if run.kind == LYRIC]
+    marks = [run for run in parse("♪ La la la ♪").runs if run.kind == MUSIC]
+    assert sung[0].color == marks[0].color == MUSIC_COLOR
+
+
+def test_a_colour_the_file_chose_outranks_the_lyric_colour() -> None:
+    sung = [
+        run
+        for run in parse('<font color="red">♪ La la la ♪</font>').runs
+        if run.kind == LYRIC
+    ]
+    assert sung[0].color == "red"
+
+
+def test_dialogue_with_no_marks_is_untouched() -> None:
+    assert lyrics("Just something somebody said.") == []
 
 
 def test_multiple_speakers_in_one_cue() -> None:

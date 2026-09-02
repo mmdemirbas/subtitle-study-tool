@@ -574,6 +574,42 @@ Each of these was a reported bug. Undoing one brings the bug back.
   every moment the box rather than its contents is the thing being used. The
   language tag stays visible throughout, because it is the answer to "I even
   didn't understand it is rails".
+- **The note marks are punctuation and what they bracket is the song.** Reported
+  as "we colorize the musical note symbols, but not format the text between
+  them". `findLyrics` in `annotations.js` decides where the singing is and
+  `markLyrics` in `markup.js` turns it into `kind: "lyric"` runs, which the
+  overlay draws italic in the same violet the marks carry. 1302 runs and 5134
+  sung words over the 34 files in the cache that contain a song. Four things
+  about it are load-bearing:
+  - **The bracketing is per PHYSICAL LINE, and nothing is carried across a line
+    break.** Measured over the 1316 cues with a mark in the 277-file cache: 574
+    lines open and close on their own, 291 open only, 251 close only, and in
+    **none** of them does an unmarked line sit between two marked ones. Every
+    line of a song carries its own mark. The 44 cues that mix marked and
+    unmarked lines are all a song beside something that is not one -
+    `- ♪ Who by high ordeal ♪` over `- Okay, Claire, meet Paige.` - so a rule
+    that carried state into the next line would sing the dialogue.
+  - **A line that ENDS with a mark and does not begin with one starts inside.**
+    That is the 251 continuation lines (`of your town ♪`), and reading their
+    mark as an opening one formats the empty string after it and leaves every
+    sung word as dialogue. Both halves of the test are needed: `♪ I'm gonna
+    swallow my tears♪♪` ends with a mark and is plainly not a continuation.
+  - **It runs over the WHOLE cue, after `splitAnnotations`, not run by run.**
+    The corpus writes `♪ <i>Happy birthday to you</i>`, where the mark is in one
+    run and every sung word is in the next. A pass that asked each run what was
+    in it would find a mark with nothing after it and a lyric with no mark, and
+    format neither.
+  - **A span with nothing in it is not a song.** `Subs @Ivandrofly corrected
+    ♪♪by` is a translator's credit with two adjacent marks in the middle of it,
+    and a rule that formatted whole marked lines would put a violet italic
+    e-mail address over the film.
+
+  Lyrics are **not** dimmed by `dimNonSpeech` and sound descriptions still are.
+  Sung words are words to read - very often the only thing on screen, and very
+  often a second voice over dialogue that is on screen with them, which is the
+  case the colour is there to answer. Written twice, in `annotations.py` and
+  `annotations.js`; `test_js_parity.py` carries the eight measured shapes and
+  diffs the runs, so the two cannot drift.
 - **A meaning is a (word, line) pair, and both halves have to match byte for
   byte on both sides.** A word out of its sentence is a different question: a
   context-free translator answers "spare" with "parça", from its memory of

@@ -12,12 +12,14 @@ import {
   VERTICAL_BY_ALIGNMENT,
 } from "./tables.generated.js";
 import {
+  LYRIC,
   MUSIC,
   MUSIC_COLOR,
   SOUND,
   SOUND_COLOR,
   SPEAKER,
   findAnnotations,
+  findLyrics,
   speakerColor,
   symbolFor,
 } from "./annotations.js";
@@ -151,7 +153,54 @@ export function parse(text) {
   flush();
 
   const merged = mergeAdjacent(runs.filter((item) => item.text));
-  return { runs: splitAnnotations(merged), vertical };
+  return { runs: markLyrics(splitAnnotations(merged)), vertical };
+}
+
+/**
+ * Mark the words between the note marks as sung rather than spoken.
+ *
+ * After splitAnnotations rather than inside it, and over the WHOLE cue rather
+ * than run by run, because the markup and the marks do not line up. The corpus
+ * writes `♪ <i>Happy birthday to you</i>`, which is two runs: the mark is in
+ * the first and every sung word is in the second. A pass that asked each run
+ * what was in it would find a mark with nothing after it and a lyric with no
+ * mark, and format neither.
+ *
+ * A run that already knows what it is keeps knowing. `[coughing]` inside a song
+ * is still a sound description, and the mark is still the mark.
+ */
+function markLyrics(runs) {
+  const text = runs.map((item) => item.text).join("");
+  const spans = findLyrics(text);
+  if (!spans.length) return runs;
+
+  const out = [];
+  let at = 0;
+  for (const item of runs) {
+    const start = at;
+    const end = at + item.text.length;
+    at = end;
+    if (item.kind) {
+      out.push(item);
+      continue;
+    }
+
+    let cursor = start;
+    for (const span of spans) {
+      const from = Math.max(span.start, cursor);
+      const to = Math.min(span.end, end);
+      if (from >= to) continue;
+      if (from > cursor) out.push(run(text.slice(cursor, from), item.styles, item.color));
+      /* The music colour, for the reason splitAnnotations gives about every
+       * other annotation: hue says "this is not the dialogue" faster than
+       * anything else can, and a lyric shares the screen with dialogue often
+       * enough that it has to. A colour the file set itself still wins. */
+      out.push(run(text.slice(from, to), item.styles, item.color || MUSIC_COLOR, LYRIC));
+      cursor = to;
+    }
+    if (cursor < end) out.push(run(text.slice(cursor, end), item.styles, item.color));
+  }
+  return mergeAdjacent(out.filter((item) => item.text));
 }
 
 /**

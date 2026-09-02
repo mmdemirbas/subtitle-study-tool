@@ -33,6 +33,7 @@ import unicodedata
 SPEAKER = "speaker"
 SOUND = "sound"
 MUSIC = "music"
+LYRIC = "lyric"
 
 # Two-word phrases whose meaning is not the sum of their parts, so they have to
 # be checked before the single-word table. "clears throat" is not "throat";
@@ -410,6 +411,87 @@ def find_annotations(text: str) -> list[tuple[int, int, str, str]]:
 
     found.sort(key=lambda span: span[0])
     return found
+
+
+# What may sit outside the marks without making a line "not start with one".
+# The dialogue dash is the common case; `\h` is SSA's hard space and reaches
+# this parser written out literally.
+_OUTSIDE_LEFT = re.compile(r"^(?:\s|\\h|[-\u2013\u2014])*")
+_OUTSIDE_RIGHT = re.compile(r"(?:\s|\\h)*$")
+# The same, without the dash: a dash inside the marks is being sung.
+_OUTSIDE_LEFT_SPACE = re.compile(r"^(?:\s|\\h)*")
+
+
+def find_lyrics(text: str) -> list[tuple[int, int]]:
+    """What sits between the note marks, which is the song.
+
+    The marks were coloured and the words between them were left as dialogue,
+    so a line of a song read exactly like a line somebody said. They are not
+    the same thing to a reader: sung words are frequently a second voice over
+    the dialogue, they are often the only thing on screen, and a learner
+    meeting them needs to know the grammar is about to be strange.
+
+    Marks bracket the singing, and the bracketing is per PHYSICAL LINE.
+    Measured over the 1316 cues carrying a mark in this machine's 277-file
+    cache: 574 lines open and close on their own, 291 open and never close, 251
+    close without opening, and in NONE of them does an unmarked line sit
+    between two marked ones. Every line of a song carries its own mark, so
+    nothing has to be carried across a line break - and all 44 cues that mix
+    marked and unmarked lines are a lyric beside something that is not one:
+
+        - ♪ Who by high ordeal ♪
+        - Okay, Claire, meet Paige.
+
+    Which end a lone mark belongs to is the only real question, and the line
+    answers it. A line that ENDS with a mark and does not begin with one is the
+    back half of a lyric that started on the line before ("of your town ♪"),
+    so it starts inside. Anything else starts outside and the first mark opens.
+    Both tests are needed: "♪ I'm gonna swallow my tears♪♪" ends
+    with a mark and is plainly not a continuation.
+
+    Returns (start, end) spans into the whole of `text`, because that is what
+    the runs concatenate back to.
+    """
+    spans: list[tuple[int, int]] = []
+    at = 0
+    for line in str(text or "").split("\n"):
+        _lyrics_in_line(line, at, spans)
+        # The newline the split consumed.
+        at += len(line) + 1
+    return spans
+
+
+def _lyrics_in_line(line: str, offset: int, out: list[tuple[int, int]]) -> None:
+    marks = list(_MUSIC_MARK.finditer(line))
+    if not marks:
+        return
+
+    opens_line = marks[0].start() == len(_OUTSIDE_LEFT.match(line).group(0))
+    closes_line = marks[-1].end() == len(line) - len(_OUTSIDE_RIGHT.search(line).group(0))
+
+    inside = closes_line and not opens_line
+    start = 0 if inside else -1
+
+    def take(begin: int, end: int) -> None:
+        """Trimmed, so the space after a mark is not sung - and so two marks
+        with nothing between them produce no span at all, which is what keeps a
+        translator's credit ("Subs @somebody corrected ♪♪by") out of
+        the song."""
+        piece = line[begin:end]
+        before = len(_OUTSIDE_LEFT_SPACE.match(piece).group(0))
+        after = len(_OUTSIDE_RIGHT.search(piece).group(0))
+        if begin + before < end - after:
+            out.append((offset + begin + before, offset + end - after))
+
+    for mark in marks:
+        if inside:
+            take(start, mark.start())
+            inside = False
+        else:
+            start = mark.end()
+            inside = True
+    if inside:
+        take(start, len(line))
 
 
 def _is_music(lowered: str) -> bool:

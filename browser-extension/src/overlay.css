@@ -190,6 +190,21 @@
   font-style: italic;
 }
 
+/* Sung words are words to READ, so they are not dimmed with the marks around
+ * them. The note glyphs are punctuation and recede under `dimNonSpeech`; what
+ * is between them is the song, and on the cues where a lyric shares the screen
+ * with dialogue it is the half a reader most needs told apart.
+ *
+ * Italic is the subtitling convention for singing, and about half the corpus
+ * already writes it - `<i>♪ Round and round ♪</i>` - so this mostly makes the
+ * other half agree rather than changing what anyone is used to. The violet is
+ * carried on the run itself, from the same constant the note marks use, so the
+ * mark and the words it brackets read as one thing.
+ */
+.sso-lyric {
+  font-style: italic;
+}
+
 /* Speaker names carry their own colour, assigned per name by the daemon and
  * stable across cues, so a conversation can be followed without reading the
  * label every time. */

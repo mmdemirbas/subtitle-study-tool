@@ -159,6 +159,17 @@ MARKUP_CASES = [
     "SHARON: Get down!",
     "♪ La la la ♪",
     "♪♪♪",
+    # The lyric shapes, in the proportions the 277-file cache has them: opens
+    # and closes, opens only, closes only, a song beside dialogue, a mark that
+    # the markup is split away from, and a credit that must not become a song.
+    "♪ Why don't you tell me",
+    "who's on the phone?♪",
+    "<i>♪ Through the streets</i>\n<i>of your town ♪</i>",
+    "♪ <i>Happy birthday to you</i>",
+    "- ♪ Who by high ordeal ♪\n- Okay, Claire, meet Paige.",
+    "Subs @Ivandrofly corrected ♪♪by",
+    "♪ I'm gonna swallow my tears♪♪",
+    "♪ [sighs] and singing ♪",
     "[Ormon sighs] Not now.",
     "[man] Over here.",
     "[Bell] I told you.",

@@ -313,6 +313,16 @@
           text: "- Did you see that?\n- I saw nothing at all.",
           runs: [{ text: "- Did you see that?\n" },
                  { text: "- I saw nothing at all." }] },
+        /* A line of a song, in the shape markup.js produces for it. The marks
+         * and the words between them are two different kinds on purpose: the
+         * marks are punctuation and recede when non-speech is dimmed, and what
+         * they bracket is words to read. */
+        { start: 1800000, end: 2100000, text: "\u266a Round and round \u266a",
+          runs: [{ text: "\u266a", color: "#c0a9e6", kind: "music" },
+                 { text: " " },
+                 { text: "Round and round", color: "#c0a9e6", kind: "lyric" },
+                 { text: " " },
+                 { text: "\u266a", color: "#c0a9e6", kind: "music" }] },
       ];
 
       const video = document.getElementById("v");
@@ -381,6 +391,7 @@
       // rendered while the playhead is inside it, so checks about it have to
       // move the clock first.
       const showSoundCue = async () => { video.currentTime = 700; await sleep(120); };
+      const showLyricCue = async () => { video.currentTime = 1900; await sleep(120); };
       const showSpeakerCue = async () => { video.currentTime = 1; await sleep(120); };
       const shadowOf = () =>
         [...document.querySelectorAll("div")].find((d) => d.shadowRoot && d.shadowRoot.querySelector(".sso-root"))?.shadowRoot;
@@ -445,6 +456,40 @@
         if (!sound || !dialogue) throw new Error("expected a sound run and a dialogue run");
         if (Number(getComputedStyle(sound).opacity) >= Number(getComputedStyle(dialogue).opacity))
           throw new Error("sound is not dimmer than speech");
+      });
+
+      check("a lyric is set apart from the dialogue, and not dimmed away with the marks", async () => {
+        /* Reported as: the note symbols are coloured and the words between them
+         * are not. They are usually a song, and a song is not a line somebody
+         * said - very often it is a second voice over dialogue that is also on
+         * screen, which is the case colour has to answer.
+         *
+         * The marks are punctuation and go quiet under dimNonSpeech; the words
+         * are the content and must not, or the reader is asked to read the one
+         * thing on screen at 72%. */
+        const was = window.__ssoApi.status().settings.dimNonSpeech;
+        try {
+          window.__ssoApi.updateSettings({ dimNonSpeech: true });
+          await showLyricCue();
+          const lyric = shadowOf().querySelector(".sso-lyric");
+          const mark = shadowOf().querySelector(".sso-music");
+          if (!lyric || !mark) throw new Error("expected a lyric run and a mark run");
+          if (!lyric.textContent.includes("Round and round"))
+            throw new Error(`the lyric run reads ${JSON.stringify(lyric.textContent)}`);
+
+          if (getComputedStyle(lyric).fontStyle !== "italic")
+            throw new Error("a lyric is not italic, so it reads as dialogue");
+          const colour = getComputedStyle(lyric).color;
+          if (colour !== getComputedStyle(mark).color)
+            throw new Error(`the lyric is ${colour} and its own marks are ${getComputedStyle(mark).color}`);
+
+          const lyricOpacity = Number(getComputedStyle(lyric).opacity);
+          const markOpacity = Number(getComputedStyle(mark).opacity);
+          if (!(markOpacity < lyricOpacity))
+            throw new Error(`marks at ${markOpacity} are not quieter than the words at ${lyricOpacity}`);
+        } finally {
+          window.__ssoApi.updateSettings({ dimNonSpeech: was });
+        }
       });
 
       check("sound symbol is rendered beside the words", async () => {
