@@ -3003,6 +3003,15 @@
   };
 
   const applyTiming = (slot, { offsetMs, rate, steps }) => {
+    /* Said, when it undoes a speed the reader set.
+     *
+     * The aligner's answer is about where this file sits against the OTHER
+     * one; a speed the reader applied by hand is about this file against the
+     * film. The pair relationship is what was just asked for, so the answer
+     * wins - but it arrives as one number with no mention of the stretch it
+     * takes out, and a reader who corrected a drift half an hour ago has no
+     * way to connect the two. */
+    const droppedRate = api.status().tracks[slot]?.rate !== 1 && (rate ?? 1) === 1;
     api.setRate(rate ?? 1, { slot, quiet: true });
     api.setSteps(steps ?? [], { slot });
     /* `byHand: false`, the same as the aligner's own apply path, and here it is
@@ -3011,6 +3020,7 @@
      * subtitle, carrying it to the follower would move the very subtitle it
      * was just measured against - and destroy the alignment being accepted. */
     api.setOffset(offsetMs ?? 0, { slot, quiet: true, byHand: false });
+    return { droppedRate };
   };
 
   async function lineUp(slot) {
@@ -3042,11 +3052,12 @@
      * "these two releases are cut differently and it has been handled" is a
      * thing worth being told once, and the correction the reader would
      * otherwise be making at every break is the thing it saves. */
-    const lined = () => {
+    const lined = ({ droppedRate = false } = {}) => {
       const acts = answer.steps?.length ?? 1;
+      const also = droppedRate ? " · speed back to the film's own" : "";
       sayInPanel(slot, acts > 1
-        ? `Lined up in ${acts} acts · ${api.describeOffset(answer.offsetMs)} at the start`
-        : `Lined up · ${api.describeOffset(answer.offsetMs)}`);
+        ? `Lined up in ${acts} acts · ${api.describeOffset(answer.offsetMs)} at the start${also}`
+        : `Lined up · ${api.describeOffset(answer.offsetMs)}${also}`);
     };
     if (answer.verdict === "apply") {
       lined();
@@ -3066,11 +3077,13 @@
         action: {
           label: "Use it",
           onClick: () => {
-            applyTiming(slot, { offsetMs: answer.offsetMs, rate: answer.trackRate, steps: answer.steps });
+            const done = applyTiming(slot, {
+              offsetMs: answer.offsetMs, rate: answer.trackRate, steps: answer.steps,
+            });
             api.trace?.("alignOutcome", {
               slot, outcome: "taken", offsetMs: answer.offsetMs, acts: answer.steps?.length ?? 1,
             });
-            lined();
+            lined(done);
             refresh(api.status());
           },
         },

@@ -7494,6 +7494,16 @@
           await sleep(250);
           if (!offered().length) throw new Error("the same drift was not offered a second time");
 
+          /* And setting the speed to the speed it already has is not a
+           * correction being thrown away. applyTiming sets the rate on every
+           * accepted alignment, whether or not the aligner had anything to say
+           * about the speed, so a no-op set used to clear the measurement and
+           * re-arm an offer the reader had already answered. */
+          api.setRate(1, { slot: 0, quiet: true });
+          await sleep(150);
+          if (!offered().length)
+            throw new Error("setting the speed to the one it already ran at cleared the measurement");
+
           await api.attach({ cues: CUES, label: "EN · Harness.Speed.Two", fileId: 6802, language: "en", slot: 0 });
           await sleep(250);
           if (offered().length)

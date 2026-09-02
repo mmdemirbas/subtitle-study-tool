@@ -4526,9 +4526,17 @@
     track.activeIndexes = NEEDS_REDRAW;
     /* The corrections were fitted against the old speed, so under the new one
      * they describe a film that no longer exists. Kept and they would measure a
-     * drift that has just been taken out. */
-    track.corrections = [];
-    track.driftOffered = false;
+     * drift that has just been taken out.
+     *
+     * Only when the speed actually moved. Setting a track that runs at 1 to 1
+     * changes nothing about what the corrections describe, and `applyTiming`
+     * does exactly that on every accepted alignment - so taking an offer that
+     * had nothing to say about the speed threw away the reader's whole drift
+     * measurement and re-armed an offer they had already answered. */
+    if (track.rate !== wasRate) {
+      track.corrections = [];
+      track.driftOffered = false;
+    }
     saveOffset(track);
     if (byHand) rememberTimingSoon(track);
     notify();
