@@ -2984,6 +2984,26 @@
           if (window.__ssoApi.status().tracks[1].offsetMs !== 2000)
             throw new Error("a correction outside the snap's reach was moved anyway");
 
+          /* And it steadies a move without reversing it.
+           *
+           * Reported as the drag "fighting back": the search is a fixed point,
+           * so a reader who moves away from it by less than its reach is moved
+           * straight back by the same amount and their gesture buys nothing.
+           * The first of these is a refinement of a one-second drag and stands;
+           * the second is the same 140ms with the drag itself being that 140ms,
+           * where taking it back would land the reader exactly where they
+           * started. */
+          window.__ssoApi.setOffset(140, { slot: 1, quiet: true });
+          const refined = window.__ssoApi.snapTiming(1, { fromMs: -1000 });
+          if (!refined) throw new Error("a refinement of a one-second drag was refused");
+
+          window.__ssoApi.setOffset(140, { slot: 1, quiet: true });
+          const reversed = window.__ssoApi.snapTiming(1, { fromMs: 0 });
+          if (reversed)
+            throw new Error(`a 140ms drag was given back by ${reversed.deltaMs}ms`);
+          if (window.__ssoApi.status().tracks[1].offsetMs !== 140)
+            throw new Error("the drag was reversed anyway");
+
           // And with nothing to agree with, it says nothing rather than
           // inventing an answer from one file.
           window.__ssoApi.detach(1);

@@ -2053,9 +2053,13 @@
        *
        * Through a promise because snapTiming is forwarded: with the film in
        * another frame it answers with one, and reading `.deltaMs` off a promise
-       * would have snapped nothing and said so confidently. */
+       * would have snapped nothing and said so confidently.
+       *
+       * `fromMs` is what makes it a steadying rather than an override: where
+       * the gesture began is the only thing that says whether the snap is
+       * refining the reader's aim or undoing it. See SNAP_KEEPS. */
       api.detached(
-        Promise.resolve(api.snapTiming?.(slot)).then((snapped) => {
+        Promise.resolve(api.snapTiming?.(slot, { fromMs: was.offsetMs })).then((snapped) => {
           sayInPanel(slot, snapped
             ? `Snapped · ${api.describeOffset(next + snapped.deltaMs)} · ${snapped.lines} lines agree`
             : `Moved · ${api.describeOffset(next)}`);

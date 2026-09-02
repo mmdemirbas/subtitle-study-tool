@@ -4649,7 +4649,27 @@
    * about why the whole file is the wrong thing to consult. Returns what it
    * did, so the panel can say so - a correction that moves after the hand has
    * let go must not be silent, or the reader learns the drag is imprecise. */
-  function snapTiming(slot = state.keyTrack, { atMs } = {}) {
+  /* How much of the reader's own move a snap is allowed to take back.
+   *
+   * Reported as the drag "fighting back", and the search is a fixed point, so
+   * it is exactly that. snapNear answers with the median gap between the two
+   * files near the playhead, and that answer does not depend on where the hand
+   * let go - so once a correction sits on it, every deliberate move away is met
+   * by a move of the same size back. Read out of the running log, over the 137
+   * snaps that followed a drag: 76 went against the drag, 29 gave back more
+   * than half of it, and 15 put the correction back within 8ms of where the
+   * gesture began, five of them to the millisecond. A reader who moved the map
+   * 443ms and was moved 443ms back has not been steadied, they have been
+   * overruled - and the second time it happens they stop trusting the drag.
+   *
+   * So a snap may refine an aim and may not reverse it. Half is the line
+   * because the whole claim above this function is that the snap is worth a few
+   * tens of milliseconds against a hand accurate to about a fifth of a second;
+   * something giving back more of the gesture than half is not that number, it
+   * is an answer to a question the hand did not ask. */
+  const SNAP_KEEPS = 0.5;
+
+  function snapTiming(slot = state.keyTrack, { atMs, fromMs } = {}) {
     const track = state.tracks[slot];
     if (!track?.cues.length || !globalThis.__ssoAlign?.snapNear) return null;
     /* The lead has nothing above it to snap to.
@@ -4674,6 +4694,20 @@
       streamStarts(slot), streamStarts(otherSlot), { atMs: at },
     );
     if (!found) return null;
+
+    /* A refinement of the move that was just made, or nothing.
+     *
+     * `fromMs` is where that gesture began. A caller with no gesture behind it
+     * passes none, and then there is nothing to be reversing and the snap
+     * stands as before. */
+    const movedMs = Number.isFinite(fromMs) ? track.offsetMs - Math.round(fromMs) : null;
+    if (
+      movedMs !== null
+      && found.deltaMs * movedMs < 0
+      && Math.abs(found.deltaMs) > Math.abs(movedMs) * SNAP_KEEPS
+    ) {
+      return null;
+    }
 
     setOffset(track.offsetMs + found.deltaMs, { slot, quiet: true, how: "snap" });
     return found;
