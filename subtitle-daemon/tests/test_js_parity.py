@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from subtitle_daemon import annotations, matching, subtitles, titles
+from subtitle_daemon import annotations, lookups, matching, subtitles, titles
 
 REPO = Path(__file__).resolve().parents[2]
 EXTENSION = REPO / "browser-extension"
@@ -72,6 +72,45 @@ SEARCH_CASES = [
     {"title": "Watch Mercy (2025) Online Free HD", "query": "", "year": 2026},
     {"title": "Prime Video: Crime 101", "query": "", "season": 3, "episode": 2},
     {"title": "", "query": "", "year": 2013},
+]
+
+# What the archive answers with, in the shapes that reached a reader's screen.
+#
+# The first is the reported one: `Serme<x id="1"/>` under the word "laying". A
+# translation memory stores segments with their placeholders in, and nothing
+# between the archive and the chip took them out. The extension's copy is what
+# answers when the daemon is not running, which is the ordinary case, so this
+# is the pipeline that had to be compared rather than only fixed.
+TRANSLATION_CASES = [
+    ("laying", {"matches": [{"translation": 'Serme<x id="1"/>', "match": 1, "quality": 70}]}),
+    ("laying", {"matches": [{"translation": '&lt;g id="1"&gt;yatırma&lt;/g&gt;', "match": 1, "quality": 74}]}),
+    ("halls", {"matches": [{"translation": "{1} salonları", "match": 0.9, "quality": 70}]}),
+    # Nothing but a placeholder: cleans away to an empty string, which is the
+    # same "no" as the archive handing the word back unchanged.
+    ("abuzz", {"matches": [{"translation": '<x id="1"/>', "match": 1, "quality": 100}]}),
+    ("abuzz", {"matches": [{"translation": "abuzz", "match": 1, "quality": 100}]}),
+    # Cleaned before it is measured, so a segment that is only long because of
+    # its markup is kept rather than refused for length.
+    ("threats", {"matches": [
+        {"translation": '<g id="1">tehditler</g><x id="2"/><x id="3"/><x id="4"/><x id="5"/>',
+         "match": 1, "quality": 70},
+    ]}),
+    # Two candidates, and the better-scoring one wins after both are cleaned.
+    ("domestic", {"matches": [
+        {"translation": "iç <x id=\"1\"/>", "match": 0.4, "quality": 60},
+        {"translation": "yerel", "match": 1, "quality": 90},
+    ]}),
+    # No matches at all: the API's own pick is the only thing there is, and it
+    # gets the same cleaning.
+    ("laying", {"responseData": {"translatedText": "Serme&lt;x id=&quot;1&quot;/&gt;"}}),
+    ("laying", {"responseData": {"translatedText": "%1$s serme"}}),
+    ("laying", {}),
+    # A whole paragraph filed under a short key, which is the length rule the
+    # archive needed in the first place and must still fire after cleaning.
+    ("get down", {"matches": [
+        {"translation": "Telefonunuzu bir mağazadan satın aldıysanız oraya götürün lütfen.",
+         "match": 1, "quality": 100},
+    ]}),
 ]
 
 SCORE_CASES = [
@@ -208,6 +247,7 @@ def js_results(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "scores": [list(case) for case in SCORE_CASES],
         "titles": TITLE_CASES,
         "searches": SEARCH_CASES,
+        "translations": [{"term": term, "payload": payload} for term, payload in TRANSLATION_CASES],
     }
 
     input_path = tmp / "input.json"
@@ -291,6 +331,45 @@ def test_search_resolutions_agree(js_results: dict) -> None:
             mismatches.append((str(params), (mine.query, mine.year, mine.season,
                                              mine.episode), theirs))
     assert not mismatches, _report("search resolution", mismatches)
+
+
+def test_translations_agree(js_results: dict) -> None:
+    """What a word means is a second pipeline written twice.
+
+    The reader who saw `Serme<x id="1"/>` on a chip was on the extension's own
+    path, which is the one that runs whenever the daemon is not listening. A fix
+    in one copy would have left the other showing tags, and nothing would have
+    said so - the daemon's tests would be green and the screen would be wrong.
+    """
+    mismatches = [
+        (row["term"], row["payload"], lookups.pick_translation(row["payload"], row["term"]), row["picked"])
+        for row in js_results["translations"]
+        if lookups.pick_translation(row["payload"], row["term"]) != row["picked"]
+    ]
+    assert not mismatches, _report("translation", mismatches)
+
+    dirty = [
+        (row["term"], mine, row["cleaned"])
+        for row in js_results["translations"]
+        if (mine := lookups.clean_translation(
+            (row["payload"].get("responseData") or {}).get("translatedText", "")
+        )) != row["cleaned"]
+    ]
+    assert not dirty, _report("cleaning", dirty)
+
+
+def test_the_translation_cases_cover_what_broke(js_results: dict) -> None:
+    """The same guard the pipeline above carries: cases that assert nothing.
+
+    Every one of these has to be exercised, or a case list that quietly stopped
+    containing markup would keep this test green while the tags came back.
+    """
+    picked = [row["picked"] for row in js_results["translations"]]
+    assert sum(1 for value in picked if value) >= 5, f"only {picked} survived"
+    assert sum(1 for value in picked if not value) >= 3, "nothing was refused"
+    assert not any("<" in value or "&" in value or "{" in value for value in picked), picked
+    raw = json.dumps([row["payload"] for row in js_results["translations"]])
+    assert "<x id=" in raw and "&lt;" in raw and "{1}" in raw, "the cases carry no markup to clean"
 
 
 def test_the_comparison_actually_covers_the_pipeline(js_results: dict) -> None:

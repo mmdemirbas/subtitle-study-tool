@@ -14,7 +14,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from subtitle_daemon.lookups import Lookups, condense, pick_translation
+from subtitle_daemon.lookups import (
+    Lookups,
+    _short_gloss,
+    clean_translation,
+    condense,
+    pick_translation,
+)
 
 RAW_ENTRY: list[dict[str, Any]] = [
     {
@@ -404,3 +410,46 @@ def test_no_model_named_means_the_batch_asks_nobody(lookups: Lookups, monkeypatc
 
     monkeypatch.setattr("subtitle_daemon.lookups.urllib.request.urlopen", never)
     assert lookups.gloss_many([{"term": "spare", "sentence": "One."}], "en", "tr") == [""]
+
+
+def test_a_translation_memorys_placeholders_do_not_reach_the_reader() -> None:
+    """Reported with a screenshot: "laying" glossed as `Serme<x id="1"/>`.
+
+    A translation memory stores segments with their inline placeholders in, and
+    a candidate scored on how well its SOURCE matched can carry a placeholder
+    its source had. Taken out rather than refused, because "Serme" is the right
+    gloss and an empty chip is the other half of the same report.
+    """
+    assert clean_translation('Serme<x id="1"/>') == "Serme"
+    assert clean_translation('&lt;g id="1"&gt;yatırma&lt;/g&gt;') == "yatırma"
+    assert clean_translation("{1} koyma") == "koyma"
+    assert clean_translation("%1$s serme") == "serme"
+    assert clean_translation("kar&#351;ı") == "karşı"
+    # One pass, so an escaped entity stays an escaped entity rather than being
+    # unwrapped twice into markup nobody wrote.
+    assert clean_translation("sa&amp;#39;lam") == "sa&#39;lam"
+    # Nothing but a placeholder is nothing.
+    assert clean_translation('<x id="1"/>') == ""
+
+
+def test_a_segment_that_is_only_markup_is_refused_rather_than_shown_empty() -> None:
+    raw = {"matches": [{"translation": '<x id="1"/>', "match": 1.0, "quality": 100}]}
+    assert pick_translation(raw, "abuzz") == ""
+
+
+def test_length_is_measured_on_what_the_reader_would_see() -> None:
+    """Cleaned before it is judged, or the markup counts against the answer.
+
+    Five placeholders and one word is a one-word gloss wearing a paragraph's
+    length, and the rule that keeps whole paragraphs of unrelated archive text
+    off the chip would have refused it.
+    """
+    padded = '<g id="1">tehditler</g><x id="2"/><x id="3"/><x id="4"/><x id="5"/>'
+    raw = {"matches": [{"translation": padded, "match": 1.0, "quality": 70}]}
+    assert pick_translation(raw, "threats") == "tehditler"
+
+
+def test_a_gloss_from_a_model_is_cleaned_the_same_way() -> None:
+    """One rule for three tiers. A model asked for JSON can wrap its answer."""
+    assert _short_gloss('<b>yedek</b>', "spare") == "yedek"
+    assert _short_gloss("&quot;yedek&quot;", "spare") == "yedek"

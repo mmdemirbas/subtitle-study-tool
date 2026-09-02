@@ -5607,6 +5607,33 @@
         [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(".sso-pop"))
           ?.shadowRoot;
 
+      check("a word nothing could answer says so, rather than showing a blank line", async () => {
+        /* Reported with a screenshot: some chips carried a meaning and some
+         * carried an empty second line. They had been asked about and nothing
+         * came back - most likely on the path with no daemon, where the only
+         * translator is a free archive that answers a fair share of words with
+         * nothing usable and the dictionary needs a host permission the reader
+         * may never have granted.
+         *
+         * A blank line is indistinguishable from a lookup still in flight, so
+         * the reader waits for something that already finished. */
+        const was = window.__stubDaemon;
+        window.__stubDaemon = { lookup: () => ({ definitions: [], translation: "" }) };
+        try {
+          await hover("idea");
+          await sleep(300);
+          const chip = [...shadowOf().querySelectorAll(".sso-trail__word")].find(
+            (node) => node.querySelector(".sso-trail__term")?.textContent === "idea",
+          );
+          if (!chip) throw new Error("the word never reached the trail");
+          const gloss = chip.querySelector(".sso-trail__gloss")?.textContent ?? "";
+          if (gloss !== "\u2014")
+            throw new Error(`the chip's second line reads "${gloss}" rather than a dash`);
+        } finally {
+          window.__stubDaemon = was ?? null;
+        }
+      });
+
       check("the word is asked for in the other subtitle's language", () => {
         // Without a target the daemon has nothing to translate into, and the
         // field it fills has been empty since study mode was written.

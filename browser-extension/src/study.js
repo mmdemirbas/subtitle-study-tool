@@ -1022,13 +1022,26 @@
     card.chip.gloss.textContent = shortMeaning(card);
   }
 
+  /* An answer that never came is not the same as one that has not arrived yet,
+   * and until now the chip drew both as an empty line.
+   *
+   * Reported alongside the markup above: "some are not even translated". They
+   * were asked about and nothing came back - which happens most on the path
+   * with no daemon, where the only translator is a free archive that answers a
+   * fair share of words with nothing usable and the dictionary needs a host
+   * permission the reader may never have granted. A blank line under a word is
+   * indistinguishable from a lookup still in flight, so the reader waits for
+   * something that already finished. */
+  const NOTHING_FOUND = "—";
+
   function shortMeaning(card) {
     const entry = card.lookup;
     if (!entry) return "";
     if (entry.translation) return entry.translation;
     const first = entry.definitions?.[0];
     const gloss = typeof first === "string" ? first : first?.text || first?.definition || "";
-    return gloss.length > 42 ? `${gloss.slice(0, 41)}…` : gloss;
+    if (gloss) return gloss.length > 42 ? `${gloss.slice(0, 41)}…` : gloss;
+    return NOTHING_FOUND;
   }
 
   /* Which subtitles have a strip, said in one place. Called whenever the

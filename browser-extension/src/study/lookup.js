@@ -38,13 +38,46 @@ const TRANSLATOR_URL = (term, from, to) =>
 const MAX_EXTRA_WORDS = 3;
 const MAX_TRANSLATION_CHARS = 80;
 
+/* What a translation memory leaves in a segment, and what the reader saw.
+ *
+ * Reported with a screenshot: the word "laying" glossed as `Serme<x id="1"/>`.
+ * That is XLIFF inline markup - the archive stores segments with their
+ * placeholders in, and an answer scored on how well its SOURCE matched can
+ * carry a placeholder its source had. Nothing between the archive and the chip
+ * took it out, so the reader read the tag. It was on THIS path, the one that
+ * runs with no daemon listening, which is the ordinary case.
+ *
+ * Entities first, because the archive escapes its own markup about as often as
+ * it does not: `&lt;x id="1"/&gt;` has to become a tag before a tag can be
+ * taken out. The named set is the five that matter plus a space, character for
+ * character the one in `lookups.py`, and `test_js_parity.py` diffs the two -
+ * a fix in one copy would otherwise leave the other showing tags. */
+const NAMED_ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+const ENTITY = /&(#x[0-9a-fA-F]{1,6}|#\d{1,7}|[a-zA-Z]{2,8});/g;
+const PLACEHOLDER = /<[^<>]*>|\{\d+\}|%\d+\$?[sd]\b|%[sd]\b|\[\d+\]/g;
+
+export function cleanTranslation(text) {
+  const answer = String(text ?? "").replace(ENTITY, (whole, name) => {
+    if (name[0] === "#") {
+      const code = name[1] === "x" || name[1] === "X"
+        ? Number.parseInt(name.slice(2), 16)
+        : Number.parseInt(name.slice(1), 10);
+      return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
+    }
+    return NAMED_ENTITIES[name.toLowerCase()] ?? whole;
+  });
+  return answer.replace(PLACEHOLDER, " ").split(/\s+/).filter(Boolean).join(" ");
+}
+
 export function pickTranslation(payload, term) {
   if (!payload || typeof payload !== "object") return "";
   const source = String(term || "").trim().toLowerCase();
   const allowedWords = source.split(/\s+/).filter(Boolean).length + MAX_EXTRA_WORDS;
 
-  const usable = (text) => {
-    const candidate = String(text || "").trim();
+  const usable = (candidate) => {
+    /* A segment that was nothing but a placeholder cleans away to the empty
+     * string, which is the same "no" as the archive handing the word back
+     * unchanged. */
     if (!candidate || candidate.toLowerCase() === source) return false;
     return (
       candidate.length <= MAX_TRANSLATION_CHARS &&
@@ -56,17 +89,20 @@ export function pickTranslation(payload, term) {
   let bestScore = 0;
   for (const match of Array.isArray(payload.matches) ? payload.matches : []) {
     if (!match || typeof match !== "object") continue;
-    if (!usable(match.translation)) continue;
+    // Cleaned BEFORE it is judged, so the length and word counts are of what
+    // the reader would actually see rather than of the markup around it.
+    const text = cleanTranslation(match.translation);
+    if (!usable(text)) continue;
     const score = (Number(match.match) || 0) * ((Number(match.quality) || 0) / 100);
     if (score > bestScore) {
-      best = String(match.translation).trim();
+      best = text;
       bestScore = score;
     }
   }
   if (best) return best;
 
-  const fallback = String(payload.responseData?.translatedText || "");
-  return usable(fallback) ? fallback.trim() : "";
+  const fallback = cleanTranslation(payload.responseData?.translatedText);
+  return usable(fallback) ? fallback : "";
 }
 
 const CACHE_KEY = "sso:lookupCache";

@@ -77,6 +77,28 @@ TRANSLATE_TIMEOUT_SECONDS = 6
 MAX_EXTRA_WORDS = 3
 MAX_TRANSLATION_CHARS = 80
 
+# What a translation memory leaves in a segment, and what the reader saw.
+#
+# Reported with a screenshot: the word "laying" glossed as `Serme<x id="1"/>`.
+# That is XLIFF inline markup - a translation memory stores segments with their
+# placeholders in, and an answer scored on how well its SOURCE matched can carry
+# a placeholder its source had. Nothing on the way to the chip took it out, so
+# the reader read the tag.
+#
+# Taken out rather than the answer refused, because "Serme" is the right gloss
+# for "laying" and refusing it leaves an empty chip, which is the other half of
+# the same report. What cleans away to nothing is refused by the usable() tests
+# below, which now see the cleaned string rather than the raw one.
+#
+# Entities first, because the archive escapes its own markup about as often as
+# it does not: `&lt;x id="1"/&gt;` has to become a tag before a tag can be
+# taken out. The named set is deliberately the five that matter plus a space -
+# every one of them is written the same way in the extension's copy, and a
+# larger set in one language than the other is a divergence nobody would see.
+NAMED_ENTITIES = {"amp": "&", "lt": "<", "gt": ">", "quot": '"', "apos": "'", "nbsp": " "}
+ENTITY = re.compile(r"&(#x[0-9a-fA-F]{1,6}|#\d{1,7}|[a-zA-Z]{2,8});")
+PLACEHOLDER = re.compile(r"<[^<>]*>|\{\d+\}|%\d+\$?[sd]\b|%[sd]\b|\[\d+\]")
+
 # The context-free tier, one step above the archive. Google answers a bare word
 # with a bare word rather than with whatever segment of whatever corpus matched
 # the string, which is the difference between "yedek" and "Adama Mickiewicza".
@@ -151,6 +173,28 @@ GLOSS_SYSTEM = (
 )
 
 
+def clean_translation(text: Any) -> str:
+    """A translation with the markup a translation memory leaves in it taken out.
+
+    Written twice - here and in the extension's `study/lookup.js`, which answers
+    when this daemon is not running - and diffed by `test_js_parity.py`, because
+    the reader who saw `Serme<x id="1"/>` was on the extension's own path and a
+    fix in one copy would have left the other showing tags.
+    """
+
+    def entity(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name.startswith("#x") or name.startswith("#X"):
+            return chr(int(name[2:], 16))
+        if name.startswith("#"):
+            return chr(int(name[1:]))
+        return NAMED_ENTITIES.get(name.lower(), match.group(0))
+
+    answer = ENTITY.sub(entity, str(text or ""))
+    answer = PLACEHOLDER.sub(" ", answer)
+    return " ".join(answer.split())
+
+
 def _short_gloss(text: Any, term: str) -> str:
     """A gloss, or "" for anything that is not one.
 
@@ -158,7 +202,7 @@ def _short_gloss(text: Any, term: str) -> str:
     one to three words will occasionally explain itself instead, and a sentence
     does not fit on a chip under a subtitle.
     """
-    answer = str(text or "").strip().strip('"').strip()
+    answer = clean_translation(text).strip('"').strip()
     if not answer or len(answer) > MAX_TRANSLATION_CHARS:
         return ""
     if len(answer.split()) > len(term.split()) + MAX_EXTRA_WORDS:
@@ -550,10 +594,11 @@ def pick_translation(raw: Any, term: str) -> str:
     source = term.strip().lower()
     allowed_words = len(source.split()) + MAX_EXTRA_WORDS
 
-    def usable(text: str) -> bool:
-        candidate = text.strip()
+    def usable(candidate: str) -> bool:
         if not candidate or candidate.lower() == source:
-            # Handing the word back unchanged is how this API says "no".
+            # Handing the word back unchanged is how this API says "no", and a
+            # segment that was nothing but a placeholder cleans away to the same
+            # empty string.
             return False
         return len(candidate) <= MAX_TRANSLATION_CHARS and len(candidate.split()) <= allowed_words
 
@@ -562,20 +607,22 @@ def pick_translation(raw: Any, term: str) -> str:
     for match in raw.get("matches") or []:
         if not isinstance(match, dict):
             continue
-        text = str(match.get("translation") or "")
+        # Cleaned BEFORE it is judged, so the length and word counts are of what
+        # the reader would actually see rather than of the markup around it.
+        text = clean_translation(match.get("translation"))
         if not usable(text):
             continue
         score = _number(match.get("match"), 0.0) * (_number(match.get("quality"), 0.0) / 100)
         if score > best_score:
-            best, best_score = text.strip(), score
+            best, best_score = text, score
 
     if best:
         return best
 
     # No scored candidate survived: fall back to the API's own pick, which is
     # all there is when `matches` is absent.
-    fallback = str((raw.get("responseData") or {}).get("translatedText") or "")
-    return fallback.strip() if usable(fallback) else ""
+    fallback = clean_translation((raw.get("responseData") or {}).get("translatedText"))
+    return fallback if usable(fallback) else ""
 
 
 def _number(value: Any, default: float) -> float:
