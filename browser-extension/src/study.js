@@ -490,7 +490,19 @@
    *
    * The apostrophe stays inside the word because "don't" is one word, and
    * because the rank table knows to fall back to the part before it. */
-  const WORD_PATTERN = /[\p{L}\p{M}][\p{L}\p{M}'’-]*/gu;
+  /* A word starts with a letter and ends with one. The apostrophes and hyphens
+   * are allowed in the middle, because "don't", "Ankara'ya" and
+   * "air-conditioning" are each one word.
+   *
+   * The trailing letter is the part that had to be added. Subtitles break a
+   * sentence off with a dash - "- No. - Soldiers--", "That's not true--" - and
+   * a pattern that let the dash into the word produced "soldiers--", which no
+   * frequency table holds, so it was read as rarer than the 30,000th word and
+   * marked. Across the 175 English films in this machine's cache that put a
+   * mark on 827 ordinary words, the commonest of them "just--", "you--",
+   * "that--", "and--" and "the--". It also filed the answer under a key
+   * nothing would look for again. */
+  const WORD_PATTERN = /[\p{L}\p{M}]([\p{L}\p{M}'’-]*[\p{L}\p{M}])?/gu;
   const LETTERS = /[\p{L}\p{M}]/gu;
 
   const letterCount = (word) => (word.match(LETTERS) || []).length;

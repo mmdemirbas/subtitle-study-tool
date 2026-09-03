@@ -5650,6 +5650,45 @@
           throw new Error("the film's dialogue was written into the log");
       });
 
+      check("a sentence broken off with a dash is still the word before it", async () => {
+        /* Subtitles cut a line short with a dash - "- No. - Soldiers--",
+         * "That's not true--" - and the word pattern used to take the dash into
+         * the word. "soldiers--" is in no frequency table, and a word no table
+         * holds is read as rarer than the 30,000th, so the commonest words in
+         * English were being marked: across the 175 English films in this
+         * machine's cache, 827 marks on "just--", "you--", "that--", "and--"
+         * and "the--". The answer was also filed under a key nothing would ever
+         * look for again. */
+        const was = window.__ssoStudy.settings().studySlots;
+        /* Two cues, because only two words a line are ever asked about and a
+         * single line would spend both before reaching the broken-off one. */
+        const BROKEN = [
+          { start: 0, end: 300000, text: "- That's not true--" },
+          { start: 300000, end: 600000, text: "- No. - Soldiers--" },
+        ];
+        try {
+          window.__ssoStudy.updateSettings({ studySlots: [0], rarityRank: 4000, auto: false });
+          await window.__ssoStudy.setEnabled(true);
+          glossAsks.length = 0;
+          await window.__ssoApi.attach({
+            cues: BROKEN, label: "EN \u00b7 broken off", fileId: 9208, language: "en", slot: 0,
+          });
+          video.currentTime = 1;
+          await until(() => glossAsks.length > 0, "no words were sent ahead");
+          const terms = glossAsks.flatMap((ask) => ask.items || []).map((item) => item.term);
+          const dashed = terms.filter((term) => /[-'\u2019]$/.test(term));
+          if (dashed.length)
+            throw new Error(`the punctuation went with the word: ${dashed.join(", ")}`);
+          if (!terms.includes("soldiers"))
+            throw new Error(`the word itself was never asked about: ${terms.join(", ") || "nothing"}`);
+        } finally {
+          window.__ssoStudy.updateSettings({ studySlots: was, auto: false });
+          await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
+          video.currentTime = 1;
+          await sleep(150);
+        }
+      });
+
       check("the model is told which film these lines are from", async () => {
         /* A gloss answers "what does this word mean in this line", and a line of
          * dialogue means different things in different programmes. "Jump",
