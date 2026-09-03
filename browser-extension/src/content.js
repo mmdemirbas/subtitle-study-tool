@@ -6522,6 +6522,7 @@
     "setStudyEnabled",
     "toggleStudySlot",
     "openStudySettings",
+    "cueTextAt",
     "toggleStudy",
     "saveTopWord",
   ];
@@ -6996,6 +6997,21 @@
      * reason a word is worth saving at all. */
     cueAt(slot) {
       return lastCue(state.tracks[slot]);
+    },
+    /* One line's text, by its index in the file, for the label the map shows
+     * under the pointer.
+     *
+     * Asked for rather than mirrored. The chrome frame's mirror carries cue
+     * TIMES and not text, deliberately - a film's dialogue crossing the frame
+     * boundary several times a second to answer a hover nobody has made yet is
+     * the wrong trade. A hover is rare and the answer is one string.
+     *
+     * Null for an index the file does not have, which is what a map drawn
+     * against a subtitle that has since been detached will ask for. */
+    cueTextAt(slot, index) {
+      const cue = state.tracks[slot]?.cues?.[index];
+      if (!cue) return null;
+      return { text: String(cue.text || ""), startMs: cue.start, endMs: cue.end };
     },
     /* The same moment in every other language, paired by overlap rather than by
      * the playhead. See cuesOverlappingStream. `overlapMs: 0` means nothing

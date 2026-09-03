@@ -1525,6 +1525,26 @@
     readout.hidden = true;
     plot.append(readout);
 
+    /* Which block is under the pointer, said in the block's own words.
+     *
+     * Asked for directly: "to make the identification of the subtitle blocks on
+     * the subtitle map, we can add a small tooltip to the blocks so we can know
+     * which blocks we are dragging and we can easily find the block we are
+     * looking for. Do not block the UI with tooltips, though."
+     *
+     * So: above the strip rather than on it - the blocks grow from the bottom
+     * and a full line reaches the top, so a label inside the well would cover
+     * the data it names. It takes no clicks, it is only there while the pointer
+     * is, and during a drag it sits clear of the offset readout in the middle.
+     *
+     * A sibling of the strip, not a child: the strip clips, which is what keeps
+     * a block from spilling past the axis, and a label above it would be
+     * clipped by the same rule. */
+    const tip = document.createElement("span");
+    tip.className = "sso-map__tip";
+    tip.hidden = true;
+    root.append(tip);
+
     let buckets = null;
     // Lines shifted off either end of the film. Counted, never binned - see
     // rebuildDensity for what binning them cost.
@@ -1759,6 +1779,82 @@
       context.globalAlpha = 1;
     }
 
+    /* Which line is under this pointer, by the same arithmetic that drew it.
+     *
+     * Walks from the first cue that could be in the window, the way paintCues
+     * does, and stops at the first block whose drawn extent covers the pointer.
+     * Reusing the drawn extent rather than the cue's own times is the point:
+     * the minimum widths in paintCues mean a two-second line at the two-hour
+     * scale is a block a reader can aim at but a span they cannot, and a label
+     * that disagreed with the picture would be worse than none.
+     *
+     * -1 for a pointer over empty axis, which is most of a quiet stretch. */
+    function cueUnder(cssX) {
+      const spans = api.cueSpans(slot);
+      const { starts, ends } = spans;
+      if (!starts.length || !width || to <= from) return -1;
+      const px = cssX * ratio();
+      const thin = Math.max(2, ratio() * 2);
+      for (let i = firstInWindow(spans); i < starts.length; i++) {
+        const at = api.toStreamMs(slot, starts[i]);
+        if (at > to) break;
+        const left = Math.round(xOf(at));
+        const until = api.toStreamMs(slot, ends[i] ?? starts[i]);
+        const span = Math.max(thin, Math.round(xOf(until)) - left - ratio());
+        if (px >= left && px <= left + span) return i;
+      }
+      return -1;
+    }
+
+    /* The label under the pointer, and the one thing it must never do.
+     *
+     * The text comes from the frame holding the cues, which on a nested player
+     * is not this one, so the answer arrives late - and by then the pointer has
+     * moved. `wanted` is what the pointer is on NOW; an answer for anything
+     * else is dropped rather than shown, or a slow frame writes the line the
+     * hand was over three moves ago.
+     *
+     * Answers are kept, because a hover crosses the same block many times.
+     * Emptied when the subtitle in this slot changes, and that is not optional:
+     * the two cards are built once and reused for every attach, so index 12
+     * means a different line as soon as a different file is in the slot. */
+    const texts = new Map();
+    let textsFor = null;
+    let wanted = -1;
+    async function showTip(index, cssX) {
+      if (index < 0) {
+        wanted = -1;
+        tip.hidden = true;
+        return;
+      }
+      wanted = index;
+      let said = texts.get(index);
+      if (said === undefined) {
+        const cue = await api.cueTextAt(slot, index);
+        // The pointer moved on, or the strip went away, while that was in
+        // flight.
+        if (wanted !== index || !cue) return;
+        /* One line, however many the cue is written on, and short enough to be
+         * read without moving the eye off the strip. A subtitle is two rows of
+         * about 42 characters; a label that carried both would be the width of
+         * the card. */
+        said = String(cue.text).replace(/\s+/gu, " ").trim().slice(0, 64);
+        texts.set(index, said);
+      }
+      if (wanted !== index || !said) return;
+      tip.textContent = said;
+      tip.hidden = false;
+      /* Follows the pointer, and stops at the ends of the strip. Measured off
+       * the strip rather than the window: the panel is dragged anywhere,
+       * including half off the screen, and a label clamped to the viewport
+       * would drift away from the block it names. */
+      const room = plot.getBoundingClientRect().width;
+      const wide = tip.getBoundingClientRect().width;
+      tip.style.left = `${Math.round(Math.min(Math.max(0, cssX - wide / 2), Math.max(0, room - wide)))}px`;
+    }
+
+    plot.addEventListener("pointerleave", () => showTip(-1, 0));
+
     /* The strip's three colours, read from the cascade once.
      *
      * getComputedStyle forces a style recalculation, and this was doing it two
@@ -1890,6 +1986,12 @@
         signature = "";
       }
 
+      // See the note on `texts`: the card outlives the file in its slot.
+      if (textsFor !== track.fileId) {
+        textsFor = track.fileId;
+        texts.clear();
+      }
+
       const scale = MAP_SPANS[spanStep];
       zoom.textContent = scale.label;
       zoom.title = scale.title;
@@ -2000,6 +2102,11 @@
     };
 
     plot.addEventListener("pointermove", (event) => {
+      /* Said whether or not a drag is running. Without a drag it is how a
+       * reader finds the line they are looking for; with one it is how they
+       * know which line they have hold of, which is what was asked for. */
+      const cssX = event.clientX - plot.getBoundingClientRect().left;
+      api.detached(showTip(cueUnder(cssX), cssX), "The map's label");
       if (!drag) return;
       /* No button down means the press ended somewhere this never heard about -
        * a pointerup swallowed by the page, a capture lost, an alt-tab. Without
@@ -2035,6 +2142,9 @@
       drag = null;
       delete plot.dataset.dragging;
       readout.hidden = true;
+      /* The lines have just moved under the pointer, so whatever the label was
+       * naming is not what is there now. The next move says the new answer. */
+      showTip(-1, 0);
       try {
         plot.releasePointerCapture?.(event.pointerId);
       } catch {}

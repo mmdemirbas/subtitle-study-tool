@@ -745,6 +745,10 @@ button.sso-quick__move[data-on="true"] {
    * be aimed at. Below it the panel scrolls rather than the map vanishing. */
   min-width: 120px;
   margin: 0;
+  /* The containing block for the hover label. The strip itself clips, which is
+   * what keeps a block from spilling past the axis, so a label above the strip
+   * has to hang off this instead. */
+  position: relative;
 }
 
 /* The map is the card's content, so it is a well cut into the surface rather
@@ -853,6 +857,35 @@ button.sso-quick__move[data-on="true"] {
 .sso-map[data-zoomed="true"] .sso-map__zoom {
   color: var(--sso-ink);
   background: var(--sso-fill-hover);
+}
+
+/* The line under the pointer, above the strip it is on.
+ *
+ * Above rather than inside: the blocks grow from the bottom of the well and a
+ * full two-row line reaches the top of it, so a label in there would cover the
+ * data it names. "Do not block the UI with tooltips" was the request, and this
+ * is what it costs to honour - it takes no clicks, it is only on screen while
+ * the pointer is on the strip, and it leaves the middle of the well to the
+ * offset readout a drag puts there.
+ *
+ * One line, ellipsised. A subtitle is two rows of about 42 characters and a
+ * label carrying both would be wider than the card. */
+.sso-map__tip {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  z-index: 2;
+  max-width: 100%;
+  overflow: hidden;
+  padding: 2px 6px;
+  font-size: var(--sso-t-micro);
+  color: var(--sso-ink);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.82);
+  border-radius: var(--sso-r-ctl);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
 }
 
 .sso-map__readout {
@@ -1378,6 +1411,7 @@ button.sso-track__remove {
   min-width: var(--sso-h-ctl);
   height: var(--sso-h-ctl);
 }
+
 
 button.sso-track__eye {
   display: flex;

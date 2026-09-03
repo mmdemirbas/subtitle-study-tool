@@ -2934,6 +2934,80 @@
         await sleep(100);
       });
 
+      check("the map says which line is under the pointer, and covers nothing", async () => {
+        /* Asked for: "to make the identification of the subtitle blocks on the
+         * subtitle map, we can add a small tooltip to the blocks so we can know
+         * which blocks we are dragging and we can easily find the block we are
+         * looking for. Do not block the UI with tooltips, though."
+         *
+         * The blocks are painted into a canvas, so there is no node to hang a
+         * title on: the pointer is hit-tested against the same arithmetic that
+         * drew them, and the answer is fetched from the frame holding the cues,
+         * which on a nested player is not the one drawing the panel. */
+        const NAMED = [
+          { start: 720000, end: 723000, text: "the first thing anybody says" },
+          { start: 3600000, end: 3604000, text: "halfway through, and quieter" },
+          { start: 6480000, end: 6483000, text: "and the last of it" },
+        ];
+        await window.__ssoApi.attach({ cues: NAMED, label: "TR \u00b7 named", fileId: 603, slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        await sleep(150);
+        await zoomToFilm();
+
+        const strip = mapStrips()[1];
+        const plot = strip.querySelector(".sso-map__plot");
+        const tip = strip.querySelector(".sso-map__tip");
+        if (!tip) throw new Error("the map carries no label at all");
+        const box = plot.getBoundingClientRect();
+        const move = (x) => plot.dispatchEvent(new PointerEvent("pointermove", {
+          pointerId: 94, buttons: 0, clientX: box.left + x,
+          clientY: box.top + box.height / 2, bubbles: true, cancelable: true,
+        }));
+
+        /* Swept rather than aimed at one pixel. A block at the whole-film scale
+         * is two or three pixels wide, and the point of the label is that it is
+         * findable by hand - a case that only passes on the exact centre would
+         * be asserting something no reader can do. */
+        const seen = new Map();
+        for (let x = 0; x < box.width; x += 1) {
+          move(x);
+          await sleep(6);
+          if (!tip.hidden && tip.textContent) seen.set(tip.textContent, x);
+        }
+        for (const cue of NAMED) {
+          if (!seen.has(cue.text))
+            throw new Error(`"${cue.text}" was never named: got ${[...seen.keys()].join(" | ") || "nothing"}`);
+        }
+        /* In the right order along the strip, which is what says the label is
+         * reading the block under the hand rather than any block at all. */
+        const order = NAMED.map((cue) => seen.get(cue.text));
+        if (!(order[0] < order[1] && order[1] < order[2]))
+          throw new Error(`named at ${order.join(", ")}px, which is not the order they are in`);
+
+        // Over empty axis it says nothing rather than the last thing it said.
+        move(Math.round((seen.get(NAMED[0].text) + seen.get(NAMED[1].text)) / 2));
+        await sleep(40);
+        if (!tip.hidden) throw new Error(`over silence it still reads "${tip.textContent}"`);
+
+        // And it blocks nothing: no clicks, and clear of the strip it names.
+        move(seen.get(NAMED[1].text));
+        await sleep(40);
+        const label = tip.getBoundingClientRect();
+        if (getComputedStyle(tip).pointerEvents !== "none")
+          throw new Error("the label takes the pointer, so the strip under it cannot be dragged");
+        if (label.bottom > box.top + 1)
+          throw new Error(`the label overlaps the strip by ${Math.round(label.bottom - box.top)}px`);
+        if (label.width > box.width + 1)
+          throw new Error(`the label is ${Math.round(label.width)}px over a ${Math.round(box.width)}px strip`);
+
+        plot.dispatchEvent(new PointerEvent("pointerleave", { pointerId: 94, bubbles: true }));
+        await sleep(40);
+        if (!tip.hidden) throw new Error("the label stayed behind after the pointer left");
+
+        window.__ssoApi.detach(1);
+        await sleep(100);
+      });
+
       check("the map carries a clock, evenly spaced, at every scale", async () => {
         /* Two patterns matched by eye need something to be matched against. The
          * only landmark either strip carried was the playhead, which is in the
