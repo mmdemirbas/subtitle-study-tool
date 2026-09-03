@@ -2655,6 +2655,60 @@
         }
       });
 
+      check("a line is not shown early and then again at an act join", async () => {
+        /* Reported as "Turkish subtitle sometimes shown earlier and then shown
+         * just in time once again", and independent of the offset.
+         *
+         * Where the aligner gives a file two acts and the later one sits
+         * further on in the stream, the release inserted material - a recap, a
+         * longer scene - and for the length of that insert no moment of this
+         * subtitle is on screen. Inverting the mapping by "the later act wins"
+         * answered with a file time from inside the next act, so its opening
+         * lines were drawn while the insert played and drawn again when the act
+         * properly began. Measured over the 26 act plans in the running log, 20
+         * have at least one join of this shape: 51 joins, 206 seconds of film,
+         * the largest single one 16.1 seconds.
+         *
+         * One cue, sitting exactly at the join, walked across it. It may appear
+         * once and once only. */
+        const wasTime = video.currentTime;
+        const JOIN = 600000;
+        const INSERT = 4000;
+        try {
+          await window.__ssoApi.attach({
+            cues: [{ start: JOIN, end: JOIN + 2000, text: "Only once, please." }],
+            label: "TR \u00b7 acts", fileId: 7401, language: "tr", slot: 1,
+          });
+          window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+          window.__ssoApi.setSteps(
+            [{ fromMs: 0, offsetMs: 0 }, { fromMs: JOIN, offsetMs: INSERT }],
+            { slot: 1 },
+          );
+
+          const boxOf = () => shadowOf().querySelectorAll(".sso-cue")[1];
+          const shown = [];
+          for (let ms = JOIN - 2000; ms <= JOIN + INSERT + 4000; ms += 250) {
+            video.currentTime = ms / 1000;
+            await sleep(60);
+            shown.push(Boolean(boxOf()?.textContent.trim()));
+          }
+
+          // How many separate stretches it was on screen for. One is right;
+          // two is the line played, taken away, and played again.
+          let runs = 0;
+          for (let i = 0; i < shown.length; i++) {
+            if (shown[i] && !shown[i - 1]) runs += 1;
+          }
+          if (runs === 0) throw new Error("the line was never drawn at all");
+          if (runs > 1) throw new Error(`the line was drawn ${runs} separate times across one join`);
+        } finally {
+          window.__ssoApi.setSteps([], { slot: 1 });
+          window.__ssoApi.detach(1);
+          video.currentTime = wasTime;
+          await sleep(150);
+        }
+      });
+
       check("a line's length and how much it says are both in the picture", async () => {
         /* Asked for directly: the strip "shows where a subtitle starts, but it
          * doesn't show where it ends or how many chars/words it have - this

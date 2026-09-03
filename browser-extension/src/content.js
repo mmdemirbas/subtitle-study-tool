@@ -3506,16 +3506,46 @@
     const stream = streamNowMs() - state.adDriftMs - track.offsetMs;
     const plain = track.rate && track.rate !== 1 ? stream / track.rate : stream;
     if (!track.steps?.length) return plain;
-    /* Inverted by trying each act's own offset and keeping the one whose
-     * answer actually falls inside that act. The mapping is monotone, so at
-     * most one can - except at a break, where the two releases disagree about
-     * whether the moment exists at all. There the LATER act wins, which is the
-     * one the picture on screen belongs to: material was inserted before it, so
-     * the playhead has already passed the join. */
+    /* Inverted by trying each act's own offset and keeping the one whose answer
+     * actually falls inside that act.
+     *
+     * The two releases disagree at every join about whether a stretch of film
+     * exists at all, and the disagreement has a direction. Where the later act
+     * sits FURTHER ON in the stream than the earlier one, the release inserted
+     * material - a recap, a longer scene - and for the length of that insert
+     * there is no moment of this subtitle file on screen at all.
+     *
+     * Answering `plain` there, which is what this did, hands back a file time
+     * from inside the next act: its opening lines are drawn while the inserted
+     * material plays, and then drawn AGAIN when the clock catches up and the
+     * act properly begins. Reported as "Turkish subtitle sometimes shown
+     * earlier and then shown just in time once again". Measured over the 26
+     * distinct act plans in the running log, 20 of them have at least one join
+     * of this shape: 51 joins and 206 seconds of film across them, the largest
+     * single one 16.1 seconds of subtitle played twice.
+     *
+     * So the clock HOLDS at the join instead. Whatever line spans that instant
+     * stays up, nothing new arrives while the insert plays, and the file
+     * resumes exactly where it stopped - which makes the whole mapping
+     * monotone, and a line can no longer be shown twice.
+     *
+     * The other direction is left alone. Where the release CUT material the two
+     * acts overlap, something has to be dropped, and the later act winning is
+     * the right drop: the picture on screen belongs to it. */
     let best = plain;
+    /* The act BEFORE this join, because the join has two stream times and they
+     * are what the gap is. The earlier act runs out at `fromMs` plus its own
+     * offset; the later one begins at `fromMs` plus its own. Testing the hold
+     * against the file boundary instead would hold the clock while the earlier
+     * act was still running, which on a three-act plan is a second bug wearing
+     * the first one's clothes. */
+    let previous = 0;
     for (const step of track.steps) {
-      const shifted = plain - step.offsetMs / (track.rate || 1);
+      const offset = step.offsetMs / (track.rate || 1);
+      const shifted = plain - offset;
       if (shifted >= step.fromMs) best = shifted;
+      else if (plain - previous >= step.fromMs) best = step.fromMs;
+      previous = offset;
     }
     return best;
   }

@@ -254,6 +254,32 @@ pairs whose truth comes from cue text rather than from any clock: 94.6% of the
 film inside 250ms against `align()`'s 86.4%, and on the 41 pairs whose truth is
 a staircase the median goes from 50% of its film in the right place to 90%.
 
+**Inverting a step plan is not the same problem as making one, and it has its
+own bug.** `filmTimeMs` in `content.js` answers "which moment of this file is on
+screen" and has to pick one act. Where the later act sits FURTHER ON in the
+stream than the one before it the release INSERTED material, so for the length
+of that insert no moment of the file is on screen at all - and answering with
+the plain stream time, which is what it did, hands back a file time from inside
+the next act. Its opening lines are drawn while the insert plays and drawn AGAIN
+when the act properly begins. Reported as "Turkish subtitle sometimes shown
+earlier and then shown just in time once again". Measured over the 26 distinct
+act plans in the running log, 20 have at least one join of this shape: 51 joins,
+206 seconds of film between them, the largest single one 16.1 seconds of
+subtitle played twice.
+
+The clock HOLDS at the join instead, so the mapping is monotone and no line can
+be drawn twice. Two things about it:
+
+- **The hold is tested against the PREVIOUS act's stream boundary**
+  (`plain - previous >= step.fromMs`), not against the file boundary. A join has
+  two stream times - where the earlier act runs out and where the later one
+  begins - and testing the file one holds the clock while the earlier act is
+  still running, which on a three-act plan is a second bug wearing the first
+  one's clothes.
+- **Only that direction.** Where the release CUT material the two acts overlap
+  in stream time, something has to be dropped, and the later act winning is the
+  right drop: the picture on screen belongs to it.
+
 **The property that let it ship is that it makes no pair worse**, and the first
 version did not have it - it invented a second act on four pairs `align()`
 already put 100% right. `bench/align/regress.mjs` is the standing gate and exits
