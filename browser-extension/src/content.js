@@ -4997,7 +4997,14 @@
   const DRIFT_EXPLAINED_MS = 1000;
   // Two is all the arithmetic needs. The rest are kept so a reader who nudges
   // several times early still has an early point to measure from.
-  const DRIFT_MAX_NOTES = 8;
+  /* How many corrections are remembered. Eight was enough for a line through
+   * two of them; the median of their pairwise slopes gets steadier with every
+   * point it has, and the busiest sitting in the log made 109. The cost is the
+   * pair loop above, which at this cap is 276 divisions when somebody nudges. */
+  const DRIFT_MAX_NOTES = 24;
+  /* The shortest gap between two corrections that can say anything about a
+   * slope. See the pair loop in driftEstimate. */
+  const DRIFT_PAIR_MIN_MS = 300000;
 
   /* --- what a correction was made against ------------------------------------
    *
@@ -5198,12 +5205,20 @@
   function correctionsDrifted(track) {
     const notes = track.corrections;
     if (notes.length < 2) return false;
-    const first = notes[0];
-    const last = notes[notes.length - 1];
-    const spanMs = last.fileMs - first.fileMs;
+    /* By film time, not by the order they were made in. See the same reading in
+     * driftEstimate: a reader corrects minute 44 and then minute 1, and asking
+     * the first and last entries of the list what the film did gives an answer
+     * about the reader's route through it. */
+    let early = notes[0];
+    let late = notes[0];
+    for (const note of notes) {
+      if (note.fileMs < early.fileMs) early = note;
+      if (note.fileMs > late.fileMs) late = note;
+    }
+    const spanMs = late.fileMs - early.fileMs;
     // Too little of the film to tell, which is not the same as steady.
     if (!(spanMs >= (globalThis.__ssoAlign?.RATE_MIN_SPAN_MS ?? 1200000))) return false;
-    return Math.abs(last.offsetMs - first.offsetMs) >= DRIFT_WORTH_SAYING_MS;
+    return Math.abs(late.offsetMs - early.offsetMs) >= DRIFT_WORTH_SAYING_MS;
   }
 
   function noteCorrection(track, slot) {
@@ -5243,14 +5258,68 @@
     if (!track || track.corrections.length < 2) return null;
     const durationMs = (filmSeconds() || 0) * 1000;
     if (!Number.isFinite(durationMs) || durationMs <= 0) return null;
-    const first = track.corrections[0];
+    /* How much of the FILM the corrections cover, not how far apart the first
+     * and the last one happen to sit in the list.
+     *
+     * They are in the order they were made, and a reader does not correct a
+     * film front to back. The running log is full of the other order - one
+     * sitting goes 44m, 44m, 1m, 2m, 9m, 0m, 1m - so first-to-last was
+     * routinely a few minutes, or negative, and this gate then threw away a
+     * measurement made across the whole episode. A subtitle corrected at
+     * minute 2 and again at minute 44 has been measured over 42 minutes
+     * whichever one the reader did first. */
+    let low = Infinity;
+    let high = -Infinity;
+    for (const note of track.corrections) {
+      if (note.fileMs < low) low = note.fileMs;
+      if (note.fileMs > high) high = note.fileMs;
+    }
+    const spanMs = high - low;
+    // The most recent one, which is the line the reader last aimed at by hand
+    // and the one applyTrackDrift has to leave where they put it.
     const last = track.corrections[track.corrections.length - 1];
-    const spanMs = last.fileMs - first.fileMs;
     /* Far enough apart to extrapolate from - the aligner's own bar, for the
      * same reason. Two nudges a minute apart measure the reader's patience. */
     if (!(spanMs >= (globalThis.__ssoAlign?.RATE_MIN_SPAN_MS ?? 1200000))) return null;
 
-    const rate = track.rate + (last.offsetMs - first.offsetMs) / spanMs;
+    /* The slope of the corrections, taken as the median of every pairwise
+     * slope among them rather than as the line through the first and the last.
+     *
+     * Read out of the running log. Over 880 by-hand corrections in 63 sittings
+     * a reader aiming at one value scatters it badly - seven corrections inside
+     * one minute of "Experimental Prototype City of Tomorrow" ran 13.4, 13.5,
+     * 12.9, 10.5, 10.6, 10.2 and 10.5 seconds - and a two-point line takes one
+     * point out of that scatter as gospel. The first correction was worse: the
+     * eviction rule keeps it forever, and the log holds first corrections of
+     * +105.4s and -47.1s made while somebody was hunting for the right value.
+     *
+     * A median of pairwise slopes is unmoved by up to a third of the points
+     * being anywhere at all, which is what those excursions are. It costs one
+     * pass over a few hundred pairs, on a path that runs when a reader nudges
+     * rather than when a film plays.
+     *
+     * What it is measuring is real and is what this whole feature is for: every
+     * one of the ten most-corrected sittings in the log has a systematic slope,
+     * from 0.02% of the clock to 0.86% - 100 to 520ms of drift per minute of
+     * film, which is 4.6 to 23 seconds by the end of a 45-minute episode. In
+     * all 880 corrections the rate was changed 6 times. */
+    const slopes = [];
+    for (let i = 0; i < track.corrections.length; i++) {
+      for (let j = i + 1; j < track.corrections.length; j++) {
+        const gap = track.corrections[j].fileMs - track.corrections[i].fileMs;
+        /* Two corrections at nearly the same moment say nothing about a slope
+         * and divide by nearly nothing while saying it: a three-second scatter
+         * a minute apart reads as five percent. */
+        if (gap < DRIFT_PAIR_MIN_MS) continue;
+        slopes.push((track.corrections[j].offsetMs - track.corrections[i].offsetMs) / gap);
+      }
+    }
+    if (!slopes.length) return null;
+    slopes.sort((a, b) => a - b);
+    const mid = slopes.length >> 1;
+    const slope = slopes.length % 2 ? slopes[mid] : (slopes[mid - 1] + slopes[mid]) / 2;
+
+    const rate = track.rate + slope;
     if (!(rate > 0)) return null;
     // Would leaving it alone cost anything by the end? Two nudges that happen
     // to differ are taste, not drift.

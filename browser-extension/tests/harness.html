@@ -3008,6 +3008,76 @@
         await sleep(100);
       });
 
+      check("a drifting subtitle is measured through the reader's wobble, not one point of it", async () => {
+        /* Read out of the running log: 880 by-hand corrections across 63
+         * sittings, and every one of the ten most-corrected sittings has a
+         * systematic slope - 0.02% to 0.86% of the clock, which is 100 to 520ms
+         * of drift per minute and 4.6 to 23 seconds by the end of an episode.
+         * In all 880 the rate was changed six times.
+         *
+         * The reason is what the estimate was made of. A line through the first
+         * correction and the latest takes one point out of the reader's scatter
+         * as gospel, and the log's scatter is wide: seven corrections inside one
+         * minute running 13.4, 13.5, 12.9, 10.5, 10.6, 10.2 and 10.5 seconds,
+         * and first corrections of +105.4s and -47.1s made while somebody was
+         * hunting. The first one is kept forever by the eviction rule, so one
+         * bad opening guess set the slope for the whole film.
+         *
+         * This drives the real path - setOffset, at real film times - and reads
+         * what the card reads. The wobble and the wild opening are the fixture:
+         * without them a two-point line would pass too. */
+        const TRUE_RATE = 1.004;             // 240ms of drift a minute
+        await window.__ssoApi.attach({ cues: burstyCues(0), label: "TR \u00b7 drifting", fileId: 604, slot: 1 });
+        window.__ssoApi.setRate(1, { slot: 1 });
+        window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+        await sleep(120);
+
+        /* The opening guess, a long way out, at the start of the film. This is
+         * the point the old estimator could never let go of. */
+        const nudge = async (minute, offsetMs) => {
+          video.currentTime = minute * 60;
+          await sleep(30);
+          window.__ssoApi.setOffset(Math.round(offsetMs), { slot: 1, quiet: true });
+          await sleep(30);
+        };
+        await nudge(2, -21000);
+
+        /* And then the reader settles down: a correction every few minutes,
+         * each aimed at the true drift and each missing it by up to 400ms in
+         * either direction. The wobble is deterministic so a failure is
+         * reproducible. */
+        let seed = 11;
+        const wobble = () => {
+          seed = (seed * 1103515245 + 12345) % 2147483648;
+          return (seed / 2147483648 - 0.5) * 800;
+        };
+        for (let minute = 4; minute <= 44; minute += 4) {
+          await nudge(minute, (TRUE_RATE - 1) * minute * 60000 + wobble());
+        }
+
+        const drift = window.__ssoApi.status().tracks[1].drift;
+        if (!drift) throw new Error("40 minutes of one-way correction was not read as drift");
+        if (!drift.fast) throw new Error("it read a subtitle falling behind as running slow");
+        /* Within a tenth of a percent of the truth, which over a 2-hour film is
+         * about 7 seconds - inside what one offset can mop up afterwards. */
+        if (Math.abs(drift.rate - TRUE_RATE) > 0.001)
+          throw new Error(`measured ${drift.rate.toFixed(5)} against a real ${TRUE_RATE}`);
+
+        // And applying it leaves the line the reader last aimed at where it is.
+        const was = window.__ssoApi.status().tracks[1];
+        const atMs = 44 * 60000;
+        const before = was.offsetMs + was.rate * atMs;
+        window.__ssoApi.applyTrackDrift(1);
+        await sleep(120);
+        const now = window.__ssoApi.status().tracks[1];
+        const after = now.offsetMs + now.rate * atMs;
+        if (Math.abs(after - before) > 250)
+          throw new Error(`fixing the drift moved the line last aimed at by ${Math.round(after - before)}ms`);
+
+        window.__ssoApi.detach(1);
+        await sleep(100);
+      });
+
       check("the map carries a clock, evenly spaced, at every scale", async () => {
         /* Two patterns matched by eye need something to be matched against. The
          * only landmark either strip carried was the playhead, which is in the
