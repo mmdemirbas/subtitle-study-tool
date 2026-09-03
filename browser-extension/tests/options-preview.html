@@ -7,24 +7,33 @@
   <body>
     <!-- Renders the settings page against a stubbed service worker, so the
          layout can be checked without loading the extension into Chrome.
-         Not a test - there is nothing asserted here. It exists because a table
-         that renders wrong is not something a passing test would notice. -->
+         Not a test - there is nothing asserted here; tests/options.html is the
+         one that asserts. It exists because a table that renders wrong is not
+         something a passing test would notice.
+
+         The list is long on purpose. It held three rows, which is the one
+         length at which an unbounded table looks fine, and the report that
+         followed was "after using the extension for a while, the list of
+         loaded subtitles becomes huge". -->
     <script>
-      const entries = [
-        {
-          file_id: 11, movie_name: "Crime 101", release: "Crime.101.2025.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX",
-          language: "en", cached_at: Date.now() / 1000 - 3600, bytes: 74210, held_by: ["extension", "daemon"],
-        },
-        {
-          file_id: 22, movie_name: "Battlestar Galactica: The Miniseries",
-          release: "Battlestar.Galactica.Miniseries.S00E01.2003.1080p.BluRay", language: "tr",
-          cached_at: Date.now() / 1000 - 86400 * 2, bytes: 90730, held_by: ["extension"],
-        },
-        {
-          file_id: 33, movie_name: "Mercy", release: "Mercy.2026.720p", language: "en",
-          cached_at: Date.now() / 1000 - 86400 * 9, bytes: 41002, held_by: ["daemon"],
-        },
+      const FILMS = [
+        ["Crime 101", "Crime.101.2025.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX", "en", ["extension", "daemon"]],
+        ["Battlestar Galactica: The Miniseries",
+          "Battlestar.Galactica.Miniseries.S00E01.2003.1080p.BluRay", "tr", ["extension"]],
+        ["Mercy", "Mercy.2026.720p", "en", ["daemon"]],
+        ["The Americans", "The.Americans.2013.S04E03.1080p.WEB-DL.DD5.1.H.264-NTb", "en", ["extension", "daemon"]],
       ];
+      // The count this machine's daemon cache actually holds.
+      const entries = Array.from({ length: 273 }, (_, i) => {
+        const [movie, release, language, held] = FILMS[i % FILMS.length];
+        return {
+          file_id: 1000 + i,
+          movie_name: i < FILMS.length ? movie : `${movie} ${i}`,
+          release, language, held_by: held,
+          cached_at: Date.now() / 1000 - 3600 * (i + 1),
+          bytes: 40000 + i * 97,
+        };
+      });
 
       window.chrome = {
         storage: { local: { get: async () => ({ "sso:provider": { apiKey: "abc", languages: ["en", "tr"] } }) } },

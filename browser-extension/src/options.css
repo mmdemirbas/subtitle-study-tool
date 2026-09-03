@@ -152,18 +152,45 @@ button.primary {
 
 /* --- the cache table ------------------------------------------------------ */
 
-/* The film column is the one that varies without limit, so it takes the slack
+/* A window onto the list, not the whole list.
+ *
+ * The film column is the one that varies without limit, so it takes the slack
  * and truncates; everything else is bounded and stays readable. The table
- * scrolls inside this box rather than making the page scroll sideways. */
-/* `position: relative` is load-bearing, not decoration. The screen-reader label
+ * scrolls inside this box rather than making the page scroll sideways.
+ *
+ * `position: relative` is load-bearing, not decoration. The screen-reader label
  * in the last header cell is absolutely positioned, and without a positioned
  * ancestor its containing block is the viewport - so it escapes this box's
  * clipping, lands at the table's full width, and drags the whole page 27px
- * sideways at a narrow window. Making this the containing block clips it. */
+ * sideways at a narrow window. Making this the containing block clips it.
+ *
+ * Both of these tables grow with use and neither had a bound. Rendered with the
+ * 273 subtitles in this machine's daemon cache, the box measured 14,910px tall
+ * in a 900px window, and the card's own buttons - Sync, Forget cached searches,
+ * Delete all subtitles - sat 15,084px down. The section's actions were
+ * unreachable without scrolling past every row it has.
+ *
+ * A bounded box scrolls instead, so the card stays a card and everything under
+ * it stays where it was whatever the list holds. The height is in vh because
+ * the useful number of visible rows is a property of the window, not of the
+ * page; the floor stops it collapsing to nothing on a short window. */
 .table-scroll {
   position: relative;
-  overflow-x: auto;
+  max-height: max(240px, 52vh);
+  overflow: auto;
   margin-top: 4px;
+  overscroll-behavior: contain;
+}
+
+/* The header goes with the rows it names. Scrolling 273 rows past a header that
+ * left the screen at row 8 means reading "en" and "2 days ago" in columns
+ * nothing is labelling. The background is the card's, not transparent, or the
+ * rows show through it. */
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--card);
 }
 
 /* Fixed layout, or the columns size to their content and the widest of them -

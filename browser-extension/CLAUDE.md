@@ -415,6 +415,10 @@ Two guards exist now and both must be kept honest:
   see. When you add a rule, add it to the compared surface.
 - `tests/fallback.html` exercises `local.js` end to end. If you fix something in
   the daemon, ask what the same input does there.
+- `tests/options.html` mounts the real settings page over a stubbed worker with
+  273 subtitles in the store, and asserts that the page keeps its shape as the
+  lists grow - four times the rows must not move the card's own buttons. Add a
+  list to that page and it belongs in a bounded box with a search over it.
 
 ## A cue with nothing to read is not a cue
 
@@ -1012,6 +1016,7 @@ node tests/worker.mjs          # the service worker, with Chrome stubbed
 python3 tests/serve.py         # then open, in a browser:
 #   http://127.0.0.1:8997/tests/harness.html    the overlay in a deliberately hostile page
 #   http://127.0.0.1:8997/tests/fallback.html   the fetch path without the daemon
+#   http://127.0.0.1:8997/tests/options.html    the settings page as its lists grow
 
 # and the one the other three cannot ask - the unpacked extension in Chrome,
 # with the video in a cross-origin frame under a full-viewport interceptor:

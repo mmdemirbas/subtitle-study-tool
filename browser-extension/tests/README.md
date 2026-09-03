@@ -17,6 +17,7 @@ cd browser-extension
 python3 tests/serve.py
 # http://127.0.0.1:8997/tests/harness.html   - the overlay in a hostile page
 # http://127.0.0.1:8997/tests/fallback.html  - fetching without the daemon
+# http://127.0.0.1:8997/tests/options.html   - the settings page as the lists grow
 ```
 
 **Use `tests/serve.py`, not `python3 -m http.server`.** It is the same thing
@@ -132,11 +133,22 @@ That path has three parts the parity test does not reach — the rule for which
 side answers, the IndexedDB cache, and the convergence with the daemon's cache —
 so they are checked here against a stubbed OpenSubtitles and a stubbed daemon.
 
-`options-preview.html` is not a test — it renders the settings page against a
-stubbed service worker so the layout can be looked at without loading the
-extension into Chrome. It exists because a table that renders wrong is not
-something a passing test notices: the Delete column was landing outside the card
-and behind a horizontal scroll, which no assertion here would have caught.
+## options.html
+
+The settings page, its stylesheet and its script, mounted over a stubbed service
+worker with 273 subtitles in the store — the number this machine's daemon cache
+holds. What it asserts is the property a glance cannot check: that the page keeps
+its shape as the lists grow. Four times the rows must not move the card's own
+buttons, the list has to be a box that scrolls rather than a table that pushes,
+the column headings have to stay with the rows they name, and a search has to
+narrow the list and say what it is showing of. Against the unbounded version the
+buttons sat 15,084px down a 900px window.
+
+`options-preview.html` is not a test — it renders the same page against the same
+kind of stub so the layout can be looked at without loading the extension into
+Chrome. It exists because a table that renders wrong is not something a passing
+test notices: the Delete column was landing outside the card and behind a
+horizontal scroll, which no assertion here would have caught.
 
 Twenty-two cases. The ones that matter are about quota, and they assert it
 directly: the stub counts calls to the download endpoint, so "this did not spend

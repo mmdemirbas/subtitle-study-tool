@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Subtitle Overlay — settings page harness</title>
+    <style>
+      body { margin: 0; font: 12px/1.55 ui-monospace, Menlo, monospace; }
+      #report {
+        position: fixed; inset: 0 0 auto 0; z-index: 9;
+        max-height: 42vh; overflow: auto;
+        padding: 12px 16px; background: #0f1116; color: #e8eaed;
+      }
+      #report h1 { margin: 0 0 4px; font-size: 13px; }
+      #summary { margin: 0 0 10px; font-size: 12px; }
+      .case { padding: 4px 0; border-top: 1px solid #1c212a; }
+      .pass::before { content: "PASS "; color: #59c27f; }
+      .fail::before { content: "FAIL "; color: #e8705f; }
+      .why { color: #8b929d; padding-left: 42px; white-space: pre-wrap; }
+      #page { margin-top: 44vh; }
+    </style>
+  </head>
+  <body>
+    <div id="report">
+      <h1>Subtitle Overlay — settings page harness</h1>
+      <p id="summary">running…</p>
+      <div id="results"></div>
+    </div>
+    <div id="page"></div>
+
+    <script>
+      /* The real settings page, its real stylesheet and its real script, over a
+       * stubbed service worker.
+       *
+       * tests/options-preview.html renders the same three things for a human to
+       * look at and asserts nothing. This one asserts the property a look
+       * cannot check quickly: that the page keeps its shape as the lists grow.
+       * The store on this machine holds 273 subtitles, so the count here is the
+       * count that produced the report - not a round number chosen to look big.
+       */
+      const MANY = 273;
+      const FILMS = [
+        ["Crime 101", "Crime.101.2025.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX", "en"],
+        ["Battlestar Galactica: The Miniseries", "Battlestar.Galactica.Miniseries.S00E01.2003.1080p.BluRay", "tr"],
+        ["The Americans", "The.Americans.2013.S04E03.1080p.WEB-DL.DD5.1.H.264-NTb", "en"],
+        ["Amélie", "Le.Fabuleux.Destin.d.Amelie.Poulain.2001.1080p.BluRay.x264", "en"],
+      ];
+      const makeEntries = (count) =>
+        Array.from({ length: count }, (_, i) => {
+          const [movie, release, language] = FILMS[i % FILMS.length];
+          return {
+            file_id: 1000 + i,
+            movie_name: `${movie}${i < FILMS.length ? "" : ` ${i}`}`,
+            release,
+            language,
+            cached_at: Date.now() / 1000 - 3600 * (i + 1),
+            bytes: 40000 + i * 97,
+            held_by: i % 3 === 0 ? ["extension", "daemon"] : ["extension"],
+          };
+        });
+
+      let entries = makeEntries(3);
+      window.__setEntries = (count) => { entries = makeEntries(count); };
+
+      window.chrome = {
+        storage: {
+          local: { get: async () => ({ "sso:provider": { apiKey: "abc", languages: ["en", "tr"] } }) },
+        },
+        runtime: {
+          sendMessage: async ({ op }) => {
+            if (op === "health") return { served_by: "extension", has_api_key: true, daemon_running: false };
+            if (op === "cacheList") return { entries, daemon_running: true, pending_deletions: 0 };
+            if (op === "deckList") return { entries: [] };
+            return {};
+          },
+        },
+        permissions: { contains: async () => false, request: async () => false, remove: async () => false },
+      };
+    </script>
+
+    <script type="module">
+      const results = [];
+      const check = async (name, body) => {
+        try {
+          await body();
+          results.push({ ok: true, name });
+        } catch (error) {
+          results.push({ ok: false, name, detail: error.message });
+        }
+      };
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const until = async (fn, why, ms = 3000) => {
+        const stop = Date.now() + ms;
+        while (Date.now() < stop) {
+          if (fn()) return;
+          await sleep(40);
+        }
+        throw new Error(why);
+      };
+      const page = document.getElementById("page");
+      const at = (id) => page.querySelector(`#${id}`);
+      const rowCount = () => at("cacheRows").querySelectorAll("tr").length;
+      /* The card the subtitles table is in, found through the table rather than
+       * by position, so adding a section above it does not silently point these
+       * cases at the wrong one. */
+      const cacheCard = () => at("cacheTable").closest(".card");
+      const scroller = () => at("cacheTable").closest(".table-scroll");
+      // Where the card's own buttons sit, measured from the top of the card.
+      const actionsBelow = () => {
+        const card = cacheCard().getBoundingClientRect();
+        const sync = [...cacheCard().querySelectorAll("button")]
+          .find((b) => b.textContent.includes("Sync with the daemon"));
+        return Math.round(sync.getBoundingClientRect().top - card.top);
+      };
+      const reload = async (count) => {
+        window.__setEntries(count);
+        at("refresh").click();
+        await until(() => rowCount() === count, `${count} entries did not render (${rowCount()} rows)`);
+      };
+
+      // Mount the real page.
+      const html = await (await fetch("../src/options.html")).text();
+      const parsed = new DOMParser().parseFromString(html, "text/html");
+      const link = document.createElement("link");
+      link.rel = "stylesheet";
+      link.href = "../src/options.css";
+      document.head.append(link);
+      page.replaceChildren(...parsed.body.children);
+      const script = document.createElement("script");
+      script.type = "module";
+      script.src = "../src/options.js";
+      document.body.append(script);
+      await until(() => rowCount() === 3, "the page never rendered its first three rows");
+
+      await check("a long list does not push the card's own actions off the page", async () => {
+        /* Reported: "after using the extension for a while, the list of loaded
+         * subtitles becomes huge". Every row was drawn into an unbounded box,
+         * so with the 273 subtitles this machine holds the box measured 14,910px
+         * tall in a 900px window and Sync, Forget cached searches and Delete
+         * all sat 15,084px down. The section's only actions were unreachable
+         * without scrolling past every row it has.
+         *
+         * Measured at two lengths rather than against a short list, because a
+         * bounded box is SUPPOSED to grow until it reaches its bound. What has
+         * to stop is the growing: four times the rows must not move anything.
+         * And the buttons have to be on the screen at all, which is the part
+         * the reader was reporting. */
+        await reload(MANY);
+        const many = actionsBelow();
+        if (many > window.innerHeight)
+          throw new Error(`the buttons sit ${many}px down a ${window.innerHeight}px window`);
+        await reload(MANY * 4);
+        const more = actionsBelow();
+        if (Math.abs(more - many) > 2)
+          throw new Error(`${MANY} rows put them at ${many}px and ${MANY * 4} rows at ${more}px`);
+        await reload(MANY);
+      });
+
+      await check("the list is a bounded box that scrolls", async () => {
+        const box = scroller();
+        const seen = box.getBoundingClientRect().height;
+        if (seen > window.innerHeight)
+          throw new Error(`the box is ${Math.round(seen)}px tall in a ${window.innerHeight}px window`);
+        if (box.scrollHeight <= box.clientHeight + 1)
+          throw new Error("273 rows fit without scrolling, so nothing is being bounded");
+      });
+
+      await check("the column headings stay with the rows they name", async () => {
+        /* Sticky, not scrolled away. Reading "en" and "2 days ago" under no
+         * heading is what a header that leaves at row eight produces. */
+        const box = scroller();
+        box.scrollTop = 400;
+        await sleep(60);
+        const head = at("cacheTable").querySelector("thead th").getBoundingClientRect();
+        const top = box.getBoundingClientRect().top;
+        if (head.top - top > 2)
+          throw new Error(`the heading is ${Math.round(head.top - top)}px below the top of the box`);
+        box.scrollTop = 0;
+      });
+
+      await check("a search narrows the list and says what it is showing", async () => {
+        /* 273 rows is past the point where scrolling is how anyone finds one.
+         * The saved words table has had a search box since it was written; the
+         * subtitles table, which is the one that grows fastest, had none. */
+        at("cacheSearch").value = "amélie";
+        at("cacheSearch").dispatchEvent(new Event("input", { bubbles: true }));
+        await sleep(60);
+        const shown = rowCount();
+        if (shown === 0 || shown >= MANY)
+          throw new Error(`the search left ${shown} of ${MANY} rows`);
+        const said = at("cacheLine").textContent;
+        if (!said.includes(String(MANY)))
+          throw new Error(`the count does not say what it is showing of: "${said}"`);
+      });
+
+      await check("a search that matches nothing does not read as an empty store", async () => {
+        /* "Nothing downloaded yet" in front of someone holding 273 subtitles
+         * reads as data loss. It is a different sentence from an empty store
+         * and it says how to get back. */
+        at("cacheSearch").value = "zzzzz-no-such-film";
+        at("cacheSearch").dispatchEvent(new Event("input", { bubbles: true }));
+        await sleep(60);
+        if (rowCount() !== 0) throw new Error(`${rowCount()} rows matched a nonsense search`);
+        if (at("cacheNoMatch").hidden) throw new Error("nothing was said about the empty result");
+        if (!at("cacheEmpty").hidden)
+          throw new Error("it said the store is empty, holding 273 subtitles");
+        at("cacheSearch").value = "";
+        at("cacheSearch").dispatchEvent(new Event("input", { bubbles: true }));
+        await sleep(60);
+        if (rowCount() !== MANY) throw new Error(`clearing the box left ${rowCount()} rows`);
+      });
+
+      const box = document.getElementById("results");
+      for (const r of results) {
+        const line = document.createElement("div");
+        line.className = `case ${r.ok ? "pass" : "fail"}`;
+        line.textContent = r.name;
+        if (!r.ok) {
+          const why = document.createElement("div");
+          why.className = "why";
+          why.textContent = r.detail;
+          // Inside the case, not beside it: the runner reads each failure as
+          // one node's text, and a sibling would be dropped from the report.
+          line.append(why);
+        }
+        box.append(line);
+      }
+      document.getElementById("summary").textContent =
+        `${results.filter((r) => r.ok).length}/${results.length} passed`;
+    </script>
+  </body>
+</html>

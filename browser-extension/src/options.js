@@ -95,20 +95,17 @@ function describe(entry) {
   return { name, detail };
 }
 
+/* Fetched once, drawn on every keystroke. The same split the deck uses: a
+ * search that went back to the worker for 273 entries per character typed would
+ * be answering with the list it already has. */
+let cacheEntries = [];
+let cacheDaemonRunning = false;
+
 async function renderCache() {
   const { entries, daemon_running: daemonRunning, pending_deletions: pending } =
     await call("cacheList");
-
-  const rows = el("cacheRows");
-  rows.replaceChildren();
-
-  const total = entries.reduce((sum, entry) => sum + (Number(entry.bytes) || 0), 0);
-  el("cacheLine").textContent = entries.length
-    ? `${entries.length} subtitle${entries.length === 1 ? "" : "s"}, ${humanSize(total)}` +
-      (daemonRunning ? "" : " — the daemon is stopped, so only this side is listed")
-    : "Nothing downloaded yet";
-  el("cacheEmpty").hidden = entries.length > 0;
-  el("cacheTable").hidden = entries.length === 0;
+  cacheEntries = entries || [];
+  cacheDaemonRunning = Boolean(daemonRunning);
 
   el("cachePending").hidden = !pending;
   if (pending) {
@@ -116,8 +113,42 @@ async function renderCache() {
       `${pending} deletion${pending === 1 ? "" : "s"} waiting for the daemon. ` +
       `${pending === 1 ? "It is" : "They are"} applied automatically the next time it runs.`;
   }
+  drawCache();
+}
 
-  for (const entry of entries) {
+function drawCache() {
+  const needle = el("cacheSearch").value.trim().toLowerCase();
+  /* Matched against what is on the row and what is behind it: the film's name,
+   * the release string under it, and the language. A reader looking for one
+   * subtitle among 273 knows one of those three, and which one it is depends on
+   * whether they are looking for an episode or for the copy of it that syncs. */
+  const shown = needle
+    ? cacheEntries.filter((entry) => {
+        const { name, detail } = describe(entry);
+        return [name, detail, entry.language, entry.release, entry.movie_name]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase()
+          .includes(needle);
+      })
+    : cacheEntries;
+
+  const rows = el("cacheRows");
+  rows.replaceChildren();
+
+  const total = shown.reduce((sum, entry) => sum + (Number(entry.bytes) || 0), 0);
+  const said = `${shown.length} subtitle${shown.length === 1 ? "" : "s"}, ${humanSize(total)}`;
+  el("cacheLine").textContent = cacheEntries.length
+    ? (needle ? `${said}, of ${cacheEntries.length}` : said) +
+      (cacheDaemonRunning ? "" : " — the daemon is stopped, so only this side is listed")
+    : "Nothing downloaded yet";
+  el("cacheEmpty").hidden = cacheEntries.length > 0;
+  // A search that matched nothing is not an empty store, and saying "nothing
+  // downloaded yet" to someone holding 273 subtitles reads as data loss.
+  el("cacheNoMatch").hidden = !(cacheEntries.length > 0 && shown.length === 0);
+  el("cacheTable").hidden = shown.length === 0;
+
+  for (const entry of shown) {
     const { name, detail } = describe(entry);
     const row = document.createElement("tr");
 
@@ -207,7 +238,9 @@ function drawDeck() {
       : `${deckEntries.length} saved`
     : "Nothing saved yet";
   el("deckEmpty").hidden = deckEntries.length > 0;
-  el("deckTable").hidden = deckEntries.length === 0;
+  // Same distinction as the cache: nothing matched is not nothing saved.
+  el("deckNoMatch").hidden = !(deckEntries.length > 0 && shown.length === 0);
+  el("deckTable").hidden = shown.length === 0;
 
   const rows = el("deckRows");
   rows.replaceChildren();
@@ -400,6 +433,7 @@ el("clearAll").addEventListener("click", async () => {
   await refresh();
 });
 
+el("cacheSearch").addEventListener("input", drawCache);
 el("deckSearch").addEventListener("input", drawDeck);
 el("deckExportTsv").addEventListener("click", () => exportDeck("tsv"));
 el("deckExportJson").addEventListener("click", () => exportDeck("json"));

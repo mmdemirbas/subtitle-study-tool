@@ -50,6 +50,12 @@
           download is never spent twice. <strong>Held</strong> says where each
           one currently is.
         </p>
+        <div class="row">
+          <label for="cacheSearch" class="visually-hidden">Search downloaded subtitles</label>
+          <input id="cacheSearch" type="search" spellcheck="false"
+                 placeholder="Search films, releases or languages" />
+        </div>
+
         <p class="status" id="cacheLine">—</p>
 
         <div class="table-scroll">
@@ -77,6 +83,9 @@
         </div>
         <p class="empty" id="cacheEmpty" hidden>
           Nothing downloaded yet. Press <kbd>⌘⇧S</kbd> on a page with a video.
+        </p>
+        <p class="empty" id="cacheNoMatch" hidden>
+          Nothing here matches that. Clear the box to see all of them again.
         </p>
 
         <p class="pending" id="cachePending" hidden></p>
@@ -129,6 +138,9 @@
         <p class="empty" id="deckEmpty" hidden>
           Nothing saved yet. Turn study mode on over a film with
           <kbd>S</kbd>, then press <kbd>D</kbd> to keep a word.
+        </p>
+        <p class="empty" id="deckNoMatch" hidden>
+          Nothing here matches that. Clear the box to see all of them again.
         </p>
 
         <div class="row">
