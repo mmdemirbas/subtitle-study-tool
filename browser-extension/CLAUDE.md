@@ -508,6 +508,21 @@ Each of these was a reported bug. Undoing one brings the bug back.
   with nothing on screen saying why, is indistinguishable from a bug — so a
   frame with no overlay in it does not snap at all, and a snap the clamp undoes
   draws nothing.
+- **The map's window is centred on the playhead and clamped only at the start.**
+  Zero is a certainty - no film has anything before it - and thirty seconds at
+  the very beginning is not a moment anyone is syncing. The END is a belief, and
+  on a player that fetches a new stream for every seek it is routinely wrong:
+  `filmSeconds` answers "where this stream starts, plus what has arrived", which
+  sits a few seconds ahead of the playhead and climbs with it, so `grew` is back
+  at zero after every `loadstart` and the number is trusted. A clamp against
+  that pinned the window near its right edge and left the mark creeping across
+  it. Reported as "when I rewind the timeline of the video, the subtitle overlay
+  play markers couldn't stay in the center and in sync"; measured off the
+  screenshot, the window was 21 seconds behind where centring would have put it.
+  What the clamp was defending does not need it - `to` is `from + span`
+  whatever happens, so nothing ever shrinks at the end and the last thirty
+  seconds are still drawn at full scale. The window simply runs past the credits
+  into empty axis, which is honest: there is no film there.
 - **A subtitle card is two rows, and the map's width is the reason.** Head with
   the identity, the reading and the verbs; then the map with Line up at the
   card's right edge, under "Line up all". The ask was for the reading, its clear

@@ -1584,17 +1584,25 @@
         to = durationMs;
         return;
       }
-      from = Math.max(0, at - span / 2);
-      /* Clamped to the film rather than allowed to run off it, so the last
-       * fifteen seconds are still fifteen seconds wide. A window that shrank at
-       * the ends would change the scale exactly where a reader is checking the
-       * end credits line up.
+      /* Centred on the playhead, and clamped at the start of the film only.
        *
-       * Only against a real end. Held against a length the playhead has already
-       * passed, this clamp is what puts the mark on the last pixel and keeps it
-       * there; without it the window is simply centred on the playhead, which
-       * is what every scale but the widest is for and needs no length at all. */
-      if (!behind) from = Math.min(from, Math.max(0, durationMs - span));
+       * Zero is a certainty - no film has anything before it - and thirty
+       * seconds at the very beginning is not a moment anyone is syncing. The
+       * END is a belief, and on a player that fetches a new stream for every
+       * seek it is routinely wrong: `filmSeconds` answers "where the stream
+       * starts, plus what has arrived", which sits a few seconds ahead of the
+       * playhead and climbs with it. A clamp against that pinned the window
+       * near its right edge and left the mark to creep across it. Reported as
+       * "when I rewind the timeline of the video, the subtitle overlay play
+       * markers couldn't stay in the center and in sync".
+       *
+       * What the clamp was defending does not need it. `to` is `from + span`
+       * whatever happens, so nothing shrinks at the end and the last thirty
+       * seconds are still drawn at full scale - the window simply runs past the
+       * credits into empty axis, which is honest: there is no film there. The
+       * one thing the map promises is that the mark is the middle, and that is
+       * now true at every moment of every film. */
+      from = Math.max(0, at - span / 2);
       to = from + span;
     }
 

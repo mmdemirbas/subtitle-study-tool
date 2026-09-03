@@ -2581,6 +2581,80 @@
         await sleep(120);
       });
 
+      /* The playhead, off the rendered canvas. `stripSignal` above deliberately
+       * skips the top rows so the full-height mark is not read as dialogue;
+       * this reads only those rows, so it sees the mark and nothing else. */
+      const playheadX = (canvas) => {
+        const pixels = canvas.getContext("2d")
+          .getImageData(0, 0, canvas.width, 2).data;
+        let best = -1;
+        let most = 0;
+        for (let x = 0; x < canvas.width; x++) {
+          const sum = pixels[x * 4 + 3] + pixels[(canvas.width + x) * 4 + 3];
+          if (sum > most) { most = sum; best = x; }
+        }
+        return most ? best : -1;
+      };
+
+      check("the map keeps the playhead in the middle, wherever the film thinks it ends", async () => {
+        /* Reported as "when I rewind the timeline of the video, the subtitle
+         * overlay play markers couldn't stay in the center and in sync".
+         *
+         * The window was clamped so it could not run past the end of the film,
+         * and on a player that fetches a new stream for every seek the believed
+         * end is wrong in exactly the way that matters: `filmSeconds` answers
+         * "where this stream starts, plus what has arrived", which sits a few
+         * seconds ahead of the playhead and climbs with it. The clamp then
+         * pinned the window near its right edge for the rest of the film.
+         *
+         * Set up as the report describes it: a length only a little ahead of
+         * the playhead, in the middle of a film that is still running. */
+        const wasTime = video.currentTime;
+        const wasDuration = Object.getOwnPropertyDescriptor(video, "duration");
+        try {
+          const strip = mapStrips()[0];
+          const canvas = strip.querySelector(".sso-map__canvas");
+          const zoom = strip.querySelector(".sso-map__zoom");
+          for (let i = 0; i < MAP_STEPS * 2 && zoom.textContent !== "60s"; i++) {
+            zoom.click();
+            await sleep(40);
+          }
+
+          // Nine seconds from an end the player has only just admitted to.
+          Object.defineProperty(video, "duration", { get: () => 2692, configurable: true });
+          video.currentTime = 2683;
+          await sleep(300);
+
+          const middle = (canvas.width - 1) / 2;
+          const at = playheadX(canvas);
+          if (at < 0) throw new Error("no playhead was drawn");
+          /* Two device pixels of slack: the mark is rounded to a whole pixel
+           * and the window moves on between the paint and the read. */
+          if (Math.abs(at - middle) > 2) {
+            throw new Error(
+              `the playhead is at ${at} of ${canvas.width - 1}, not the middle at ${Math.round(middle)}`,
+            );
+          }
+
+          // And it stays there as the film runs past the believed end.
+          video.currentTime = 2695;
+          await sleep(300);
+          const after = playheadX(canvas);
+          if (Math.abs(after - middle) > 2) {
+            throw new Error(`past the believed end it sits at ${after}, not ${Math.round(middle)}`);
+          }
+        } finally {
+          Object.defineProperty(video, "duration", wasDuration);
+          /* And forget that this element's length ever moved. Putting the long
+           * duration back is itself a growth, which would leave every check
+           * after this one being told the film has no length at all - the
+           * same reset the part-loaded-stream checks above use. */
+          video.dispatchEvent(new Event("loadstart"));
+          video.currentTime = wasTime;
+          await sleep(400);
+        }
+      });
+
       check("a line's length and how much it says are both in the picture", async () => {
         /* Asked for directly: the strip "shows where a subtitle starts, but it
          * doesn't show where it ends or how many chars/words it have - this
