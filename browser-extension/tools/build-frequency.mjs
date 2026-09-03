@@ -40,12 +40,25 @@ const KEEP = 30000;
  * language. Applied before the rank cut, so ranks stay dense. */
 const MIN_COUNT = 12;
 
-/* Letters only, at least two of them. The lists carry stray digits, single
- * letters left over from tokenising contractions ("don't" -> "don", "t"), and
- * fragments of markup that survived the corpus cleaning. None of them are
- * words to look up, and a single letter marked rare on screen is noise sitting
- * on top of the film. */
-const WORD = /^\p{L}[\p{L}\p{M}'’-]*\p{L}$/u;
+/* Letters only, and it may be one letter.
+ *
+ * This used to demand two, to keep out the stray letters left over from
+ * tokenising contractions ("don't" -> "don", "t"), on the grounds that a single
+ * letter marked rare on screen is noise sitting on top of the film. It kept
+ * those out, and it also kept out "i", the second commonest word in the whole
+ * corpus at 27 million occurrences, and "a", the fifth.
+ *
+ * That mattered somewhere else. rarity.js answers a contraction by looking up
+ * the part before the apostrophe, so "i'll" is rankable only if "i" is in here
+ * - and it was not, so "i'll" and "i've" came back unrankable, which the
+ * marking rule reads as rarer than the 30,000th word. Measured over the 175
+ * English films in this machine's cache: "i'll" was marked in 150 of them and
+ * "i've" in 113.
+ *
+ * The stray letters are still harmless. Nothing under three letters can be
+ * marked, so "t" and "s" can only sit in the table being common, and neither is
+ * ever the part before an apostrophe. */
+const WORD = /^\p{L}([\p{L}\p{M}'’-]*\p{L})?$/u;
 
 async function build(lang) {
   const response = await fetch(SOURCE(lang));

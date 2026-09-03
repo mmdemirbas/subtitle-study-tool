@@ -39,6 +39,20 @@ globalThis.fetch = async (url, options) => {
     const answer = daemonAnswers(String(url));
     if (answer) return { ok: true, status: 200, json: async () => answer };
   }
+  /* A packaged file, served off disk. rarity.js and phrases.js fetch their
+   * tables through chrome.runtime.getURL rather than importing them, because a
+   * service worker may not use dynamic import - so the shipped tables are only
+   * reachable from a test through this. Reading the real ones is the point: a
+   * stub table would test the lookup and never the data. */
+  const packaged = String(url).replace("chrome-extension://test/", "");
+  if (packaged !== String(url)) {
+    const { readFile } = await import("node:fs/promises");
+    const { fileURLToPath } = await import("node:url");
+    const path = fileURLToPath(new URL(`../${packaged}`, import.meta.url));
+    const text = await readFile(path, "utf-8").catch(() => null);
+    if (text === null) return { ok: false, status: 404, text: async () => "" };
+    return { ok: true, status: 200, text: async () => text };
+  }
   throw new TypeError("Failed to fetch");
 };
 
@@ -1194,6 +1208,42 @@ chrome.storage.local.set = instant.set;
   t("a rank comes back with each one, which is what decides whether it is marked",
     of("back off").every((hit) => hit.rank === 0) && of("give in").every((hit) => hit.rank === 4),
     JSON.stringify(of("back off").concat(of("give in"))));
+}
+
+/* --- word rarity, against the table that ships --------------------------------
+ *
+ * The real file, read off disk, because the defect these cases guard was in the
+ * data and not in the lookup. A stub table would have passed throughout.
+ */
+{
+  const { rank } = await import("../src/study/rarity.js");
+  const ranks = await rank(["i", "a", "it", "the", "i'll", "i've", "don't", "we'll", "abuzz"], "en");
+
+  t("the commonest words in film dialogue are in the table",
+    ranks.i !== null && ranks.i < 10 && ranks.a !== null && ranks.a < 10,
+    `i=${ranks.i} a=${ranks.a}`);
+
+  /* Reported by the study report, not by anyone watching: "i'll" was marked as
+   * a rare word in 150 of the 175 English films in this machine's cache and
+   * "i've" in 113. A contraction is ranked by the part before the apostrophe,
+   * and the table's builder demanded two letters, so "i" was not in it - and a
+   * word the table does not hold is read as rarer than the 30,000th. */
+  t("a contraction is as common as the word it is made from",
+    ranks["i'll"] !== null && ranks["i'll"] < 100 && ranks["i've"] !== null && ranks["i've"] < 100,
+    `i'll=${ranks["i'll"]} i've=${ranks["i've"]}`);
+
+  t("and so is one whose stem was always there",
+    ranks["don't"] !== null && ranks["don't"] < 100 && ranks["we'll"] !== null && ranks["we'll"] < 100,
+    `don't=${ranks["don't"]} we'll=${ranks["we'll"]}`);
+
+  t("a genuinely rare word is still rare",
+    ranks.abuzz === null || ranks.abuzz > 20000,
+    `abuzz=${ranks.abuzz}`);
+
+  const tr = await rank(["iyi", "ankara'ya"], "tr");
+  t("the Turkish table answers the same way, suffix and all",
+    tr.iyi !== null && tr.iyi < 200 && tr["ankara'ya"] !== null,
+    JSON.stringify(tr));
 }
 
 for (const r of results) console.log(r.ok ? "PASS" : "FAIL", "-", r.name, r.ok ? "" : `→ ${r.detail}`);

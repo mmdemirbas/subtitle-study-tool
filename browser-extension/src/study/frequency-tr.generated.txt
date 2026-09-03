@@ -5,6 +5,7 @@ ve
 için
 mi
 de
+o
 ben
 çok
 ama
@@ -101,6 +102,7 @@ gün
 ederim
 nerede
 tanrım
+a
 şeyi
 merhaba
 efendim
@@ -124,6 +126,7 @@ siz
 üzgünüm
 ol
 olabilir
+i
 olsun
 küçük
 size
@@ -140,6 +143,7 @@ kız
 nin
 devam
 bize
+e
 oluyor
 ver
 izin
@@ -200,6 +204,7 @@ emin
 üç
 herkes
 dakika
+ı
 söyledi
 istiyorsun
 pek
@@ -365,6 +370,7 @@ kendine
 tarafından
 yeter
 dünya
+u
 yı
 olduğumu
 bunları
@@ -774,6 +780,7 @@ bulmak
 söylüyorum
 kızın
 vakit
+n
 yıldır
 görüyorum
 haklı
@@ -855,6 +862,7 @@ söyleme
 burda
 allah
 parçası
+s
 biriyle
 üstünde
 şeyden
@@ -1022,6 +1030,7 @@ demektir
 sırada
 ifade
 aferin
+l
 sıkı
 max
 bölüm
@@ -1030,6 +1039,7 @@ yazık
 kalp
 arka
 verici
+m
 suçlu
 kadının
 oldun
@@ -1079,6 +1089,7 @@ ettiğini
 üçüncü
 james
 söylemiştin
+b
 almış
 hayatı
 alex
@@ -1169,6 +1180,7 @@ amerikan
 saçmalık
 kalmadı
 çift
+d
 endişelenme
 hayatımı
 dışı
@@ -1471,6 +1483,7 @@ haberi
 ettik
 sayılmaz
 arıyorsun
+t
 of
 kulağa
 kime
@@ -2335,6 +2348,7 @@ düşündüğüm
 efendi
 çocuğa
 kaldık
+c
 telefonda
 istemez
 ölümü
@@ -2366,6 +2380,7 @@ leo
 buyur
 bileyim
 yahudi
+ü
 anneme
 şüphe
 etmeliyim
@@ -2413,6 +2428,7 @@ bildiğin
 ayı
 hakkı
 seyahat
+â
 hayir
 nokta
 değilsiniz
@@ -3409,6 +3425,7 @@ paranı
 olabilecek
 paran
 kimseyle
+h
 tur
 harvey
 etmemi
@@ -3425,6 +3442,7 @@ giriyor
 güveniyorum
 city
 katie
+k
 johnson
 bilmen
 yıldızı
@@ -4339,6 +4357,7 @@ içecek
 kanada
 alması
 işlerin
+r
 verdiniz
 zamanını
 oturma
@@ -5141,6 +5160,7 @@ bağışla
 teksas
 jen
 çalan
+x
 çelik
 işimize
 clay
@@ -5270,6 +5290,7 @@ sayende
 konuştuğunu
 twitter
 ajanı
+g
 bakıma
 geldiğim
 kullanıyorsun
@@ -5433,6 +5454,7 @@ getirebilir
 moskova
 olursam
 hâle
+y
 getirmiş
 kaçık
 buluyor
@@ -5691,6 +5713,7 @@ hissedebiliyorum
 kalkma
 yarışı
 atı
+z
 kurtardım
 soo
 kitabın
@@ -7529,6 +7552,7 @@ hesabını
 istemediğimi
 okumayı
 oradalar
+v
 fikriydi
 terör
 bahçesi
@@ -7838,6 +7862,7 @@ açıkla
 bekleyip
 ayarla
 doluydu
+j
 einstein
 konularda
 görüşmeyi
@@ -7931,6 +7956,7 @@ sahilde
 tanrısı
 aşağıdaki
 sormadım
+p
 götürebilir
 erica
 sullivan
@@ -9010,6 +9036,7 @@ dijital
 gibiydim
 mahvetmek
 tepeden
+f
 çayı
 yahudiler
 seveceğim
@@ -11348,6 +11375,7 @@ keşiş
 sesinden
 sıkıştı
 barışı
+ş
 güvercin
 edemeyeceğim
 amacımız
@@ -14182,6 +14210,7 @@ dostları
 tobias
 betsy
 olmamalıydı
+q
 yaşamaktan
 ayrıl
 kesiyor
@@ -14783,6 +14812,7 @@ olduklarından
 noldu
 dersler
 odamız
+ç
 jerome
 yerdeydi
 işiyle
@@ -18673,6 +18703,7 @@ dolarla
 beraberken
 bileğini
 kayıplar
+w
 sandalyeyi
 muydum
 ginny
@@ -29967,34 +29998,3 @@ bluz
 boşluğunda
 sanıp
 verandada
-cip
-bavulu
-yalanını
-maktul
-şarkımız
-isteğine
-hissederdin
-silahlarımız
-davadaki
-anahtarlarım
-konuşabileceğim
-bağlantılarım
-kılını
-toplansın
-kabusu
-toksikoloji
-kurtarman
-madende
-başlatalım
-dönüyordum
-yazıya
-daniskası
-çıksam
-seçildim
-partiydi
-siniri
-food
-işsizlik
-çağırdığını
-zarfın
-sapığın
