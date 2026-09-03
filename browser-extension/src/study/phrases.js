@@ -132,6 +132,26 @@ export function buildIndex(phrases) {
  * the phone up with the others". */
 export const MAX_GAP = 3;
 
+/* ...and what may not be inside it.
+ *
+ * `to` in the gap means the particle belongs to an infinitive that follows,
+ * not to the verb before it. "Do you want to find out" is `find out` with
+ * `want` in front of it, and reading it as `want out` puts a mark on two words
+ * that are not a phrase and hides the one that is - reported exactly that way.
+ *
+ * Measured over the 175 English files in this machine's cache: 5178 of 17521
+ * matches have something between the verb and its particle, and 214 of those
+ * span a `to`. Every one sampled was wrong - "hate to put you on" read as
+ * `hate on`, "used to look up" as `use up`, "chance to save people on" as
+ * `chance on`.
+ *
+ * The wider rule this replaces was measured and refused: rejecting a gap that
+ * merely CONTAINS another verb able to take the same particle would have
+ * thrown away 758 matches including "shut the fuck up" and "take your hands
+ * off", which are both right. A gap may hold anything except the one word that
+ * changes whose particle it is. */
+const NOT_IN_GAP = "to";
+
 /**
  * The phrasal verbs in one line's words, left to right and never overlapping.
  *
@@ -155,6 +175,13 @@ export function findPhrases(words, index) {
           }
         }
         if (!matched) continue;
+        /* The gap is the words between the verb and its first particle. A `to`
+         * in there hands the particle to the infinitive after it. */
+        let infinitive = false;
+        for (let step = 1; step <= gap; step++) {
+          if (words[at + step] === NOT_IN_GAP) infinitive = true;
+        }
+        if (infinitive) continue;
         const span = 1 + gap + particles.length;
         /* The longest phrase wins, and among equals the tightest one. "Put up
          * with" beats "put up" on the same three words, and "pick up" beats

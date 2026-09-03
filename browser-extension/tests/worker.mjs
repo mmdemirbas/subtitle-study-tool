@@ -1125,7 +1125,13 @@ chrome.storage.local.set = instant.set;
  */
 {
   const { buildIndex, findPhrases, surfaceForms } = await import("../src/study/phrases.js");
-  const index = buildIndex(["back off", "pick up", "put up", "put up with", "give in", "look at"]);
+  /* `fuck up` and `hand off` are in here so the gap in "shut the fuck up" and
+   * "take your hands off me" really does hold a verb that could take the same
+   * particle - without them those two cases would prove nothing. */
+  const index = buildIndex([
+    "back off", "pick up", "put up", "put up with", "give in", "look at",
+    "find out", "want out", "shut up", "take off", "fuck up", "hand off",
+  ]);
   const of = (line) => findPhrases(line.split(" "), index);
   const said = (line) => of(line).map((hit) => `${hit.phrase}@${hit.words.join(",")}`).join(" ");
 
@@ -1148,6 +1154,28 @@ chrome.storage.local.set = instant.set;
   t("and not so far away that any two words count",
     of("she picked the whole damn thing up").length === 0,
     said("she picked the whole damn thing up"));
+
+  /* ...and the gap may not hold the word that changes whose particle it is.
+   *
+   * Reported: "do you want to find out" was read as `want out`, which is two
+   * words that are not a phrase, and it hid the one that is. A `to` in the gap
+   * means the particle belongs to the infinitive after it. Measured over the
+   * 175 English files in the cache, 214 of the 5178 separated matches span a
+   * `to` and every one sampled was wrong. */
+  t("a particle behind an infinitive belongs to the infinitive",
+    said("do you want to find out") === "find out@4,5",
+    said("do you want to find out"));
+
+  t("and the same verb still takes its own particle with nothing between them",
+    said("i want out") === "want out@1,2",
+    said("i want out"));
+
+  /* The rule that was measured and refused: rejecting any gap containing
+   * another verb able to take the same particle would have thrown away 758
+   * matches, these two among them. */
+  t("a gap may hold another verb that could have taken the particle",
+    said("shut the fuck up") === "shut up@0,3" && said("take your hands off me") === "take off@0,3",
+    said("shut the fuck up") + " | " + said("take your hands off me"));
 
   /* "Put up with" is fixed - the object goes after the whole thing - so it
    * takes no gap, and where both could match the longer one wins. */
