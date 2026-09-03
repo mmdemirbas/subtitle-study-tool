@@ -6521,6 +6521,7 @@
     "pauseVideo",
     "setStudyEnabled",
     "toggleStudySlot",
+    "openStudySettings",
     "toggleStudy",
     "saveTopWord",
   ];
@@ -6950,6 +6951,11 @@
     },
     toggleStudySlot(slot) {
       return window.__ssoStudy?.toggleStudySlot?.(slot);
+    },
+    /* Opens study's own settings window, which lives in the frame the cue text
+     * is in rather than the one drawing the panel. */
+    openStudySettings() {
+      return Boolean(window.__ssoStudy?.openSettings?.());
     },
     toggleStudy() {
       return Boolean(window.__ssoStudy?.toggle?.());

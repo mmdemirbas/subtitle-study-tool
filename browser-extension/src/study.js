@@ -1927,7 +1927,10 @@
       settingsEl = buildRailSettings();
       settingsWindow.body.append(settingsEl);
     }
-    await settingsWindow.show(host);
+    /* Anchored on the focus box only while there IS one on screen. The box can
+     * be put away with study still running, and a hidden host measures zero, so
+     * anchoring to it put the window in the top-left corner of the film. */
+    await settingsWindow.show(settings.showFocus ? host : null);
     markGear();
     refreshRailSettings();
   }
@@ -3087,6 +3090,15 @@
     toggleStudySlot,
     reorderSlots,
     closeStrip,
+    /* The second way in.
+     *
+     * The gear that opens this sits on the focus box, and the box has a close
+     * button that puts it away with study still running - so closing it took
+     * the only entrance to study's settings with it, and there was no way back
+     * short of turning study off and on again. Reported as "I remember we had
+     * some settings for how rare words should be shown, but I cannot find them
+     * any more". The control panel's subtitle card calls this. */
+    openSettings: () => openRailSettings(),
     settings: () => ({ ...settings }),
     defaults: DEFAULT_SETTINGS,
   };

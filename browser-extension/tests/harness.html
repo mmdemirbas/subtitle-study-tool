@@ -6509,6 +6509,62 @@
           throw new Error("closing it took the words away too");
       });
 
+      check("putting the focus box away does not take the settings with it", async () => {
+        /* Reported: "I remember that we had some settings regarding how rare
+         * words should be shown, but I could not find those settings any more.
+         * I think they are gone with the study pane itself."
+         *
+         * They were. The only gear sits on the focus box's head, and the box's
+         * own close button hides it with study still running - so one press put
+         * every threshold out of reach, and the way back was to turn study off
+         * and on again. The control panel's settings window carries a pointer
+         * to that window now - a pointer rather than a second copy of the
+         * sliders, because two surfaces holding the same control is how the two
+         * drift apart. */
+        const was = window.__ssoStudy.settings().showFocus;
+        try {
+          window.__ssoStudy.updateSettings({ showFocus: false });
+          await sleep(150);
+          await window.__ssoPanel.show();
+          await sleep(200);
+
+          const sheet0 = await openSettings();
+          const row0 = [...sheet0.querySelectorAll(".sso-sec")]
+            .find((sec) => sec.querySelector(".sso-sec__h")?.textContent === "Study");
+          if (!row0) throw new Error("no Study section in the settings window");
+          if (row0.hidden) throw new Error("the Study section is hidden while study is running");
+          [...row0.querySelectorAll("button")]
+            .find((b) => b.textContent.includes("How study works"))
+            .click();
+          await sleep(300);
+
+          const sheet = [...document.querySelectorAll("div")]
+            .find((d) => d.shadowRoot?.querySelector(".sso-focus__settings"))?.shadowRoot;
+          if (!sheet) throw new Error("the panel's way in opened nothing");
+          const box = sheet.host.getBoundingClientRect();
+          if (box.width === 0) throw new Error("the settings window has no size");
+          /* Anchored on the focus box while there is one, and centred when
+           * there is not: a hidden host measures zero, which used to put the
+           * window in the top-left corner of the film. */
+          if (box.left < 0 || box.top < 0 || box.right > window.innerWidth)
+            throw new Error(`it opened off screen at ${Math.round(box.left)},${Math.round(box.top)}`);
+
+          // And the threshold that was asked for is one of the controls in it.
+          const row = [...sheet.querySelectorAll(".sso-set")]
+            .find((r) => r.textContent.includes("Mark a word rarer than"));
+          if (!row) throw new Error("the rarity threshold is not in the window the panel opens");
+
+          sheet.querySelector(".sso-icon--close").click();
+          await sleep(150);
+        } finally {
+          window.__ssoStudy.updateSettings({ showFocus: was });
+          const gear = panelShadow()?.querySelector(".sso-icon--gear");
+          if (gear?.dataset.on === "true") gear.click();
+          window.__ssoPanel.hide();
+          await sleep(200);
+        }
+      });
+
       check("study's own keys are set where study is set", async () => {
         /* They were two rows in the control panel's Keys grid, beside the
          * bindings for timing and for the panel itself, after everything else
@@ -6558,7 +6614,7 @@
         await sleep(150);
       });
 
-      check("study is a switch on the subtitles, and nothing in the settings", async () => {
+      check("study is a switch on the subtitles, and the settings only point at it", async () => {
         /* The switch has to be on this surface at all because the rail it
          * belongs to does not exist while study is off. It was a section in
          * Settings; a switch you press several times a film does not belong in
@@ -6567,7 +6623,19 @@
         await sleep(150);
 
         const sheet = await openSettings();
-        const said = sheet.textContent || "";
+        /* One Study section is allowed here, and it may hold a way into study's
+         * own window - see "putting the focus box away does not take the
+         * settings with it", where closing the box hid the only other entrance.
+         * What may not come back is a CONTROL: two surfaces holding the same
+         * slider is how the two drift apart. */
+        const pointer = [...sheet.querySelectorAll(".sso-sec")]
+          .find((sec) => sec.querySelector(".sso-sec__h")?.textContent === "Study");
+        if (pointer?.querySelector("input"))
+          throw new Error("a study control is back in the settings window");
+        const said = [...sheet.querySelectorAll(".sso-sec")]
+          .filter((sec) => sec !== pointer)
+          .map((sec) => sec.textContent)
+          .join(" ");
         if (/study|word|rare|deck/i.test(said))
           throw new Error(`study is still in the settings: ${said.slice(0, 120)}`);
         sheetShadow().querySelector(".sso-icon--close").click();

@@ -2255,6 +2255,7 @@
       refresh(api.status());
     });
 
+
     /* Hide is a button, not a menu item. It is the other thing readers reach
      * for constantly - a subtitle in the way of something on screen goes away
      * for ten seconds and comes back - and burying a ten-second action two
@@ -2941,7 +2942,8 @@
         },
       });
       settingsWindow.body.append(
-        buildSite(), buildWatching(), buildAppearance(), buildKeys(), buildDiagnostics(),
+        buildSite(), buildWatching(), buildStudy(), buildAppearance(), buildKeys(),
+        buildDiagnostics(),
       );
     }
     await settingsWindow.show(host);
@@ -3710,6 +3712,51 @@
    * is what intensive listening is and is not what anybody wants by accident.
    * It sits above Appearance because it changes what happens; everything below
    * changes what things look like. */
+  /* The way back to study's settings.
+   *
+   * They used to be eleven controls in this window, and they moved to the focus
+   * box on the principle that settings belong on the thing they change. What
+   * that missed is the box's own close button, which puts it away with study
+   * still running - so one press took every threshold out of reach and the way
+   * back was to turn study off and on again. Reported as "I remember that we
+   * had some settings regarding how rare words should be shown, but I could not
+   * find those settings any more. I think they are gone with the study pane
+   * itself."
+   *
+   * A pointer rather than a second copy of the controls. Two surfaces holding
+   * the same sliders is how they drift; this opens the one window there is, and
+   * the reader who looked for settings in the settings window finds them. */
+  function buildStudy() {
+    const wrap = section("Study");
+
+    const note = document.createElement("p");
+    note.className = "sso-note";
+    note.textContent =
+      "What counts as a rare word, which phrasal verbs are marked, how many a line, " +
+      "and what the focus box looks like. The same window opens from the gear on the " +
+      "box itself.";
+
+    const row = document.createElement("div");
+    row.className = "sso-row";
+    row.append(
+      button("How study works", {
+        title: "Open study's own settings - the thresholds are yours, not this subtitle's",
+        onClick: () => api.openStudySettings(),
+      }),
+    );
+
+    /* Hidden when study.js is not loaded at all, which is the one state where
+     * there is no window to open. Not hidden when study is merely switched off:
+     * the thresholds are what the reader wants to look at BEFORE turning it on
+     * again, and a row that disappears in that state is the same defect this
+     * section exists to fix. */
+    el.studySection = wrap;
+    wrap.hidden = !api.studySettings();
+
+    wrap.append(note, row);
+    return wrap;
+  }
+
   function buildWatching() {
     const wrap = section("While watching");
 
@@ -4377,6 +4424,10 @@
     if (!settingsWindow?.isOpen()) return;
 
     el.pauseAtLineEnd.input.checked = Boolean(settings.pauseAtLineEnd);
+    /* Study can arrive after this window was built - the frame holding the cue
+     * text loads it when a subtitle attaches - so the section is asked again on
+     * every redraw rather than only at build time. */
+    if (el.studySection) el.studySection.hidden = !api.studySettings();
     el.background.input.value = String(settings.background);
     el.background.readout.textContent = String(settings.background);
     el.rewrap.input.checked = Boolean(settings.rewrap);
