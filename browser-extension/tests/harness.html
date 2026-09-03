@@ -5599,6 +5599,57 @@
         }
       });
 
+      check("the whole walk is written down, the refusals with the marks", async () => {
+        /* Asked for after a season of watching: how well is this choosing the
+         * words worth stopping on, and is the meaning under them right. Neither
+         * was answerable. The prefetch threw every answer away once the cache
+         * was warm, and nothing anywhere counted the words the rule refused.
+         *
+         * The refusals are the half that decides it. A filter judged on the
+         * words that survive it is judged against a population it curated
+         * itself, so a name rule eating half the film, or a per-cue cap costing
+         * the reader the line they needed, cannot appear in its own output.
+         * `tools/study-report.mjs` reads these records back. */
+        const was = window.__ssoStudy.settings().studySlots;
+        const AHEAD = CUES.map((cue) => ({ ...cue }));
+        const seen = await tracing(async (traced) => {
+          try {
+            window.__ssoStudy.updateSettings({ studySlots: [0], rarityRank: 4000, auto: false });
+            await window.__ssoStudy.setEnabled(true);
+            await window.__ssoApi.attach({
+              cues: AHEAD, label: "EN \u00b7 written down", fileId: 9207, language: "en", slot: 0,
+            });
+            video.currentTime = 1;
+            await until(() => traced.some((a) => a.kind === "marks"), "the walk was never written down");
+          } finally {
+            window.__ssoStudy.updateSettings({ studySlots: was, auto: false });
+            await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
+            video.currentTime = 1;
+            await sleep(150);
+          }
+        });
+        const record = seen.filter((a) => a.kind === "marks").map((a) => a.detail).pop();
+        if (record.cues !== AHEAD.length)
+          throw new Error(`the record says ${record.cues} cues against ${AHEAD.length} attached`);
+        const rare = record.asked.find((item) => item.t === "frankly");
+        if (!rare)
+          throw new Error(`nothing was recorded as marked: ${record.asked.map((i) => i.t).join(", ") || "none"}`);
+        if (rare.r !== RANKS.frankly)
+          throw new Error(`the mark carries rank ${rare.r} rather than ${RANKS.frankly}`);
+        /* Both counted, because either one alone reads as a rule that never
+         * refuses anything. "[Ormon]" is a speaker label and "you" is a word
+         * everybody already has. */
+        if (!(record.skipped.name > 0))
+          throw new Error("a speaker label was refused and the refusal was not counted");
+        if (!(record.skipped.common > 0))
+          throw new Error("common words were refused and the refusals were not counted");
+        /* Terms and glosses only. A record that carries the dialogue is a copy
+         * of the subtitle rather than a record about it, and the file it came
+         * from is on disk already. */
+        if (JSON.stringify(record).includes("Get down"))
+          throw new Error("the film's dialogue was written into the log");
+      });
+
       check("the model is told which film these lines are from", async () => {
         /* A gloss answers "what does this word mean in this line", and a line of
          * dialogue means different things in different programmes. "Jump",

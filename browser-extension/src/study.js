@@ -803,6 +803,14 @@
      * at attach and that one runs as the film plays, and sharing it would have
      * whichever ran first silence the other. */
     const aheadSeen = new Set();
+    /* What the marking rule THREW AWAY, counted beside what it kept.
+     *
+     * A filter judged on the words that survive it is judged against a
+     * population it curated itself, so nothing it wrongly removed can ever show
+     * up. These four are every way a word can fail to be marked, and they are
+     * what says whether the name rule is too greedy or the per-cue cap is
+     * costing the reader lines they needed. */
+    const skipped = { name: 0, short: 0, common: 0, unranked: 0, cap: 0 };
     perCue.forEach(({ line, words }, at) => {
       /* The lines either side of this one. A subtitle line is four or five
        * words with the rest of the exchange in the lines around it, and this
@@ -814,32 +822,106 @@
       for (const hit of byLine[at] || []) {
         if (hit.rank < settings.phraseRank || aheadSeen.has(hit.phrase)) continue;
         aheadSeen.add(hit.phrase);
-        items.push({ term: hit.phrase, sentence: line, ...around });
+        items.push({ term: hit.phrase, sentence: line, rank: hit.rank, phrase: true, ...around });
       }
       const rare = [];
       for (const word of words) {
-        if (names.has(word) || letterCount(word) < settings.minLetters) continue;
+        if (names.has(word)) { skipped.name += 1; continue; }
+        if (letterCount(word) < settings.minLetters) { skipped.short += 1; continue; }
         const rank = ranks.has(word) ? ranks.get(word) : undefined;
-        if (rank === undefined) continue;
+        if (rank === undefined) { skipped.unranked += 1; continue; }
         if (rank === null || rank >= settings.rarityRank) rare.push({ word, rank });
+        else skipped.common += 1;
       }
       rare.sort((a, b) => (b.rank ?? Infinity) - (a.rank ?? Infinity));
+      skipped.cap += Math.max(0, rare.length - settings.maxPerCue);
       for (const item of rare.slice(0, settings.maxPerCue)) {
-        items.push({ term: item.word, sentence: line, ...around });
+        items.push({ term: item.word, sentence: line, rank: item.rank, ...around });
       }
     });
 
+    /* What came back, kept beside what was asked.
+     *
+     * The prefetch used to throw the answers away - it only had to warm the
+     * cache - and that left no way to ask the only two questions that say
+     * whether any of this is worth having: are these the words worth stopping
+     * on, and is the meaning under them right. The whole film goes past in one
+     * walk here, decided by one rule, so this is the one place that can answer
+     * both. `tools/study-report.mjs` reads it back. */
+    const glosses = [];
     for (let at = 0; at < items.length; at += GLOSS_CHUNK) {
       // A different file, or a different pair of languages, while this was in
       // flight: the rest of these answers are about a film nobody is watching.
       if (glossedTracks.get(slot) !== mark) return;
-      await api.daemon("gloss", {
-        items: items.slice(at, at + GLOSS_CHUNK),
+      const chunk = items.slice(at, at + GLOSS_CHUNK);
+      const answer = await api.daemon("gloss", {
+        // Only the four fields the daemon reads. The rank and the phrase flag
+        // are for the record below and have no business on the wire.
+        items: chunk.map(({ term, sentence, before, after }) => ({
+          term, sentence, before, after,
+        })),
         language,
         target,
         film,
       });
+      const said = Array.isArray(answer?.glosses) ? answer.glosses : [];
+      for (let i = 0; i < chunk.length; i++) glosses.push(said[i] || "");
     }
+
+    if (glossedTracks.get(slot) !== mark) return;
+    noteMarks(slot, {
+      language, target, film, ranks, names, skipped, items, glosses, cues: texts.length,
+    });
+  }
+
+  /* One record per film per subtitle, written once the whole file has been
+   * walked and every meaning asked for.
+   *
+   * It carries what was MARKED and what was REFUSED, because a filter judged
+   * on the words that survive it is judged against a population it curated
+   * itself - nothing it wrongly threw away can appear in its own output. The
+   * counts of each refusal are what say whether the name rule is too greedy or
+   * the per-cue cap is costing the reader lines they needed.
+   *
+   * Terms and glosses only. The lines they were said in are already reachable
+   * from the file, and putting a film's dialogue in the log would make it a
+   * copy of the subtitle rather than a record about it. */
+  function noteMarks(slot, { language, target, film, ranks, names, skipped, items, glosses, cues }) {
+    const info = api.trackInfo(slot) || {};
+    let ranked = 0;
+    let unranked = 0;
+    for (const rank of ranks.values()) {
+      if (rank === null) unranked += 1;
+      else ranked += 1;
+    }
+    api.trace?.("marks", {
+      film,
+      slot,
+      label: info.label || "",
+      fileId: info.fileId ?? null,
+      language,
+      target,
+      cues,
+      vocabulary: { distinct: ranks.size, ranked, unranked, names: names.size },
+      settings: {
+        rarityRank: settings.rarityRank,
+        phraseRank: settings.phraseRank,
+        minLetters: settings.minLetters,
+        maxPerCue: settings.maxPerCue,
+      },
+      // Every way a word can fail to be marked, counted per occurrence.
+      skipped,
+      /* t: the term. r: its rank, which for a phrase is a line in the phrase
+       * table and for a word a line in the frequency one - null means the
+       * table has never seen it, which is rarer than its last entry. p: a
+       * phrase rather than a word. g: what came back, "" for nothing. */
+      asked: items.map((item, at) => ({
+        t: item.term,
+        r: item.rank ?? null,
+        ...(item.phrase ? { p: 1 } : {}),
+        g: glosses[at] || "",
+      })),
+    });
   }
 
   async function markWords(line) {
