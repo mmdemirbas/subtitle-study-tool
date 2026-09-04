@@ -106,6 +106,27 @@ function report(records) {
       ` - the rule keeps ${pct(asked, asked + totalRefused)} of what it looks at`,
   );
 
+  console.log("\nWHICH TIER ANSWERED");
+  /* Three tiers behind one chip. The model reads the line the word was said in
+   * and is the only one that can tell "spare a minute" from "a spare tyre";
+   * Google answers the bare word; disk is a question already answered. An empty
+   * chip is none of them, and until this was recorded the four were
+   * indistinguishable from the overlay - which is what "translation quality is
+   * still not improved" had to be diagnosed through. */
+  const from = { disk: 0, model: 0, google: 0, none: 0 };
+  for (const entry of all) {
+    for (const key of Object.keys(from)) from[key] += entry.from?.[key] || 0;
+  }
+  const fromTotal = Object.values(from).reduce((a, b) => a + b, 0);
+  if (!fromTotal) {
+    console.log("  not recorded - these walks predate the tier being counted");
+  } else {
+    row("the model, reading the line", `${from.model} (${pct(from.model, fromTotal)})`);
+    row("already on disk", `${from.disk} (${pct(from.disk, fromTotal)})`);
+    row("the bare word, no line", `${from.google} (${pct(from.google, fromTotal)})`);
+    row("nothing answered", `${from.none} (${pct(from.none, fromTotal)})`);
+  }
+
   console.log("\nWHAT CAME BACK");
   let blank = 0;
   let same = 0;

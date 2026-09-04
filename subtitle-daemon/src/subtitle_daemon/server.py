@@ -186,14 +186,18 @@ class Service:
         items = body.get("items")
         if not isinstance(items, list):
             return {"error": "items must be a list"}
-        return {
-            "glosses": self.lookups.gloss_many(
-                items,
-                str(body.get("language") or "en"),
-                str(body.get("target") or ""),
-                str(body.get("film") or ""),
-            )
-        }
+        # Which tier answered, counted and sent back with the answers. See
+        # gloss_many: from the overlay a slow model and a missing key look
+        # identical, and both look like a word with no translation.
+        tally: dict[str, int] = {}
+        glosses = self.lookups.gloss_many(
+            items,
+            str(body.get("language") or "en"),
+            str(body.get("target") or ""),
+            str(body.get("film") or ""),
+            tally=tally,
+        )
+        return {"glosses": glosses, "from": tally}
 
     def search(self, params: dict[str, list[str]]) -> dict[str, Any]:
         """Guess what is playing and find candidate subtitles.

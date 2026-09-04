@@ -870,8 +870,14 @@ def test_many_words_are_glossed_in_one_request(service, http, monkeypatch) -> No
     base, _ = http
     asked: list[tuple[str, str]] = []
 
-    def gloss_many(items, language, target, film=""):
+    # **kwargs, not a fixed signature: a stub that is stricter than the thing it
+    # stands in for fails the day the real one grows an argument, which is a
+    # failure about the stub and reads as a failure about the route.
+    def gloss_many(items, language, target, film="", **kwargs):
         asked.extend((it["term"], it["sentence"]) for it in items)
+        tally = kwargs.get("tally")
+        if tally is not None:
+            tally["model"] = len(items)
         return [f"{it['term']}-{target}" for it in items]
 
     monkeypatch.setattr(service[0].lookups, "gloss_many", gloss_many)
@@ -885,6 +891,9 @@ def test_many_words_are_glossed_in_one_request(service, http, monkeypatch) -> No
     assert body["glosses"] == ["spare-tr", "chamber-tr"]
     assert asked == [("spare", "Can you spare a minute?"),
                      ("chamber", "The chamber is dropping.")], "the lines did not travel"
+    # Which tier answered comes back with the answers. Without it a slow model,
+    # a missing key and an untranslatable word are the same empty chip.
+    assert body["from"] == {"model": 2}
 
 
 def test_a_gloss_request_without_items_is_answered_not_crashed(http) -> None:

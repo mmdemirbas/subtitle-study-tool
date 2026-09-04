@@ -134,3 +134,51 @@ not small.
 
 **Anything from a real viewing.** The `marks` record exists but no film has been
 watched since. Run `node tools/study-report.mjs` after the next one.
+
+---
+
+## Postscript, 4 September: why the answers were not arriving
+
+Reported the next day: "translation quality is still not improved." It was not
+the model. The model is configured correctly, present in ollama, and its answers
+are the good ones.
+
+**Measured against the configured `qwen3.6:35b-a3b` on this machine**, three
+words with their neighbouring lines took 103 seconds and came back `iç`, `ön
+koltuk` and `sağlamacı`. `iç` is the sense of "domestic" in "from threats both
+foreign and domestic" that the context-free tier gets wrong as `yerel`, and
+which the cache on disk had wrong.
+
+At 34 seconds a word, the fixed batch of twenty wanted 690 seconds against a
+180-second timeout. **A timeout loses the whole batch**, and the prefetch had no
+tier below it - `gloss_many` returned `""` where `lookup` would have fallen to
+Google and then to the archive. So every prefetched word came back empty, and an
+empty chip is indistinguishable from a word with no translation.
+
+Three changes (`main`):
+
+- The batch size is measured rather than assumed: a small probe first, because
+  the first request also pays for loading the model, then each batch sized from
+  what the last one cost, aiming at 60% of the timeout.
+- Whatever the model does not reach falls to Google, filed under the word alone
+  and never under the word-and-line key - so the contextual question stays
+  unanswered and the model is asked again next viewing. Google and not the
+  archive, because a film's four hundred words arriving at a free service in one
+  burst is a way to be blocked.
+- The daemon says which tier answered and the count travels back with the
+  answers into the `marks` record. `tools/study-report.mjs` prints it.
+
+**End to end afterwards**, live model and live Google, eight words on a fresh
+cache: 158 seconds, all eight from the model - `askeri sağlıkçı`, `ön koltuk`,
+`yedek`, `kasa`, `haberci`, `depo`, `işbirlikçi`. The cached `sağlamacı` for
+"medic" is gone.
+
+One thing that run also showed, on a single sample and worth no more than that:
+the same word in the same line came back `yerli` without the neighbouring lines
+and `iç` with them.
+
+What the budget means in practice: a 40-word chunk gets at most 180 seconds of
+model time, so at these speeds roughly nine words a chunk are answered
+contextually on a first viewing and the rest arrive as bare-word translations.
+The sentence-keyed cache stays empty for those, so each later viewing asks the
+model again and fills more of them in.

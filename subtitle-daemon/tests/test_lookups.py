@@ -15,6 +15,7 @@ from typing import Any
 
 import pytest
 from subtitle_daemon.lookups import (
+    GLOSS_PROBE,
     Lookups,
     _short_gloss,
     clean_translation,
@@ -507,6 +508,177 @@ def test_the_archive_still_answers_when_nothing_is_configured(
     to keep working for whoever cloned the repo and started it."""
     monkeypatch.setattr(lookups, "_fetch_translation", lambda *args: "parça")
     assert lookups.translate("spare", "en", "tr", "One spare engine.") == "parça"
+
+
+# --- when the model cannot keep up ----------------------------------------------
+#
+# Reported after a season of watching: "translation quality is still not
+# improved". It was not the model. Measured against the configured
+# qwen3.6:35b-a3b on this machine, three words took 103 seconds and came back
+# "iç", "ön koltuk" and "sağlamacı" - and "iç" is the sense of "domestic" in
+# "from threats both foreign and domestic" that the context-free tier gets wrong
+# as "yerel". At that speed a batch of twenty wants 690 seconds against a
+# 180-second timeout, a timeout loses the whole batch, and the prefetch had
+# nothing below it to catch what was lost.
+
+
+def test_a_batch_that_times_out_still_answers_from_the_tier_below(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    glosser = Lookups(tmp_path, gloss_model="a-slow-model", google_key="k")
+    monkeypatch.setattr(
+        "subtitle_daemon.lookups.urllib.request.urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("too slow")),
+    )
+    monkeypatch.setattr(Lookups, "_fetch_google", lambda self, term, *a: f"{term}-google")
+    items = [
+        {"term": "spare", "sentence": "Can you spare a minute?"},
+        {"term": "chamber", "sentence": "The pressure in the chamber is dropping."},
+    ]
+    assert glosser.gloss_many(items, "en", "tr") == ["spare-google", "chamber-google"]
+
+
+def test_the_context_free_answer_is_not_filed_where_the_contextual_one_goes(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Otherwise the model is never asked again. A bare-word answer under the
+    word-and-line key is a wrong answer to a question nobody will re-ask."""
+    glosser = Lookups(tmp_path, gloss_model="a-slow-model", google_key="k")
+    monkeypatch.setattr(
+        "subtitle_daemon.lookups.urllib.request.urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("too slow")),
+    )
+    monkeypatch.setattr(Lookups, "_fetch_google", lambda self, term, *a: "yerel")
+    line = "from threats both foreign and domestic."
+    assert glosser.gloss_many([{"term": "domestic", "sentence": line}], "en", "tr") == ["yerel"]
+    assert glosser._translation_path("domestic", "en", "tr").exists()
+    assert not glosser._translation_path("domestic", "en", "tr", line).exists()
+
+
+def test_the_batch_shrinks_to_what_the_model_can_manage(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A constant twenty is a claim about how fast the model is. The size comes
+    from what the last batch actually cost, after a small probe first - the
+    first request also pays for loading the model."""
+    glosser = Lookups(tmp_path, gloss_model="a-slow-model")
+    sizes: list[int] = []
+    clock = [0.0]
+
+    def fake_gloss(asks, language, target, timeout, film=""):
+        sizes.append(len(asks))
+        # Twelve seconds a word, so a 180s timeout holds nine and the aim of
+        # 60% of it holds five.
+        clock[0] += 12.0 * len(asks)
+        return [f"{ask.term}-said" for ask in asks]
+
+    monkeypatch.setattr(glosser, "_gloss", fake_gloss)
+    monkeypatch.setattr("subtitle_daemon.lookups.time.monotonic", lambda: clock[0])
+    items = [{"term": f"w{i}", "sentence": f"line {i}"} for i in range(14)]
+    said = glosser.gloss_many(items, "en", "tr")
+
+    assert sizes[0] == GLOSS_PROBE, f"the probe was {sizes[0]} words"
+    assert sizes[1] == 9, f"the second batch was {sizes[1]} words, not what 12s a word allows"
+    assert said[:2] == ["w0-said", "w1-said"]
+
+
+def test_a_call_stops_asking_the_model_once_its_budget_is_gone(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Past the budget the film is better served by a fast answer for every
+    remaining word than by a slow one for the next few."""
+    glosser = Lookups(tmp_path, gloss_model="a-slow-model", google_key="k")
+    clock = [0.0]
+    asked: list[int] = []
+
+    def fake_gloss(asks, language, target, timeout, film=""):
+        asked.append(len(asks))
+        clock[0] += 100.0
+        return [f"{ask.term}-said" for ask in asks]
+
+    monkeypatch.setattr(glosser, "_gloss", fake_gloss)
+    monkeypatch.setattr("subtitle_daemon.lookups.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(Lookups, "_fetch_google", lambda self, term, *a: f"{term}-google")
+    items = [{"term": f"w{i}", "sentence": f"line {i}"} for i in range(40)]
+    said = glosser.gloss_many(items, "en", "tr")
+
+    assert sum(asked) < 40, "the model was asked for every word despite the budget"
+    assert said[-1] == "w39-google", "the words past the budget were left blank"
+    assert said[0] == "w0-said", "the words inside it lost their contextual answer"
+
+
+def test_a_proper_noun_the_model_refused_is_not_then_translated(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The empty string is an ANSWER from this tier, not an absence.
+
+    The system prompt asks for "" on a proper noun, so a blank inside a batch
+    that came back means "Paige is a name, leave it alone". Handing those to
+    Google would undo the one instruction the model is given about them - and
+    the tier below has no idea it is looking at a name. Only the words in a
+    batch the model never answered at all fall through.
+    """
+    glosser = Lookups(tmp_path, gloss_model="a-model", google_key="k")
+    clock = [0.0]
+
+    def fake_gloss(asks, language, target, timeout, film=""):
+        clock[0] += 1.0
+        return ["" if ask.term == "Paige" else "oda" for ask in asks]
+
+    monkeypatch.setattr(glosser, "_gloss", fake_gloss)
+    monkeypatch.setattr("subtitle_daemon.lookups.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        Lookups, "_fetch_google", lambda self, term, *a: "sayfa-numarası-yap"
+    )
+    items = [
+        {"term": "Paige", "sentence": "Paige, come down here."},
+        {"term": "chamber", "sentence": "The pressure in the chamber is dropping."},
+    ]
+    assert glosser.gloss_many(items, "en", "tr") == ["", "oda"]
+
+
+def test_which_tier_answered_is_counted_and_handed_back(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """From the overlay a slow model, a missing key and a genuinely untranslatable
+    word are the same empty chip. The one report that followed was "translation
+    quality is still not improved", which is true and says nothing about which."""
+    glosser = Lookups(tmp_path, gloss_model="a-model", google_key="k")
+    clock = [0.0]
+    batches = [0]
+
+    def fake_gloss(asks, language, target, timeout, film=""):
+        clock[0] += 1.0
+        batches[0] += 1
+        # The first batch answers; the second gives up, the way a batch that
+        # ran out of clock does.
+        if batches[0] > 1:
+            return ["" for _ in asks]
+        # Written to disk the way the real _gloss writes, so the second call
+        # below is asking the question this test means to ask.
+        for ask in asks:
+            glosser._write_translation(ask.term.lower(), "en", "tr", f"{ask.term}-said", ask.line)
+        return [f"{ask.term}-said" for ask in asks]
+
+    monkeypatch.setattr(glosser, "_gloss", fake_gloss)
+    monkeypatch.setattr("subtitle_daemon.lookups.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        Lookups, "_fetch_google", lambda self, term, *a: "" if term == "w5" else f"{term}-google"
+    )
+    items = [{"term": f"w{i}", "sentence": f"line {i}"} for i in range(6)]
+    tally: dict[str, int] = {}
+    said = glosser.gloss_many(items, "en", "tr", tally=tally)
+
+    assert said[:GLOSS_PROBE] == [f"w{i}-said" for i in range(GLOSS_PROBE)]
+    assert said[4] == "w4-google"
+    assert said[5] == ""
+    assert tally == {"disk": 0, "model": GLOSS_PROBE, "google": 1, "none": 1}
+
+    # And the second time round the model's answers are on disk, which is a
+    # different fact about the same chip.
+    again: dict[str, int] = {}
+    glosser.gloss_many(items[:1], "en", "tr", tally=again)
+    assert again["disk"] == 1 and again["model"] == 0
 
 
 def test_no_model_named_means_the_batch_asks_nobody(lookups: Lookups, monkeypatch: Any) -> None:

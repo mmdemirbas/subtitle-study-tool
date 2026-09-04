@@ -155,6 +155,28 @@ GLOSS_BATCH = 20
 GLOSS_BATCH_TIMEOUT_SECONDS = 180
 GLOSS_LIVE_TIMEOUT_SECONDS = 4
 
+# The first batch of a call, before anything is known about how fast this model
+# is on this machine today. Small, because the first request also pays for
+# loading the model, and because a probe that times out has cost the call its
+# whole budget before it learned anything.
+GLOSS_PROBE = 4
+
+# How much of a batch's timeout an adaptively sized batch aims to use. A batch
+# that only just fits is a batch that loses everything the next time the machine
+# is a little busier than it was when the size was chosen.
+GLOSS_BATCH_AIM = 0.6
+
+# How long one prefetch call may spend on the model before the tier below takes
+# the rest of it.
+#
+# The prefetch is answering words that will be said in forty minutes, so a slow
+# model is not a failure - but it is not free either. Measured on this machine
+# at 34 seconds a word, a chunk of forty words would hold the request for
+# twenty-two minutes and answer none of the film's later chunks any sooner. Past
+# this the remaining words are better served by a context-free answer that
+# arrives than by a contextual one that does not.
+GLOSS_CALL_BUDGET_SECONDS = 180
+
 # How long a failing endpoint is left alone. Without this, every word looked up
 # by hand pays the full live timeout before the archive gets its turn, and a
 # reader who never configured a model would feel the whole feature stall.
@@ -363,7 +385,12 @@ class Lookups:
         return answer
 
     def gloss_many(
-        self, items: list[dict[str, Any]], language: str, target: str, film: str = ""
+        self,
+        items: list[dict[str, Any]],
+        language: str,
+        target: str,
+        film: str = "",
+        tally: dict[str, int] | None = None,
     ) -> list[str]:
         """Gloss many words at once, each in the line it was said in.
 
@@ -375,7 +402,17 @@ class Lookups:
         had left. Asked ahead, every one of them is a disk read.
 
         Returns one answer per item, in order, "" where nothing came back.
+
+        `tally` is filled in with how many answers came from where, if a caller
+        passes a dict for it. Which tier answered used to be knowable only by
+        watching the terminal the daemon was started in, and the one report that
+        followed was "translation quality is still not improved" - which is a
+        true statement about the chips on screen and says nothing about which of
+        four things went wrong. The counts travel back with the answers now.
         """
+        if tally is not None:
+            for where in ("disk", "model", "google", "none"):
+                tally.setdefault(where, 0)
         lang = (language or "").strip().lower()[:2]
         into = (target or "").strip().lower()[:2]
         asks = [
@@ -410,25 +447,153 @@ class Lookups:
                 held = self._read_translation(ask.term.lower(), lang, into)
             if held is not None:
                 answers[at] = held
+                if tally is not None:
+                    tally["disk"] += 1
                 continue
             wanted.setdefault((ask.term, ask.line), []).append(at)
             context.setdefault((ask.term, ask.line), ask)
 
-        if not wanted or not self._gloss_model:
+        if not wanted:
             return answers
 
         asked = list(wanted)
-        for start in range(0, len(asked), GLOSS_BATCH):
-            keys = asked[start : start + GLOSS_BATCH]
+        if self._gloss_model:
+            asked = self._gloss_into(answers, asked, wanted, context, lang, into, film)
+        if tally is not None:
+            # What the model reached, which includes the words it deliberately
+            # answered with "" - a proper noun refused is an answer from this
+            # tier, not an absence. See _gloss_into.
+            left = set(asked)
+            for key, where in wanted.items():
+                if key not in left:
+                    tally["model"] += len(where)
+
+        # Whatever the model did not answer, answered by the tier below rather
+        # than left blank. See _fill_context_free.
+        if asked:
+            self._fill_context_free(answers, asked, wanted, lang, into)
+        if tally is not None:
+            for key in asked:
+                for index in wanted[key]:
+                    tally["google" if answers[index] else "none"] += 1
+        return answers
+
+    def _gloss_into(
+        self,
+        answers: list[str],
+        asked: list[tuple[str, str]],
+        wanted: dict[tuple[str, str], list[int]],
+        context: dict[tuple[str, str], "Ask"],
+        lang: str,
+        into: str,
+        film: str,
+    ) -> list[tuple[str, str]]:
+        """Ask the model for as many as it can manage. Returns the rest.
+
+        The batch used to be a constant twenty, which is a claim about how fast
+        the model is. Measured on this machine against the configured
+        qwen3.6:35b-a3b: three words took 103 seconds, so twenty would want 690
+        against a 180-second timeout - and a timeout loses the whole batch, so
+        every request returned twenty blanks. The answers were good ones: the
+        same three words came back "iç", "ön koltuk" and "sağlamacı", and "iç"
+        is the sense of "domestic" in "foreign and domestic" that the tier below
+        gets wrong as "yerel".
+
+        So the size is measured rather than assumed. A small probe first,
+        because the first request also pays for loading the model, and then each
+        batch sized from what the last one actually cost. A whole call is
+        bounded too: past that the film is better served by a fast answer for
+        every remaining word than by a slow one for the next few.
+        """
+        budget = GLOSS_CALL_BUDGET_SECONDS
+        size = GLOSS_PROBE
+        at = 0
+        while at < len(asked) and budget > 0:
+            keys = asked[at : at + size]
+            started = time.monotonic()
             answered = self._gloss(
-                [context[key] for key in keys], lang, into, GLOSS_BATCH_TIMEOUT_SECONDS, film=film
+                [context[key] for key in keys],
+                lang,
+                into,
+                min(GLOSS_BATCH_TIMEOUT_SECONDS, budget),
+                film=film,
             )
+            took = time.monotonic() - started
+            budget -= took
+            got = 0
             for key, text in zip(keys, answered):
                 if not text:
                     continue
-                for at in wanted[key]:
-                    answers[at] = text
-        return answers
+                got += 1
+                for index in wanted[key]:
+                    answers[index] = text
+            if not got:
+                # Nothing came back, and on this path the reason is nearly
+                # always the clock rather than the words. `at` is deliberately
+                # not advanced: the batch that failed is part of what the tier
+                # below has to answer, and advancing past it was how those words
+                # kept their empty chips.
+                logger.warning(
+                    "gloss gave up after %.0fs for %s words; the rest go to the tier below",
+                    took,
+                    len(keys),
+                )
+                break
+            at += len(keys)
+            # What the next batch may hold, from what this one cost. Aiming
+            # short of the timeout rather than at it, because a batch that
+            # only just fits is a batch that loses everything when the machine
+            # is a little busier than it was.
+            per = took / max(1, len(keys))
+            room = (GLOSS_BATCH_TIMEOUT_SECONDS * GLOSS_BATCH_AIM) / per if per > 0 else GLOSS_BATCH
+            size = max(1, min(GLOSS_BATCH, int(room)))
+        return asked[at:]
+
+    def _fill_context_free(
+        self,
+        answers: list[str],
+        asked: list[tuple[str, str]],
+        wanted: dict[tuple[str, str], list[int]],
+        lang: str,
+        into: str,
+    ) -> None:
+        """Google, for the words the model did not reach.
+
+        The prefetch had no tier below it at all. `lookup` - the path a word
+        takes when it is clicked - falls from the model to Google to the
+        archive; this one returned "" instead, so a model that was down, busy or
+        merely slow left every prefetched word with an empty chip. On a machine
+        where the model cannot keep up that is the whole of "the translation
+        quality is still not improved": the good answers exist and never arrive.
+
+        Google and not the archive, deliberately. Google is keyed, fast - 0.25
+        seconds a word measured here - and its quota is the reader's own; the
+        archive is a free service, and a film's four hundred marked words
+        arriving at it in one burst at attach is a way to be blocked. A reader
+        with no key configured gets exactly what they got before, and their
+        by-hand lookups still fall to the archive one word at a time.
+
+        The answer is filed under the word alone, never under the word and its
+        line. That distinction is what `_translation_path` is built on: a
+        context-free answer is not an answer to the contextual question, and
+        filing it there would mean the model is never asked again. Filed flat it
+        serves every by-hand lookup of that word at once, and leaves the better
+        answer still to be had.
+        """
+        if not self._google_key:
+            return
+        for key in asked:
+            term = key[0]
+            held = self._read_translation(term.lower(), lang, into)
+            if held is None:
+                held = self._fetch_google(term, lang, into)
+                if held:
+                    self._write_translation(term.lower(), lang, into, held)
+            if not held:
+                continue
+            for index in wanted[key]:
+                if not answers[index]:
+                    answers[index] = held
 
     # --- disk ---------------------------------------------------------------
 

@@ -861,6 +861,15 @@
      * walk here, decided by one rule, so this is the one place that can answer
      * both. `tools/study-report.mjs` reads it back. */
     const glosses = [];
+    /* Which tier answered, added up over the film's chunks.
+     *
+     * The daemon has three of them - a model that reads the line, a
+     * context-free translator, and whatever is already on disk - and from the
+     * overlay all three failures look the same: a chip with nothing under it.
+     * Reported as "translation quality is still not improved", which is a true
+     * statement about the chips and says nothing about which of the three went
+     * wrong. Now it is in the record. */
+    const from = {};
     for (let at = 0; at < items.length; at += GLOSS_CHUNK) {
       // A different file, or a different pair of languages, while this was in
       // flight: the rest of these answers are about a film nobody is watching.
@@ -878,11 +887,15 @@
       });
       const said = Array.isArray(answer?.glosses) ? answer.glosses : [];
       for (let i = 0; i < chunk.length; i++) glosses.push(said[i] || "");
+      for (const [where, many] of Object.entries(answer?.from || {})) {
+        from[where] = (from[where] || 0) + many;
+      }
     }
 
     if (glossedTracks.get(slot) !== mark) return;
     noteMarks(slot, {
-      language, target, film, ranks, names, skipped, items, glosses, cues: texts.length,
+      language, target, film, ranks, names, skipped, items, glosses, from,
+      cues: texts.length,
     });
   }
 
@@ -898,7 +911,7 @@
    * Terms and glosses only. The lines they were said in are already reachable
    * from the file, and putting a film's dialogue in the log would make it a
    * copy of the subtitle rather than a record about it. */
-  function noteMarks(slot, { language, target, film, ranks, names, skipped, items, glosses, cues }) {
+  function noteMarks(slot, { language, target, film, ranks, names, skipped, items, glosses, from, cues }) {
     const info = api.trackInfo(slot) || {};
     let ranked = 0;
     let unranked = 0;
@@ -923,6 +936,8 @@
       },
       // Every way a word can fail to be marked, counted per occurrence.
       skipped,
+      // And which tier answered the ones that were. See the note on `from`.
+      from,
       /* t: the term. r: its rank, which for a phrase is a line in the phrase
        * table and for a word a line in the frequency one - null means the
        * table has never seen it, which is rarer than its last entry. p: a

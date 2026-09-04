@@ -186,7 +186,12 @@
             }
             if (msg.op === "gloss") {
               glossAsks.push(msg.args);
-              return { glosses: (msg.args.items || []).map(() => "") };
+              /* `from` as well as the answers. The daemon says which of its
+               * tiers answered, because from the overlay a slow model, a
+               * missing key and an untranslatable word are the same empty
+               * chip - see the marks record. */
+              const many = (msg.args.items || []).length;
+              return { glosses: (msg.args.items || []).map(() => ""), from: { none: many } };
             }
             if (msg.op === "lookup") {
               lookupCalls.push(msg.args.query);
@@ -5792,6 +5797,12 @@
          * from is on disk already. */
         if (JSON.stringify(record).includes("Get down"))
           throw new Error("the film's dialogue was written into the log");
+        /* And which tier answered, added up over the film's chunks. Reported as
+         * "translation quality is still not improved", which is true of the
+         * chips and says nothing about whether the model was slow, the key was
+         * missing, or the word has no translation. */
+        if ((record.from?.none ?? 0) !== record.asked.length)
+          throw new Error(`the tiers say ${JSON.stringify(record.from)} for ${record.asked.length} words`);
       });
 
       check("a sentence broken off with a dash is still the word before it", async () => {
