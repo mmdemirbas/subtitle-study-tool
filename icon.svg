@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24">
+  <title>subtitle-study-tool</title>
+  <!-- films with two subtitle tracks, and the words kept. Drawn on a 24 grid so it stays legible at 16 pixels. -->
+  <rect width="24" height="24" rx="6" fill="#d2691e" />
+  <g fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3.5" y="5" width="17" height="14" rx="2" />
+    <path d="M7.5 15.5h9" />
+    <path d="M9.5 12h5" />
+  </g>
+</svg>
