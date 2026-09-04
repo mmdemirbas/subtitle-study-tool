@@ -3104,43 +3104,88 @@
         const strip = mapStrips()[1];
         const canvas = strip.querySelector(".sso-map__canvas");
         const zoom = strip.querySelector(".sso-map__zoom");
+        const panelHost = panelShadow().host;
+        const panelBody = panelShadow().querySelector(".sso-panel__body");
+        const wasWidth = panelHost.getBoundingClientRect().width;
+        const wasBody = panelBody.getBoundingClientRect().height;
+
+        /* Widened first, because how many marks there are is a fact about the
+         * strip's width and not about the clock.
+         *
+         * paintTicks picks the first step on its ladder that leaves 58px per
+         * label, so the number of marks is `span / (58 * span / stripWidth)` -
+         * the span cancels and only the width is left. Measured at the width
+         * the panel opens at: 202px of strip, a 30-second step across the
+         * minute, two marks 100px apart. Two marks is a defensible clock and it
+         * makes "evenly spaced" vacuous, so this asks the question at a width
+         * where a grid has to exist. */
+        window.__ssoPanel.applySize(640, wasBody);
+        await sleep(220);
 
         try {
           for (let scale = 0; scale < 3; scale++) {
             const label = zoom.textContent;
+            // The same rounding paintTicks uses, so a mark's width in columns
+            // is known rather than assumed.
+            const dpr = Math.max(1, Math.round(window.devicePixelRatio || 1));
             const context = canvas.getContext("2d");
+            const cssWidth = canvas.getBoundingClientRect().width;
+            if (cssWidth < 240)
+              throw new Error(`the strip is ${Math.round(cssWidth)}px wide, too narrow to owe a grid`);
+
             const top = context.getImageData(0, 0, canvas.width, 1).data;
             const bottom = context.getImageData(0, canvas.height - 1, canvas.width, 1).data;
-            const ticks = [];
+
+            /* Columns are grouped into marks before anything is counted.
+             *
+             * A mark is drawn `ratio()` device pixels wide, so a column count
+             * counts one thing on a 1x display and two on a 2x one. That is how
+             * this check came to pass on a laptop and fail headless: the same
+             * two marks read as 4 columns at 2x and 2 at 1x, and the threshold
+             * was written in columns. */
+            const marks = [];
             for (let x = 0; x < canvas.width; x++) {
               const a = top[x * 4 + 3];
               const b = bottom[x * 4 + 3];
               // Ink at both ends of the column, and faint - the playhead is
               // opaque, and a cue bar never reaches the top.
-              if (a > 8 && b > 8 && a < 200) ticks.push(x);
+              if (!(a > 8 && b > 8 && a < 200)) continue;
+              if (marks.length && x - marks[marks.length - 1].last <= 1) marks[marks.length - 1].last = x;
+              else marks.push({ first: x, last: x });
             }
-            if (ticks.length < 3)
-              throw new Error(`the ${label} scale draws ${ticks.length} time ticks`);
+            if (marks.length < 3)
+              throw new Error(
+                `the ${label} scale draws ${marks.length} time marks across ${Math.round(cssWidth)}px`);
 
-            const gaps = [];
-            for (let i = 1; i < ticks.length; i++) {
-              // Adjacent columns are one tick two device pixels wide.
-              if (ticks[i] - ticks[i - 1] > 2) gaps.push(ticks[i] - ticks[i - 1]);
+            /* A lattice, not a list of equal gaps.
+             *
+             * Anything opaque standing on a mark hides it from the reading
+             * above - the playhead does, and at the film scale so does a
+             * density bar tall enough to reach the top row. Demanding that
+             * every gap be identical calls that an uneven clock. Measured at 1x
+             * on the film scale: marks at 0, 101, 151 and 201 device pixels
+             * with the one at 50 hidden, so the gaps are 101, 50, 50 and only a
+             * multiples rule reads them as the even grid they are. */
+            const gaps = marks.slice(1).map((mark, i) => (mark.first - marks[i].first) / dpr);
+            const unit = Math.min(...gaps);
+            for (const gap of gaps) {
+              const steps = Math.round(gap / unit);
+              if (Math.abs(gap - steps * unit) > 1)
+                throw new Error(
+                  `the ${label} scale has a ${gap.toFixed(1)}px gap in a ${unit.toFixed(1)}px grid`);
             }
-            const wide = Math.max(...gaps);
-            const narrow = Math.min(...gaps);
-            if (wide - narrow > 2)
-              throw new Error(`the ${label} scale's ticks are ${narrow}px to ${wide}px apart`);
-            // Far enough apart to carry a legible label.
-            if (narrow < 40)
-              throw new Error(`the ${label} scale's ticks are ${narrow}px apart, too close to label`);
+            // Far enough apart to carry a legible label, in the units the label
+            // is drawn in.
+            if (unit < 40)
+              throw new Error(`the ${label} scale's marks are ${unit.toFixed(1)}px apart, too close to label`);
 
             zoom.click();
             await sleep(180);
           }
         } finally {
+          window.__ssoPanel.applySize(wasWidth, wasBody);
           window.__ssoApi.detach(1);
-          await sleep(100);
+          await sleep(120);
         }
       });
 
