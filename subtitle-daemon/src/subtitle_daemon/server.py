@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import binascii
 import errno
+import hashlib
 import json
 import logging
 import re
@@ -962,7 +963,23 @@ def _cache_key(
 ) -> str:
     parts = [query.lower(), ",".join(sorted(languages)), str(year), str(season), str(episode),
              str(imdb_id)]
-    return re.sub(r"[^a-z0-9]+", "_", "|".join(parts).lower())[:120]
+    raw = "|".join(parts)
+    # A readable name, plus a digest of what it was made from.
+    #
+    # The name alone was the key, and it is lossy twice over. Every character
+    # outside a-z0-9 collapses to an underscore, so a title with no Latin
+    # letters in it collapses to nothing: "君の名は" and "千と千尋の神隠し" both
+    # keyed as "_en_none_none_none_none", and the second search was answered
+    # with the first film's results for the six hours the entry lived. It was
+    # also cut to 120 characters, so two long titles sharing a prefix met in
+    # the same place. Searches cost no quota, so the collision was never paid
+    # for in downloads - it was paid for by attaching the wrong subtitle.
+    #
+    # The digest is over the parts before they are flattened, so nothing that
+    # distinguishes two searches can be lost on the way to the key. The
+    # readable half is kept because this cache is looked at by hand.
+    slug = re.sub(r"[^a-z0-9]+", "_", raw.lower())[:100]
+    return f"{slug}-{hashlib.sha256(raw.encode('utf-8')).hexdigest()[:12]}"
 
 
 def _first(params: dict[str, list[str]], key: str) -> str | None:

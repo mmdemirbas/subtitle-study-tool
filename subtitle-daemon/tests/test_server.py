@@ -801,6 +801,30 @@ def test_a_clean_typed_title_survives_the_guesser_untouched(http) -> None:
     assert payload["used"]["query"] == "Crime 101"
 
 
+def test_two_searches_that_share_no_latin_letters_are_not_one_search() -> None:
+    """The key was the readable name and nothing else, and the name is lossy.
+
+    Every character outside a-z0-9 becomes an underscore, so a title written in
+    a script that has none of them collapses to nothing at all: two different
+    films keyed the same, and the second search was answered out of the first
+    one's cache entry for the six hours it lived. Searches cost no quota, so
+    this was never paid for in downloads - it was paid for by attaching the
+    wrong subtitle. The 120-character cut did the same to two long titles that
+    begin alike.
+    """
+    kimi = server_module._cache_key("君の名は", ("en",), None, None, None, None)
+    chihiro = server_module._cache_key("千と千尋の神隠し", ("en",), None, None, None, None)
+    assert kimi != chihiro
+
+    long_one = server_module._cache_key("the " * 40 + "americans", ("en",), None, None, None, None)
+    long_two = server_module._cache_key("the " * 40 + "sopranos", ("en",), None, None, None, None)
+    assert long_one != long_two
+
+    # Still readable, because this cache is looked at by hand.
+    plain = server_module._cache_key("the americans", ("en", "tr"), 2013, 2, 9, "tt2149175")
+    assert plain.startswith("the_americans_en_tr_2013_2_9_tt2149175-")
+
+
 # --- what a body may say ----------------------------------------------------
 
 
