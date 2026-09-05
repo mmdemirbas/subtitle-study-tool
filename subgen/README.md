@@ -6,7 +6,7 @@ does not exist.
 
 ```bash
 ./setup.sh                        # installs faster-whisper into a venv
-./run.sh /path/to/film.mkv        # writes film.srt beside it
+./run.sh /path/to/film.mkv        # writes outputs/film.orig.srt and outputs/film.en.srt
 python3 src/cli.py --help         # every option
 ```
 

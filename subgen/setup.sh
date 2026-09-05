@@ -32,7 +32,13 @@ echo "[SubGen] Upgrading pip"
 pip install --upgrade pip >/dev/null
 
 echo "[SubGen] Installing requirements from requirements.txt"
-pip install --no-binary=:all: -r "$PROJECT_DIR/requirements.txt"
+# Wheels allowed. This asked pip for source distributions only, and
+# faster-whisper publishes none for the pinned 1.2.1 - so the install ended at
+# the first line of the file with "no matching distribution found", listing
+# every version up to 1.2.0 as if the pin were the problem. ctranslate2, which
+# comes with it, would want a C++ toolchain and a long build even where a
+# source distribution exists.
+pip install -r "$PROJECT_DIR/requirements.txt"
 
 echo "[SubGen] Setup complete.  To use the tool, run:"
 echo "  source $VENV_DIR/bin/activate && ./run.sh <file_or_directory>"
