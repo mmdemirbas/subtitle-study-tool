@@ -24,9 +24,10 @@ transcripts don't already show.
 ## Why it matters for the realtime path
 
 Both runs used `large-v3`. On this machine that model transcribes slower than
-realtime, so neither configuration here can drive a live overlay as-is. The
-realtime engine in `subgen/` uses a smaller model for that reason; these files
-are the quality reference to measure that tradeoff against, not a baseline to
+realtime, so neither configuration here can drive a live overlay as-is. `subgen/`
+is the batch generator and defaults to `large-v3` as well - a realtime engine is
+still an idea, and when there is one it will run a smaller model. These files are
+the quality reference to measure that tradeoff against, not a baseline to
 reproduce.
 
 The `condition_on_previous_text=False` and VAD settings in the faster-whisper

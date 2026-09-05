@@ -1,4 +1,11 @@
 SubGen - Complete Project Files
+
+> **Not the tool in `subgen/`.** This is a specification that was never
+> implemented, kept for the design decisions in it. The generator that exists
+> is `subgen/src/`, which is faster-whisper based and documented in
+> `subgen/README.md`; nothing below describes its behaviour, its flags or its
+> output. See the root README's "What subgen is" list.
+
 Copy each file below to create your project structure.
 
 File: README.md

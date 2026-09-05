@@ -27,10 +27,12 @@ so matching cue text gives a correspondence that owes nothing to any method
 here, and every matched pair is a point on the true warp. Unique-exact-match
 plus a longest increasing subsequence, which is the anchor trick `diff` uses.
 
-It **refuses** rather than guesses. Of 283 same-film pairs it settles 137;
-of the rest, 131 are cross-language and share no text by construction and 15 are
+It **refuses** rather than guesses. Of 379 same-film pairs it settles 162;
+of the rest, 202 are cross-language and share no text by construction and 15 are
 independent transcriptions with too few identical lines. Both refusals are
-printed. The refused half is scored by referees instead, in its own table,
+printed. Those four numbers are what `shapes.mjs` printed against a 277-file
+corpus, and the corpus grows whenever `expand.mjs` runs - the figures earlier in
+this paragraph were 283, 137 and 131 when the corpus was smaller. The refused half is scored by referees instead, in its own table,
 labelled as objectives rather than truth.
 
 This replaced a consensus - a pair where the methods landed within 250ms of each

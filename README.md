@@ -37,8 +37,9 @@ video.
 | `srt-viewer/` | Single-file browser app, "SRT Study Tool v7". Dual-subtitle study surface with its own virtual playback clock, for studying without a video. Also where the subtitle corpus the aligner is tested against lives. | see its README |
 | `srt-translator/` | Python CLI. Batch-translates a whole `.srt` via OpenAI / DeepL / Google / Azure / LibreTranslate, with a SQLite dedup cache. Made the Turkish files in `srt-viewer/subtitles/`. | working |
 | `subgen/` | Local Whisper transcription, for a film nobody has subtitled. Batch today, over a file you already have; realtime is still an idea. | see its README |
+| `bench/align/` | The alignment bench. Builds a ground truth from cue text rather than from clocks, then measures every aligner against it - including the one the extension ships. Run it before changing an alignment constant. | see its README |
 | `scripts/` | `setup-whisper.sh` builds whisper.cpp and fetches models. | working |
-| `docs/` | Bake-off results and older design specs. | reference |
+| `docs/` | Bake-off results, reports and older design specs. | reference |
 
 Multi-gigabyte things — the whisper.cpp checkout and the model weights — live
 in `vendor/` and `models/`, both gitignored and both restored by

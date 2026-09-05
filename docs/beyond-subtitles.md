@@ -44,6 +44,15 @@ it may never explain the future.*
 The stated goal is language learning, so this is the layer with the clearest
 payoff, and the cheapest to build.
 
+**Read this as the pitch it was, not as a list of what is missing.** Five of the
+six below have since been built, and the page has not been rewritten around
+them: 1.1 click a word (the lookup popup in `study.js`), 1.2 save the word with
+its line and export it (`study/deck.js`, TSV and Anki), 1.3 rarity highlighting
+(the marked words in study mode, from a static frequency list as predicted),
+1.5 idiom and phrase marking (`study/phrases.js`), and 1.6 two subtitles at once
+in the overlay. Of 1.4, the replay key shipped as **T**; playing one cue at
+0.75x did not. What remains unbuilt is Layer 2 and beyond.
+
 ### 1.1 Click a word, get its meaning
 Make cue text selectable, pause on click, show definition + translation +
 pronunciation. The study viewer already has a dictionary drawer and a selection
