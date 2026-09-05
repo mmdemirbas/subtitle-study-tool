@@ -55,11 +55,21 @@ _ALLOWED_ORIGIN = re.compile(
 
 MAX_BODY_BYTES = 64 * 1024
 
+# An import carries a whole subtitle file, base64-encoded, so it is the one
+# body that is legitimately larger than a request. Measured over the 273 files
+# in this machine's cache: the median encodes to 56KB and the largest to 200KB,
+# and 96 of them - a third of what is held - did not fit under the 64KB
+# ceiling. Those imports were refused with "body too large", which meant the
+# extension paid a second download for a file the daemon could have been given.
+MAX_IMPORT_BODY_BYTES = 4 * 1024 * 1024
+
 # The running log is the one body that is legitimately large: a single
 # alignment entry carries two subtitle files' worth of timings. It is written
 # straight to a file and never parsed into anything the rest of the daemon
 # holds, so a bigger ceiling here costs disk, not memory.
 MAX_LOG_BODY_BYTES = 64 * 1024 * 1024
+
+_BODY_CEILINGS = {"/log": MAX_LOG_BODY_BYTES, "/cached": MAX_IMPORT_BODY_BYTES}
 
 # Everything a search derives about its result set, and therefore everything a
 # cache hit has to reproduce. Anything omitted here silently reverts to its
@@ -558,8 +568,8 @@ class Service:
 
     def fetch(self, body: dict[str, Any]) -> dict[str, Any]:
         """Return cues for a file_id, downloading only if not already cached."""
-        file_id = body.get("file_id")
-        if not isinstance(file_id, int):
+        file_id = _file_id(body.get("file_id"))
+        if file_id is None:
             return {"error": "file_id must be an integer"}
 
         cached = self.cache.get_subtitle(file_id)
@@ -630,8 +640,8 @@ class Service:
         stored verbatim, so the file on disk is the one OpenSubtitles served and
         its sha256 matches on both sides.
         """
-        file_id = body.get("file_id")
-        if not isinstance(file_id, int):
+        file_id = _file_id(body.get("file_id"))
+        if file_id is None:
             return {"error": "file_id must be an integer"}
 
         existing = self.cache.get_subtitle(file_id)
@@ -793,7 +803,15 @@ class _Handler(BaseHTTPRequestHandler):
         except ValueError:
             self._send(HTTPStatus.BAD_REQUEST, {"error": "bad Content-Length"})
             return
-        ceiling = MAX_LOG_BODY_BYTES if parsed.path == "/log" else MAX_BODY_BYTES
+        # Negative as well as unparseable. Only the ceiling was checked, and a
+        # declared length of -1 is under every ceiling there is - it then
+        # reached rfile.read(-1), which reads until the peer closes rather than
+        # until the body ends, so one request held a worker thread for as long
+        # as the caller cared to keep the socket open.
+        if length < 0:
+            self._send(HTTPStatus.BAD_REQUEST, {"error": "bad Content-Length"})
+            return
+        ceiling = _BODY_CEILINGS.get(parsed.path, MAX_BODY_BYTES)
         if length > ceiling:
             self._send(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "body too large"})
             return
@@ -905,6 +923,22 @@ def _episode_agreement(item: dict[str, Any], season: int | None, episode: int | 
     ):
         return 1
     return -1
+
+
+def _file_id(value: Any) -> int | None:
+    """A file_id, or None when what arrived cannot be one.
+
+    bool is a subclass of int in Python, so `isinstance(file_id, int)` admitted
+    True - and True is what a caller sends when a truthiness check has crept in
+    somewhere on the way. It then names the file: measured against a scratch
+    cache, {"file_id": true} wrote True.srt and True.json, after which
+    list_subtitles raised ValueError on int("True") and every endpoint that
+    lists what is held answered with a traceback instead. One bad body, and the
+    cache directory stayed poisoned until somebody deleted the two files.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
 
 
 def _cues_response(raw: bytes, meta: dict[str, Any], *, from_cache: bool) -> dict[str, Any]:

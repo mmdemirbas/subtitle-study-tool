@@ -115,6 +115,28 @@ def test_a_word_that_could_escape_the_cache_directory_does_not(lookups: Lookups)
     assert "/" not in path.name.removeprefix("en-")
 
 
+def test_a_language_code_that_could_escape_the_cache_directory_does_not(
+    lookups: Lookups,
+) -> None:
+    """The word was quoted and the codes beside it were not.
+
+    `lang` and `to` arrive as query parameters on /lookup, and both are written
+    straight into the filename the answer is cached under - so a code carrying
+    a slash named a path rather than a file, in a directory the caller chose.
+    Every real code quotes to itself, so nothing already on disk moved.
+    """
+    assert lookups._path("warrant", "en").name == "en-warrant.json"
+    assert lookups._translation_path("warrant", "en", "tr").name == "en-tr-warrant.json"
+
+    escaped = lookups._path("warrant", "../../etc")
+    assert escaped.parent == lookups._dir
+    assert "/" not in escaped.name
+
+    both = lookups._translation_path("warrant", "../../etc", "../..")
+    assert both.parent == lookups._translations
+    assert "/" not in both.name
+
+
 def test_a_corrupt_cache_file_is_a_miss_rather_than_a_crash(
     lookups: Lookups, monkeypatch: Any
 ) -> None:

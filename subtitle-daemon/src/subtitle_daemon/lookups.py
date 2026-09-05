@@ -600,8 +600,10 @@ class Lookups:
     def _path(self, term: str, language: str) -> Path:
         # quote() rather than a hash: the cache stays readable, and a word that
         # contains a slash or a dot cannot escape the directory.
+        # The language too, and for the same reason. It arrives as a query
+        # parameter, so "lang=../.." was a directory the answer got written to.
         safe = urllib.parse.quote(term, safe="")
-        return self._dir / f"{language}-{safe}.json"
+        return self._dir / f"{urllib.parse.quote(language, safe='')}-{safe}.json"
 
     def _read(self, term: str, language: str) -> dict[str, Any] | None:
         path = self._path(term, language)
@@ -634,10 +636,15 @@ class Lookups:
         and the answers being split apart are answers to the same question.
         """
         safe = urllib.parse.quote(term, safe="")
+        # Both codes quoted as well: they come from the query string, and an
+        # unquoted one carrying a slash names a path rather than a file. For
+        # every real language code quote() is the identity, so nothing already
+        # on disk changes name.
+        pair = f"{urllib.parse.quote(language, safe='')}-{urllib.parse.quote(target, safe='')}"
         if sentence:
             mark = hashlib.sha1(sentence.encode("utf-8")).hexdigest()[:10]
-            return self._translations / f"{language}-{target}-{safe}-{mark}.json"
-        return self._translations / f"{language}-{target}-{safe}.json"
+            return self._translations / f"{pair}-{safe}-{mark}.json"
+        return self._translations / f"{pair}-{safe}.json"
 
     def _read_translation(
         self, term: str, language: str, target: str, sentence: str = ""

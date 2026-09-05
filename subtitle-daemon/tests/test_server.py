@@ -11,6 +11,8 @@ call or consume real quota.
 
 from __future__ import annotations
 
+import base64
+import http.client as http_client
 import json
 import threading
 import urllib.error
@@ -797,6 +799,81 @@ def test_a_clean_typed_title_survives_the_guesser_untouched(http) -> None:
     base, _stub = http
     _status, payload = _get(base, "/search?query=Crime+101")
     assert payload["used"]["query"] == "Crime 101"
+
+
+# --- what a body may say ----------------------------------------------------
+
+
+def test_a_boolean_file_id_is_refused_by_both_endpoints(http, tmp_path) -> None:
+    """bool is a subclass of int, and True names a file.
+
+    isinstance(True, int) is True, so a body of {"file_id": true} - which is
+    what a truthiness check on the caller's side produces - reached the cache
+    and wrote True.srt and True.json beside the numbered ones. list_subtitles
+    then raised ValueError on int("True"), so every endpoint that lists what is
+    held answered with a traceback, and it stayed that way until somebody
+    deleted the two files by hand.
+    """
+    base, _stub = http
+
+    for path in ("/fetch", "/cached"):
+        _status, answer = _post(base, path, {"file_id": True, "content": "aGk="})
+        assert answer.get("error") == "file_id must be an integer", (path, answer)
+
+    status, listed = _get(base, "/cached")
+    assert status == 200
+    assert isinstance(listed.get("subtitles"), list)
+
+
+def test_a_negative_content_length_is_refused_rather_than_read(http) -> None:
+    """Only the ceiling was checked, and -1 is under every ceiling there is.
+
+    It then reached rfile.read(-1), which reads until the peer closes rather
+    than until the body ends - so the request held a worker thread for as long
+    as the caller kept the socket open. Without the check this test times out
+    rather than failing.
+    """
+    base, _stub = http
+    host, port = base.removeprefix("http://").split(":")
+
+    conn = http_client.HTTPConnection(host, int(port), timeout=5)
+    try:
+        conn.putrequest("POST", "/cached")
+        conn.putheader("Content-Type", "application/json")
+        conn.putheader("Content-Length", "-1")
+        conn.endheaders()
+        conn.send(b"{}")
+        response = conn.getresponse()
+        assert response.status == 400
+        assert json.loads(response.read())["error"] == "bad Content-Length"
+    finally:
+        conn.close()
+
+
+def test_an_import_the_size_of_a_real_subtitle_fits(http) -> None:
+    """A third of this machine's cache did not fit under the old ceiling.
+
+    Imports carry a whole subtitle file, base64-encoded. Measured over the 273
+    files held here: the median encodes to 56KB and the largest to 200KB, and 96
+    of them were over the 64KB ceiling every other endpoint shares. Each of
+    those was answered with "body too large", which is a download paid twice.
+    """
+    base, _stub = http
+
+    cues = "".join(
+        f"{n}\n00:{n // 60:02d}:{n % 60:02d},000 --> 00:{n // 60:02d}:{n % 60:02d},900\n"
+        f"a line of dialogue long enough to be one\n\n"
+        for n in range(1, 1400)
+    )
+    raw = cues.encode()
+    assert len(base64.b64encode(raw)) > server_module.MAX_BODY_BYTES
+
+    status, answer = _post(
+        base, "/cached",
+        {"file_id": 8801, "content": base64.b64encode(raw).decode(), "meta": {"language": "en"}},
+    )
+    assert status == 200, answer
+    assert answer.get("imported") is True, answer
 
 
 # --- the extension's running log --------------------------------------------

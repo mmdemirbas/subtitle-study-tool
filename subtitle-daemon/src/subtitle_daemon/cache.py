@@ -136,6 +136,11 @@ class Cache:
             data_path = meta_path.with_suffix(".srt")
             if not data_path.exists():
                 continue
+            # A name that is not a file_id is skipped rather than raised on.
+            # This directory is also where a stray file lands, and one of those
+            # used to take out every endpoint that lists what is held.
+            if not meta_path.stem.isdigit():
+                continue
             found.append(
                 CachedSubtitle(
                     file_id=int(meta_path.stem),
