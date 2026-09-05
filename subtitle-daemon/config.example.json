@@ -12,7 +12,7 @@
 
   "port": 8791,
 
-  "_comment_gloss": "Study mode's word meanings, best tier first. gloss_model names a model that sees the subtitle line a word was said in, which is what tells "spare a minute" from "a spare tyre"; gloss_url defaults to a model running on this machine (http://127.0.0.1:11434/v1/chat/completions for ollama) and gloss_api_key is only needed for a hosted one. google_api_key is the tier below: a sane answer for a bare word, with no idea of the line. With neither, a free archive answers and the glosses are what they were.",
+  "_comment_gloss": "Study mode's word meanings, best tier first. gloss_model names a model that sees the subtitle line a word was said in, which is what tells 'spare a minute' from 'a spare tyre'; gloss_url defaults to a model running on this machine (http://127.0.0.1:11434/v1/chat/completions for ollama) and gloss_api_key is only needed for a hosted one. google_api_key is the tier below: a sane answer for a bare word, with no idea of the line. With neither, a free archive answers and the glosses are what they were.",
   "gloss_model": "",
   "gloss_url": "",
   "gloss_api_key": "",

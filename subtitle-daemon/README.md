@@ -56,7 +56,8 @@ own vocabulary and none of them is what a dictionary says. `gloss_url` defaults 
 which is [ollama](https://ollama.com) on this machine: no key, no quota, and
 nothing about what you are watching leaves the house. Any endpoint speaking the
 OpenAI chat-completions shape works, with `gloss_api_key` for a hosted one.
-`GLOSS_MODEL`, `GLOSS_URL` and `GLOSS_API_KEY` override the file.
+`GLOSS_MODEL`, `GLOSS_URL`, `GLOSS_API_KEY` and `GOOGLE_API_KEY` override the
+file.
 
 `google_api_key` is the tier below: a sane answer for a bare word, with no idea
 of the line. Below that a free archive answers with no key at all, which is what
@@ -86,9 +87,9 @@ out. `--replace` stops the old one and takes over — and refuses if the port is
 held by something that is not a subtitle-daemon, since taking the port first
 is not a reason to be killed.
 
-There are no runtime dependencies. `http.server` and `urllib` cover a
-three-endpoint service, and keeping the dependency list empty means the daemon
-starts even if nothing has been installed.
+There are no runtime dependencies. `http.server` and `urllib` cover a service
+of this size, and keeping the dependency list empty means the daemon starts
+even if nothing has been installed.
 
 ## Quota, and why the cache is not optional
 
@@ -127,6 +128,10 @@ Downloaded subtitle files are not versioned: those are raw bytes.
 | `GET` | `/cached/{file_id}` | Cues for one cached subtitle. |
 | `GET` | `/lookup?q=...` | A word's dictionary entry and its meaning. `lang`, `to`, `sentence`, and optionally `film`, `before` and `after`. Free. |
 | `POST` | `/gloss` | Body `{"language", "target", "film", "items": [{"term", "sentence", "before", "after"}]}`. Many words with their lines, answered before they are asked. Free. |
+| `POST` | `/cached` | Body `{"file_id", "content"}` and the metadata beside it. Takes in a subtitle the extension downloaded while the daemon was stopped, so the same `file_id` is not paid for twice. |
+| `POST` | `/log` | Appends to the extension's running log. A browser extension cannot write a file without announcing every one, and this records while you watch. Larger body ceiling than the rest. |
+| `DELETE` | `/cached/{file_id}` | Forgets one subtitle. |
+| `DELETE` | `/cached` | Forgets everything. `?searches_only=1` keeps the downloaded files and clears only the search cache, which is the one that costs nothing to rebuild. |
 
 `/search` also accepts `languages`, `year`, `season`, `episode` and `imdb_id`.
 
