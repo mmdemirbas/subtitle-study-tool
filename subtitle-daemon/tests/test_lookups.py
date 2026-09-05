@@ -659,6 +659,41 @@ def test_a_proper_noun_the_model_refused_is_not_then_translated(
     assert glosser.gloss_many(items, "en", "tr") == ["", "oda"]
 
 
+def test_a_batch_of_names_does_not_stop_the_model_for_the_rest_of_the_film(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """An empty batch used to be read as an outage, and it is not one.
+
+    The prompt asks for "" on a proper noun, so a batch that happens to hold
+    only names comes back entirely blank - and the loop broke there, handing
+    every word after it to the tier below for the rest of the call. A cast list
+    said early in a film is exactly such a batch.
+
+    None is what an unreachable model returns now, and only that stops the tier.
+    """
+    glosser = Lookups(tmp_path, gloss_model="a-model", google_key="k")
+    clock = [0.0]
+    seen: list[list[str]] = []
+
+    def fake_gloss(asks, language, target, timeout, film=""):
+        clock[0] += 1.0
+        seen.append([ask.term for ask in asks])
+        # Every name refused; every other word answered.
+        return ["" if ask.term[0].isupper() else f"{ask.term}-said" for ask in asks]
+
+    monkeypatch.setattr(glosser, "_gloss", fake_gloss)
+    monkeypatch.setattr("subtitle_daemon.lookups.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(Lookups, "_fetch_google", lambda self, term, *a: f"{term}-google")
+
+    names = [{"term": f"Name{i}", "sentence": f"line {i}"} for i in range(GLOSS_PROBE)]
+    words = [{"term": f"word{i}", "sentence": f"line {i}"} for i in range(3)]
+    said = glosser.gloss_many(names + words, "en", "tr")
+
+    assert said[:GLOSS_PROBE] == [""] * GLOSS_PROBE, "a refused name is left alone"
+    assert said[GLOSS_PROBE:] == [f"word{i}-said" for i in range(3)], (
+        f"the model was asked {seen} and stopped after the batch of names")
+
+
 def test_which_tier_answered_is_counted_and_handed_back(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
@@ -673,9 +708,10 @@ def test_which_tier_answered_is_counted_and_handed_back(
         clock[0] += 1.0
         batches[0] += 1
         # The first batch answers; the second gives up, the way a batch that
-        # ran out of clock does.
+        # ran out of clock does - None rather than a row of blanks, because a
+        # row of blanks is the model saying these are names.
         if batches[0] > 1:
-            return ["" for _ in asks]
+            return None
         # Written to disk the way the real _gloss writes, so the second call
         # below is asking the question this test means to ask.
         for ask in asks:

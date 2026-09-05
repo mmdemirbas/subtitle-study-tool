@@ -368,12 +368,17 @@ class Lookups:
                 return held
             if time.monotonic() >= self._gloss_rests_until:
                 ask = Ask(term, line, (before or "").strip(), (after or "").strip())
-                answer = self._gloss(
+                answered = self._gloss(
                     [ask], lang, into, GLOSS_LIVE_TIMEOUT_SECONDS, film=film
-                )[0]
-                if answer:
-                    return answer
-                self._gloss_rests_until = time.monotonic() + GLOSS_REST_SECONDS
+                )
+                if answered and answered[0]:
+                    return answered[0]
+                # The rest is for a model that could not be reached, not for a
+                # word it had nothing to say about. Standing down for a minute
+                # over one proper noun took the good tier away from every word
+                # the reader clicked next.
+                if answered is None:
+                    self._gloss_rests_until = time.monotonic() + GLOSS_REST_SECONDS
 
         cached = self._read_translation(term.lower(), lang, into)
         if cached is not None:
@@ -520,25 +525,27 @@ class Lookups:
             )
             took = time.monotonic() - started
             budget -= took
-            got = 0
-            for key, text in zip(keys, answered):
-                if not text:
-                    continue
-                got += 1
-                for index in wanted[key]:
-                    answers[index] = text
-            if not got:
-                # Nothing came back, and on this path the reason is nearly
-                # always the clock rather than the words. `at` is deliberately
-                # not advanced: the batch that failed is part of what the tier
-                # below has to answer, and advancing past it was how those words
-                # kept their empty chips.
+            if answered is None:
+                # The model could not be asked - the clock, the port, the key.
+                # `at` is deliberately not advanced: the batch that failed is
+                # part of what the tier below has to answer, and advancing past
+                # it was how those words kept their empty chips.
                 logger.warning(
                     "gloss gave up after %.0fs for %s words; the rest go to the tier below",
                     took,
                     len(keys),
                 )
                 break
+            for key, text in zip(keys, answered):
+                if not text:
+                    continue
+                for index in wanted[key]:
+                    answers[index] = text
+            # Advanced whether or not anything came back, because a batch that
+            # answered with nothing has still answered: the prompt asks for ""
+            # on a name. Only an unreachable model stops the tier, above. This
+            # used to break on an empty batch as well, so a run of names in one
+            # batch cost the model tier the whole rest of the film.
             at += len(keys)
             # What the next batch may hold, from what this one cost. Aiming
             # short of the timeout rather than at it, because a batch that
@@ -754,11 +761,18 @@ class Lookups:
         target: str,
         timeout: float,
         film: str = "",
-    ) -> list[str]:
-        """One request, one gloss per ask, "" for every ask on any failure."""
-        blank = ["" for _ in asks]
+    ) -> list[str] | None:
+        """One gloss per ask, or None when the model could not be asked.
+
+        None and a row of empty strings are two different things and the
+        callers act on them differently: a model that answered nothing for
+        these particular words has still been reached, and the tier is still
+        good for the next batch. Returning "" for both made every refusal look
+        like an outage - the batch loop stopped asking for the rest of the film
+        and the single-word path stood down for a minute.
+        """
         if not self._gloss_model or not asks:
-            return blank
+            return None
 
         system = GLOSS_SYSTEM.format(target=target)
         if film:
@@ -839,7 +853,7 @@ class Lookups:
             logger.warning(
                 "gloss unavailable for %s words from %s: %s", len(asks), self._gloss_url, error
             )
-            return blank
+            return None
 
         # A short array would pair every gloss after the gap with the wrong
         # word, which is worse than no gloss at all - a wrong meaning under a
@@ -850,7 +864,7 @@ class Lookups:
                 len(answers) if isinstance(answers, list) else type(answers).__name__,
                 len(asks),
             )
-            return blank
+            return None
 
         # Written here rather than by the callers, so the single-word path and
         # the batch cannot disagree about what a cached gloss looks like.
