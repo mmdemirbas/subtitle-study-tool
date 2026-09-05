@@ -420,6 +420,11 @@ class Lookups:
                 tally.setdefault(where, 0)
         lang = (language or "").strip().lower()[:2]
         into = (target or "").strip().lower()[:2]
+        # One ask per item including the ones that are not objects, which are
+        # then answered with "". Skipping them shortened the list instead, so
+        # every answer after the bad item was paired with the word before it -
+        # and a wrong meaning under a word is not read as a failure, it is read
+        # as the meaning. The docstring above promises one answer per item.
         asks = [
             Ask(
                 str(item.get("term", "")).strip(),
@@ -427,8 +432,9 @@ class Lookups:
                 str(item.get("before", "")).strip(),
                 str(item.get("after", "")).strip(),
             )
-            for item in items
             if isinstance(item, dict)
+            else Ask("", "", "", "")
+            for item in items
         ]
         answers = ["" for _ in asks]
         if not lang or not into or lang == into:

@@ -659,6 +659,29 @@ def test_a_proper_noun_the_model_refused_is_not_then_translated(
     assert glosser.gloss_many(items, "en", "tr") == ["", "oda"]
 
 
+def test_an_item_that_is_not_an_object_still_has_a_place_in_the_answers(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """One answer per item, in order, is what the caller pairs by index.
+
+    An item that was not a dict used to be dropped rather than answered, so the
+    list came back a place short and every gloss after it sat under the word
+    before it. A wrong meaning under a word is not read as a failure, it is read
+    as the meaning.
+    """
+    glosser = Lookups(tmp_path, gloss_model="a-model")
+    monkeypatch.setattr(
+        glosser, "_gloss",
+        lambda asks, *a, **kw: [f"{ask.term}-said" for ask in asks],
+    )
+    items: list[Any] = [
+        {"term": "chamber", "sentence": "one"},
+        "not an object",
+        {"term": "hatch", "sentence": "two"},
+    ]
+    assert glosser.gloss_many(items, "en", "tr") == ["chamber-said", "", "hatch-said"]
+
+
 def test_a_batch_of_names_does_not_stop_the_model_for_the_rest_of_the_film(
     tmp_path: Path, monkeypatch: Any
 ) -> None:

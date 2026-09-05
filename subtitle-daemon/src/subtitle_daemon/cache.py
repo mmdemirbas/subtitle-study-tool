@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +26,19 @@ SEARCH_TTL_SECONDS = 6 * 60 * 60
 # daemon keeps serving answers computed by the previous version. Downloaded
 # subtitle files are not versioned: those are raw bytes and never go stale.
 SEARCH_SCHEMA_VERSION = 6
+
+
+def _replace(path: Path, payload: bytes) -> None:
+    """Write a file that is either the old one or the new one, never half.
+
+    A reader here is another thread of this daemon or the person looking at the
+    cache directory, and both of them see a rename rather than a growing file.
+    The temporary name sits in the same directory so the rename stays on one
+    filesystem, which is what makes it atomic.
+    """
+    temporary = path.with_name(f"{path.name}.writing")
+    temporary.write_bytes(payload)
+    os.replace(temporary, path)
 
 
 @dataclass(frozen=True)
@@ -63,9 +77,16 @@ class Cache:
 
     def put_subtitle(self, file_id: int, raw: bytes, meta: dict[str, object]) -> CachedSubtitle:
         path = self._subtitle_path(file_id)
-        path.write_bytes(raw)
         meta = {**meta, "cached_at": time.time(), "sha256": hashlib.sha256(raw).hexdigest()}
-        path.with_suffix(".json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+        # The subtitle first and its metadata second, each of them appearing
+        # whole or not at all. get_subtitle needs both files to call something
+        # cached, so an interrupted write leaves a download to be made again -
+        # which is the safe half of the quota. Written in place, a torn .srt is
+        # a subtitle that is served, and a torn .json is a ValueError out of
+        # every endpoint that lists what is held.
+        _replace(path, raw)
+        _replace(path.with_suffix(".json"),
+                 json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"))
         return CachedSubtitle(file_id=file_id, path=path, meta=meta)
 
     def find_for_title(self, imdb_id: str | None, languages: tuple[str, ...]) -> CachedSubtitle | None:
@@ -163,7 +184,15 @@ class Cache:
         path = self._search_path(key)
         if not path.exists():
             return None
-        payload = json.loads(path.read_text())
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, ValueError):
+            # A half-written or hand-edited entry is a miss. It used to be a
+            # ValueError out of /search, and the entry stayed there answering
+            # every later search for the same title the same way.
+            return None
+        if not isinstance(payload, dict):
+            return None
         if time.time() - payload.get("at", 0) > SEARCH_TTL_SECONDS:
             return None
         envelope = payload.get("envelope")
@@ -171,8 +200,8 @@ class Cache:
 
     def put_search(self, key: str, envelope: dict[str, object]) -> None:
         path = self._search_path(key)
-        path.write_text(json.dumps({"at": time.time(), "envelope": envelope},
-                                   ensure_ascii=False))
+        _replace(path, json.dumps({"at": time.time(), "envelope": envelope},
+                                  ensure_ascii=False).encode("utf-8"))
 
     def _search_path(self, key: str) -> Path:
         return self._searches / f"v{SEARCH_SCHEMA_VERSION}-{key}.json"
