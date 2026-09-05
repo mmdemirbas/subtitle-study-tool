@@ -82,12 +82,28 @@ export const IRREGULAR = {
 
 const VOWEL = /[aeiou]/;
 
+/* A final consonant that doubles before a vowel ending: one vowel before it,
+ * and something other than a vowel before that.
+ *
+ * put/putting, stop/stopped, plan/planning, begin/beginning, refer/referring.
+ * Without it the index held "puting" and "stoped", which appear in no subtitle,
+ * so "putting up with" and "stopped by" were not phrases at all - the head verb
+ * was in the index, but never under the form the line used.
+ *
+ * English decides the multi-syllable cases by stress, which is not something
+ * this can see, so both spellings are added: "travelled" beside "traveled", and
+ * "openned" beside "opened". A form that is not a word costs nothing, since an
+ * index is only ever read by the words a subtitle actually contains, and a
+ * missing one is a phrase that can never be marked. */
+const DOUBLES = /(?:^|[^aeiou])[aeiou][bdgklmnprtvz]$/;
+
 /** Every form of a head verb a line can carry, the lemma included. */
 export function surfaceForms(verb) {
   const found = new Set([verb]);
   for (const form of IRREGULAR[verb] || []) found.add(form);
   const last = verb.slice(-1);
   const before = verb.slice(-2, -1);
+  const doubled = DOUBLES.test(verb) ? verb + last : "";
 
   found.add(
     /(s|sh|ch|x|z)$/.test(verb) ? `${verb}es`
@@ -102,8 +118,20 @@ export function surfaceForms(verb) {
         : last === "y" && !VOWEL.test(before) ? `${verb.slice(0, -1)}ied`
           : `${verb}ed`,
     );
+    if (doubled) found.add(`${doubled}ed`);
   }
-  found.add(last === "e" && verb.length > 2 ? `${verb.slice(0, -1)}ing` : `${verb}ing`);
+  /* -ing, where three endings go their own way. A verb in -ie takes -ying
+   * (lie/lying, die/dying, tie/tying); one whose e follows another vowel keeps
+   * it (see/seeing, agree/agreeing, free/freeing); any other silent e drops it
+   * (move/moving). One rule covered all three and produced "liing", "seing"
+   * and "agreing". */
+  found.add(
+    verb.endsWith("ie") ? `${verb.slice(0, -2)}ying`
+      : /[aeiou]e$/.test(verb) ? `${verb}ing`
+        : last === "e" && verb.length > 2 ? `${verb.slice(0, -1)}ing`
+          : `${verb}ing`,
+  );
+  if (doubled) found.add(`${doubled}ing`);
   return [...found];
 }
 
@@ -185,8 +213,18 @@ export function findPhrases(words, index) {
         const span = 1 + gap + particles.length;
         /* The longest phrase wins, and among equals the tightest one. "Put up
          * with" beats "put up" on the same three words, and "pick up" beats
-         * "pick up" found three words later. */
-        if (!best || particles.length > best.particles || span < best.span) {
+         * "pick up" found three words later.
+         *
+         * The tie-break belongs inside the equal-length case. Beside the rule
+         * above it as an alternative, it undid it: "stand in for" was found and
+         * then replaced by "stand in", because two words are fewer than three
+         * and the shorter span won on its own. Which of the two came out
+         * depended on the order the table happened to list them in, and the
+         * reader saw half a phrase underlined. */
+        const better = !best
+          || particles.length > best.particles
+          || (particles.length === best.particles && span < best.span);
+        if (better) {
           /* Which words are the phrase, not which words it spans. "Pick it up"
            * is two words of phrase with an object sitting between them, and the
            * overlay must not underline the object - a reader shown "pick it up"

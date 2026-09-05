@@ -8051,6 +8051,49 @@
         await sleep(120);
       });
 
+      check("a phrase is found in the tense the line used, and whole", async () => {
+        /* Two ways the phrase index missed, both of them silent - a phrase that
+         * is not found is indistinguishable from a line that has none.
+         *
+         * The index is built from the head verb's surface forms, and the
+         * -ing/-ed rule never doubled a final consonant. So it held "puting"
+         * and "stoped", which appear in no subtitle, and "she is putting up
+         * with it" carried no phrase at all. The same rule dropped the e in
+         * "lie", "see" and "agree", giving "liing", "seing" and "agreing".
+         *
+         * And the longest phrase did not reliably win. The tie-break on span
+         * sat beside the rule on length rather than inside its equal case, so
+         * "stand in for" was found and then replaced by "stand in" - two words
+         * being fewer than three and the shorter span winning on its own. Which
+         * of the two came out depended on the order the table listed them in,
+         * which is why both orders are asked here. */
+        const phrases = await import("../src/study/phrases.js");
+
+        for (const [verb, form] of [
+          ["put", "putting"], ["stop", "stopped"], ["plan", "planning"],
+          ["begin", "beginning"], ["lie", "lying"], ["die", "dying"],
+          ["see", "seeing"], ["agree", "agreeing"], ["move", "moving"],
+        ]) {
+          const forms = phrases.surfaceForms(verb);
+          if (!forms.includes(form))
+            throw new Error(`"${verb}" has no "${form}": ${forms.join(" ")}`);
+        }
+
+        const said = "she is putting up with it".split(" ");
+        const found = phrases.findPhrases(said, phrases.buildIndex(["put up with", "put up"]));
+        if (found.map((f) => f.phrase).join() !== "put up with")
+          throw new Error(`"putting up with" came out as ${JSON.stringify(found)}`);
+
+        for (const table of [["stand in", "stand in for"], ["stand in for", "stand in"]]) {
+          const hits = phrases.findPhrases(
+            "he stood in for me".split(" "), phrases.buildIndex(table),
+          );
+          if (hits.map((f) => f.phrase).join() !== "stand in for")
+            throw new Error(
+              `listed as ${JSON.stringify(table)} it marked ${JSON.stringify(hits.map((f) => f.phrase))}`);
+        }
+      });
+
       check("a phrasal verb is marked as one thing, and only the first time", async () => {
         /* The question the rarity table cannot answer. "Put up with" is three
          * of the hundred commonest words in English and means nothing any of
