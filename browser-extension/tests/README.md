@@ -73,8 +73,11 @@ survives Prime Video.
 
 ## The cases
 
-Fifty-five. The first thirty-seven cover the single-subtitle overlay; the rest
-cover two at once and study mode, described at the end.
+Two hundred and sixty-seven, which is what the page prints at the top when it
+finishes - trust that number rather than this one, since this file is written by
+hand and the suite grows most weeks. What follows is what the groups cover, not
+a census: the earlier ones are the single-subtitle overlay, the later ones two
+subtitles at once, study mode, the windows and the diagnostic report.
 
 Thirty-seven, covering: shadow-root isolation, cue colour, italics, speaker
 colour, non-speech dimming, sound symbols, handle visibility under a
@@ -133,23 +136,6 @@ That path has three parts the parity test does not reach — the rule for which
 side answers, the IndexedDB cache, and the convergence with the daemon's cache —
 so they are checked here against a stubbed OpenSubtitles and a stubbed daemon.
 
-## options.html
-
-The settings page, its stylesheet and its script, mounted over a stubbed service
-worker with 273 subtitles in the store — the number this machine's daemon cache
-holds. What it asserts is the property a glance cannot check: that the page keeps
-its shape as the lists grow. Four times the rows must not move the card's own
-buttons, the list has to be a box that scrolls rather than a table that pushes,
-the column headings have to stay with the rows they name, and a search has to
-narrow the list and say what it is showing of. Against the unbounded version the
-buttons sat 15,084px down a 900px window.
-
-`options-preview.html` is not a test — it renders the same page against the same
-kind of stub so the layout can be looked at without loading the extension into
-Chrome. It exists because a table that renders wrong is not something a passing
-test notices: the Delete column was landing outside the card and behind a
-horizontal scroll, which no assertion here would have caught.
-
 Twenty-two cases. The ones that matter are about quota, and they assert it
 directly: the stub counts calls to the download endpoint, so "this did not spend
 a download" is a number, not an inference from a cache flag. Covered: the
@@ -173,6 +159,23 @@ zero cues; and a six-hour window in which a replayed search still ranked by what
 was held when it was first run, which could send auto-attach to a different
 upload of a film already on disk. The second was inherited from the daemon and
 is now fixed on both sides.
+
+## options.html
+
+The settings page, its stylesheet and its script, mounted over a stubbed service
+worker with 273 subtitles in the store — the number this machine's daemon cache
+holds. What it asserts is the property a glance cannot check: that the page keeps
+its shape as the lists grow. Four times the rows must not move the card's own
+buttons, the list has to be a box that scrolls rather than a table that pushes,
+the column headings have to stay with the rows they name, and a search has to
+narrow the list and say what it is showing of. Against the unbounded version the
+buttons sat 15,084px down a 900px window.
+
+`options-preview.html` is not a test — it renders the same page against the same
+kind of stub so the layout can be looked at without loading the extension into
+Chrome. It exists because a table that renders wrong is not something a passing
+test notices: the Delete column was landing outside the card and behind a
+horizontal scroll, which no assertion here would have caught.
 
 ## Adding a case
 

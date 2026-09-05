@@ -50,7 +50,8 @@ the daemon is running, anything either side has downloaded is copied to the
 other. A download is never spent twice, whichever side spent it the first time.
 
 The copy runs automatically when the daemon comes up, before any search. There
-is a **Sync now** button on the options page if you want to force it.
+is a **Sync with the daemon now** button on the options page if you want to
+force it.
 
 ### Managing what has been downloaded
 

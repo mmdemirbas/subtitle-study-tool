@@ -11,10 +11,10 @@ isolated `window` — never through the DOM, and never reachable from the page.
 
 | File | Lines | Owns | Exposes |
 |---|---|---|---|
-| `align.js` | 520 | matching a subtitle's timing to the playing release | — |
-| `content.js` | 4.5k | the video, the playback clock, the cue overlay, the CC handle, settings, keys, the frame roles, frame/fullscreen plumbing | `window.__ssoApi`, `__ssoTeardown` |
-| `panel.js` | 3.2k | the control panel window (search, attach, sync, settings) | `window.__ssoPanel`, `__ssoPanelTeardown` |
-| `study.js` | 2.5k | the word strips, the focus box, the deck, the lookup popup | `window.__ssoStudy`, `__ssoStudyTeardown` |
+| `align.js` | 980 | matching a subtitle's timing to the playing release | — |
+| `content.js` | 7.5k | the video, the playback clock, the cue overlay, the CC handle, settings, keys, the frame roles, frame/fullscreen plumbing | `window.__ssoApi`, `__ssoTeardown` |
+| `panel.js` | 4.8k | the control panel window (search, attach, sync, settings) | `window.__ssoPanel`, `__ssoPanelTeardown` |
+| `study.js` | 3.2k | the word strips, the focus box, the deck, the lookup popup | `window.__ssoStudy`, `__ssoStudyTeardown` |
 
 `content.js` is the only one that touches the `<video>`. `panel.js` and
 `study.js` reach it exclusively through `window.__ssoApi`. Keep that direction:
