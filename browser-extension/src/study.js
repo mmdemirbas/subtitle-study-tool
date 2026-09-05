@@ -49,19 +49,31 @@
   const SETTINGS_KEY = "sso:study";
   const POSITION_KEY = "sso:studyPosition";
 
-  /* Where the rail sits until it is dragged, in pixels rather than in vh.
+  /* Where the box sits until it is dragged: the corner the control panel is
+   * not in, level with its top.
    *
-   * What it has to clear is the control panel's parked title bar, which is a
-   * fixed number of pixels tall wherever it is - so a fraction of the viewport
-   * cleared it on a tall screen and landed on it on a short one. Measured: the
-   * panel parks at 52px and its folded bar ends near 93, so this starts below
-   * that on every screen.
+   * It used to park under the panel's folded title bar, 104px down the same
+   * right-hand corner, which cleared the bar and nothing else. Measured with
+   * both on screen at 1400x900: the panel occupied 1042,52 to 1384,559 and the
+   * box 1068,104 to 1388,301 - the box inside the panel on all four sides but
+   * four pixels, so every one of its five buttons was covered and the rare
+   * words it exists to show were behind whatever the panel was showing.
+   * Reported as "I'd expect to see a fixed focus study area where the rare
+   * words appear - where is that? I think that is broken or invisible
+   * somehow", and it was invisible in the state study is switched on from,
+   * because the switch is on the panel.
    *
-   * An open panel still covers the rail, which is correct - it is above by
-   * z-index, it is opened on purpose and closed again, and both of them can be
-   * dragged anywhere and remember where that was. */
-  const PARK_TOP = 104;
-  const PARK_RIGHT = 12;
+   * Stacking cannot fix two windows that want the same rectangle, so they no
+   * longer want it. The left is free: the handle and the panel are both on the
+   * right, the subtitles sit along the bottom. Level with the panel rather
+   * than under it, because there is nothing above it on this side to clear.
+   *
+   * A panel dragged onto the box still covers it, which is correct - it is
+   * opened on purpose and closed again, and both remember where they were put.
+   * What keeps it above is the order content.js raises them in; see
+   * attachToCorrectParent there. */
+  const PARK_TOP = 52;
+  const PARK_LEFT = 16;
 
   const DEFAULT_SETTINGS = {
     enabled: false,
@@ -1791,8 +1803,8 @@
       all: "initial",
       position: "fixed",
       top: `${PARK_TOP}px`,
-      right: `${PARK_RIGHT}px`,
-      left: "auto",
+      left: `${PARK_LEFT}px`,
+      right: "auto",
       width: `${FOCUS_WIDTH}px`,
       "z-index": "2147483646", // just under the panel, which opens over it
     })) {
@@ -2793,8 +2805,8 @@
   }
 
   function park() {
-    host.style.setProperty("left", "auto", "important");
-    host.style.setProperty("right", `${PARK_RIGHT}px`, "important");
+    host.style.setProperty("right", "auto", "important");
+    host.style.setProperty("left", `${PARK_LEFT}px`, "important");
     host.style.setProperty("top", `${PARK_TOP}px`, "important");
     api.writeStored(null, { remove: POSITION_KEY });
     api.showToast?.("Focus box parked");

@@ -7545,10 +7545,21 @@
             n.getBoundingClientRect().height > 20);
           if (!empty) throw new Error("no empty part of the window to grab");
 
+          /* Alt held, as the settings window's own drag check holds it: what is
+           * under test is that an empty part of the window is a handle, not
+           * where the window ends up. Both windows are held to the same lines
+           * now and the focus box parks level with the panel, so an unheld drag
+           * of exactly 70px down came to rest 7px further on - a correct snap
+           * and a failed measurement. */
+          const free = (type, x, y, buttons) =>
+            new PointerEvent(type,
+              { pointerId: 31, clientX: x, clientY: y, button: 0, buttons, bubbles: true,
+                altKey: true });
+
           const start = host.getBoundingClientRect();
-          empty.dispatchEvent(pev("pointerdown", start.left + 40, start.top + 60, 1));
-          empty.dispatchEvent(pev("pointermove", start.left + 140, start.top + 130, 1));
-          empty.dispatchEvent(pev("pointerup", start.left + 140, start.top + 130, 0));
+          empty.dispatchEvent(free("pointerdown", start.left + 40, start.top + 60, 1));
+          empty.dispatchEvent(free("pointermove", start.left + 140, start.top + 130, 1));
+          empty.dispatchEvent(free("pointerup", start.left + 140, start.top + 130, 0));
           await sleep(60);
           const moved = host.getBoundingClientRect();
           if (Math.abs(moved.left - start.left - 100) > 3 || Math.abs(moved.top - start.top - 70) > 3)
@@ -8712,6 +8723,76 @@
           if (!node) throw new Error(`${what} has no host`);
           if (!node.matches(":popover-open"))
             throw new Error(`${what} is not in the top layer`);
+        }
+      });
+
+      check("the panel stays over the focus box when a pointer move re-raises them", async () => {
+        /* Two surfaces in the top layer, and the top layer paints in the order
+         * its entries were shown in - so the last one re-shown is in front,
+         * whatever either z-index says.
+         *
+         * Both are re-shown on every raise, and a raise happens on every
+         * pointer move over the film. Measured with the panel dragged onto the
+         * focus box, elementsFromPoint at the box's centre: the panel answered
+         * while nothing had moved and the focus box answered from the first
+         * pointer move onwards. So the panel covered the box until the mouse
+         * moved and then lost the overlap to it, which is the opposite of what
+         * study.js promises about a panel being opened on purpose.
+         *
+         * The check is the overlap itself rather than the call order, because
+         * the order is only the mechanism: what a reader sees is which of the
+         * two is in front after the mouse has moved. */
+        const hostFor = (sel) =>
+          [...document.querySelectorAll("div")].find((d) => d.shadowRoot?.querySelector(sel));
+        const study = window.__ssoStudy;
+        const studyWas = study.settings().enabled;
+        const panelWas = window.__ssoPanel.isOpen();
+        /* Read after show(), because the panel builds its host there - taken
+         * before, this was null on the run where the panel had never been
+         * opened, nothing was put back, and the displaced panel then covered
+         * the focus box for every case after this one. */
+        let bar = null;
+        let written = null;
+
+        try {
+          await study.setEnabled(true);
+          await window.__ssoPanel.show();
+          await sleep(250);
+          const box = hostFor(".sso-focus");
+          bar = hostFor(".sso-panel");
+          if (!box) throw new Error("study is on and there is no focus box to be covered");
+          if (!bar) throw new Error("the panel is open and has no host");
+          written = bar.getAttribute("style");
+
+          // Onto the box, so there is something to be in front of.
+          const target = box.getBoundingClientRect();
+          bar.style.setProperty("left", `${Math.max(0, target.left - 30)}px`, "important");
+          bar.style.setProperty("top", `${Math.max(0, target.top - 30)}px`, "important");
+          bar.style.setProperty("right", "auto", "important");
+
+          const front = () => {
+            const b = box.getBoundingClientRect();
+            const p = bar.getBoundingClientRect();
+            const x = Math.min(b.left + b.width / 2, p.right - 6);
+            const y = Math.min(b.top + b.height / 2, p.bottom - 6);
+            const first = document.elementsFromPoint(x, y)[0];
+            return first === bar ? "panel" : first === box ? "focus box" : "neither";
+          };
+          if (front() !== "panel")
+            throw new Error(`the panel does not cover the focus box it was opened over - ${front()} is in front`);
+
+          // What a mouse over the film does: content.js re-raises every surface.
+          for (let move = 0; move < 3; move += 1) {
+            document.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, clientX: 40 + move, clientY: 40 }));
+            await sleep(300); // past the 250ms raise throttle, so each one counts
+          }
+          if (front() !== "panel")
+            throw new Error(`after a pointer move the ${front()} is in front of the panel`);
+        } finally {
+          if (bar && written !== null) bar.setAttribute("style", written);
+          if (!panelWas) window.__ssoPanel.hide();
+          await study.setEnabled(studyWas);
+          await sleep(200);
         }
       });
 

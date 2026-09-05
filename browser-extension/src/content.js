@@ -2882,8 +2882,18 @@
      * re-raise is held back. */
     const raising = force || (raise && now - raisedAt >= RAISE_MS);
     if (raising) raisedAt = now;
-    if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(holder, { raise: raising });
+    /* The rail first and the panel second, because the top layer paints in the
+     * order its entries were shown in and a re-raise re-shows them both.
+     *
+     * Measured with the panel dragged over the focus box, elementsFromPoint at
+     * the box's centre: the panel answered while nothing had moved, and the
+     * focus box answered from the first pointer move over the film onwards. So
+     * a panel opened on top of the box kept whatever it covered for a moment
+     * and lost it as soon as the mouse moved. The z-index in the two files says
+     * what this order now says; it settles the fullscreen path, where nothing
+     * is in the top layer and stacking falls back to z-index. */
     if (window.__ssoStudy?.reparent) window.__ssoStudy.reparent(holder, { raise: raising });
+    if (window.__ssoPanel?.reparent) window.__ssoPanel.reparent(holder, { raise: raising });
     if (!host) return;
 
     /* No fullscreen: the top layer, which is what keeps these above the chrome
