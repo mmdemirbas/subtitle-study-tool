@@ -482,7 +482,12 @@ async function handleDaemonCall(op, args, sender) {
      * listening on this machine. Neither belongs in a content script. Down, and
      * every word simply falls back to being asked for one at a time. */
     case "gloss":
-      return glossWords(args.items || [], args.language, args.target, args.film).catch(() => ({}));
+      /* Not caught here. Every other op lets a failure reach the dispatcher,
+       * which answers {transportError} - and this one swallowed it into an
+       * empty object, so a worker that could not be reached was recorded as a
+       * daemon that answered nothing. That is the fourth of the four failures
+       * the marks record exists to tell apart. See glossAhead in study.js. */
+      return glossWords(args.items || [], args.language, args.target, args.film);
     case "lookupReady":
       return { dictionary: await canReachDictionary() };
     case "deckSave":

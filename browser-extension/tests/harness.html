@@ -5848,6 +5848,13 @@
          * missing, or the word has no translation. */
         if ((record.from?.none ?? 0) !== record.asked.length)
           throw new Error(`the tiers say ${JSON.stringify(record.from)} for ${record.asked.length} words`);
+        /* And a worker that never answered is the fourth failure, which is not
+         * one of those tiers. It used to be caught on the way back and turned
+         * into an empty answer, so it was written down as a daemon that had
+         * nothing to say - the one reading that sends the reader to the wrong
+         * place to look. Nothing failed on this run, so nothing says so. */
+        if ("unreachable" in record)
+          throw new Error(`the worker answered and the record says ${record.unreachable} words did not`);
       });
 
       check("a sentence broken off with a dash is still the word before it", async () => {
@@ -5960,6 +5967,55 @@
           await sleep(1800);
           window.__sent.length = 0;
         }
+      });
+
+      check("a worker that cannot be reached is written down as that", async () => {
+        /* Four ways a word ends up with nothing under it, and from the overlay
+         * they are one empty chip: the model was slow, the key is missing, the
+         * word has no translation, or nobody was ever asked because the worker
+         * did not answer. The first three are counted in `from`. The fourth
+         * was caught in background.js and turned into an empty object, so it
+         * arrived here as a daemon that answered nothing - which sends whoever
+         * reads the record to look at the model rather than at the extension. */
+        const was = window.__ssoStudy.settings().studySlots;
+        const AHEAD = CUES.map((cue) => ({ ...cue }));
+        const LABEL = "EN \u00b7 no worker";
+        let record = null;
+        await tracing(async (traced) => {
+          try {
+            /* Added to the object tracing installed rather than assigned over
+             * it: tracing replaces window.__stubDaemon wholesale to catch the
+             * trace calls, so an override set before it is thrown away and the
+             * default gloss stub answers instead. */
+            window.__stubDaemon.gloss = () => ({ transportError: "Extension context invalidated." });
+            window.__ssoStudy.updateSettings({ studySlots: [0], rarityRank: 4000, auto: false });
+            await window.__ssoStudy.setEnabled(true);
+            await window.__ssoApi.attach({
+              cues: AHEAD, label: LABEL, fileId: 9211, language: "en", slot: 0,
+            });
+            video.currentTime = 1;
+            /* This walk's own record, by the label it was attached under. A
+             * walk started by the case before this one can still be in flight,
+             * and "any marks record" was satisfied by that one. */
+            const mine = () => traced
+              .filter((a) => a.kind === "marks" && a.detail?.label === LABEL)
+              .map((a) => a.detail);
+            await until(() => mine().length > 0, "this walk was never written down");
+            record = mine().pop();
+          } finally {
+            delete window.__stubDaemon.gloss;
+            window.__ssoStudy.updateSettings({ studySlots: was, auto: false });
+            await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
+            video.currentTime = 1;
+            await sleep(150);
+          }
+        });
+        if (!record) throw new Error("no record was written");
+        if (!(record.unreachable > 0))
+          throw new Error(
+            `the worker answered nothing and the record says ${JSON.stringify(record.from)}`);
+        if (!/invalidated/.test(record.unreachableSaid || ""))
+          throw new Error(`what went wrong was not kept: ${record.unreachableSaid}`);
       });
 
       check("study can follow two subtitles at once", async () => {

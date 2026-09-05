@@ -882,6 +882,13 @@
      * statement about the chips and says nothing about which of the three went
      * wrong. Now it is in the record. */
     const from = {};
+    /* The fourth failure, and it is not one of the daemon's tiers: the worker
+     * itself could not be reached, so no tier was ever asked. It used to be
+     * caught in background.js and turned into an empty answer, which reads
+     * here as a daemon that answered nothing - the one reading that is wrong
+     * about where to go and look. */
+    let unreachable = 0;
+    let unreachableSaid = "";
     for (let at = 0; at < items.length; at += GLOSS_CHUNK) {
       // A different file, or a different pair of languages, while this was in
       // flight: the rest of these answers are about a film nobody is watching.
@@ -897,6 +904,10 @@
         target,
         film,
       });
+      if (answer?.transportError) {
+        unreachable += chunk.length;
+        unreachableSaid = unreachableSaid || String(answer.transportError);
+      }
       const said = Array.isArray(answer?.glosses) ? answer.glosses : [];
       for (let i = 0; i < chunk.length; i++) glosses.push(said[i] || "");
       for (const [where, many] of Object.entries(answer?.from || {})) {
@@ -907,7 +918,7 @@
     if (glossedTracks.get(slot) !== mark) return;
     noteMarks(slot, {
       language, target, film, ranks, names, skipped, items, glosses, from,
-      cues: texts.length,
+      cues: texts.length, unreachable, unreachableSaid,
     });
   }
 
@@ -923,7 +934,10 @@
    * Terms and glosses only. The lines they were said in are already reachable
    * from the file, and putting a film's dialogue in the log would make it a
    * copy of the subtitle rather than a record about it. */
-  function noteMarks(slot, { language, target, film, ranks, names, skipped, items, glosses, from, cues }) {
+  function noteMarks(slot, {
+    language, target, film, ranks, names, skipped, items, glosses, from, cues,
+    unreachable = 0, unreachableSaid = "",
+  }) {
     const info = api.trackInfo(slot) || {};
     let ranked = 0;
     let unranked = 0;
@@ -950,6 +964,10 @@
       skipped,
       // And which tier answered the ones that were. See the note on `from`.
       from,
+      /* Words nobody was able to ask about, because the worker did not answer.
+       * Separate from `from`, which counts what the daemon said about words it
+       * received: this is the request never arriving. */
+      ...(unreachable ? { unreachable, unreachableSaid } : {}),
       /* t: the term. r: its rank, which for a phrase is a line in the phrase
        * table and for a word a line in the frequency one - null means the
        * table has never seen it, which is rarer than its last entry. p: a
