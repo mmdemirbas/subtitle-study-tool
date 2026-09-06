@@ -143,6 +143,47 @@ def unload(model: str) -> None:
         pass
 
 
+def plainly(model: str, ask: Ask, timeout: float) -> str:
+    """One word, one request, no JSON.
+
+    A model trained for translation and nothing else may not be able to hold the
+    daemon's contract - an array of exactly N answers, in order, as JSON - and
+    refusing it on that alone would confuse "cannot translate" with "cannot
+    format". This asks the question the way such a model expects it, so the two
+    can be told apart. It is slower by construction: one request per word rather
+    than one per batch.
+    """
+    body = json.dumps(
+        {
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": (
+                        f'In the subtitle line "{ask.line}", what does "{ask.term}" mean in '
+                        f"Turkish? Answer with one to three words and nothing else."
+                    ),
+                }
+            ],
+            "temperature": 0,
+        }
+    ).encode()
+    request = urllib.request.Request(
+        f"{OLLAMA}/v1/chat/completions", data=body,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = json.loads(response.read().decode("utf-8"))
+        said = raw["choices"][0]["message"]["content"]
+    except Exception:
+        return ""
+    # The same shortening the daemon applies, so the two modes are comparable.
+    from subtitle_daemon.lookups import THINKING, _short_gloss
+
+    return _short_gloss(THINKING.sub("", said).strip().splitlines()[0] if said.strip() else "", ask.term)
+
+
 def run(model: str, timeout: float) -> dict:
     glosser = Lookups(
         Path(tempdir), gloss_model=model, gloss_url=f"{OLLAMA}/v1/chat/completions"
@@ -163,11 +204,17 @@ def run(model: str, timeout: float) -> dict:
     # keeps it - not of how well it translates. Both are reported.
     unload(model)
     started = time.monotonic()
-    glosser._gloss(asks[:1], "en", "tr", timeout, film="The Americans")
+    if args.plain:
+        plainly(model, asks[0], timeout)
+    else:
+        glosser._gloss(asks[:1], "en", "tr", timeout, film="The Americans")
     cold = time.monotonic() - started
 
     started = time.monotonic()
-    said = glosser._gloss(asks, "en", "tr", timeout, film="The Americans")
+    if args.plain:
+        said = [plainly(model, ask, timeout) for ask in asks]
+    else:
+        said = glosser._gloss(asks, "en", "tr", timeout, film="The Americans")
     took = time.monotonic() - started
     unload(model)
 
@@ -192,6 +239,11 @@ def run(model: str, timeout: float) -> dict:
 parser = argparse.ArgumentParser()
 parser.add_argument("models", nargs="*", help="ollama model names; default is every candidate")
 parser.add_argument("--timeout", type=float, default=900.0)
+parser.add_argument(
+    "--plain",
+    action="store_true",
+    help="one word per request, plain text back, instead of the daemon's JSON contract",
+)
 args = parser.parse_args()
 
 import tempfile  # noqa: E402
