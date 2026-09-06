@@ -37,9 +37,18 @@ let syncing = null;
 let service = null;
 let serviceKey = null;
 
-async function settings() {
+/* What is actually written down, with nothing filled in.
+ *
+ * Kept apart from settings() below because "the reader chose en, tr" and "the
+ * reader chose nothing and en, tr is the default" are different facts, and
+ * preferredLanguages has to tell them apart. */
+async function storedSettings() {
   const stored = await chrome.storage.local.get(SETTINGS_KEY);
-  return { apiKey: "", languages: DEFAULT_LANGUAGES, ...(stored[SETTINGS_KEY] || {}) };
+  return stored[SETTINGS_KEY] || {};
+}
+
+async function settings() {
+  return { apiKey: "", languages: DEFAULT_LANGUAGES, ...(await storedSettings()) };
 }
 
 export async function updateSettings(patch) {
@@ -141,8 +150,27 @@ export async function status() {
  * still found - it just does not win the slot.
  */
 export async function preferredLanguages() {
+  /* The extension's own setting wins, and only falls back to the daemon's.
+   *
+   * The options page writes this list into the extension's storage and reads it
+   * straight back, so the field is showing the reader's own answer. status()
+   * reports the DAEMON's list while a daemon is running, and that list lives in
+   * a config file on disk that the options page never touches. So saving
+   * "tr, en" and then starting the daemon searched in the daemon's order
+   * instead, with the field still showing what the reader had chosen and
+   * nothing anywhere saying otherwise - and the order decides which of the pair
+   * is the language being learnt.
+   *
+   * A reader who has never saved anything on the options page has no stored
+   * list, and for them the daemon's is still the better answer than a built-in
+   * default. */
   const info = await status();
-  const configured = info.default_languages?.length ? info.default_languages : DEFAULT_LANGUAGES;
+  const chosen = (await storedSettings()).languages;
+  const configured = chosen?.length
+    ? chosen
+    : info.default_languages?.length
+      ? info.default_languages
+      : DEFAULT_LANGUAGES;
   let used = [];
   try {
     used = (await chrome.storage.local.get("sso:usedLanguages"))["sso:usedLanguages"] || [];

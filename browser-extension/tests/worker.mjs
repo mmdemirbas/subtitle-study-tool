@@ -1246,6 +1246,48 @@ chrome.storage.local.set = instant.set;
   );
 }
 
+/* --- which languages a search asks for ----------------------------------------
+ *
+ * There are two lists. The options page writes one into the extension's storage
+ * and reads it straight back, so the field shows the reader's own answer. The
+ * daemon has another in a config file on disk that the options page never
+ * touches, and status() reports THAT one while a daemon is running. So saving
+ * "tr, en" and then starting the daemon searched in the daemon's order instead,
+ * with the field still showing what the reader chose - and the order is what
+ * decides which of the pair is the language being learnt.
+ */
+{
+  const provider = await import("../src/provider.js");
+  daemonUp = true;
+  daemonAnswers = (url) =>
+    String(url).endsWith("/health") ? { default_languages: ["en", "de"] } : null;
+  await provider.daemonUp({ force: true });
+
+  const heldProvider = (await chrome.storage.local.get("sso:provider"))["sso:provider"];
+  const heldUsed = (await chrome.storage.local.get("sso:usedLanguages"))["sso:usedLanguages"];
+  await chrome.storage.local.set({ "sso:usedLanguages": [] });
+
+  await chrome.storage.local.set({ "sso:provider": { apiKey: "", languages: ["tr", "en"] } });
+  const chosen = await provider.preferredLanguages();
+  t(
+    "the list the reader saved is the one searched for, daemon running or not",
+    chosen[0] === "tr" && chosen[1] === "en",
+    JSON.stringify(chosen),
+  );
+
+  await chrome.storage.local.set({ "sso:provider": { apiKey: "" } });
+  const unset = await provider.preferredLanguages();
+  t(
+    "and a reader who never saved one gets the daemon's list rather than a built-in default",
+    unset[0] === "en" && unset.includes("de"),
+    JSON.stringify(unset),
+  );
+
+  await chrome.storage.local.set({ "sso:provider": heldProvider, "sso:usedLanguages": heldUsed });
+  daemonAnswers = null;
+  daemonUp = true;
+}
+
 /* --- the next episode, warmed before anybody asks for it ---------------------
  *
  * The page says what follows what it is playing. A search costs nothing and is
