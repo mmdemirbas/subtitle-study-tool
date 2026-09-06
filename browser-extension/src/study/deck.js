@@ -22,10 +22,24 @@ const KEY = "sso:deck";
  * sentence is new evidence about the same word. */
 const identity = (entry) => `${entry.language}:${entry.term}:${entry.fileId ?? ""}`;
 
+/* The deck as stored, and a failure to read it is raised rather than answered.
+ *
+ * `all` used to swallow it and return [], which is a fine answer for something
+ * that only displays the deck and a destructive one for anything that writes:
+ * both writers are read-modify-write, so one failed read turned the next save
+ * into "the deck is this one new word". Observed with a deck of one entry and
+ * a single rejected storage read: save() returned added:true and the stored
+ * deck became just the new word, with nothing thrown and nothing logged.
+ * remove() wrote [] the same way. */
+async function read() {
+  const stored = await chrome.storage.local.get(KEY);
+  return Array.isArray(stored[KEY]) ? stored[KEY] : [];
+}
+
+/** The deck for anything that only shows it; an unreadable deck reads empty. */
 export async function all() {
   try {
-    const stored = await chrome.storage.local.get(KEY);
-    return Array.isArray(stored[KEY]) ? stored[KEY] : [];
+    return await read();
   } catch {
     return [];
   }
@@ -78,7 +92,11 @@ async function addOne(entry) {
   if (!term) return { added: false, entry: null, reason: "nothing to save" };
 
   const record = {
-    id: `${Date.now().toString(36)}-${term.slice(0, 24)}`,
+    /* The clock is not enough on its own. Two saves of the same word against
+     * two different films inside one millisecond took the same id, and remove()
+     * deletes by id - so deleting one card deleted both. Observed: two saves
+     * returned id "mtpd832h-warrant", and one remove reported removed:2. */
+    id: `${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}-${term.slice(0, 24)}`,
     term,
     language: entry.language || "en",
     rank: entry.rank ?? null,
@@ -96,7 +114,7 @@ async function addOne(entry) {
     savedAt: new Date().toISOString(),
   };
 
-  const entries = await all();
+  const entries = await read();
   const existing = entries.find((item) => identity(item) === identity(record));
   if (existing) return { added: false, entry: existing };
 
@@ -131,7 +149,7 @@ export function remove(id) {
   // In the queue too: a removal racing a save reads the deck before the save
   // lands and writes it back without the new entry.
   return inTurn(async () => {
-    const entries = await all();
+    const entries = await read();
     const kept = entries.filter((entry) => entry.id !== id);
     await write(kept);
     return { removed: entries.length - kept.length, size: kept.length };
@@ -157,7 +175,10 @@ const COLUMNS = [
   ["term", (entry) => entry.term],
   ["language", (entry) => entry.language],
   ["rank", (entry) => (entry.rank == null ? "" : String(entry.rank))],
-  ["definition", (entry) => entry.definitions.map((d) => `${d.partOfSpeech}: ${d.sense}`).join(" | ")],
+  // Guarded like every other column. An entry saved by an older build, or one
+  // hand-edited back in, has no definitions array - and one of those threw out
+  // of the whole export rather than exporting an empty cell.
+  ["definition", (entry) => (entry.definitions || []).map((d) => `${d.partOfSpeech}: ${d.sense}`).join(" | ")],
   ["phonetic", (entry) => entry.phonetic],
   ["translation", (entry) => entry.translation],
   ["sentence", (entry) => entry.sentence],
@@ -181,17 +202,33 @@ export function formatTime(ms) {
  * Serialise the deck.
  *
  * `tsv` rather than csv is the default because that is what Anki's importer
- * takes without configuration, and a subtitle line is full of commas and quotes
- * - exactly the two things CSV quoting gets wrong when a person edits the file
- * afterwards. Tabs cannot occur in a subtitle line, so nothing has to be
- * escaped and nothing can be mangled.
+ * takes without configuration, and a subtitle line is full of commas - the
+ * character CSV would then have to quote in almost every row.
+ *
+ * Tabs and newlines are flattened, which used to be the whole of it, and the
+ * quotes were left alone on the grounds that a tab-separated file has nothing
+ * to quote. Anki's importer reads the file with Python's csv module, which
+ * honours quotes whatever the delimiter is. Measured on four entries, one of
+ * them holding a line of dialogue in quotation marks: the file parsed as three
+ * rows instead of five, `"Get out," he said.` arrived as `Get out, he said.`,
+ * and an unbalanced quote - ordinary when speech runs across two cues -
+ * swallowed its own row and the two after it.
+ *
+ * So a field carrying a quote is quoted and its quotes doubled, which is what
+ * RFC 4180 says and what that importer expects. Every field without one is
+ * written exactly as before, so a deck exported last month and one exported
+ * today still import the same way.
  */
 export function serialise(entries, format = "tsv") {
   if (format === "json") return JSON.stringify(entries, null, 2);
 
+  const field = (value) => {
+    const flat = String(value || "").replace(/[\t\r\n]+/g, " ");
+    return flat.includes('"') ? `"${flat.replace(/"/g, '""')}"` : flat;
+  };
   const rows = [COLUMNS.map(([name]) => name)];
   for (const entry of entries) {
-    rows.push(COLUMNS.map(([, read]) => String(read(entry) || "").replace(/[\t\r\n]+/g, " ")));
+    rows.push(COLUMNS.map(([, take]) => field(take(entry))));
   }
   return rows.map((row) => row.join("\t")).join("\n");
 }

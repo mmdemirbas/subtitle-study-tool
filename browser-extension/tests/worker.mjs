@@ -541,6 +541,91 @@ t(
   after.join(",") || "(empty)",
 );
 
+/* A storage read that failed is not an empty deck.
+ *
+ * Both writers are read-modify-write, and `all()` answered a failed read with
+ * [] - so one unlucky read turned the next save into "the deck is this one new
+ * word". Measured with a deck of one entry and a single rejecting read: save()
+ * returned added:true and the stored deck came back holding only the new word,
+ * with nothing thrown and nothing logged. The writers read strictly now and the
+ * failure reaches the caller. */
+await deck.clear();
+await deck.save({ term: "warrant", language: "en", fileId: 1 });
+const readableAgain = chrome.storage.local.get;
+let saveRefused = false;
+chrome.storage.local.get = async () => { throw new Error("storage is unavailable"); };
+try {
+  await deck.save({ term: "new", language: "en", fileId: 2 });
+} catch {
+  saveRefused = true;
+}
+chrome.storage.local.get = readableAgain;
+const survived = (await deck.all()).map((entry) => entry.term);
+t(
+  "a deck that could not be read is not overwritten with one word",
+  saveRefused && survived.length === 1 && survived[0] === "warrant",
+  `refused=${saveRefused} deck=${survived.join(",") || "(empty)"}`,
+);
+
+/* One word, two films, one millisecond: two ids, not one.
+ *
+ * The id was the clock in base 36 plus the word, so the same word saved against
+ * two films inside a millisecond took the same id - and remove() deletes by id.
+ * Measured before: both saves returned "mtpd832h-warrant" and removing one
+ * reported removed:2, so deleting one card took the other with it. */
+await deck.clear();
+const [first, second] = await Promise.all([
+  deck.save({ term: "warrant", language: "en", fileId: 10, title: "one" }),
+  deck.save({ term: "warrant", language: "en", fileId: 11, title: "two" }),
+]);
+const gone = await deck.remove(first.entry.id);
+t(
+  "the same word saved against two films keeps two ids",
+  first.entry.id !== second.entry.id && gone.removed === 1 && gone.size === 1,
+  `ids ${first.entry.id === second.entry.id ? "collide" : "differ"}, removed ${gone.removed}, left ${gone.size}`,
+);
+
+/* An export a reader can import back.
+ *
+ * Tabs and newlines were flattened and quotes were left alone, on the grounds
+ * that a tab-separated file has nothing to quote. Anki reads it with Python's
+ * csv module, which honours quotes whatever the delimiter is. Measured on four
+ * entries, one holding a line of dialogue in quotation marks: the file parsed
+ * as three rows instead of five, and an unbalanced quote - ordinary when speech
+ * runs across two cues - swallowed its own row and the two after it. An entry
+ * with no definitions array threw out of the export entirely. */
+const exported = deck.serialise([
+  { term: "one", language: "en", definitions: [], sentence: '"Get out," he said.', savedAt: "x" },
+  { term: "two", language: "en", definitions: [], sentence: '"I told you', savedAt: "x" },
+  { term: "three", language: "en", definitions: [], sentence: "plain", savedAt: "x" },
+  { term: "four", language: "en", savedAt: "x" },
+]);
+/* Read back the way the importer reads it: a quoted field runs to its closing
+ * quote, and a doubled quote inside one is a quote. */
+const parseTsv = (text) => {
+  const rows = [[""]];
+  let quoted = false;
+  for (let at = 0; at < text.length; at += 1) {
+    const ch = text[at];
+    const row = rows[rows.length - 1];
+    if (quoted) {
+      if (ch === '"' && text[at + 1] === '"') { row[row.length - 1] += '"'; at += 1; }
+      else if (ch === '"') quoted = false;
+      else row[row.length - 1] += ch;
+    } else if (ch === '"' && row[row.length - 1] === "") quoted = true;
+    else if (ch === "\t") row.push("");
+    else if (ch === "\n") rows.push([""]);
+    else row[row.length - 1] += ch;
+  }
+  return rows;
+};
+const back = parseTsv(exported);
+t(
+  "a quote in a subtitle line does not eat the rows after it",
+  back.length === 5 && back[1][6] === '"Get out," he said.' && back[4][0] === "four",
+  `${back.length} rows, first sentence ${JSON.stringify(back[1]?.[6])}, last term ${JSON.stringify(back[4]?.[0])}`,
+);
+
 // --- the running log --------------------------------------------------------
 /* Same slow store as the deck above, and for the same reason: this is a
  * read-modify-write on one key with two callers that fire milliseconds apart -
