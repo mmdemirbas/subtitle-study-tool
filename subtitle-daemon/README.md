@@ -76,7 +76,7 @@ question from the one the reader asked.
 ./run.sh --port 8792  # run alongside one
 ```
 
-Listens on `http://127.0.0.1:8791`. It starts and serves `/health` with no API
+Listens on `http://127.0.0.1:8794`. It starts and serves `/health` with no API
 key configured, so you can confirm the plumbing before dealing with
 credentials.
 

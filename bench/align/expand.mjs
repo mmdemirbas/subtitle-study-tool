@@ -40,7 +40,8 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
 const CACHE = path.join(REPO, "subtitle-daemon/cache/subtitles");
-const DAEMON = "http://127.0.0.1:8791";
+// Wherever the daemon listens; it moved off 8791 when a file server took it.
+const DAEMON = "http://127.0.0.1:8794";
 
 /* Chosen for the two shapes the corpus is short of, not for taste.
  *

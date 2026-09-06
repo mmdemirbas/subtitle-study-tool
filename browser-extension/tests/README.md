@@ -136,7 +136,7 @@ That path has three parts the parity test does not reach — the rule for which
 side answers, the IndexedDB cache, and the convergence with the daemon's cache —
 so they are checked here against a stubbed OpenSubtitles and a stubbed daemon.
 
-Twenty-two cases. The ones that matter are about quota, and they assert it
+Thirty cases. The ones that matter are about quota, and they assert it
 directly: the stub counts calls to the download endpoint, so "this did not spend
 a download" is a number, not an inference from a cache flag. Covered: the
 extension answering alone, the title being cleaned before it is searched for,
@@ -148,7 +148,7 @@ error not being retried locally, both directions of the sync, a pulled subtitle
 working offline afterwards, the sha256 surviving the copy, and a missing API key
 being reported rather than failing silently.
 
-Cache management adds six more: what is held listed with sizes and dates,
+Cache management is six of them: what is held listed with sizes and dates,
 entries in both stores appearing once rather than twice, deleting with the
 daemon running, **deleting with the daemon stopped not undoing itself**,
 forgetting searches without touching downloads, and deleting everything.

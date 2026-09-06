@@ -552,7 +552,7 @@ the host permission.
 
 ## Boundaries
 
-- The extension talks only to `http://127.0.0.1:8791`. It has no other host
+- The extension talks only to `http://127.0.0.1:8794`. It has no other host
   permission, so the OpenSubtitles API key never enters a web page. The
   dictionary origin is declared as *optional* and requested on the options page,
   so it is granted only by someone who wants lookup without the daemon.

@@ -180,7 +180,7 @@ ones are worth knowing so they are not tried again:
    plays meant a popup every few seconds. `setUiOptions({enabled:false})` is
    supposed to silence that and **did not** — reported, not theorised.
 
-So `flush()` POSTs to `http://127.0.0.1:8791/log` and the daemon appends one
+So `flush()` POSTs to `http://127.0.0.1:8794/log` and the daemon appends one
 line of JSON per entry to `subtitle-daemon/logs/<date>.jsonl`. No files, no
 popups, no ceiling but the disk. **Read that directory instead of asking anyone
 to reproduce anything.**
@@ -398,7 +398,7 @@ follower back wherever the lead happened to be.
 `subtitle-daemon/` and `src/subtitles/` are the same pipeline in two languages.
 The daemon answers when it is running; **when it is not — which is the ordinary
 case — `src/subtitles/local.js` does, and that is the code the reader is
-actually using.** Check `lsof -i :8791` before believing a daemon-side fix
+actually using.** Check `lsof -i :8794` before believing a daemon-side fix
 reached anything.
 
 A change to search, title parsing, matching or ranking has **four** places to
