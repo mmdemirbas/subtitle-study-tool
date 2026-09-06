@@ -420,7 +420,18 @@
       return { ok: false, reason: "too-few-cues", confidence: -Infinity };
     }
 
-    const answer = search(a, b, maxOffsetMs);
+    /* The window comes from a caller, and every way of getting it wrong failed
+     * a long way from here. vote() sizes an array from it: a negative number or
+     * Infinity threw a RangeError out of the middle of the search, 1e12 asked
+     * for twenty billion bins and took the tab down with it, and NaN sized it
+     * to NaN - which allocates nothing, matches nothing, and reports two copies
+     * of the same film as different ones. Clamped to the range this file
+     * searches, so a caller that gets it wrong gets an answer. */
+    const window = Number.isFinite(maxOffsetMs)
+      ? Math.min(Math.max(Math.round(maxOffsetMs), BIN_MS), WIDE_OFFSET_MS)
+      : MAX_OFFSET_MS;
+
+    const answer = search(a, b, window);
     /* Nothing inside three minutes. Look again over twenty-five before saying
      * these are different films, because "no gap this small fits" and "these
      * are not the same programme" are different answers and only one of them
@@ -446,13 +457,13 @@
      * candidate subtitles by this number, so the handicap fell on exactly the
      * candidates that were hardest to choose between. */
     const weak = !answer.ok || answer.verdict === "offer";
-    if (weak && wide && maxOffsetMs < WIDE_OFFSET_MS) {
+    if (weak && wide && window < WIDE_OFFSET_MS) {
       const wider = align(aTimes, bTimes, { maxOffsetMs: WIDE_OFFSET_MS, wide: false });
       if (wider.confidence > answer.confidence) {
         return { ...wider, searchedMs: WIDE_OFFSET_MS };
       }
     }
-    return { ...answer, searchedMs: maxOffsetMs };
+    return { ...answer, searchedMs: window };
   }
 
   /** One complete search at a given window. */

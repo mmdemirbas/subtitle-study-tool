@@ -4626,6 +4626,29 @@
         if (tiny.reason !== "too-few-cues") throw new Error(`reason was ${tiny.reason}`);
       });
 
+      check("a search window the caller got wrong still gets an answer", async () => {
+        /* The window sizes an array inside vote(), so every wrong shape used to
+         * fail a long way from the caller: a negative number or Infinity threw
+         * a RangeError out of the middle of the search, 1e12 asked for twenty
+         * billion bins and took the tab with it, and NaN sized it to NaN -
+         * which allocates nothing, matches nothing, and reports two copies of
+         * the same film as different ones. */
+        const align = window.__ssoAlign;
+        const a = speech(600, 41);
+        const b = a.map((t) => t + 4200);
+        for (const bad of [-5000, 0, Infinity, NaN, 1e12]) {
+          let answer;
+          try {
+            answer = align.align(a, b, { maxOffsetMs: bad });
+          } catch (err) {
+            throw new Error(`${bad} threw ${err.name}: ${err.message}`);
+          }
+          if (!answer.ok || answer.shiftMs !== 4200) {
+            throw new Error(`${bad} answered ok=${answer.ok} shift=${answer.shiftMs}`);
+          }
+        }
+      });
+
       check("a confidence survives being written down", async () => {
         /* The number the whole accept-or-refuse decision rests on could be
          * Infinity, and Infinity does not survive being written down: trace.js
