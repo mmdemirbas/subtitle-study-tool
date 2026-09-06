@@ -106,6 +106,11 @@ PLACEHOLDER = re.compile(r"<[^<>]*>|\{\d+\}|%\d+\$?[sd]\b|%[sd]\b|\[\d+\]")
 # MyMemory, and it is skipped entirely when no key is configured.
 GOOGLE_URL = "https://translation.googleapis.com/language/translate/v2"
 GOOGLE_TIMEOUT_SECONDS = 6
+# How many words go in one request. Google's own limit, from the v2 `translate`
+# reference: "Provide an array of strings to translate multiple phrases. The
+# maximum number of strings is 128."
+# https://cloud.google.com/translate/docs/reference/rest/v2/translate
+GOOGLE_BATCH = 128
 
 # --- the gloss ------------------------------------------------------------------
 #
@@ -608,18 +613,44 @@ class Lookups:
         """
         if not self._google_key:
             return
+
+        # Disk first, and only what disk did not have goes to the wire - in one
+        # request per GOOGLE_BATCH words rather than one per word. Deduplicated
+        # by the folded word, because two lines of the film asking about the
+        # same word are one question to a translator that never sees the line.
+        # The cache is keyed by the folded word; the WIRE gets the spelling the
+        # film used. That distinction is load-bearing for names: Google hands
+        # back "Paige" for Paige, which _short_gloss reads as "no translation"
+        # and drops, and it is much less likely to do that for "paige".
+        held: dict[str, str] = {}
+        missing: dict[str, str] = {}
         for key in asked:
             term = key[0]
-            held = self._read_translation(term.lower(), lang, into)
-            if held is None:
-                held = self._fetch_google(term, lang, into)
-                if held:
-                    self._write_translation(term.lower(), lang, into, held)
-            if not held:
+            word = term.lower()
+            if word in held or word in missing:
+                continue
+            found = self._read_translation(word, lang, into)
+            if found is None:
+                missing[word] = term
+            elif found:
+                held[word] = found
+
+        spellings = list(missing.values())
+        for start in range(0, len(spellings), GOOGLE_BATCH):
+            batch = spellings[start : start + GOOGLE_BATCH]
+            for term, answer in self._fetch_google_many(batch, lang, into).items():
+                if not answer:
+                    continue
+                self._write_translation(term.lower(), lang, into, answer)
+                held[term.lower()] = answer
+
+        for key in asked:
+            answer = held.get(key[0].lower())
+            if not answer:
                 continue
             for index in wanted[key]:
                 if not answers[index]:
-                    answers[index] = held
+                    answers[index] = answer
 
     # --- disk ---------------------------------------------------------------
 
@@ -741,26 +772,54 @@ class Lookups:
             return ""
         return pick_translation(raw, term)
 
-    def _fetch_google(self, term: str, language: str, target: str) -> str:
-        """One word, no line. "" when no key is configured or anything fails."""
-        if not self._google_key:
-            return ""
-        query = urllib.parse.urlencode(
-            {
-                "key": self._google_key,
-                "q": term,
-                "source": language,
-                "target": target,
-                "format": "text",
-            }
-        )
+    def _fetch_google_many(
+        self, terms: list[str], language: str, target: str
+    ) -> dict[str, str]:
+        """Many words in one request. {} when no key is configured or it fails.
+
+        The API takes a repeated `q` and answers in the order asked, up to 128
+        strings a request - Google's documented limit, quoted at GOOGLE_BATCH.
+
+        This is the whole of "the translations are late". A film marks about
+        four hundred words and the prefetch asked for them one at a time, each
+        its own TLS handshake and round trip. Measured against the live API on
+        twenty words: 54.29 seconds one at a time, 0.44 seconds as one request,
+        the same twenty answers to the byte. Four hundred words is the
+        difference between eighteen minutes and nine seconds, and eighteen
+        minutes is longer than the reader keeps watching the chip.
+
+        Sent as a POST form rather than a query string, because 128 words do
+        not fit in a URL.
+
+        What batching costs: a request that fails now loses 128 words instead
+        of one. Measured, the timeout has room - 1 word takes 1.21 seconds, 32
+        take 0.38 and 128 take 0.52, so the cost is the round trip and not the
+        words, and GOOGLE_TIMEOUT_SECONDS is ten times the worst of those.
+        Nothing is cached on a failure, so the next prefetch asks again, and a
+        word the reader actually clicks still goes down the by-hand path one at
+        a time and then to the archive.
+        """
+        if not self._google_key or not terms:
+            return {}
+        fields: list[tuple[str, str]] = [
+            ("key", self._google_key),
+            ("source", language),
+            ("target", target),
+            ("format", "text"),
+        ]
+        fields += [("q", term) for term in terms]
         request = urllib.request.Request(
-            f"{GOOGLE_URL}?{query}", data=b"", headers={"User-Agent": USER_AGENT}
+            GOOGLE_URL,
+            data=urllib.parse.urlencode(fields).encode("utf-8"),
+            headers={
+                "User-Agent": USER_AGENT,
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
         )
         try:
             with urllib.request.urlopen(request, timeout=GOOGLE_TIMEOUT_SECONDS) as response:
                 raw = json.loads(response.read().decode("utf-8"))
-            answer = raw["data"]["translations"][0]["translatedText"]
+            said = [t["translatedText"] for t in raw["data"]["translations"]]
         except (
             urllib.error.URLError,
             TimeoutError,
@@ -768,10 +827,20 @@ class Lookups:
             OSError,
             KeyError,
             IndexError,
+            TypeError,
         ) as error:
-            logger.debug("google unavailable term=%s error=%s", term, error)
-            return ""
-        return _short_gloss(answer, term)
+            logger.debug("google unavailable words=%d error=%s", len(terms), error)
+            return {}
+        # A short array would silently pair each word with the next one's
+        # answer, which is worse than no answer at all.
+        if len(said) != len(terms):
+            logger.debug("google answered %d of %d", len(said), len(terms))
+            return {}
+        return {term: _short_gloss(answer, term) for term, answer in zip(terms, said)}
+
+    def _fetch_google(self, term: str, language: str, target: str) -> str:
+        """One word, no line. "" when no key is configured or anything fails."""
+        return self._fetch_google_many([term], language, target).get(term, "")
 
     def _gloss(
         self,

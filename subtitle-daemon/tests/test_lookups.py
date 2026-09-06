@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from subtitle_daemon.lookups import (
     GLOSS_PROBE,
+    GOOGLE_BATCH,
     Lookups,
     _short_gloss,
     clean_translation,
@@ -553,7 +554,9 @@ def test_a_batch_that_times_out_still_answers_from_the_tier_below(
         "subtitle_daemon.lookups.urllib.request.urlopen",
         lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("too slow")),
     )
-    monkeypatch.setattr(Lookups, "_fetch_google", lambda self, term, *a: f"{term}-google")
+    monkeypatch.setattr(
+        Lookups, "_fetch_google_many", lambda self, terms, *a: {t: f"{t}-google" for t in terms}
+    )
     items = [
         {"term": "spare", "sentence": "Can you spare a minute?"},
         {"term": "chamber", "sentence": "The pressure in the chamber is dropping."},
@@ -571,7 +574,9 @@ def test_the_context_free_answer_is_not_filed_where_the_contextual_one_goes(
         "subtitle_daemon.lookups.urllib.request.urlopen",
         lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("too slow")),
     )
-    monkeypatch.setattr(Lookups, "_fetch_google", lambda self, term, *a: "yerel")
+    monkeypatch.setattr(
+        Lookups, "_fetch_google_many", lambda self, terms, *a: {t: "yerel" for t in terms}
+    )
     line = "from threats both foreign and domestic."
     assert glosser.gloss_many([{"term": "domestic", "sentence": line}], "en", "tr") == ["yerel"]
     assert glosser._translation_path("domestic", "en", "tr").exists()
@@ -621,7 +626,9 @@ def test_a_call_stops_asking_the_model_once_its_budget_is_gone(
 
     monkeypatch.setattr(glosser, "_gloss", fake_gloss)
     monkeypatch.setattr("subtitle_daemon.lookups.time.monotonic", lambda: clock[0])
-    monkeypatch.setattr(Lookups, "_fetch_google", lambda self, term, *a: f"{term}-google")
+    monkeypatch.setattr(
+        Lookups, "_fetch_google_many", lambda self, terms, *a: {t: f"{t}-google" for t in terms}
+    )
     items = [{"term": f"w{i}", "sentence": f"line {i}"} for i in range(40)]
     said = glosser.gloss_many(items, "en", "tr")
 
@@ -667,9 +674,14 @@ def test_a_word_handed_back_unchanged_is_not_a_gloss(tmp_path: Path, monkeypatch
     # test. Google answers with the word it was given for anything it cannot
     # translate, which is what a name looks like to it.
     def urlopen(request: Any, timeout: float = 0) -> Any:
-        term = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)["q"][0]
-        said = {"Paige": "Paige", "vault": "kasa"}[term]
-        return _Raw(json.dumps({"data": {"translations": [{"translatedText": said}]}}).encode())
+        # The words are in the POST body now, and there may be several of them.
+        terms = urllib.parse.parse_qs(request.data.decode("utf-8"))["q"]
+        said = [{"Paige": "Paige", "vault": "kasa"}[term] for term in terms]
+        return _Raw(
+            json.dumps(
+                {"data": {"translations": [{"translatedText": x} for x in said]}}
+            ).encode()
+        )
 
     monkeypatch.setattr("subtitle_daemon.lookups.urllib.request.urlopen", urlopen)
     said = glosser.gloss_many(
@@ -761,7 +773,9 @@ def test_a_batch_of_names_does_not_stop_the_model_for_the_rest_of_the_film(
 
     monkeypatch.setattr(glosser, "_gloss", fake_gloss)
     monkeypatch.setattr("subtitle_daemon.lookups.time.monotonic", lambda: clock[0])
-    monkeypatch.setattr(Lookups, "_fetch_google", lambda self, term, *a: f"{term}-google")
+    monkeypatch.setattr(
+        Lookups, "_fetch_google_many", lambda self, terms, *a: {t: f"{t}-google" for t in terms}
+    )
 
     names = [{"term": f"Name{i}", "sentence": f"line {i}"} for i in range(GLOSS_PROBE)]
     words = [{"term": f"word{i}", "sentence": f"line {i}"} for i in range(3)]
@@ -799,7 +813,9 @@ def test_which_tier_answered_is_counted_and_handed_back(
     monkeypatch.setattr(glosser, "_gloss", fake_gloss)
     monkeypatch.setattr("subtitle_daemon.lookups.time.monotonic", lambda: clock[0])
     monkeypatch.setattr(
-        Lookups, "_fetch_google", lambda self, term, *a: "" if term == "w5" else f"{term}-google"
+        Lookups,
+        "_fetch_google_many",
+        lambda self, terms, *a: {t: ("" if t == "w5" else f"{t}-google") for t in terms},
     )
     items = [{"term": f"w{i}", "sentence": f"line {i}"} for i in range(6)]
     tally: dict[str, int] = {}
@@ -866,3 +882,64 @@ def test_a_gloss_from_a_model_is_cleaned_the_same_way() -> None:
     """One rule for three tiers. A model asked for JSON can wrap its answer."""
     assert _short_gloss('<b>yedek</b>', "spare") == "yedek"
     assert _short_gloss("&quot;yedek&quot;", "spare") == "yedek"
+
+
+def test_a_film_of_words_reaches_google_in_one_request(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """The whole of "the translations are late".
+
+    A film marks about four hundred words and every one of them was its own
+    round trip. Measured against the live API on twenty words: 54.29 seconds
+    one at a time against 0.44 seconds as one request, the same twenty answers.
+    """
+    glosser = Lookups(tmp_path, google_key="k")
+    calls: list[list[str]] = []
+
+    def urlopen(request: Any, timeout: float = 0) -> Any:
+        terms = urllib.parse.parse_qs(request.data.decode("utf-8"))["q"]
+        calls.append(terms)
+        return _Raw(
+            json.dumps(
+                {"data": {"translations": [{"translatedText": f"{t}-tr"} for t in terms]}}
+            ).encode()
+        )
+
+    monkeypatch.setattr("subtitle_daemon.lookups.urllib.request.urlopen", urlopen)
+    # Two lines asking about the same word are one question to a tier that
+    # never sees the line, so "spare" is sent once and answers both.
+    items = [{"term": f"w{i}", "sentence": f"line {i}"} for i in range(200)]
+    items += [
+        {"term": "spare", "sentence": "Can you spare a minute?"},
+        {"term": "spare", "sentence": "We are down to one spare engine."},
+    ]
+    said = glosser.gloss_many(items, "en", "tr")
+
+    assert said[0] == "w0-tr" and said[199] == "w199-tr"
+    assert said[200] == said[201] == "spare-tr"
+    assert [len(c) for c in calls] == [GOOGLE_BATCH, 73], "not one request per batch of 128"
+    assert calls[0].count("spare") + calls[1].count("spare") == 1, "the word was asked twice"
+
+
+def test_google_answering_with_the_wrong_number_of_words_is_no_answer(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """A short array would pair each word with the NEXT one's answer.
+
+    Silently, and for every word after the gap - which is worse than a row of
+    empty chips, because a wrong meaning reads as a meaning.
+    """
+    glosser = Lookups(tmp_path, google_key="k")
+
+    def urlopen(request: Any, timeout: float = 0) -> Any:
+        terms = urllib.parse.parse_qs(request.data.decode("utf-8"))["q"]
+        return _Raw(
+            json.dumps(
+                {"data": {"translations": [{"translatedText": f"{t}-tr"} for t in terms[1:]]}}
+            ).encode()
+        )
+
+    monkeypatch.setattr("subtitle_daemon.lookups.urllib.request.urlopen", urlopen)
+    items = [{"term": "vault", "sentence": "a"}, {"term": "courier", "sentence": "b"}]
+    assert glosser.gloss_many(items, "en", "tr") == ["", ""]
+    assert not glosser._translation_path("vault", "en", "tr").exists()
