@@ -258,6 +258,19 @@ def _short_gloss(text: Any, term: str) -> str:
         return ""
     if len(answer.split()) > len(term.split()) + MAX_EXTRA_WORDS:
         return ""
+    # The word handed back unchanged, which is how a translator says it has no
+    # answer - and putting "Paige" under "Paige" is worse than putting nothing
+    # there, because a reader reads a chip as a meaning rather than as a
+    # failure. tools/study-report.mjs already counts this shape as one of the
+    # three ways a gloss is not one.
+    #
+    # It matters more now than it did. The model was told to answer a proper
+    # noun with an empty string and did; Google was not and cannot be, and
+    # measured over the 175 English subtitles in the cache 24.2% of everything
+    # marked is a proper noun the name rule missed. Observed through the running
+    # daemon the day the tier changed: "Paige" came back "Paige".
+    if answer.casefold() == term.casefold():
+        return ""
     return answer
 
 

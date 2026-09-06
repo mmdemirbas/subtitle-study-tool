@@ -10,6 +10,7 @@ the network can only ever come back as a 404 the user then has to read.
 from __future__ import annotations
 
 import json
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -627,6 +628,60 @@ def test_a_call_stops_asking_the_model_once_its_budget_is_gone(
     assert sum(asked) < 40, "the model was asked for every word despite the budget"
     assert said[-1] == "w39-google", "the words past the budget were left blank"
     assert said[0] == "w0-said", "the words inside it lost their contextual answer"
+
+
+class _Raw:
+    """A canned HTTP response with a body of the caller's own shape.
+
+    _Answered wraps its argument in the OpenAI envelope, which is right for the
+    gloss endpoint and wrong for every other one this module calls.
+    """
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _Raw:
+        return self
+
+    def __exit__(self, *args: Any) -> bool:
+        return False
+
+
+def test_a_word_handed_back_unchanged_is_not_a_gloss(tmp_path: Path, monkeypatch: Any) -> None:
+    """A translator that returns the word it was given has no answer for it, and
+    a chip reading "Paige" under the word Paige is read as a meaning rather than
+    as a failure.
+
+    It matters most for names. The model is told to answer a proper noun with an
+    empty string; Google is not and cannot be, and 24.2% of everything the
+    marking rule marks over the 175 English subtitles in the cache is a proper
+    noun the name rule missed.
+    """
+    glosser = Lookups(tmp_path, google_key="k")
+
+    # Stubbed at the wire, not at _fetch_google: the shortening that drops an
+    # echo happens inside that method, so a stub replacing it would test the
+    # test. Google answers with the word it was given for anything it cannot
+    # translate, which is what a name looks like to it.
+    def urlopen(request: Any, timeout: float = 0) -> Any:
+        term = urllib.parse.parse_qs(urllib.parse.urlparse(request.full_url).query)["q"][0]
+        said = {"Paige": "Paige", "vault": "kasa"}[term]
+        return _Raw(json.dumps({"data": {"translations": [{"translatedText": said}]}}).encode())
+
+    monkeypatch.setattr("subtitle_daemon.lookups.urllib.request.urlopen", urlopen)
+    said = glosser.gloss_many(
+        [{"term": "Paige", "sentence": "Paige, come down here."},
+         {"term": "vault", "sentence": "That is the vault."}],
+        "en",
+        "tr",
+    )
+    assert said == ["", "kasa"]
+    # Case alone is not a translation either.
+    assert _short_gloss("PAIGE", "Paige") == ""
+    assert _short_gloss("kasa", "vault") == "kasa"
 
 
 def test_a_proper_noun_the_model_refused_is_not_then_translated(
