@@ -646,6 +646,36 @@
         if (!calls.subtitles) throw new Error("the search was still replayed from cache");
       });
 
+      check("a file this side already holds is answered from here, not asked for", async () => {
+        /* The daemon does not know what the extension has. The copy in that
+         * direction is made by converge, which runs on a down-to-up transition
+         * and gives up quietly when a push fails, with no retry until the
+         * daemon next restarts - so this state is reachable and stays.
+         *
+         * With the daemon up, the fetch went to it regardless. Against a real
+         * daemon that means a download spent on a file that was already here,
+         * out of five a day; against this stub, which has no /fetch route, it
+         * means no cues at all. Both are the same mistake: asking for something
+         * we are holding. The bytes are the same bytes either way - the sha256
+         * is checked on the way in and both stores keep what OpenSubtitles
+         * served. */
+        await setDaemon(false);
+        await provider.fetchSubtitle(11, { imdb_id: "32430579", language: "en" });
+        if (!(await cache.getSubtitle(11))) throw new Error("setup: this side should hold 11");
+
+        // The daemon comes up without ever having been given the file.
+        daemonCache.delete(11);
+        await setDaemon(true);
+        reset();
+        const answer = await provider.fetchSubtitle(11, { imdb_id: "32430579", language: "en" });
+        if (!answer.cues?.length)
+          throw new Error(`the held file was not served: ${answer.error || "no cues"}`);
+        if (answer.served_by !== "extension")
+          throw new Error(`served by ${answer.served_by}, not from the copy already here`);
+        if (calls.download)
+          throw new Error(`a download was spent on a file already held here (${calls.download})`);
+      });
+
       check("a deletion the daemon refused is not reported as done", async () => {
         /* `call` returns any answer carrying an `error`, whatever its status,
          * which is right for the endpoints whose refusals are part of the

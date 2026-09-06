@@ -17,7 +17,7 @@
 
 import * as daemon from "./daemon.js";
 import { DaemonDownError } from "./daemon.js";
-import { LocalService } from "./subtitles/local.js";
+import { cuesResponse, LocalService } from "./subtitles/local.js";
 import * as cache from "./subtitles/cache.js";
 import { converge } from "./subtitles/sync.js";
 
@@ -197,6 +197,24 @@ export async function search(args) {
 }
 
 export async function fetchSubtitle(fileId, context = {}) {
+  /* What this side already holds, before either side is asked.
+   *
+   * A download is the scarce thing here - five a day anonymously, ten with an
+   * account - and the daemon does not know what the extension has. The copy in
+   * the other direction is made by converge, which runs on a down-to-up
+   * transition and gives up quietly when a push fails or when listing the
+   * daemon's cache fails, with no retry until the daemon next restarts. So a
+   * file this side held and had not managed to push was fetched through the
+   * daemon, and the daemon spent a download on it. Observed with the push
+   * failed and file 99 held here: POST /fetch went out and the stub counted one
+   * download spent.
+   *
+   * The bytes are the same bytes - the sha256 is checked on the way in and both
+   * stores keep the file OpenSubtitles served - so answering from here is the
+   * same answer, sooner and for nothing. */
+  const held = await cache.getSubtitle(fileId);
+  if (held) return { served_by: "extension", ...cuesResponse(held.bytes, held.meta, true) };
+
   if (await daemonUp()) {
     await settled();
     try {
