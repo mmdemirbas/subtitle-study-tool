@@ -4649,6 +4649,30 @@
         }
       });
 
+      check("two cues that start together are one line, not two", async () => {
+        /* snapNear needs four lines before it will move anything, and two
+         * speakers talking over each other are two cues with the same start.
+         * Counted separately, three moments looked like four - and the repeated
+         * start went into the median twice as well, so one moment carried half
+         * the answer. */
+        const align = window.__ssoAlign;
+        const at = 600000;
+        const moments = [0, 8000, 16000, 24000].map((d) => at + d);
+        const other = moments.map((t) => t + 400);
+
+        const four = align.snapNear(moments, other, { atMs: at });
+        if (!four || four.deltaMs !== 400 || four.lines !== 4) {
+          throw new Error(`four distinct starts answered ${JSON.stringify(four)}`);
+        }
+        const three = align.snapNear(moments.slice(0, 3), other, { atMs: at });
+        if (three) throw new Error(`three starts answered ${JSON.stringify(three)}`);
+
+        // The same three moments, with the first one carrying two cues.
+        const repeated = [moments[0], moments[0], moments[1], moments[2]];
+        const answer = align.snapNear(repeated, other, { atMs: at });
+        if (answer) throw new Error(`a repeated start made a fourth line: ${JSON.stringify(answer)}`);
+      });
+
       check("a confidence survives being written down", async () => {
         /* The number the whole accept-or-refuse decision rests on could be
          * Infinity, and Infinity does not survive being written down: trace.js

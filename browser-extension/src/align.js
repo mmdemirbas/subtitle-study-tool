@@ -952,7 +952,21 @@
     const from = atMs - spanMs / 2;
     const to = atMs + spanMs / 2;
 
-    const a = (aTimes || []).filter((t) => Number.isFinite(t) && t >= from && t <= to);
+    /* One cue start, one vote, however many cues began on it.
+     *
+     * Two speakers talking over each other are two cues with the same start,
+     * and a subtitle that separates a sound label from the line under it is
+     * another. Counted separately, one moment supplies two of the four lines
+     * this correction needs, and it supplies the same number twice to the
+     * median as well - so the answer is drawn from three moments while the
+     * spread and the count both say four.
+     *
+     * align() above is deliberately not changed to match: its thresholds were
+     * calibrated on real files with whatever repeats they hold, and its n and
+     * its matched count are both inflated by the same repeats, so taking them
+     * out would move every number in the corpus for no defect. Here there are
+     * four points and each one is a quarter of the answer. */
+    const a = [...new Set((aTimes || []).filter((t) => Number.isFinite(t) && t >= from && t <= to))];
     const b = (bTimes || [])
       .filter((t) => Number.isFinite(t) && t >= from - radiusMs && t <= to + radiusMs)
       .sort((x, y) => x - y);
