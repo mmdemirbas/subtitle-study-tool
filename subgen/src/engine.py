@@ -119,13 +119,21 @@ class SubtitleGenerator:
         )
         return list(segments), info
 
-    def _post_process_segments(self, segments: Iterable) -> List:
+    def _post_process_segments(self, segments: Iterable, file_path: str) -> List:
         """Apply post‑processing filters to remove obvious repetition and
-        optionally diarize speakers."""
+        optionally diarize speakers.
+
+        `file_path` is the audio the segments came from. A diarization model
+        needs it to separate speakers - it works on the sound, not on the
+        transcript - and this passed "" instead. The stub in diarization.py
+        ignores the argument, so nothing was visibly wrong; the day the stub is
+        replaced, every speaker label would have come out of a model that was
+        handed no audio.
+        """
         cleaned = remove_repeated_segments(segments)
         if self.diarize:
             # Note: apply_diarization prints a warning if dependencies are missing
-            cleaned = apply_diarization(cleaned, "")
+            cleaned = apply_diarization(cleaned, file_path)
         return cleaned
 
     def process_file(
@@ -152,11 +160,11 @@ class SubtitleGenerator:
         os.makedirs(output_dir, exist_ok=True)
         if mode in ("transcribe", "both"):
             segments, info = self._transcribe(file_path, task="transcribe")
-            segments = self._post_process_segments(segments)
+            segments = self._post_process_segments(segments, file_path)
             out_path = os.path.join(output_dir, f"{filename}.orig.srt")
             write_srt(segments, out_path)
         if mode in ("translate", "both"):
             segments, info = self._transcribe(file_path, task="translate")
-            segments = self._post_process_segments(segments)
+            segments = self._post_process_segments(segments, file_path)
             out_path = os.path.join(output_dir, f"{filename}.en.srt")
             write_srt(segments, out_path)
