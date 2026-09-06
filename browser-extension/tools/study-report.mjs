@@ -79,7 +79,7 @@ function report(records) {
   let phrases = 0;
   let unrankedMarks = 0;
   let cues = 0;
-  const refused = { name: 0, short: 0, common: 0, unranked: 0, cap: 0 };
+  const refused = { name: 0, short: 0, common: 0, unranked: 0, cap: 0, credit: 0 };
   for (const entry of all) {
     asked += entry.asked.length;
     cues += entry.cues || 0;
@@ -101,6 +101,9 @@ function report(records) {
   row("common enough already", `${refused.common} (${pct(refused.common, totalRefused)})`);
   row("no rank to judge it by", `${refused.unranked} (${pct(refused.unranked, totalRefused)})`);
   row("over the line's cap", `${refused.cap} (${pct(refused.cap, totalRefused)})`);
+  // Words on a line nobody in the film said - the site that made the subtitle,
+  // the person who synced it, the release it was cut for. See notDialogue.
+  row("not dialogue at all", `${refused.credit} (${pct(refused.credit, totalRefused)})`);
   console.log(
     `  ${"".padEnd(34)} ${totalRefused} refusals against ${asked} marks` +
       ` - the rule keeps ${pct(asked, asked + totalRefused)} of what it looks at`,

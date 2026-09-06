@@ -5834,6 +5834,52 @@
         }
       });
 
+      check("the line naming the site that made the subtitle is not studied", async () => {
+        /* A subtitle carries the site that made it, the person who synced it
+         * and the release it was cut for, and study mode read all of it as
+         * speech. `www`, `addic`, `corrections` and `synced` are all in the
+         * answer cache on this machine, which means they were marked, glossed
+         * and put on screen as vocabulary. Measured over the 175 English
+         * subtitles in the daemon's cache: 87 such cues in 55 films, costing
+         * 265 marks on 41 words.
+         *
+         * The last cue is the one that keeps the rule honest. Somebody saying a
+         * web address is somebody speaking, and an earlier version of this
+         * matched any line containing one and ate it. */
+        const was = window.__ssoStudy.settings().studySlots;
+        const CREDITS = [
+          { start: 0, end: 200000, text: "Sync and corrections by GeirDM\nwww.addic7ed.com" },
+          { start: 200000, end: 400000, text: "Ripped by phaelox for divxstation.com" },
+          { start: 400000, end: 600000, text: "Sherlock.1x01.A-Study-In-Pink.HDTV-XviD-FoV" },
+          /* Words the table holds, so the two places a line has are not spent
+           * before the one this case is about. */
+          { start: 600000, end: 800000, text: "You saw that at petersonsyard.com." },
+        ];
+        try {
+          window.__ssoStudy.updateSettings({ studySlots: [0], rarityRank: 4000, auto: false });
+          await window.__ssoStudy.setEnabled(true);
+          glossAsks.length = 0;
+          await window.__ssoApi.attach({
+            cues: CREDITS, label: "EN \u00b7 credits", fileId: 9210, language: "en", slot: 0,
+          });
+          video.currentTime = 1;
+          await until(() => glossAsks.length > 0, "no words were sent ahead");
+          const terms = glossAsks.flatMap((ask) => ask.items || []).map((item) => item.term);
+          const noise = terms.filter((t) =>
+            ["www", "addic7ed", "geirdm", "phaelox", "divxstation", "xvid", "hdtv", "sherlock"]
+              .includes(t));
+          if (noise.length)
+            throw new Error(`the credits were studied: ${noise.join(", ")}`);
+          if (!terms.includes("petersonsyard"))
+            throw new Error(`a line somebody spoke was thrown away too: ${terms.join(", ") || "nothing"}`);
+        } finally {
+          window.__ssoStudy.updateSettings({ studySlots: was, auto: false });
+          await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
+          video.currentTime = 1;
+          await sleep(150);
+        }
+      });
+
       check("a name the film only ever capitalises is not a word to learn", async () => {
         /* The name rule asks whether a word is capitalised in the MIDDLE of a
          * sentence, and a character is addressed - "Paige, come down here" - so

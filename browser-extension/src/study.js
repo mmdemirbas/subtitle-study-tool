@@ -647,6 +647,42 @@
   /* Anything a subtitle puts in brackets is a speaker label or a sound, not
    * spoken words, and neither should vote on how a word is normally spelt. */
   const NOT_SPOKEN = /\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|<[^>]*>/g;
+
+  /* A line nobody in the film said.
+   *
+   * A subtitle carries the site that made it, the person who synced it and the
+   * release it was cut for, and study mode read all of it as speech: `www`,
+   * `addic`, `corrections` and `synced` are all in the answer cache on this
+   * machine, which means they were marked, glossed and put on screen as
+   * vocabulary. Measured over the 175 English subtitles in the daemon's cache,
+   * 87 cues in 55 of them, costing 265 marks on 41 words - every one of them a
+   * site, a handle or a credit.
+   *
+   * The three shapes are deliberately narrow, because a rule that guesses at
+   * dialogue eats dialogue. `WEB_ONLY` is a line that is NOTHING but an
+   * address: an earlier version matched any line containing one and took "I
+   * think it's petersonsyard.com", which is somebody speaking. A credit needs a
+   * credit verb AND the word "by". A release needs one of the tokens a release
+   * name is built from. */
+  const TAGS = /<[^>]*>/g;
+  const WEB_ONLY = /^[\s©@~*_·—–-]*(?:https?:\/\/)?(?:www\.)?[\w-]+(?:\.[\w-]+)+\/?[\s©@~*_·—–-]*$/i;
+  const CREDIT_SITE = /\b(?:addic7ed|opensubtitles|subscene|podnapisi|yify|yts|rarbg|napiprojekt|legendas|subtitleseeker|tvsubtitles)\b/i;
+  const CREDIT_BY =
+    /\b(?:sync(?:ed|hroniz(?:ed|ation))?|correct(?:ed|ions?)|subtitl(?:es?|ed)|translat(?:ed|ion)|transcri(?:bed|pt)|encoded?|ripp?ed|resync)\b[^.\n]{0,40}\bby\b/i;
+  const RELEASE_NAME =
+    /\b(?:\d{3,4}p|bluray|blu-ray|web-?dl|webrip|hdtv|dvdrip|brrip|x26[45]|h\.?26[45]|xvid|aac|ac3|dts|hevc)\b/i;
+
+  function notDialogue(text) {
+    const flat = String(text).replace(/\s+/g, " ").trim();
+    if (!flat) return false;
+    const bare = flat.replace(TAGS, " ").replace(/\s+/g, " ").trim();
+    return Boolean(
+      (bare && WEB_ONLY.test(bare)) ||
+        CREDIT_SITE.test(flat) ||
+        CREDIT_BY.test(flat) ||
+        RELEASE_NAME.test(flat),
+    );
+  }
   const BRACKETED = /\[([^\]]*)\]|\(([^)]*)\)/g;
   const CAPITAL = /^[\p{Lu}]/u;
 
@@ -804,7 +840,15 @@
 
     const { names, capitalOnly } = namesIn(slot, language);
     const everyWord = new Set();
+    let creditWords = 0;
     const perCue = texts.map((text) => {
+      /* A credit line contributes nothing - not to the marks, and not to the
+       * vocabulary the ranks are asked for. See notDialogue. */
+      if (notDialogue(text)) {
+        const said = String(text).replace(NOT_SPOKEN, " ").match(WORD_PATTERN) || [];
+        creditWords += said.length;
+        return { line: text, words: [], sequence: [] };
+      }
       const spoken = String(text).replace(NOT_SPOKEN, " ");
       WORD_PATTERN.lastIndex = 0;
       const words = [...new Set((spoken.match(WORD_PATTERN) || []).map((w) => fold(w, language)))];
@@ -856,7 +900,8 @@
      * up. These four are every way a word can fail to be marked, and they are
      * what says whether the name rule is too greedy or the per-cue cap is
      * costing the reader lines they needed. */
-    const skipped = { name: 0, short: 0, common: 0, unranked: 0, cap: 0 };
+    const skipped = { name: 0, short: 0, common: 0, unranked: 0, cap: 0, credit: 0 };
+    skipped.credit = creditWords;
     perCue.forEach(({ line, words }, at) => {
       /* The lines either side of this one. A subtitle line is four or five
        * words with the rest of the exchange in the lines around it, and this
@@ -1010,6 +1055,9 @@
   }
 
   async function markWords(line) {
+    // Nothing on a credit line is vocabulary, and asking about it costs a round
+    // trip to say so. Same rule the prefetch applies, so the two agree.
+    if (notDialogue(line.cue?.text || "")) return;
     const language = studyLanguage(line.slot);
     const candidates = [...new Set(line.words.map((span) => span.dataset.w))].filter(
       (word) => letterCount(word) >= settings.minLetters,
