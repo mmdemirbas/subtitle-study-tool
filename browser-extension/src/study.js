@@ -681,10 +681,14 @@
    * array content.js built once for the same file. */
   const namesByTrack = new Map();
 
+  /* How many times a word has to appear before "capitalised every time" says
+   * anything. See namesIn: at two it takes real words with it. */
+  const NAME_REPEATS = 3;
+
   function namesIn(slot, language) {
     const texts = api.cueTexts?.(slot) || [];
     const held = namesByTrack.get(slot);
-    if (held && held.texts === texts && held.language === language) return held.names;
+    if (held && held.texts === texts && held.language === language) return held.found;
 
     /* Who is talking, which a subtitle writes in brackets and which the
      * capitalisation test above can never see, because the brackets are cut out
@@ -720,19 +724,37 @@
           .replace(/["'\u201c\u201d\u2018\u2019()[\]]+\s*$/, "")
           .trimEnd();
         const opens = before === "" || /[.!?\u2026:]$/.test(before) || /(^|\s)[-\u2013\u2014]$/.test(before);
-        const entry = seen.get(word) || { count: 0, capitalMid: 0 };
+        const entry = seen.get(word) || { count: 0, capitalMid: 0, capitals: 0 };
         if (!opens && CAPITAL.test(match[0])) entry.capitalMid += 1;
+        if (CAPITAL.test(match[0])) entry.capitals += 1;
         entry.count += 1;
         seen.set(word, entry);
       }
     }
 
     const names = new Set(labelled);
+    /* And the ones that are capitalised EVERYWHERE, which the test above cannot
+     * see. A character is addressed, so their name opens the line - "Paige,
+     * come down here" - or follows the dash that marks the second speaker, and
+     * neither position counts as a mid-sentence capital. Measured over the 175
+     * English subtitles in the daemon's cache, that left 1348 marks on names.
+     *
+     * Not a name on its own: "Well" and "Yes" open lines constantly and are
+     * capitalised every time they do. What makes it one is the word also being
+     * absent from the frequency table, and the caller applies that half because
+     * the ranks arrive from the worker long after this runs. Three occurrences
+     * rather than two, because two is where the real words are: at two,
+     * "phosphine", "radiological", "ionic" and "bird-watching" came along with
+     * the names, and at three the only word in the 91 it takes that a reader
+     * might have wanted is "guardsman". */
+    const capitalOnly = new Set();
     for (const [word, entry] of seen) {
       if (entry.capitalMid >= Math.max(1, entry.count * 0.5)) names.add(word);
+      else if (entry.capitals === entry.count && entry.count >= NAME_REPEATS) capitalOnly.add(word);
     }
-    namesByTrack.set(slot, { texts, language, names });
-    return names;
+    const found = { names, capitalOnly };
+    namesByTrack.set(slot, { texts, language, found });
+    return found;
   }
 
   /* Answering the film's words before anybody says them.
@@ -780,7 +802,7 @@
     const mark = { texts, language, target };
     glossedTracks.set(slot, mark);
 
-    const names = namesIn(slot, language);
+    const { names, capitalOnly } = namesIn(slot, language);
     const everyWord = new Set();
     const perCue = texts.map((text) => {
       const spoken = String(text).replace(NOT_SPOKEN, " ");
@@ -854,6 +876,12 @@
         if (letterCount(word) < settings.minLetters) { skipped.short += 1; continue; }
         const rank = ranks.has(word) ? ranks.get(word) : undefined;
         if (rank === undefined) { skipped.unranked += 1; continue; }
+        /* The second half of the always-capitalised test, applied here because
+         * this is where the rank is known. A word this film only ever writes
+         * with a capital, three times or more, that the frequency table has
+         * never heard of, is somebody's name - and the tier that would gloss it
+         * has no idea it is looking at one. */
+        if (rank === null && capitalOnly.has(word)) { skipped.name += 1; continue; }
         if (rank === null || rank >= settings.rarityRank) rare.push({ word, rank });
         else skipped.common += 1;
       }
@@ -999,7 +1027,7 @@
     if (lines.get(line.slot) !== line || !settings.enabled) return;
 
     const rare = [];
-    const names = namesIn(line.slot, language);
+    const { names, capitalOnly } = namesIn(line.slot, language);
     /* Which words this line's phrases have already claimed. A word inside a
      * phrasal verb is not a word to look up on its own - that is the whole
      * point of the phrase being marked - so it is passed over below rather
@@ -1038,7 +1066,10 @@
       /* A name is marked as a name and stops there: it keeps the fact that
        * Caprica is a place, which a bare subtitle strips, without taking one of
        * the two places a line has for words that can be learnt. */
-      const isName = names.has(word);
+      // Same two halves as the prefetch: the shape here, the rank from the
+      // worker. Both sites have to agree or a word is marked on screen and
+      // never asked about, or the reverse.
+      const isName = names.has(word) || (rank === null && capitalOnly.has(word));
       span.dataset.name = isName ? "true" : "false";
       const isRare = !isName && (rank === null || rank >= settings.rarityRank);
       span.dataset.rare = isRare ? "true" : "false";
