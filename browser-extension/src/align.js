@@ -110,9 +110,9 @@
 
   /* Three verdicts, not two, and the corpus is why.
    *
-   * Measured over every pair of the seventeen subtitle files in this repository
-   * - four films, one series, two languages, and several retimings - the
-   * confidences come out like this:
+   * These numbers were set on the seventeen subtitle files this repository held
+   * at the time - four films, one series, two languages, and several retimings
+   * - where every pair came out like this:
    *
    *   963, 802, 476, 327  same film, same or near-identical timing
    *    95,  36,  33       same episode, different retimings
@@ -120,18 +120,25 @@
    *   3.11                     Good Fortune against Crime 101 - WRONG
    *   2.34 and below           every other unrelated pair
    *
-   * So there is no threshold that both accepts every true pair and rejects
-   * every false one with room to spare: the worst true pair is 3.55 and the
-   * worst false one is 3.11. A single cutoff between them would be four
-   * hundredths of a decade from being wrong in either direction, on a corpus of
-   * seventeen files.
+   * On seventeen files no threshold both accepted every true pair and rejected
+   * every false one with room to spare: the worst true pair was 3.55 and the
+   * worst false one 3.11, four hundredths of a decade apart.
+   *
+   * Re-measured on the 277 files held now by bench/align/separation.mjs, over
+   * 377 same-film pairs and a fixed sample of 6069 of the 37847 different-film
+   * ones, the two groups do not merely sit close together, they overlap.
+   * Same-film confidences run from -1.81 to 1729.56 with a median of 217.24;
+   * 357 of the 377 are accepted and the highest one that is NOT is 3.44. Eight
+   * of the 6069 different-film pairs are accepted, the highest at 4.83. A true
+   * pair and a false pair now sit on opposite sides of ACCEPT the wrong way
+   * round, so no single cutoff separates them at all.
    *
    * The way out is to stop pretending it is one decision. Above AUTO the answer
    * is not in doubt and applying it silently is what "it should just work"
    * means. Between ACCEPT and AUTO it is probably right and worth one click to
-   * confirm. Below ACCEPT it is refused. That leaves the razor-thin boundary
-   * deciding between "refuse" and "ask", which is the cheapest of the three
-   * places to be wrong.
+   * confirm. Below ACCEPT it is refused. All eight of the false accepts landed
+   * in the middle band and none of them reached apply, which is what the
+   * overlap costs: a click, not a subtitle moved to the wrong place.
    *
    * What does NOT work, measured, so nobody adds it back: checking that the
    * offset holds across the first, middle and last third of the film. The false
@@ -150,7 +157,8 @@
    * across the whole film can clear AUTO on sheer n. Coverage is the direct
    * measure of that excess: matched, over the cues there were to match.
    *
-   * Measured over this repository's corpus, and the two groups do not overlap:
+   * Measured over the seventeen files this repository held then, and the two
+   * groups did not overlap:
    *
    *   0.322 0.328 0.408 0.662 0.730 1.000 1.000   every genuine "apply"
    *   0.206 0.216 0.217 0.218                     every wrong shift applied
@@ -168,10 +176,16 @@
    * chance must not be applied on its own, whatever the arithmetic says about
    * how many cues that is.
    *
-   * 0.28 sits between the two, with headroom on both sides. The guard is
-   * deliberately one-directional: it can only ever turn "apply" into "offer",
-   * never "no" into "yes", so the boundary this file is really about - the
-   * 3.11 wrong pair against the 3.55 right one - is untouched by it. */
+   * 0.28 sits between the two. On the 277 files held now, bench/align/
+   * separation.mjs reaches no different-film pair that applies at all, and the
+   * eight that are accepted as "offer" carry coverage 0.19 to 0.24 - still
+   * under the gate. The low side is not re-checked against true pairs there and
+   * cannot be: a pair is only an apply if it already cleared 0.28, so listing
+   * the coverages of the applies answers a different question.
+   *
+   * The guard is deliberately one-directional: it can only ever turn "apply"
+   * into "offer", never "no" into "yes", so the boundary this file is really
+   * about - refusing against asking - is untouched by it. */
   const AUTO_MIN_COVERAGE = 0.28;
 
   // --- the maths ---------------------------------------------------------------

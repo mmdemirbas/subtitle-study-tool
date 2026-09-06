@@ -100,6 +100,28 @@ Two of those four turned out to be the **oracle** being wrong rather than the
 candidate, which is the useful thing about a regression list: it does not know
 which side is at fault, so it makes you go and look.
 
+## Where the thresholds sit now: separation.mjs
+
+```bash
+node bench/align/separation.mjs
+```
+
+`align.js` carries three constants - `ACCEPT`, `AUTO` and `AUTO_MIN_COVERAGE` -
+and its comments quote the confidence of every pair of the **seventeen** files
+this repository held when they were chosen. The cache is 277 files now. This
+runs the shipped aligner over every same-film pair, every cut pair and a fixed
+sample of the different-film ones, and prints where the two groups actually sit.
+
+What it showed on 277 files: the groups overlap. The highest same-film pair that
+is refused comes in at 3.44 and the highest different-film pair that is accepted
+at 4.83, so no single cutoff separates them. Every one of those eight false
+accepts landed in the middle band and none reached "apply", which is the whole
+argument for having three verdicts rather than two.
+
+Run it after anything that changes how confidence or coverage is computed, and
+put the numbers it prints back into the comments in `align.js` rather than
+leaving the older corpus's figures reading as current.
+
 ## Where the labels come from
 
 Derived, never hand-written, in `corpus.mjs`. Every cached download carries the
