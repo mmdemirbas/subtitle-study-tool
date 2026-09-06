@@ -92,7 +92,17 @@ function normaliseLanguage(language) {
  * part before the apostrophe gets the right answer for English contractions and
  * possessives, and for the Turkish suffixed proper nouns ("Ankara'ya"), which
  * are the same shape. */
-function ranked(ranks, word) {
+function ranked(ranks, raw) {
+  /* Composed first, because the table is composed and a subtitle file need not
+   * be. A .srt saved in NFD writes "ışık" as five code points, the s carrying a
+   * separate COMBINING CEDILLA, and lowercasing does not put it back together -
+   * so the word reached the table in a form the table does not hold, came back
+   * absent, and absent counts as rarer than the last word in the file.
+   * Measured: the decomposed spelling answered null where the composed one
+   * answers 1626. The dotted i is a different problem and is already handled
+   * where the words are folded, in study.js - NFC does not compose i + U+0307,
+   * because there is no single code point for it. */
+  const word = raw.normalize("NFC");
   const direct = ranks.get(word);
   if (direct !== undefined) return direct;
   const apostrophe = word.search(/['’]/);
@@ -112,7 +122,12 @@ function ranked(ranks, word) {
  */
 export async function rank(words, language) {
   const ranks = await table(language);
-  const out = {};
+  /* No prototype to collide with. The word pattern in study.js cannot produce
+   * "__proto__" - it matches letters, marks, apostrophes and hyphens - so this
+   * is not a defect anyone has hit; it is that `rank` is reached by a message
+   * whose word list this file does not get to choose, and on a plain object
+   * that one word would set the prototype instead of an entry. */
+  const out = Object.create(null);
   if (!ranks) return out;
   for (const word of words) out[word] = ranked(ranks, word);
   return out;

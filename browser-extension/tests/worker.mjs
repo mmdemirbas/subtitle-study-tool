@@ -1348,6 +1348,17 @@ chrome.storage.local.set = instant.set;
   t("the Turkish table answers the same way, suffix and all",
     tr.iyi !== null && tr.iyi < 200 && tr["ankara'ya"] !== null,
     JSON.stringify(tr));
+
+  /* The table is composed and a .srt need not be. Saved in NFD, "ışık" is five
+   * code points with the s carrying a separate combining cedilla, and
+   * lowercasing does not put it back together - so a word the table holds
+   * arrived in a spelling it does not, came back absent, and absent counts as
+   * rarer than the last word in the file. */
+  const decomposed = "ışık".normalize("NFD");
+  const spellings = await rank([decomposed, "ışık"], "tr");
+  t("a word spelled with combining marks ranks as the word it is",
+    spellings[decomposed] !== null && spellings[decomposed] === spellings["ışık"],
+    `NFD=${spellings[decomposed]} NFC=${spellings["ışık"]}`);
 }
 
 for (const r of results) console.log(r.ok ? "PASS" : "FAIL", "-", r.name, r.ok ? "" : `→ ${r.detail}`);
