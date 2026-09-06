@@ -41,6 +41,19 @@ async function refresh() {
     el("statusNote").textContent = status.has_api_key
       ? "Subtitles come from the daemon, which holds its own key and cache."
       : "The daemon is running but has no API key configured.";
+  } else if (status.daemon_blocked) {
+    /* Something else is on the daemon's port, which is not the same as the
+     * daemon being stopped and does not have the same answer: starting it now
+     * fails with the port already in use. Said plainly, because the symptom
+     * when this happened was two days of translations that arrived late and
+     * knew nothing about their line, with nothing on any surface saying why. */
+    el("statusLine").textContent = "Something else is on the daemon's port";
+    el("statusLine").dataset.kind = "stuck";
+    el("statusNote").textContent =
+      `${status.daemon_blocked} The extension is doing the work itself, so ` +
+      "subtitles still arrive - but word meanings lose the line they were said " +
+      "in, which is what makes them right. Find what is holding the port and " +
+      "stop it, then start the daemon.";
   } else if (status.has_api_key) {
     el("statusLine").textContent = "The extension is answering on its own";
     el("statusLine").dataset.kind = "extension";

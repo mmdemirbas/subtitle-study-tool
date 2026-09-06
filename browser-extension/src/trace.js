@@ -27,11 +27,15 @@
  * All of it is on this machine. Nothing here talks to anything but 127.0.0.1.
  */
 
+import { DAEMON_ORIGIN } from "./daemon.js";
+
 const KEY = "sso:trace";
 const STATE_KEY = "sso:traceState";
 const SETTINGS_KEY = "sso:settings";
 export const FOLDER = "subtitle-overlay-log";
-const DAEMON_LOG = "http://127.0.0.1:8791/log";
+// Derived, not a second literal: the two drifted apart the last time the port
+// moved, and a log posted to the old one is a log nobody has.
+const DAEMON_LOG = `${DAEMON_ORIGIN}/log`;
 
 /* How long an entry may sit before the daemon is offered it.
  *
@@ -204,12 +208,12 @@ async function toDaemon(log) {
     const said = await answer.json().catch(() => ({}));
     /* A POST that succeeded is not proof the daemon took it.
      *
-     * Ports collide, and 8791 is on this machine: something else holding it
+     * Ports collide, and this one is on this machine: something else holding it
      * that answers 200 would be handed the log AND have the browser's copy
      * dropped, so the entries are gone and they went to a stranger's process.
      * The daemon says where it wrote them, and nothing else does. */
     if (said.ok !== true || typeof said.file !== "string") {
-      return { ok: false, reason: "something other than the daemon answered on 8791" };
+      return { ok: false, reason: `something other than the daemon answered on ${DAEMON_ORIGIN}` };
     }
     return { ok: true, bytes: text.length, file: said.file };
   } catch (error) {

@@ -27,7 +27,12 @@ CACHE_DIR = DAEMON_ROOT / "cache"
 # `/log` in server.py.
 LOG_DIR = DAEMON_ROOT / "logs"
 
-DEFAULT_PORT = 8791
+# Moved off 8791, which collided: a static file server from another project held
+# it for two days and answered every request with an HTML error page. Nothing
+# crashed - the extension does the work itself when the daemon is absent - so
+# the only symptom was translations that arrived late and knew nothing about
+# the line they came from. The extension's DAEMON_ORIGIN has to match this.
+DEFAULT_PORT = 8794
 
 
 @dataclass(frozen=True)

@@ -133,11 +133,16 @@
         },
       });
 
+      /* The origin the extension really calls, imported rather than written out
+       * again. The port moved once and a stub still answering the old one is a
+       * suite that passes while testing a URL nobody requests. */
+      const { DAEMON_ORIGIN } = await import("../src/daemon.js");
+
       globalThis.fetch = async (url, options = {}) => {
         const target = String(url);
 
         // --- the daemon ---
-        if (target.startsWith("http://127.0.0.1:8791")) {
+        if (target.startsWith(DAEMON_ORIGIN)) {
           if (!daemonRunning) throw new TypeError("Failed to fetch");
           /* Something that is not the daemon, holding the port. A dev server
            * answers 200 with its index page for every path it does not know,
@@ -150,7 +155,7 @@
               headers: { "Content-Type": "text/html" },
             });
           }
-          const path = target.slice("http://127.0.0.1:8791".length);
+          const path = target.slice(DAEMON_ORIGIN.length);
           if (path.startsWith("/health")) {
             return json({ has_api_key: true, default_languages: ["en"] });
           }
@@ -444,7 +449,7 @@
         if (!calls.daemonSearch) throw new Error("the daemon was not asked");
       });
 
-      /* Ports collide, and this one is 8791 on the reader's own machine. The
+      /* Ports collide, and this one is on the reader's own machine. The
        * probe asked "did something answer" rather than "did the daemon
        * answer", so a dev server left running there was taken for the daemon:
        * every search went to it, came back as nothing, and the extension's own
@@ -461,6 +466,37 @@
           throw new Error(`a dev server on the port was taken for the daemon: ${found.served_by}`);
         if (!found.results?.length)
           throw new Error("the extension's own search never ran");
+      });
+
+      /* ...and the reader is told which of the two it is.
+       *
+       * Observed over two days: a static file server from another project held
+       * the port and answered every request with its own page. Nothing failed,
+       * because the case above means the extension quietly does the work
+       * itself - so the only symptom was that word meanings arrived late and
+       * knew nothing about the line they were said in, and the settings page
+       * said "the daemon is not running". That is true, and it sends the
+       * reader to run.sh, which then fails with the port already in use. */
+      check("a stranger on the port is reported as that, not as a stopped daemon", async () => {
+        foreignOnPort = true;
+        await setDaemon(true);
+        const blocked = await provider.status();
+        foreignOnPort = false;
+        await setDaemon(false);
+        if (blocked.daemon_running !== false)
+          throw new Error("a dev server on the port was reported as the daemon running");
+        if (!/listening/i.test(blocked.daemon_blocked || ""))
+          throw new Error(`nothing said what was wrong: ${JSON.stringify(blocked.daemon_blocked)}`);
+      });
+
+      // A port with nothing on it gets the ordinary advice, because starting
+      // the daemon really is the answer to that one.
+      check("an empty port is left to the ordinary advice", async () => {
+        await setDaemon(false);
+        const quiet = await provider.status();
+        if (quiet.daemon_running !== false) throw new Error("no daemon, yet reported running");
+        if (quiet.daemon_blocked)
+          throw new Error(`said something was on the port: ${quiet.daemon_blocked}`);
       });
 
       check("an error from the daemon is not retried locally", async () => {

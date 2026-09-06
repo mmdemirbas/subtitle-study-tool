@@ -7,12 +7,30 @@
  * one place that decides which side answers.
  */
 
-export const DAEMON_ORIGIN = "http://127.0.0.1:8791";
+/* Where the daemon listens, named once for the whole extension.
+ *
+ * It was 8791 and moved, because 8791 collided: a static file server from
+ * another project sat on it for two days and answered every gloss request with
+ * an HTML error page. Nothing crashed - the extension fell back to doing the
+ * work itself, which is the designed behaviour - so the only symptom was that
+ * every translation arrived late and knew nothing about the line it came from.
+ *
+ * It is a constant rather than a setting because `host_permissions` in the
+ * manifest has to name the origin, and a manifest cannot read a setting. The
+ * only way to make it configurable is to ask for `http://127.0.0.1/*`, which is
+ * every service on the reader's machine - too much to spend on a port number.
+ * The daemon's own `port` in config.local.json has to match this. */
+export const DAEMON_ORIGIN = "http://127.0.0.1:8794";
 
 export class DaemonDownError extends Error {
-  constructor(message) {
+  /* `foreign` separates the two reasons, because the advice differs and a
+   * caller cannot tell them apart from the message without matching on prose.
+   * Nothing listening is answered by starting the daemon; something else
+   * listening makes that fail with the port already in use. */
+  constructor(message, { foreign = false } = {}) {
     super(message || "The subtitle daemon is not running. Start it with subtitle-daemon/run.sh");
     this.name = "DaemonDownError";
+    this.foreign = foreign;
   }
 }
 
@@ -44,7 +62,7 @@ async function call(path, options = {}) {
 /* Whether the daemon is there - and it has to be the daemon, not merely an
  * answer.
  *
- * The probe asked "did something reply". Ports collide, and this one is 8791 on
+ * The probe asked "did something reply". Ports collide, and this one is on
  * the reader's own machine: a dev server left running there answers 200 with
  * its index page for every path it does not know, so nothing fails, nothing
  * parses, and every search went to it and came back empty while the
@@ -63,9 +81,9 @@ export async function health() {
   } catch (error) {
     // An HTTP error from /health is something else on the port, not a daemon
     // with a problem - the daemon has no failing path here.
-    throw error instanceof DaemonDownError ? error : new DaemonDownError(FOREIGN);
+    throw error instanceof DaemonDownError ? error : new DaemonDownError(FOREIGN, { foreign: true });
   }
-  if (!Array.isArray(payload.default_languages)) throw new DaemonDownError(FOREIGN);
+  if (!Array.isArray(payload.default_languages)) throw new DaemonDownError(FOREIGN, { foreign: true });
   return payload;
 }
 

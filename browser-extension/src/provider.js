@@ -31,7 +31,7 @@ const DEFAULT_LANGUAGES = ["en", "tr"];
  * the user is still looking at the screen. */
 const PROBE_TTL_MS = 5000;
 
-let probe = { at: 0, up: false };
+let probe = { at: 0, up: false, why: "" };
 let lastUp = false;
 let syncing = null;
 let service = null;
@@ -64,13 +64,31 @@ async function local() {
 export async function daemonUp({ force = false } = {}) {
   if (!force && Date.now() - probe.at < PROBE_TTL_MS) return probe.up;
   let up = false;
+  /* Why it is not there, not only that it is not.
+   *
+   * The two reasons need different advice and the bare catch here threw the
+   * difference away. A daemon that is not running is started with run.sh; a
+   * port with something ELSE on it makes run.sh fail with the port in use, and
+   * the reader has to find what is holding it first. daemon.js already tells
+   * them apart - see FOREIGN there - and this is where that was being lost.
+   *
+   * Observed: a static file server from another project held the port for two
+   * days. Nothing failed, because the extension does the work itself when the
+   * daemon is absent, so the only symptom was that every translation arrived
+   * late and knew nothing about the line it came from. The settings page said
+   * "the daemon is not running", which was true and sent the reader nowhere. */
+  let why = "";
   try {
     await daemon.health();
     up = true;
-  } catch {
+  } catch (error) {
     up = false;
+    // Only the foreign case. "Nothing is listening" is the ordinary state and
+    // already has advice that works; saying it twice would put a warning on
+    // every reader who simply has not started the daemon.
+    why = error instanceof DaemonDownError && error.foreign ? error.message : "";
   }
-  probe = { at: Date.now(), up };
+  probe = { at: Date.now(), up, why };
 
   /* Coming back up is the moment to converge the two caches, and it has to
    * finish before anything searches: a search that ran first would rank against
@@ -102,6 +120,8 @@ export async function status() {
   return {
     served_by: "extension",
     daemon_running: false,
+    // Empty when the port is simply free. See daemonUp.
+    daemon_blocked: probe.why,
     has_api_key: Boolean(config.apiKey),
     default_languages: config.languages,
     cached_subtitles: held.subtitles,

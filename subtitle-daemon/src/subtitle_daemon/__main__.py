@@ -12,6 +12,7 @@ import urllib.error
 import urllib.request
 
 from . import config as config_module
+from .config import DEFAULT_PORT
 from .server import PortInUseError, serve
 
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="subtitle-daemon",
         description="Find, download and cache subtitles for whatever is playing.",
     )
-    parser.add_argument("--port", type=int, help="port to listen on (default 8791)")
+    parser.add_argument("--port", type=int, help=f"port to listen on (default {DEFAULT_PORT})")
     parser.add_argument("--verbose", "-v", action="store_true", help="log every request")
     parser.add_argument(
         "--replace",
