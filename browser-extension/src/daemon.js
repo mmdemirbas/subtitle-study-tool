@@ -54,7 +54,11 @@ async function call(path, options = {}) {
 
   const payload = await response.json().catch(() => ({}));
   if (!response.ok && !payload.error) {
-    throw new Error(`Daemon returned HTTP ${response.status}`);
+    const failed = new Error(`Daemon returned HTTP ${response.status}`);
+    // Carried separately because health() has to report the number and cannot
+    // get it out of the sentence without matching on prose.
+    failed.status = response.status;
+    throw failed;
   }
   return payload;
 }
@@ -79,11 +83,22 @@ export async function health() {
   try {
     payload = await call("/health");
   } catch (error) {
-    // An HTTP error from /health is something else on the port, not a daemon
-    // with a problem - the daemon has no failing path here.
-    throw error instanceof DaemonDownError ? error : new DaemonDownError(FOREIGN, { foreign: true });
+    /* An HTTP error from /health is something else on the port, not a daemon
+     * with a problem - the daemon has no failing path here, and a crash inside
+     * one closes the connection rather than answering.
+     *
+     * What it answered goes into the message. The sentence on its own names no
+     * program and no number, so a reader looking at "something other than the
+     * subtitle daemon is listening" had nothing to search for and no way to
+     * tell a stranger on the port from a daemon that had grown one of these. */
+    if (error instanceof DaemonDownError) throw error;
+    const status = error.status ? ` It answered HTTP ${error.status}.` : "";
+    throw new DaemonDownError(`${FOREIGN}${status}`, { foreign: true });
   }
-  if (!Array.isArray(payload.default_languages)) throw new DaemonDownError(FOREIGN, { foreign: true });
+  if (!Array.isArray(payload.default_languages)) {
+    const said = typeof payload.error === "string" ? ` It answered: "${payload.error}".` : "";
+    throw new DaemonDownError(`${FOREIGN}${said}`, { foreign: true });
+  }
   return payload;
 }
 

@@ -102,6 +102,9 @@
       let daemonRunning = false;
       let daemonFails = null;
       let foreignOnPort = false;
+      /* Something on the port that answers in JSON rather than with a page.
+       * A case sets a status and a body and gets exactly that back. */
+      let foreignReply = null;
       const daemonCache = new Map();
 
       const json = (body, status = 200) =>
@@ -155,6 +158,7 @@
               headers: { "Content-Type": "text/html" },
             });
           }
+          if (foreignReply) return json(foreignReply.body, foreignReply.status);
           const path = target.slice(DAEMON_ORIGIN.length);
           if (path.startsWith("/health")) {
             return json({ has_api_key: true, default_languages: ["en"] });
@@ -746,6 +750,29 @@
         const { entries } = await provider.cacheEntries();
         if (entries.length) throw new Error(`${entries.length} left`);
         if (daemonCache.size) throw new Error("the daemon still holds some");
+      });
+
+      check("a port that answers but not as the daemon says what it answered", async () => {
+        /* "Something other than the subtitle daemon is listening" names no
+         * program and no number, so the reader had nothing to search for. The
+         * two shapes are a reply with a status and nothing else in it, and a
+         * reply carrying a reason of its own. */
+        try {
+          foreignReply = { status: 503, body: {} };
+          await setDaemon(true);
+          const numbered = await provider.status();
+          if (!/503/.test(numbered.daemon_blocked || ""))
+            throw new Error(`did not say what it answered: ${numbered.daemon_blocked}`);
+
+          foreignReply = { status: 403, body: { error: "origin not allowed" } };
+          await setDaemon(true);
+          const refused = await provider.status();
+          if (!/origin not allowed/.test(refused.daemon_blocked || ""))
+            throw new Error(`did not carry the reason: ${refused.daemon_blocked}`);
+        } finally {
+          foreignReply = null;
+          await setDaemon(true);
+        }
       });
 
       check("clearing while a convergence is running does not refill the cache", async () => {
