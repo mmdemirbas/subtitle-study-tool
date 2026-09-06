@@ -208,6 +208,22 @@ const toasts = () => sentToTab.filter((m) => m.type === "sso:toast").map((m) => 
 const results = [];
 const t = (name, ok, detail = "") => results.push({ name, ok, detail });
 
+/* Poll for a condition instead of sleeping for a guess.
+ *
+ * What these cases wait on is a promise chain inside the worker, and how long
+ * it takes is a fact about the machine. "a rejection nobody caught in the
+ * worker is written down" waited a fixed 30ms, lost that bet while the machine
+ * was busy, and reported an empty list for code that was working. Returns
+ * either way, so the case still reports what it actually saw. */
+const until = async (ready, ms = 2000) => {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    if (await ready()) return true;
+    if (Date.now() > deadline) return false;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+};
+
 // 1. A site nobody has decided about turns itself on at the first attach, once.
 await ask({ type: "sso:attached" }, sender);
 t("first attach enables the site", sites()?.["https://example.tv"] === true, JSON.stringify(sites()));
@@ -995,8 +1011,11 @@ await resetTrace();
 for (const fn of listeners.global.unhandledrejection || []) {
   fn({ reason: new Error("something in the worker gave up") });
 }
-await new Promise((r) => setTimeout(r, 30));
-const errors = (await trace.entries()).filter((e) => e.kind === "error");
+let errors = [];
+await until(async () => {
+  errors = (await trace.entries()).filter((e) => e.kind === "error");
+  return errors.length === 1;
+});
 t(
   "a rejection nobody caught in the worker is written down",
   errors.length === 1 && errors[0].message.includes("gave up") && errors[0].where === "worker",
