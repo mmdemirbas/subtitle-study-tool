@@ -346,8 +346,27 @@
     const m = pairs.length;
     if (m < MIN_PAIRS) return null;
 
-    const hypotheses = RATES.length * PEAKS * Math.round(maxOffsetMs / TOL_MS);
-    const lnTail = lnBinomialTail(n, p0, m);
+    /* Two ways this used to hand back an infinite confidence, and an infinite
+     * confidence does not survive being written down: trace.js and report.js
+     * both put the answer through JSON, where Infinity becomes null - and null
+     * compared against the accept threshold is false, so an answer that had
+     * just been applied read back as one that was refused.
+     *
+     * The chances counted and the hits counted come from different sets. `n` is
+     * the smaller trimmed window, while `pairs` is not restricted to those
+     * windows: below rate 1 the tolerance pairUp works to is TOL_MS/rate, which
+     * is wider than the one that decided the windows, so a cue at the boundary
+     * can pair without having been counted. Then k > n, the tail is -Infinity,
+     * and the coverage passes 1. Constructed: 2000 cues at rate 0.959041 with
+     * the first kept cue nudged 245ms gave confidence Infinity and coverage
+     * 1.001. Nothing in the 6448-pair corpus reaches it.
+     *
+     * And a window under 125ms rounds to zero hypotheses, whose log is
+     * -Infinity: align(a, b, {maxOffsetMs: 100}) answered Infinity as well. No
+     * caller passes that, but the bench and the harness can. */
+    const chances = Math.max(1, Math.round(maxOffsetMs / TOL_MS));
+    const hypotheses = RATES.length * PEAKS * chances;
+    const lnTail = lnBinomialTail(n, p0, Math.min(m, n));
     const confidence = -(lnTail + Math.log(hypotheses)) / Math.LN10;
 
     const residuals = pairs.map(([x, y]) => y - (rate * x + shift));
@@ -357,7 +376,7 @@
     return {
       confidence,
       matched: m,
-      coverage: m / n,
+      coverage: Math.min(1, m / n),
       madMs: Math.round(mad),
       overlapMs: Math.round(span),
     };
@@ -413,11 +432,23 @@
      * seconds past the edge - comes back ok, verdict "offer", confidence 4.33,
      * and a shift 5.18 SECONDS wrong. One click from being applied. The wide
      * pass scores 475 on it with the shift exact, and is only taken when it
-     * beats what the narrow pass found. */
+     * beats what the narrow pass found.
+     *
+     * "Beats" and nothing else. The test used to admit any wide answer that was
+     * merely ok, which is not the same thing and cost confidence for nothing:
+     * `hypotheses` scales with the window, so identical evidence scored over
+     * 126 seconds instead of 15.1 loses log10(126000/15120) = 0.92 decades.
+     * Measured over the corpus before this: 34 of 379 pairs took a wide answer
+     * where the narrow pass had already said ok, every one of the 34 reported a
+     * LOWER confidence than the narrow pass had found, and not one of them
+     * changed the shift or the rate. It cannot turn an ok into a refusal - a
+     * wide answer below the threshold fails both halves - but the panel ranks
+     * candidate subtitles by this number, so the handicap fell on exactly the
+     * candidates that were hardest to choose between. */
     const weak = !answer.ok || answer.verdict === "offer";
     if (weak && wide && maxOffsetMs < WIDE_OFFSET_MS) {
       const wider = align(aTimes, bTimes, { maxOffsetMs: WIDE_OFFSET_MS, wide: false });
-      if (wider.ok || wider.confidence > answer.confidence) {
+      if (wider.confidence > answer.confidence) {
         return { ...wider, searchedMs: WIDE_OFFSET_MS };
       }
     }

@@ -4626,6 +4626,47 @@
         if (tiny.reason !== "too-few-cues") throw new Error(`reason was ${tiny.reason}`);
       });
 
+      check("a confidence survives being written down", async () => {
+        /* The number the whole accept-or-refuse decision rests on could be
+         * Infinity, and Infinity does not survive being written down: trace.js
+         * and report.js both put an answer through JSON, where it becomes null
+         * - and null against the accept threshold is false, so an answer that
+         * had just been applied read back as one that was refused.
+         *
+         * The chances counted and the hits counted came from different sets.
+         * `n` is the smaller trimmed window; the pairing is not restricted to
+         * those windows, and below rate 1 it works to a wider tolerance than
+         * the one that chose them, so a cue at the boundary can pair without
+         * having been counted. Then the hits exceed the chances, the binomial
+         * tail is -Infinity, and the coverage passes 1.
+         *
+         * The construction below is the smallest one found that reaches it:
+         * 2000 cues, rate 0.959041, and one cue moved a quarter of a second.
+         * Nothing in the 6448-pair corpus does, which is why it survived. */
+        const align = window.__ssoAlign;
+        let x = 1;
+        const next = () => (x = (x * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+        const a = [];
+        let t = 30000;
+        for (let i = 0; i < 2000; i++) { t += 400 + Math.round(1200 * next()); a.push(t); }
+        const b = a.map((each) => Math.round(0.959041 * each) + 12345);
+        b[100] -= 250;
+
+        const answer = align.align(a, b);
+        if (!Number.isFinite(answer.confidence))
+          throw new Error(`the confidence came back ${answer.confidence}`);
+        if (answer.coverage > 1)
+          throw new Error(`coverage ${answer.coverage} - more cues matched than there were chances`);
+        if (JSON.parse(JSON.stringify(answer)).confidence !== answer.confidence)
+          throw new Error("the confidence did not survive being written down");
+        /* And it is still the right answer, not merely a finite one. The rate
+         * is chosen from a ladder rather than fitted, so it is compared to the
+         * tolerance the ladder is spaced by rather than for equality. */
+        if (!answer.ok) throw new Error("the pair was refused");
+        if (Math.abs(answer.rate - 0.959041) > 0.001)
+          throw new Error(`rate ${answer.rate}, want about 0.959041`);
+      });
+
       check("a gap past the first window is found by the second, not mis-fitted", async () => {
         /* This used to assert that anything past MAX_OFFSET_MS was refused,
          * which was the behaviour and was the bug: a subtitle timed for a cut
@@ -5786,6 +5827,50 @@
            * is cached for the session, so a case that leaves the overlay
            * marking "frankly" spends it for the case further down that hovers
            * it and then has nothing to observe. */
+          window.__ssoStudy.updateSettings({ studySlots: was, auto: false });
+          await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
+          video.currentTime = 1;
+          await sleep(150);
+        }
+      });
+
+      check("a name the film only ever capitalises is not a word to learn", async () => {
+        /* The name rule asks whether a word is capitalised in the MIDDLE of a
+         * sentence, and a character is addressed - "Paige, come down here" - so
+         * their name opens the line, or follows the dash that marks the second
+         * speaker. Neither counts. Measured over the 175 English subtitles in
+         * the daemon's cache, that left 1348 marks on names: haku, chihiro,
+         * collignon, lundegaard, mcclane, deckard.
+         *
+         * The other half of the test is the frequency table, because "Well" and
+         * "Yes" open lines constantly and are capitalised every time they do.
+         * The rank arrives from the worker, so the shape is decided in namesIn
+         * and the rarity where the ranks are - and both marking sites have to
+         * agree, which is why this checks the chip AND what was sent ahead. */
+        const was = window.__ssoStudy.settings().studySlots;
+        const NAMED = [
+          { start: 0, end: 200000, text: "Yubaba, wait." },
+          { start: 200000, end: 400000, text: "Yubaba took her name." },
+          { start: 400000, end: 600000, text: "- Yubaba? - She runs the bathhouse." },
+          // Three times and always capitalised, but the table knows it, so it
+          // is a word and not a name.
+          { start: 600000, end: 800000, text: "Frankly, no. Frankly. Frankly!" },
+        ];
+        try {
+          window.__ssoStudy.updateSettings({ studySlots: [0], rarityRank: 4000, auto: false });
+          await window.__ssoStudy.setEnabled(true);
+          glossAsks.length = 0;
+          await window.__ssoApi.attach({
+            cues: NAMED, label: "EN \u00b7 named", fileId: 9209, language: "en", slot: 0,
+          });
+          video.currentTime = 1;
+          await until(() => glossAsks.length > 0, "no words were sent ahead");
+          const terms = glossAsks.flatMap((ask) => ask.items || []).map((item) => item.term);
+          if (terms.includes("yubaba"))
+            throw new Error(`a name was sent to be glossed: ${terms.join(", ")}`);
+          if (!terms.includes("frankly"))
+            throw new Error(`a rare word the table holds was refused too: ${terms.join(", ") || "nothing"}`);
+        } finally {
           window.__ssoStudy.updateSettings({ studySlots: was, auto: false });
           await window.__ssoApi.attach({ cues: CUES, label: "EN", fileId: 8801, language: "en", slot: 0 });
           video.currentTime = 1;
