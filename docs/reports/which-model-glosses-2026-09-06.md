@@ -134,6 +134,44 @@ string, so the tier below the model cannot be given the sentence even if it were
 free to do so - which is the whole reason the model tier exists and the whole of
 what is lost while it is off.
 
+### And it is good, on the same thirteen words
+
+`gloss_bakeoff.py google-translate` runs the free tier through the same set with
+the same accepted-answer lists:
+
+| | a word | accepted | contextual |
+|---|---|---|---|
+| google-translate | 1.0s | **8/13** | 1/6 |
+| qwen3.6:35b-a3b (22.6 GB) | 21.8s | 10/13 | 4/6 |
+| qwen3:14b (9.3 GB) | 33.4s | 6/13 | 2/6 |
+| qwen3:4b (2.5 GB) | 30.1s | 4/13 | 1/6 |
+| gemma3:4b (3.3 GB) | 0.3s | 2/13 | 0/6 |
+| phi4-mini (2.5 GB) | 0.2s | 0/13 | 0/6 |
+
+Google beats every local model measured except the 22.6 GB one, at a twentieth
+of its latency and none of its memory.
+
+**The split is the finding, not the total.** Google got **7 of the 7 bare-word
+cases**, including returning nothing at all for the proper noun `Paige` - a
+perfect score on the half of the problem that does not need the line. All five
+of its misses are contextual, and they are the same five a reader would notice:
+
+      domestic   "foreign and domestic"        yerel        (local, as in a local shop)
+      shotgun    shouted at a car              av tüfeği    (the gun)
+      spare      "one spare engine"            kıyamamak    (to not have the heart to)
+      spare      "can you spare a minute"      kıyamamak    (the same answer, again)
+      draft      a draft notice                taslak       (a rough version)
+
+The two `spare` lines returning the identical string is the mechanism in one
+line: Google is asked the word, so it answers the word, so it cannot answer two
+different questions that share one.
+
+**What this changes.** The local tier is not competing for the whole job. Google
+already holds 7 of 13 for free, at 1 second and no memory. The only work left
+for a model on this machine is the 6 contextual words, and the measured range
+there is 0/6 to 4/6. A candidate that does not beat 1/6 is buying nothing at all,
+whatever its total looks like - `gemma3:4b` at 2/13 is worse than doing nothing.
+
 ## Purpose-built translation models, since they were suggested
 
 Two exist as ollama pulls and neither had been tried:

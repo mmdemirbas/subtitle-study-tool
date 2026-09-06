@@ -42,6 +42,18 @@ from subtitle_daemon.lookups import Ask, Lookups  # noqa: E402
 
 OLLAMA = "http://127.0.0.1:11434"
 
+# Not a model name: the tier below every model, asked for by name so it can be
+# put in the same table.
+GOOGLE = "google-translate"
+
+
+def google_key() -> str:
+    """The reader's own key, read where the daemon reads it."""
+    settings = Path(__file__).resolve().parent.parent / "config.local.json"
+    if not settings.exists():
+        return ""
+    return json.loads(settings.read_text()).get("google_api_key", "")
+
 # One question per line, with what a Turkish speaker would accept for it.
 #
 # `context` marks the ones whose answer cannot be had from the word alone. They
@@ -186,9 +198,31 @@ def plainly(model: str, ask: Ask, timeout: float) -> str:
 
 def run(model: str, timeout: float) -> dict:
     glosser = Lookups(
-        Path(tempdir), gloss_model=model, gloss_url=f"{OLLAMA}/v1/chat/completions"
+        Path(tempdir),
+        gloss_model=model,
+        gloss_url=f"{OLLAMA}/v1/chat/completions",
+        google_key=google_key(),
     )
     asks = [Ask(c["term"], c["line"], c["before"], c["after"]) for c in CASES]
+
+    # The tier that answers today, scored on the same words, so "is a local
+    # model worth its memory" is a comparison and not an opinion. Google never
+    # sees the line - that is the whole shape of the result and the reason the
+    # contextual column is reported separately.
+    if model == GOOGLE:
+        started = time.monotonic()
+        said = [glosser._fetch_google(ask.term, "en", "tr") for ask in asks]
+        took = time.monotonic() - started
+        rows = [
+            {
+                "term": case["term"],
+                "context": case["context"],
+                "answer": answer,
+                "right": fold(answer) in [fold(x) for x in case["ok"]],
+            }
+            for case, answer in zip(CASES, said)
+        ]
+        return {"model": model, "took": took, "cold": 0.0, "refused": False, "rows": rows}
 
     # Loading and answering are two different costs and only one of them is
     # about the model being good.
@@ -250,11 +284,7 @@ import tempfile  # noqa: E402
 
 tempdir = tempfile.mkdtemp()
 
-wanted = args.models or [
-    "phi4-mini:latest",
-    "qwen2.5vl:7b",
-    "qwen3:14b",
-]
+wanted = args.models or [GOOGLE]
 
 contextual = sum(1 for c in CASES if c["context"])
 print(f"{len(CASES)} words, {contextual} of them decided by the line they are in\n")
