@@ -10,6 +10,7 @@
 import { readFileSync } from "node:fs";
 
 import { classify, speakerColor, symbolFor } from "../src/subtitles/annotations.js";
+import { searchKey } from "../src/subtitles/cache.js";
 import { score } from "../src/subtitles/matching.js";
 import { decode, parseSrt, toJson } from "../src/subtitles/srt.js";
 import { guess, resolve } from "../src/subtitles/titles.js";
@@ -25,6 +26,24 @@ out.annotations = (input.annotations || []).map((text) => ({
   followed: classify(text, { followedBySpeech: true }),
   alone: classify(text, { followedBySpeech: false }),
 }));
+
+/* The key a cached search is filed under. Both sides derive it, and a search
+ * answered by one has to be answered the same way by the other - so the two
+ * derivations agree here or they do not agree at all. */
+out.search_keys = [];
+for (const case_ of input.search_keys || []) {
+  out.search_keys.push({
+    ...case_,
+    key: await searchKey({
+      query: case_.query,
+      languages: case_.languages,
+      year: case_.year ?? null,
+      season: case_.season ?? null,
+      episode: case_.episode ?? null,
+      imdbId: case_.imdb_id ?? null,
+    }),
+  });
+}
 
 out.subtitles = (input.subtitles || []).map((path) => {
   const bytes = new Uint8Array(readFileSync(path));

@@ -149,7 +149,7 @@ export class LocalService {
       return response;
     }
 
-    const key = cache.searchKey({ query, languages, year, season, episode, imdbId });
+    const key = await cache.searchKey({ query, languages, year, season, episode, imdbId });
     const cached = await cache.getSearch(key);
     if (cached) {
       const replayed = { ...response, ...cached, from_cache: true };

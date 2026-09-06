@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from subtitle_daemon import annotations, lookups, matching, subtitles, titles
+from subtitle_daemon import annotations, lookups, matching, server, subtitles, titles
 
 REPO = Path(__file__).resolve().parents[2]
 EXTENSION = REPO / "browser-extension"
@@ -240,6 +240,22 @@ def _srt_files() -> list[Path]:
     return sorted(REPO.glob("srt-viewer/subtitles/*.srt"))
 
 
+# What a cached search is filed under, on both sides. The awkward ones are the
+# point: a title with no Latin letters in it, two long enough to reach the cut,
+# and one that is ordinary - the first two used to collapse onto each other and
+# the third has to keep reading like itself.
+SEARCH_KEY_CASES = [
+    {"query": "the americans", "languages": ["en", "tr"],
+     "year": 2013, "season": 2, "episode": 9, "imdb_id": "tt2149175"},
+    {"query": "君の名は", "languages": ["en"]},
+    {"query": "千と千尋の神隠し", "languages": ["en"]},
+    {"query": "올드보이", "languages": ["en"]},
+    {"query": "Çılgın Hırsız", "languages": ["tr"]},
+    {"query": "the " * 40 + "americans", "languages": ["en"]},
+    {"query": "the " * 40 + "sopranos", "languages": ["en"]},
+]
+
+
 @pytest.fixture(scope="module")
 def js_results(tmp_path_factory: pytest.TempPathFactory) -> dict:
     if shutil.which("node") is None:
@@ -258,6 +274,7 @@ def js_results(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "scores": [list(case) for case in SCORE_CASES],
         "titles": TITLE_CASES,
         "searches": SEARCH_CASES,
+        "search_keys": SEARCH_KEY_CASES,
         "translations": [{"term": term, "payload": payload} for term, payload in TRANSLATION_CASES],
     }
 
@@ -273,6 +290,40 @@ def js_results(tmp_path_factory: pytest.TempPathFactory) -> dict:
     if result.returncode != 0:
         pytest.fail(f"parity harness failed:\n{result.stderr}")
     return json.loads(result.stdout)
+
+
+def test_search_keys_agree(js_results: dict) -> None:
+    """One search, one key, whichever side derives it.
+
+    Both caches are keyed the same way so the two halves of this tool describe
+    a search identically. The derivation is written twice, which is what this
+    file exists to catch - and it drifted once already, when the daemon's key
+    gained a digest and the extension's did not.
+    """
+    for row in js_results["search_keys"]:
+        ours = server._cache_key(
+            row["query"],
+            tuple(row["languages"]),
+            row.get("year"),
+            row.get("season"),
+            row.get("episode"),
+            row.get("imdb_id"),
+        )
+        assert row["key"] == ours, row["query"][:40]
+
+
+def test_two_titles_that_share_no_latin_letters_key_apart(js_results: dict) -> None:
+    """Why the digest is there, asserted on the extension's own output.
+
+    Every character outside a-z0-9 becomes an underscore, so a title written in
+    a script with none of them used to collapse to nothing at all, and the
+    second search was answered out of the first film's entry.
+    """
+    keys = {row["query"]: row["key"] for row in js_results["search_keys"]}
+    assert keys["君の名は"] != keys["千と千尋の神隠し"]
+    assert keys["君の名は"] != keys["올드보이"]
+    long_ones = [key for query, key in keys.items() if query.startswith("the the ")]
+    assert len(set(long_ones)) == len(long_ones)
 
 
 def test_symbols_agree(js_results: dict) -> None:

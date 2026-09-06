@@ -275,8 +275,19 @@ export async function findByContent(digest) {
 // --- searches ---------------------------------------------------------------
 
 /* Same key derivation and the same staleness window as the daemon, so a search
- * answered by one is answered the same way by the other. */
-export function searchKey({ query, languages, year, season, episode, imdbId }) {
+ * answered by one is answered the same way by the other. See _cache_key in
+ * server.py, which this has to stay level with.
+ *
+ * A readable name and a digest of what it was made from. The name alone was the
+ * key, and it is lossy twice: every character outside a-z0-9 becomes an
+ * underscore, so a title written in a script with none of them collapses to
+ * nothing - two different films keyed as "_en_tr_2013_1_none_none" and the
+ * second search answered out of the first one's entry. It was also cut at 120
+ * characters, which a page title of that length reaches, taking the year, the
+ * season, the episode and the imdb id with it: S01E01 and S01E02 keyed
+ * identically. Searches cost no quota, so nothing was paid in downloads - it
+ * was paid by auto-attach ranking another programme's files. */
+export async function searchKey({ query, languages, year, season, episode, imdbId }) {
   const parts = [
     String(query).toLowerCase(),
     [...languages].sort().join(","),
@@ -285,11 +296,14 @@ export function searchKey({ query, languages, year, season, episode, imdbId }) {
     episode === null || episode === undefined ? "None" : String(episode),
     imdbId === null || imdbId === undefined ? "None" : String(imdbId),
   ];
-  return parts
-    .join("|")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .slice(0, 120);
+  const raw = parts.join("|");
+  const slug = raw.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 100);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));
+  const hex = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 12);
+  return `${slug}-${hex}`;
 }
 
 export async function getSearch(key) {
