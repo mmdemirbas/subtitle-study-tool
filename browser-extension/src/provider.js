@@ -212,7 +212,16 @@ export async function fetchSubtitle(fileId, context = {}) {
    * The bytes are the same bytes - the sha256 is checked on the way in and both
    * stores keep the file OpenSubtitles served - so answering from here is the
    * same answer, sooner and for nothing. */
-  const held = await cache.getSubtitle(fileId);
+  let held = null;
+  try {
+    held = await cache.getSubtitle(fileId);
+  } catch {
+    /* A store that cannot be read costs a download, not the answer. This is an
+     * optimisation over what is already here, and it must not be the thing that
+     * stops a subtitle arriving - which is what it became when it was written
+     * unguarded: with no usable IndexedDB every fetch rejected before either
+     * side was asked, and the reader was told "Something went wrong". */
+  }
   if (held) return { served_by: "extension", ...cuesResponse(held.bytes, held.meta, true) };
 
   if (await daemonUp()) {
