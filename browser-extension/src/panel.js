@@ -4228,9 +4228,21 @@
   function refresh(status) {
     if (!host) return;
     /* The film can change without a page load, and when it does the Find
-     * screen is answering about the last one. See searchedFor. */
-    if ((status.programme ?? null) !== searchedFor) {
-      forgetSearch(status.programme ?? null, { refill: isPanelVisible() });
+     * screen is answering about the last one. See searchedFor.
+     *
+     * A programme that was UNKNOWN and is now known is not a different
+     * programme, though: it is the same one, described. The mark is empty
+     * until a page announces itself or its video reports a length over a
+     * minute, and until then a search is filed against "". Reproduced in the
+     * harness: search, one result on screen, then the page sets
+     * data-sso-now-playing - the mark goes from "" to the episode and the
+     * result list empties under the reader, about a second after they asked
+     * for it. What was learned is written down instead, so the next real
+     * change is still caught. */
+    const playing = status.programme ?? null;
+    if (playing !== searchedFor) {
+      if (searchedFor) forgetSearch(playing, { refill: isPanelVisible() });
+      else searchedFor = playing;
     }
     const settings = status.settings;
     const showing = (name) => atScreen === name;
