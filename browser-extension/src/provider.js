@@ -299,6 +299,18 @@ async function mirrorFromDaemon(fileId) {
  * disk - not the search path, which used to pay the same cost twice per query
  * and now reads metadata only. */
 export async function cacheEntries() {
+  /* Probe and then wait, before anything is read or deleted.
+   *
+   * daemonUp() starts a convergence the first time it sees the daemon come up,
+   * and a convergence copies files in both directions. The three functions
+   * below all read or delete the store, and all three ran against a store that
+   * was being written underneath them: the list showed files that were about to
+   * arrive or about to leave, and a clear emptied the store and then watched it
+   * fill again from the other side. search() and fetchSubtitle() already wait
+   * for the same reason. */
+  const up = await daemonUp();
+  await settled();
+
   const mine = await cache.listSubtitles();
   const merged = new Map();
 
@@ -312,7 +324,7 @@ export async function cacheEntries() {
   }
 
   let daemonRunning = false;
-  if (await daemonUp()) {
+  if (up) {
     try {
       const theirs = await daemon.cached();
       daemonRunning = true;
@@ -341,8 +353,11 @@ export async function cacheEntries() {
  * "deleted" never means "deleted from one of two places" without saying so.
  */
 export async function cacheDelete(fileId) {
+  const up = await daemonUp();
+  await settled();
+
   await cache.deleteSubtitle(fileId);
-  if (await daemonUp()) {
+  if (up) {
     try {
       await daemon.forget(fileId);
       await cache.clearPendingDeletion(fileId);
@@ -355,11 +370,14 @@ export async function cacheDelete(fileId) {
 }
 
 export async function cacheClear({ searchesOnly = false } = {}) {
+  const up = await daemonUp();
+  await settled();
+
   const result = { subtitles: 0, searches: 0, everywhere: false };
   if (!searchesOnly) result.subtitles = await cache.deleteAllSubtitles();
   result.searches = await cache.clearSearches();
 
-  if (await daemonUp()) {
+  if (up) {
     try {
       await daemon.forgetAll({ searchesOnly });
       /* Only when the subtitles went too. Asked for searches only, the daemon

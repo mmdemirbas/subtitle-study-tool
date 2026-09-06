@@ -203,6 +203,13 @@
             }
             const held = daemonCache.get(id);
             if (!held) return json({ error: "not cached" });
+            /* A slow read a case can ask for, on this route only. Copying a
+             * file in is the part of a convergence that takes real time
+             * against a real daemon, and a case about what happens DURING a
+             * convergence needs it to still be running when it looks. */
+            if (window.__slowCachedOne) {
+              await new Promise((ok) => setTimeout(ok, window.__slowCachedOne));
+            }
             return json({ content: held.content, meta: held.meta, cues: [] });
           }
           return json({ error: "no such endpoint" }, 404);
@@ -739,6 +746,34 @@
         const { entries } = await provider.cacheEntries();
         if (entries.length) throw new Error(`${entries.length} left`);
         if (daemonCache.size) throw new Error("the daemon still holds some");
+      });
+
+      check("clearing while a convergence is running does not refill the cache", async () => {
+        /* The daemon coming up starts a convergence, and a convergence copies
+         * the daemon's files in. The clear ran on top of one already in
+         * flight: it emptied the store, told the daemon to forget everything,
+         * and then the copy finished and put the file back - so "Clear the
+         * cache" reported nothing cleared and left a subtitle here that the
+         * daemon had already been told to forget, which is the one state the
+         * two stores are never supposed to be in. */
+        await setDaemon(false);
+        daemonCache.set(99, {
+          file_id: 99,
+          content: base64(SRT),
+          meta: { imdb_id: "tt999", language: "en", movie_name: "Converging" },
+        });
+        window.__slowCachedOne = 150;
+        try {
+          // Returns as soon as the probe answers; the convergence it started is
+          // still running, which is the whole point.
+          await setDaemon(true);
+          const result = await provider.cacheClear();
+          if (!result.subtitles) throw new Error("reported nothing cleared");
+          const { entries } = await provider.cacheEntries();
+          if (entries.length) throw new Error(`${entries.length} left after the clear`);
+        } finally {
+          window.__slowCachedOne = 0;
+        }
       });
 
       // --- run ------------------------------------------------------------
