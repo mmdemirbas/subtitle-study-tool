@@ -307,9 +307,17 @@ export async function cacheClear({ searchesOnly = false } = {}) {
   if (await daemonUp()) {
     try {
       await daemon.forgetAll({ searchesOnly });
-      // The daemon has them now, so nothing is left to propagate.
-      for (const pending of await cache.pendingDeletions()) {
-        await cache.clearPendingDeletion(pending.file_id);
+      /* Only when the subtitles went too. Asked for searches only, the daemon
+       * returns before it deletes a single subtitle - so emptying the queue
+       * there threw away deletions nobody had propagated yet, and the next
+       * convergence pulled those files back. Observed: a delete whose
+       * propagation had failed stayed queued, "forget cached searches" emptied
+       * the queue, and the deleted file was in the extension's cache again
+       * after the next sync. */
+      if (!searchesOnly) {
+        for (const pending of await cache.pendingDeletions()) {
+          await cache.clearPendingDeletion(pending.file_id);
+        }
       }
       result.everywhere = true;
     } catch {

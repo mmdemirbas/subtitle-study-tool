@@ -192,6 +192,11 @@
           if (one) {
             const id = Number(one[1]);
             if (options.method === "DELETE") {
+              /* A refusal a case can ask for, answered the way the daemon
+               * answers one: a status and a reason in the body. Only on this
+               * route, so a case can keep one file's deletion from ever
+               * propagating while the collection routes still work. */
+              if (window.__refuseDelete) return json({ error: window.__refuseDelete }, 500);
               const existed = daemonCache.delete(id);
               calls.forgotten.push(id);
               return json({ deleted: existed, file_id: id });
@@ -639,6 +644,61 @@
         reset();
         await provider.search({ query: "Crime 101", year: 2025, languages: ["en"] });
         if (!calls.subtitles) throw new Error("the search was still replayed from cache");
+      });
+
+      check("a deletion the daemon refused is not reported as done", async () => {
+        /* `call` returns any answer carrying an `error`, whatever its status,
+         * which is right for the endpoints whose refusals are part of the
+         * answer. It is wrong for a deletion: this side recorded it as
+         * propagated and dropped the queue entry that would have retried it, so
+         * the file came back on the next convergence - which is the very case
+         * the pending-deletion record exists to prevent. */
+        await setDaemon(true);
+        await provider.syncNow();
+        if (!daemonCache.has(11)) throw new Error("setup: the daemon should hold 11");
+
+        window.__refuseDelete = "cache is locked by another writer";
+        try {
+          const result = await provider.cacheDelete(11);
+          if (result.everywhere)
+            throw new Error("the daemon refused and this side called it deleted everywhere");
+          const queued = await cache.pendingDeletions();
+          if (!queued.some((item) => item.file_id === 11))
+            throw new Error("the deletion was dropped rather than left to retry");
+        } finally {
+          window.__refuseDelete = null;
+        }
+
+        // And it is applied once the daemon will take it.
+        reset();
+        await provider.syncNow();
+        if (daemonCache.has(11)) throw new Error("the retry never reached the daemon");
+      });
+
+      check("forgetting searches leaves a queued deletion queued", async () => {
+        /* Asked for searches only, the daemon returns before it deletes a
+         * single subtitle. Emptying the queue here threw away deletions nobody
+         * had propagated yet, and the next convergence pulled those files back
+         * out of the daemon. */
+        await setDaemon(true);
+        await provider.syncNow();
+        /* Refused for the whole case, so the queue cannot drain on the way and
+         * what the clear does to it is the only thing being measured. The
+         * collection route still answers, which is what the clear itself uses. */
+        window.__refuseDelete = "cache is locked by another writer";
+        try {
+          await provider.cacheDelete(11);
+          const before = await cache.pendingDeletions();
+          if (!before.some((item) => item.file_id === 11))
+            throw new Error("setup: a refused deletion should stay queued");
+
+          await provider.cacheClear({ searchesOnly: true });
+          const after = await cache.pendingDeletions();
+          if (!after.some((item) => item.file_id === 11))
+            throw new Error("forgetting searches threw away a deletion nobody had propagated");
+        } finally {
+          window.__refuseDelete = null;
+        }
       });
 
       check("deleting everything empties both stores", async () => {

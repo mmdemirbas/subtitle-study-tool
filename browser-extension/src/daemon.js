@@ -184,14 +184,30 @@ export function cachedOne(fileId, { content = false } = {}) {
   return call(`/cached/${fileId}${content ? "?content=1" : ""}`);
 }
 
+/* A deletion either happened or it did not, so a refusal is raised.
+ *
+ * `call` returns any answer that carries an `error`, whatever its status, which
+ * is right for the endpoints whose refusals are part of the answer - "no API
+ * key configured" is a fact about the search, not a broken request. It is wrong
+ * for these two: the caller records the deletion as propagated and drops the
+ * queue entry that would have retried it, so the file comes back on the next
+ * convergence. Observed: DELETE answered HTTP 500 "cache is locked by another
+ * writer", cacheDelete reported everywhere:true, and the daemon still held it.
+ */
+const mustHaveDone = async (payload) => {
+  if (payload && payload.error) throw new Error(String(payload.error));
+  return payload;
+};
+
 /** Delete one subtitle from the daemon's cache. */
 export function forget(fileId) {
-  return call(`/cached/${fileId}`, { method: "DELETE" });
+  return call(`/cached/${fileId}`, { method: "DELETE" }).then(mustHaveDone);
 }
 
 /** Delete everything, or only the cached searches. */
 export function forgetAll({ searchesOnly = false } = {}) {
-  return call(`/cached${searchesOnly ? "?searches_only=1" : ""}`, { method: "DELETE" });
+  return call(`/cached${searchesOnly ? "?searches_only=1" : ""}`, { method: "DELETE" })
+    .then(mustHaveDone);
 }
 
 /** Hand the daemon a subtitle the extension downloaded while it was stopped. */
