@@ -790,6 +790,11 @@
     const tblBody = $('#tbl-body');
 
     let LEFT = [], RIGHT = [], ROWS = [];
+    /* What the left file was called, so the export can be named after it. Every
+       export used to be translated.tr.srt, so a second one in the same session
+       arrived as "translated.tr (1).srt" and there was nothing in the name to
+       say which film it was. */
+    let LEFT_NAME = '';
     let DICT = loadDict();
     let popupData = null;
     let followScroll = true;
@@ -806,6 +811,7 @@
     /* Load */
     loadBtn.addEventListener('click', async () => {
         loadStatus.textContent = 'Parsing…';
+        LEFT_NAME = leftInput.files[0]?.name || '';
         const ltxt = await fileToText(leftInput.files[0]);
         LEFT = parseSRT(ltxt);
         RIGHT = [];
@@ -936,6 +942,15 @@
         exportBtn.disabled = false;
         statusEl.innerHTML = `<span class="ok">Done</span>`;
     });
+    /* The target language as a filename may hold it, "tr" when the field is
+       empty or is only punctuation. */
+    const targetCode = () => (tgt.value || '').trim().toLowerCase().replace(/[^a-z0-9-]+/g, '') || 'tr';
+    const labelExport = () => {
+        exportBtn.textContent = `Export ${targetCode().toUpperCase()} .srt`;
+    };
+    tgt.addEventListener('input', labelExport);
+    labelExport();
+
     exportBtn.addEventListener('click', () => {
         if (!RIGHT.length) {
             alert('Nothing to export');
@@ -944,7 +959,11 @@
         const srt = toSRT(RIGHT);
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([srt], {type: 'text/plain;charset=utf-8'}));
-        a.download = 'translated.tr.srt';
+        /* The language actually asked for, not the one this was written with.
+           The target is a field the reader can change, and the file always came
+           out named .tr.srt whatever they put in it. */
+        const stem = LEFT_NAME.replace(/\.[^.]*$/, '').replace(/[\\/:*?"<>|]+/g, '_');
+        a.download = `${stem || 'translated'}.${targetCode()}.srt`;
         document.body.appendChild(a);
         a.click();
         a.remove();
