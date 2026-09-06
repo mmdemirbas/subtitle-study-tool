@@ -26,6 +26,7 @@ const DICTIONARY_URL = (word) =>
   `${DICTIONARY_ORIGIN}/api/v2/entries/en/${encodeURIComponent(word)}`;
 
 const TRANSLATOR_ORIGIN = "https://api.mymemory.translated.net";
+const TRANSLATOR_NAME = "mymemory.translated.net";
 const TRANSLATOR_URL = (term, from, to) =>
   `${TRANSLATOR_ORIGIN}/get?q=${encodeURIComponent(term)}&langpair=${from}|${to}`;
 
@@ -115,9 +116,16 @@ const CACHE_KEY = "sso:lookupCache";
  * four hundred. Still several films inside the cap. */
 const CACHE_LIMIT = 1500;
 const CACHE_WRITE_DELAY_MS = 2000;
+/* And a ceiling on the delay above, because that delay is restarted by every
+ * lookup and a reader working through a scene never stops looking things up.
+ * Measured: eight lookups over 9.6 seconds produced no storage write at all,
+ * and a worker torn down inside that window loses every one of them - which is
+ * a word asked about again, on an archive that allows six hundred a day. */
+const CACHE_WRITE_CEILING_MS = 10000;
 
 let cache = null;
 let cacheWrite = null;
+let cacheDirtySince = 0;
 
 async function loadCache() {
   if (cache) return cache;
@@ -135,10 +143,17 @@ function remember(key, entry) {
   // Map iterates in insertion order, so the front is the oldest.
   while (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
 
+  const now = Date.now();
+  if (!cacheDirtySince) cacheDirtySince = now;
+  const wait = Math.min(CACHE_WRITE_DELAY_MS, Math.max(0, cacheDirtySince + CACHE_WRITE_CEILING_MS - now));
   clearTimeout(cacheWrite);
-  cacheWrite = setTimeout(() => {
-    chrome.storage.local.set({ [CACHE_KEY]: Object.fromEntries(cache) }).catch(() => {});
-  }, CACHE_WRITE_DELAY_MS);
+  cacheWrite = setTimeout(flush, wait);
+}
+
+function flush() {
+  cacheWrite = null;
+  cacheDirtySince = 0;
+  chrome.storage.local.set({ [CACHE_KEY]: Object.fromEntries(cache) }).catch(() => {});
 }
 
 /** Has the user granted the dictionary origin? Never prompts. */
@@ -180,42 +195,69 @@ export async function lookup({
   // The target is part of the key: the same word wanted in a different language
   // is a different answer, and leaving it out served Turkish to a reader who
   // had since switched the other subtitle to something else.
-  /* The line is part of the key only when something can actually use it.
+  /* The line is part of the key only when the answer used it, and that is a
+   * fact about who answered rather than about who was listening.
    *
-   * With a daemon, it is part of the answer: it glosses "spare" one way in
-   * "spare a minute" and another in "a spare tyre", and a key that cannot tell
-   * them apart hands the second reader the first one's meaning.
+   * A daemon glosses "spare" one way in "spare a minute" and another in "a
+   * spare tyre", so its answers are filed under the line; a key that cannot
+   * tell those apart hands the second reader the first one's meaning.
    *
-   * Without one, this path asks a context-free archive, which returns the same
-   * string whatever line it came from - and that archive allows about six
-   * hundred words a day. Keying those by line would ask it again for every new
-   * sentence the same word turned up in, and spend a day's allowance on one
-   * film. So the daemon being up is what decides the shape of the key. */
-  const daemon = await daemonUp();
-  const key = `${language}>${target}:${term}${daemon && sentence ? `@${sentence}` : ""}`;
+   * The archive below never sees the line and returns the same string whatever
+   * line it came from - and it allows about six hundred words a day. Filed
+   * under the line, one film would ask it again for every new sentence the same
+   * word turned up in and spend a day's allowance in an evening.
+   *
+   * This used to be decided by whether the daemon was REACHABLE, which is the
+   * wrong question by exactly the interesting case: a daemon that answers the
+   * probe and then fails the lookup sends every word to the archive AND files
+   * each one under its line. That is the shape the months-long shadowing bug
+   * had, and it burned the allowance ten times faster while it ran. */
+  const up = await daemonUp();
+  const bare = `${language}>${target}:${term}`;
+  const byLine = sentence ? `${bare}@${sentence}` : bare;
   await loadCache();
-  const hit = cache.get(key);
+
+  const hit = up ? cache.get(byLine) : cache.get(bare);
   if (hit) return { ...hit, source: `${hit.source} (cached)` };
 
   /* The film and the neighbouring lines are not in the key, for the reason the
    * daemon's `_translation_path` gives at length: they help answer the
    * question, they are not part of it. Keying by them would ask again for every
    * position in the file the same word turned up in. */
-  const result = await resolve(term, language, target, sentence, daemon, {
-    film,
-    before,
-    after,
-  });
+  const { answer, refused } = up
+    ? await fromDaemon(term, language, target, sentence, { film, before, after })
+    : {};
+  if (answer) {
+    remember(byLine, answer);
+    return answer;
+  }
+
+  /* The daemon was up and did not answer. Anything held under the bare key came
+   * from the archive, which is the same string the archive would return now -
+   * so serving it is free where asking again is not. Reached only after the
+   * daemon has had its turn, so a daemon that comes back still gets asked. */
+  const held = up ? cache.get(bare) : null;
+  if (held) return { ...held, source: `${held.source} (cached)` };
+
+  const result = await fromHere(term, language, target);
   // Only a real answer is worth keeping. Caching "the daemon was down" would
   // mean starting the daemon changed nothing until the cache was cleared.
-  if (result.definitions.length > 0 || result.translation) remember(key, result);
-  return result;
+  if (result.definitions.length > 0 || result.translation) {
+    remember(bare, result);
+    return result;
+  }
+  /* Nothing answered, and the daemon said why. Without this the chip reports
+   * the archive's silence - "No dictionary entry for that word" - for a word
+   * the daemon knows perfectly well and could not reach its model to gloss. */
+  if (!refused) return result;
+  return { ...result, unavailable: result.unavailable ? `${result.unavailable} (${refused})` : refused };
 }
 
-/* `up`, not `daemon`, and the name is the whole of a bug that ran for months.
+/* Nothing here is called `daemon`, and that is the whole of a bug that ran for
+ * months.
  *
  * This file imports the daemon's client as `daemon` at the top. A parameter of
- * the same name shadows it, so `daemon.lookup(...)` was called on the BOOLEAN
+ * the same name shadowed it, so `daemon.lookup(...)` was called on the BOOLEAN
  * `daemonUp()` returns - "up.lookup is not a function", a TypeError, thrown
  * inside a try whose catch says "went down between the probe and the call".
  * Every word a reader clicked therefore went to the free archive while the
@@ -226,25 +268,37 @@ export async function lookup({
  *
  * The prefetch was unaffected - background.js sends `gloss` straight to the
  * daemon - which is why the film's marked words were glossed well and the words
- * looked up by hand were not. */
-async function resolve(term, language, target, sentence, up, context = {}) {
-  if (up) {
-    try {
-      const payload = await daemon.lookup(term, language, target, sentence, context);
-      if (payload && !payload.error) {
-        return {
+ * looked up by hand were not.
+ *
+ * Returns `{ answer }` or `{ refused }`, never both and never a throw: the
+ * caller has a second place to ask, and it also has a chip to fill in when
+ * neither place answers. The reason the daemon gave used to be dropped on the
+ * floor here, which is how "the model would not load" reached the reader as
+ * "no dictionary entry for that word". */
+async function fromDaemon(term, language, target, sentence, context = {}) {
+  try {
+    const payload = await daemon.lookup(term, language, target, sentence, context);
+    if (payload && !payload.error) {
+      return {
+        answer: {
           query: term,
           definitions: payload.definitions || [],
           phonetic: payload.phonetic || "",
           translation: payload.translation || "",
           source: payload.source || "daemon",
-        };
-      }
-    } catch {
-      // Went down between the probe and the call. Fall through and try here.
+        },
+      };
     }
+    return { refused: String(payload?.error || "the daemon had no answer") };
+  } catch (error) {
+    // Went down between the probe and the call.
+    return { refused: `daemon: ${error?.message || error}` };
   }
+}
 
+/* The dictionary and the archive, both reachable from the page and neither of
+ * them told which line the word was in. */
+async function fromHere(term, language, target) {
   /* The two halves are independent: a phrase has no dictionary entry but does
    * have a translation, and a language other than English has no dictionary at
    * all. Asking for both and reporting whichever arrives beats letting the one
@@ -256,8 +310,12 @@ async function resolve(term, language, target, sentence, up, context = {}) {
 
   if (translation) {
     const { unavailable, ...rest } = definition;
-    // A translation is an answer; only say "unavailable" when nothing came.
-    return { ...rest, translation };
+    /* A translation is an answer; only say "unavailable" when nothing came.
+     *
+     * The source travels with it because the cached replay reads it back:
+     * without one, a word looked up twice came back attributed to
+     * "undefined (cached)" the second time. */
+    return { ...rest, translation, source: rest.source || TRANSLATOR_NAME };
   }
   return definition;
 }

@@ -1135,6 +1135,117 @@ chrome.storage.local.set = instant.set;
   daemonUp = true;
 }
 
+/* --- a daemon that answers the probe and then does not answer -----------------
+ *
+ * The interesting case, and the one the key used to get wrong. Whether the line
+ * belongs in the key is a fact about who answered, not about who was listening:
+ * a daemon whose model will not load passes the probe, fails the lookup, and
+ * sends every word to the archive - and if the archive's answers are filed
+ * under the line, one film asks it once per sentence and spends a day's six
+ * hundred words in an evening. That is the shape the shadowing bug had.
+ */
+{
+  const archive = [];
+  daemonUp = true;
+  daemonAnswers = (url) => {
+    const at = String(url);
+    if (at.endsWith("/health")) return { default_languages: ["en"] };
+    if (at.includes("/lookup")) return { error: "the gloss model would not load" };
+    if (at.includes("mymemory")) {
+      archive.push(at);
+      return { matches: [{ translation: "uçak hangarı", match: 1, quality: "90" }] };
+    }
+    return null;
+  };
+  await (await import("../src/provider.js")).daemonUp({ force: true });
+
+  const { lookup } = await import("../src/study/lookup.js");
+  const first = await lookup({
+    query: "hangar", language: "en", target: "tr", sentence: "Clear the hangar deck.",
+  });
+  const second = await lookup({
+    query: "hangar", language: "en", target: "tr", sentence: "He was hiding in the hangar.",
+  });
+  t(
+    "a daemon that fails the lookup does not multiply what the archive is asked",
+    archive.length === 1 && first.translation === "uçak hangarı" && second.translation === "uçak hangarı",
+    `asked ${archive.length} time(s), answers ${JSON.stringify([first.translation, second.translation])}`,
+  );
+
+  /* Every answer says where it came from, including the second time. A
+   * translation with no definition beside it used to carry no source at all,
+   * and the replay read that back as the string "undefined (cached)". */
+  t(
+    "a translation says where it came from, and still does when it is replayed",
+    first.source === "mymemory.translated.net" &&
+      second.source === "mymemory.translated.net (cached)",
+    `${JSON.stringify([first.source, second.source])}`,
+  );
+
+  /* And when nothing answers at all, the daemon's reason is what the chip
+   * shows. Dropping it reported the archive's silence for a word the daemon
+   * knows and could not gloss. */
+  const nothing = await lookup({ query: "reactor", language: "en", target: "", sentence: "The reactor." });
+  t(
+    "when nothing answers, the chip carries the reason the daemon gave",
+    String(nothing.unavailable).includes("the gloss model would not load"),
+    `unavailable: ${nothing.unavailable}`,
+  );
+
+  daemonAnswers = null;
+  daemonUp = true;
+}
+
+/* --- the cache reaches disk while the reader is still reading -----------------
+ *
+ * The storage write is debounced, and the debounce is restarted by every
+ * lookup, so a reader working through a scene restarts it forever: eight
+ * lookups over 9.6 seconds produced no write at all, and a worker torn down in
+ * that window loses every one of them. Checked through the delay the code asks
+ * for rather than by waiting ten seconds - the invariant is that the delay
+ * shrinks to nothing once the oldest pending change is old enough.
+ */
+{
+  const delays = [];
+  const realTimeout = globalThis.setTimeout;
+  const realNow = Date.now;
+  /* Anchored on the real clock rather than on a round number: an earlier block
+   * in this file left a write pending, and a fake clock set in the past reads
+   * as "that change is not old yet" forever. */
+  let clock = realNow();
+  globalThis.setTimeout = (fn, ms) => {
+    delays.push(ms);
+    return realTimeout(() => {}, 0);
+  };
+  Date.now = () => clock;
+
+  daemonUp = false;
+  daemonAnswers = (url) =>
+    String(url).includes("mymemory")
+      ? { matches: [{ translation: "cevap", match: 1, quality: "90" }] }
+      : null;
+  await (await import("../src/provider.js")).daemonUp({ force: true });
+
+  const { lookup } = await import("../src/study/lookup.js");
+  // A word a second, which is slower than a reader clicking through a scene and
+  // still fast enough that a two-second debounce never expires on its own.
+  for (let i = 0; i < 12; i++) {
+    await lookup({ query: `pending${i}`, language: "en", target: "tr", sentence: "" });
+    clock += 1000;
+  }
+
+  globalThis.setTimeout = realTimeout;
+  Date.now = realNow;
+  daemonAnswers = null;
+  daemonUp = true;
+
+  t(
+    "a reader who never pauses still gets the cache written down",
+    delays.length === 12 && delays[0] === 2000 && delays[delays.length - 1] === 0,
+    `delays ${JSON.stringify(delays)}`,
+  );
+}
+
 /* --- the next episode, warmed before anybody asks for it ---------------------
  *
  * The page says what follows what it is playing. A search costs nothing and is
