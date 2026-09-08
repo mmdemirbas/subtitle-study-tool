@@ -559,11 +559,6 @@ button.sso-quick__move[data-on="true"] {
 
 /* One subtitle is not a choice, so the name stops offering one - without
  * dimming, because it is still the name and still has to be read. */
-.sso-track__label:disabled {
-  color: var(--sso-ink);
-  cursor: default;
-}
-
 /* The name gives way first, but never all the way to nothing.
  *
  * Both halves shrink now. The tail used to be `flex: none` on the argument

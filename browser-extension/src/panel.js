@@ -4353,8 +4353,10 @@
       card.labelHead.textContent = head;
       card.labelTail.textContent = tail;
       // Release names are long and the controls beside them are not optional,
-      // so the name is often an ellipsis. Hovering it says the whole thing.
-      card.label.title = track.label || "Attached";
+      // so the name is often an ellipsis. Hovering it says the whole thing -
+      // and says how a different file is asked for, which is the one verb on
+      // this card with no writing anywhere to announce it.
+      card.label.title = `${track.label || "Attached"}\n\nDouble-click to choose a different subtitle`;
       /* Selected, which is what the keys act on. Marked on the card itself
        * rather than by a chip inside it: the whole card is the thing being
        * chosen, and a border says so without spending any of the title's room
@@ -4367,9 +4369,17 @@
       card.root.dataset.selected = selected ? "true" : "false";
       card.root.setAttribute("aria-label", `Subtitle ${slot + 1}${track.label ? ` - ${track.label}` : ""}`);
       card.label.setAttribute("aria-pressed", selected ? "true" : "false");
-      // With one subtitle there is nothing to choose between, so the name is
-      // not offering a choice either.
-      card.label.disabled = status.trackCount < 2;
+      /* The name is never disabled, whatever is attached.
+       *
+       * It was disabled below two subtitles, on the argument that with one
+       * there is nothing to choose between. That is true of the SELECTION a
+       * single click makes, and false of the double click, which asks for a
+       * DIFFERENT FILE - and which is the only way left to ask for one, since
+       * the menu that used to hold Replace was taken apart. A disabled button
+       * dispatches neither click nor dblclick, so on the ordinary panel, the
+       * one with a single subtitle on it, the name did nothing at all.
+       * Reported as "I'm supposed to be able to change the subtitle by
+       * clicking or double-clicking the title, but it doesn't work now". */
       /* Two subtitles is what makes either gesture mean anything: with one
        * there is nothing to choose between and nowhere to move it to. */
       const movable = status.trackCount > 1;
