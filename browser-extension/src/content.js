@@ -3695,86 +3695,214 @@
    * are learning, and the ordinary repair - drag the scrubber back, overshoot,
    * drag forward, overshoot - costs far more attention than the line was worth,
    * and takes your eyes off the picture to do it. The subtitle file already
-   * says where every line begins, so the repair is one keystroke.
-   *
-   * Backwards restarts the line being spoken before it goes to the one before
-   * it. That is the rule a music player uses for "previous track" and it is
-   * right here for the same reason: the first press is nearly always "say that
-   * again". Pressing twice steps back one, because the first press leaves the
-   * playhead at the line's own start and the grace period below is then behind
-   * it. */
+   * says where every line begins, so the repair is one keystroke. */
+
+  /* How far past the mark it aimed at the playhead may sit and a second press
+   * still count as part of the same gesture. */
   const LINE_GRACE_MS = 400;
+  /* How far SHORT of that mark the film may have come to rest and still count
+   * as having got there. A seek settles on a keyframe, and on a stream the
+   * nearest one can be seconds away from the moment asked for. */
+  const LINE_LANDING_MS = 4000;
   /* Land a little before the line rather than exactly on it. A seek settles on
    * a keyframe, which can be after the moment asked for, and a repeat that
    * starts one word in has not repeated the line. */
   const LINE_PREROLL_MS = 150;
+  /* A stretch with nothing in the keyed subtitle, long enough that something
+   * could be being said in it. Ordinary dialogue leaves gaps well under this;
+   * a gap this long is music, action, or speech this file chose not to carry. */
+  const LINE_GAP_MS = 2500;
+  /* Two marks this close together are one line counted twice. Two files timed
+   * against different releases put the same line a few hundred milliseconds
+   * apart, and stepping through both of those is stepping twice through one
+   * line. */
+  const LINE_MERGE_MS = 1200;
 
-  function stepLine(direction, { slot = state.keyTrack } = {}) {
-    if (!state.video) return false;
+  // Which mark the last press asked for. See stepLine for why it is kept.
+  let lastStepMs = null;
+
+  /* Every place the film has a new line to show, in stream milliseconds.
+   *
+   * The keyed subtitle sets the beat, because it is the one being read. The
+   * other attached files are asked only about the stretches where it says
+   * nothing at all.
+   *
+   * The case that needs them: a film in English that turns to Russian for a
+   * scene. The picture carries a burnt-in English caption there, so the
+   * English subtitle has nothing for those minutes - and stepping back by its
+   * lines alone jumps over several whole conversations at once. The Turkish
+   * translation kept going, and it is the only record left that anything was
+   * said.
+   *
+   * Taking every mark from every file is wrong the other way. The same line in
+   * two files sits a few hundred milliseconds apart, so their union is each
+   * line twice and "again" degenerates into a nudge. Hence the two rules
+   * below: only a gap long enough to hold a conversation is filled, and a
+   * borrowed mark landing beside one already taken is dropped. Where both
+   * files carry the dialogue - which is nearly all of a film - the answer is
+   * exactly the keyed file's own line starts, as it was before. */
+  function lineBoundaries(slot) {
+    const attached = attachedTracks();
+    if (attached.length === 0) return [];
     /* The keyed track is the one being read, so its lines are the ones worth
      * stepping through. Falling back to whatever is attached keeps the keys
      * working when the keyed slot happens to be the empty one. */
-    const track = state.tracks[slot]?.cues.length > 0 ? state.tracks[slot] : attachedTracks()[0];
-    if (!track) return false;
+    const keyed = state.tracks[slot]?.cues.length > 0 ? state.tracks[slot] : attached[0];
 
-    const now = filmTimeMs(track);
-    let cue = direction < 0
-      ? lastCueStartingBefore(track.cues, now - LINE_GRACE_MS)
-      : firstCueStartingAfter(track.cues, now);
-    /* Sitting in the pre-roll of a line - which is exactly where the previous
-     * press left the playhead - means that line is the one about to be read,
-     * so "next" has to mean the one after it. Without this, Again followed by
-     * Next stays where it is and the key looks broken. Backwards needs no such
-     * guard: the grace period is longer than the pre-roll, so the search is
-     * already behind the line's own start. */
-    if (direction > 0 && cue && cue.start - now <= LINE_PREROLL_MS) {
-      cue = firstCueStartingAfter(track.cues, cue.start);
+    const spans = keyed.cues
+      .map((cue) => [streamTimeMs(keyed, cue.start), streamTimeMs(keyed, cue.end)])
+      .sort((a, b) => a[0] - b[0]);
+    const marks = spans.map(([start]) => ({ at: start, keyed: true }));
+    if (attached.length < 2 || spans.length === 0) return marks.map((mark) => mark.at);
+
+    /* Where the keyed file has nothing on screen. Its cues overlap - a sign
+     * held over the dialogue under it - so coverage is carried forward rather
+     * than reset at each line. */
+    const gaps = [[-Infinity, spans[0][0]]];
+    let coveredTo = spans[0][1];
+    for (const [start, end] of spans.slice(1)) {
+      if (start - coveredTo > LINE_GAP_MS) gaps.push([coveredTo, start]);
+      coveredTo = Math.max(coveredTo, end);
     }
-    if (!cue) {
+    // Past the last line of the keyed file there is no more of it to be inside.
+    gaps.push([coveredTo, Infinity]);
+
+    const borrowed = [];
+    for (const track of attached) {
+      if (track === keyed) continue;
+      for (const cue of track.cues) {
+        const at = streamTimeMs(track, cue.start);
+        if (gaps.some(([from, to]) => at > from && at < to)) borrowed.push({ at, keyed: false });
+      }
+    }
+    if (borrowed.length === 0) return marks.map((mark) => mark.at);
+
+    const all = [...marks, ...borrowed].sort((a, b) => a.at - b.at);
+    const kept = [];
+    for (const mark of all) {
+      const last = kept.length > 0 ? kept[kept.length - 1] : null;
+      const crowded = last !== null && mark.at - last.at <= LINE_MERGE_MS;
+      /* Two of the keyed file's own marks this close together are two people
+       * talking over each other, not one line counted twice, and both are
+       * worth stepping to. Only a borrowed mark gives way - including to a
+       * keyed one that arrives just after it. */
+      if (crowded && !mark.keyed) continue;
+      if (crowded && !last.keyed) {
+        kept[kept.length - 1] = mark;
+        continue;
+      }
+      kept.push(mark);
+    }
+    return kept.map((mark) => mark.at);
+  }
+
+  /** The last mark at or before this moment, or null. */
+  function markAtOrBefore(marks, timeMs) {
+    let found = null;
+    let low = 0;
+    let high = marks.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (marks[mid] <= timeMs) {
+        found = marks[mid];
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return found;
+  }
+
+  /** The last mark strictly before this moment, or null. */
+  function markBefore(marks, timeMs) {
+    let found = null;
+    let low = 0;
+    let high = marks.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (marks[mid] < timeMs) {
+        found = marks[mid];
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+    return found;
+  }
+
+  /** The first mark strictly after this moment, or null. */
+  function markAfter(marks, timeMs) {
+    let found = null;
+    let low = 0;
+    let high = marks.length - 1;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (marks[mid] > timeMs) {
+        found = marks[mid];
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+    return found;
+  }
+
+  function stepLine(direction, { slot = state.keyTrack } = {}) {
+    if (!state.video) return false;
+    const marks = lineBoundaries(slot);
+    if (marks.length === 0) return false;
+
+    const nowMs = streamNowMs();
+    /* Count from what the last press ASKED FOR rather than from where the film
+     * came to rest, while those can still be one gesture.
+     *
+     * They are routinely not the same moment. A seek settles on a keyframe, and
+     * on a stream that keyframe can be a second or two short of the moment
+     * asked for - so counting from where the film stopped reads the PREVIOUS
+     * line as the current one, "again" plays the line before the one wanted,
+     * and the press after it goes back two. Reported as exactly that: "it
+     * looks like rewinding to the beginning or end of the previous one, not
+     * the current one".
+     *
+     * Playing on through the line leaves the window, and so does dragging the
+     * scrubber anywhere else, which is what stops an old press being read as
+     * part of a new gesture. So does re-timing or replacing the file, which is
+     * what the mark-still-exists test is for. */
+    const stillThere = lastStepMs !== null && markAtOrBefore(marks, lastStepMs) === lastStepMs;
+    const repeating =
+      stillThere && nowMs >= lastStepMs - LINE_LANDING_MS && nowMs <= lastStepMs + LINE_GRACE_MS;
+    const from = repeating ? lastStepMs : nowMs;
+
+    let mark;
+    if (direction < 0) {
+      /* The first press restarts the line being spoken, and the press after it
+       * steps back one. That is the rule a music player uses for "previous
+       * track" and it is right here for the same reason: the first press is
+       * nearly always "say that again". */
+      mark = repeating ? markBefore(marks, from) : markAtOrBefore(marks, from);
+    } else {
+      mark = markAfter(marks, from);
+      /* Sitting in the pre-roll of a line - which is exactly where a press
+       * leaves the playhead - means that line is the one about to be read, so
+       * "next" has to mean the one after it. Without this, Again followed by
+       * Next stays where it is and the key looks broken. */
+      if (mark !== null && mark - from <= LINE_PREROLL_MS) mark = markAfter(marks, mark);
+    }
+
+    if (mark === null) {
       // The key did its job; there was simply nowhere to go.
       showToast(direction < 0 ? "Nothing before this" : "That was the last line");
       return true;
     }
 
-    seekFilm(streamTimeMs(track, cue.start) - LINE_PREROLL_MS, { how: "line", tell: true });
+    seekFilm(mark - LINE_PREROLL_MS, { how: "line", tell: true });
+    lastStepMs = mark;
     /* Draw it now rather than up to a tick later. Setting currentTime moves the
      * official playback position immediately, so the tick reads the new time
      * even while the frames are still on their way. */
     for (const other of state.tracks) other.activeIndexes = NEEDS_REDRAW;
     tick();
     return true;
-  }
-
-  function lastCueStartingBefore(cues, timeMs) {
-    let found = null;
-    let low = 0;
-    let high = cues.length - 1;
-    while (low <= high) {
-      const mid = (low + high) >> 1;
-      if (cues[mid].start < timeMs) {
-        found = cues[mid];
-        low = mid + 1;
-      } else {
-        high = mid - 1;
-      }
-    }
-    return found;
-  }
-
-  function firstCueStartingAfter(cues, timeMs) {
-    let found = null;
-    let low = 0;
-    let high = cues.length - 1;
-    while (low <= high) {
-      const mid = (low + high) >> 1;
-      if (cues[mid].start > timeMs) {
-        found = cues[mid];
-        high = mid - 1;
-      } else {
-        low = mid + 1;
-      }
-    }
-    return found;
   }
 
   // --- a new programme, without a page load -----------------------------------
@@ -5582,6 +5710,10 @@
     }
 
     track.cues = Array.isArray(cues) ? cues : [];
+    /* A different file means the mark the last press aimed at is not this
+     * file's mark. See stepLine, which reads it to tell a second press of the
+     * pair from a first. */
+    lastStepMs = null;
     track.label = label || "";
     track.fileId = fileId ?? null;
     track.language = language || "";
@@ -5917,6 +6049,7 @@
         cueCount: track.cues.length,
       })),
     });
+    lastStepMs = null;
     const slots = slot == null ? state.tracks.map((_, index) => index) : [Number(slot)];
     for (const index of slots) {
       const track = state.tracks[index];

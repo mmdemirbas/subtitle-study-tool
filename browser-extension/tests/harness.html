@@ -5434,6 +5434,25 @@
       };
       const attachSecond = () =>
         window.__ssoApi.attach({ cues: CUES_TR, label: "TR · harness", fileId: 2, language: "tr", slot: 1 });
+      /* Putting both slots back the way a case found them. A case that steps by
+       * line has to say exactly which subtitles are attached while it runs -
+       * the answer changes what a line boundary is - so it detaches and
+       * re-attaches freely, and the case after it is entitled to the panel it
+       * expected. */
+      const restoreTracks = async (wasAttached) => {
+        const api = window.__ssoApi;
+        if (wasAttached[0]) {
+          await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+        } else {
+          api.detach(0);
+        }
+        if (wasAttached[1]) {
+          await attachSecond();
+        } else {
+          api.detach(1);
+        }
+        await sleep(120);
+      };
       /* Both subtitles back to their files' own timing, lead first.
        *
        * The order is the whole reason this is a helper. The first subtitle
@@ -8088,6 +8107,10 @@
           { start: 9000, end: 11000, text: "three" },
         ];
         await api.attach({ cues, label: "stepping", fileId: 6100, language: "en", slot: 0 });
+        /* On its own, because "nothing after the last line" is only true of a
+         * panel with one subtitle on it. A second one carries its own lines
+         * into the silence after this file's last, which is the case below. */
+        api.detach(1);
         api.setKeyTrack(0);
         await sleep(120);
 
@@ -8117,12 +8140,129 @@
         if (at() < 8000) throw new Error(`running off the end moved the film to ${at()}ms`);
 
         video.currentTime = wasTime;
-        if (wasAttached[0]) {
-          await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
-        } else {
-          api.detach(0);
-        }
+        await restoreTracks(wasAttached);
+      });
+
+      check("stepping by line borrows the other subtitle's lines, but only in a silence", async () => {
+        /* Reported: a film that is in English but turns to Russian for a
+         * scene. The picture carries a burnt-in English caption there, so the
+         * English subtitle has nothing at all for those minutes - and stepping
+         * back by its lines alone jumps over several whole conversations in
+         * one press. The Turkish translation kept going, and it is the only
+         * record left that anything was said.
+         *
+         * The second half of the same report is why the union of both files is
+         * not the answer: two files timed against different releases put the
+         * same line a few hundred milliseconds apart, so stepping through both
+         * of them is stepping twice through one line. Both halves are checked
+         * here, because either rule on its own is the wrong behaviour. */
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+
+        const en = [
+          { start: 1000, end: 3000, text: "one" },
+          { start: 5000, end: 7000, text: "two" },
+          // Half a minute of nothing: the scene this file does not carry.
+          { start: 40000, end: 42000, text: "three" },
+        ];
+        const tr = [
+          { start: 1000, end: 3000, text: "bir" },
+          // The English line above, 100ms out. Borrowing this would turn
+          // "again" into a nudge of a tenth of a second.
+          { start: 5100, end: 7100, text: "iki" },
+          { start: 12000, end: 14000, text: "uc" },
+          { start: 20000, end: 22000, text: "dort" },
+          { start: 30000, end: 32000, text: "bes" },
+          { start: 40000, end: 42000, text: "alti" },
+        ];
+        await api.attach({ cues: en, label: "en steps", fileId: 6120, language: "en", slot: 0 });
+        await api.attach({ cues: tr, label: "tr steps", fileId: 6121, language: "tr", slot: 1 });
+        api.setKeyTrack(0);
         await sleep(120);
+
+        const at = () => Math.round(video.currentTime * 1000);
+
+        // Out the far side of the silence. Back is this file's line at 40s;
+        // the press after it is the Turkish line at 30s, and NOT the English
+        // one at 5s, which is where stepping by the keyed file alone lands.
+        video.currentTime = 41;
+        api.stepLine(-1);
+        if (Math.abs(at() - 40000) > 300)
+          throw new Error(`going back from 41s landed at ${at()}ms, not on the line at 40s`);
+        api.stepLine(-1);
+        const borrowed = at();
+        if (Math.abs(borrowed - 30000) > 300)
+          throw new Error(`a second press landed at ${borrowed}ms, not on the Turkish line at 30s`);
+
+        // Where both files carry the dialogue nothing is borrowed: the press
+        // after "again" reaches the line before, not the same line's twin.
+        video.currentTime = 6;
+        api.stepLine(-1);
+        if (Math.abs(at() - 5000) > 300)
+          throw new Error(`again from inside line 2 landed at ${at()}ms, not on its start`);
+        api.stepLine(-1);
+        const before = at();
+        if (Math.abs(before - 1000) > 300)
+          throw new Error(`a second press landed at ${before}ms - the twin 100ms away was counted`);
+
+        video.currentTime = wasTime;
+        await restoreTracks(wasAttached);
+      });
+
+      check("a seek that lands short of the line does not cost the press after it", async () => {
+        /* Reported: "rewinding to the previous subtitle (or replaying the
+         * current one again) is not working correctly. It looks like rewinding
+         * to the beginning or end of the previous one, not the current one."
+         *
+         * A seek settles on a keyframe, and on a stream the nearest one can be
+         * seconds before the moment asked for. Counting the next press from
+         * where the film came to REST then reads the previous line as the
+         * current one. With lines every two seconds and a two-second
+         * undershoot, a press asking for the line at 13s leaves the playhead
+         * at 10.85s, and the press after it reaches 9s - a line further back
+         * than the music-player rule promises. Counting from the mark the
+         * press ASKED FOR is what fixes it. */
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const own = Object.getOwnPropertyDescriptor(video, "currentTime");
+
+        const cues = [1000, 3000, 5000, 7000, 9000, 11000, 13000].map((start) => ({
+          start,
+          end: start + 1800,
+          text: `at ${start}`,
+        }));
+        await api.attach({ cues, label: "keyframes", fileId: 6130, language: "en", slot: 0 });
+        api.detach(1);
+        api.setKeyTrack(0);
+        await sleep(120);
+
+        // A player whose keyframes are two seconds apart, rounding down.
+        let held = 14;
+        Object.defineProperty(video, "currentTime", {
+          get: () => held,
+          set: (seconds) => {
+            held = Math.max(0, seconds - 2);
+          },
+          configurable: true,
+        });
+
+        api.stepLine(-1); // asks for 12.85s, comes to rest at 10.85s
+        const first = Math.round(held * 1000);
+        api.stepLine(-1); // has to ask for 10.85s, not for 8.85s
+        const second = Math.round(held * 1000);
+        Object.defineProperty(video, "currentTime", own);
+
+        if (Math.abs(first - 10850) > 50)
+          throw new Error(`the first press came to rest at ${first}ms, not where the stub puts it`);
+        if (Math.abs(second - 8850) > 50)
+          throw new Error(
+            `the second press reached ${second}ms rather than 8850ms: it was counted from where the film stopped, not from the line it asked for`,
+          );
+
+        await restoreTracks(wasAttached);
       });
 
       check("a page that says it can seek is asked, rather than written to", async () => {
