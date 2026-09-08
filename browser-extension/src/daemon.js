@@ -41,11 +41,26 @@ export class DaemonDownError extends Error {
  * use, and the reader has to find what is holding it first. */
 const FOREIGN = `Something other than the subtitle daemon is listening on ${DAEMON_ORIGIN}.`;
 
-async function call(path, options = {}) {
+/* `timeoutMs` is a guard against a hang, not a latency control.
+ *
+ * There was none at all, and /gloss is allowed to hold a request for three
+ * minutes by design - so a lookup that went wrong left the study rail waiting
+ * on it with nothing to show and no way back. The ops that are meant to be
+ * quick pass a deadline; the ones that are meant to be slow do not. */
+async function call(path, { timeoutMs = 0, ...options } = {}) {
   let response;
   try {
-    response = await fetch(`${DAEMON_ORIGIN}${path}`, options);
-  } catch {
+    response = await fetch(`${DAEMON_ORIGIN}${path}`, {
+      ...options,
+      ...(timeoutMs ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+    });
+  } catch (error) {
+    /* A deadline is not the same as nothing listening, and telling the reader
+     * to start a daemon that is running and merely slow sends them to fix the
+     * wrong thing. */
+    if (error?.name === "TimeoutError") {
+      throw new Error(`The daemon did not answer within ${Math.round(timeoutMs / 1000)}s.`);
+    }
     // fetch only rejects on a transport failure, which here means nothing is
     // listening on the port. Distinguish it so the UI can say something useful
     // instead of "failed to fetch".
@@ -169,7 +184,11 @@ export function lookup(
   if (film) params.set("film", film);
   if (before) params.set("before", before);
   if (after) params.set("after", after);
-  return call(`/lookup?${params.toString()}`);
+  /* A hover has a reader waiting on it. The daemon's own worst legitimate case
+   * is the archive's timeout plus the grace it gives the dictionary, which is
+   * inside ten seconds; past that something has gone wrong and the rail is
+   * better told so than left spinning. */
+  return call(`/lookup?${params.toString()}`, { timeoutMs: 12000 });
 }
 
 /**

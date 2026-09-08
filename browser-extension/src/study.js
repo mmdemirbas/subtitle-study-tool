@@ -2452,19 +2452,29 @@
     const pending = api
       .daemon("lookup", { query: term, language, target, sentence, film, ...around })
       .then((response) => {
-        if (!response) return { definitions: [], unavailable: "Lookup failed." };
+        if (!response) return { definitions: [], unavailable: "Lookup failed.", failed: true };
         if (response.transportError) {
-          return { definitions: [], unavailable: `Lookup failed - ${response.transportError}` };
+          return {
+            definitions: [],
+            unavailable: `Lookup failed - ${response.transportError}`,
+            failed: true,
+          };
         }
         return response;
       })
-      .catch(() => ({ definitions: [], unavailable: "Lookup failed." }));
+      .catch(() => ({ definitions: [], unavailable: "Lookup failed.", failed: true }));
     lookupCache.set(key, pending);
     const settled = await pending;
-    // Hold the value rather than the promise, and do not hold a failure: a
-    // lookup that failed because the daemon was starting should be asked again.
-    if (settled.definitions?.length || settled.translation) lookupCache.set(key, settled);
-    else lookupCache.delete(key);
+    /* Hold the value rather than the promise, and hold an EMPTY answer too.
+     *
+     * A word with no definition and no translation is usually a name, and a
+     * name is read as often as any other word - so dropping the answer sent
+     * every one of them back down the whole path on every hover. Only a lookup
+     * that failed is dropped, which is what `failed` marks: a daemon that was
+     * still starting should be asked again, a word it has already settled
+     * should not. */
+    if (settled.failed) lookupCache.delete(key);
+    else lookupCache.set(key, settled);
     return settled;
   }
 

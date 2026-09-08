@@ -33,6 +33,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -51,6 +52,24 @@ DICTIONARY_URL = "https://api.dictionaryapi.dev/api/v2/entries/{lang}/{word}"
 SUPPORTED = ("en",)
 
 TIMEOUT_SECONDS = 6
+
+# How long to stand down from an upstream that could not be reached at all.
+#
+# Measured from this machine on 2026-09-08: api.dictionaryapi.dev does not
+# connect - curl gives up with no status at all after 12s - and every /lookup
+# paid the full TIMEOUT_SECONDS for it. A word whose translation was already on
+# disk took 6.12s, and took it again on the next hover, because the failure was
+# never cached and the dictionary ran before the translation rather than beside
+# it. A host that cannot be reached at all is not going to be reachable a few
+# seconds later, and the definition is enrichment - so standing down too long
+# costs a field the reader can live without, and asking again costs the whole
+# answer.
+REST_SECONDS = 300
+
+# How long the definition may keep the answer waiting once the translation is
+# ready. The rail puts the translation first, so this is the delay the reader
+# actually feels; a dictionary that is working answers well inside it.
+DEFINITION_GRACE_SECONDS = 2.5
 
 # A dictionary entry returns every sense of every part of speech, which is far
 # more than fits beside a film that is still playing. One sense per part of
@@ -302,6 +321,10 @@ class Lookups:
         self._google_key = google_key or None
         # When to start asking again after a failure. See GLOSS_REST_SECONDS.
         self._gloss_rests_until = 0.0
+        # The same idea for the two upstreams that have no model behind them.
+        # See REST_SECONDS.
+        self._dictionary_rests_until = 0.0
+        self._archive_rests_until = 0.0
 
     def get(
         self,
@@ -325,15 +348,36 @@ class Lookups:
         if not term:
             return _empty(term, "nothing to look up")
 
-        payload = self._definition(term, lang)
-        if into and into != lang:
-            translated = self.translate(term, lang, into, sentence, film, before, after)
-            payload = {**payload, "translation": translated}
-            # A word with no dictionary entry but a translation is a useful
-            # answer, not an unavailable one - which is the normal case for
-            # every language except English, and for every phrase.
-            if payload["translation"] and not payload.get("definitions"):
-                payload.pop("unavailable", None)
+        if not into or into == lang:
+            return self._definition(term, lang)
+
+        # Both at once, and the definition does not get to hold the answer.
+        #
+        # They are two providers with two failure modes and neither needs the
+        # other's result, so running them one after the other added their
+        # timeouts together for no reason. Measured before the change: 6.12s
+        # for a word already translated on disk, all of it the dictionary. The
+        # rail shows the translation first, so the definition is given
+        # DEFINITION_GRACE_SECONDS past the moment the translation is ready and
+        # then the answer goes without it. The thread finishes on its own and
+        # still writes the cache and trips the rest, so the next word is faster
+        # for it having run.
+        held: dict[str, Any] = {}
+        finding = threading.Thread(
+            target=lambda: held.update(entry=self._definition(term, lang)),
+            daemon=True,
+        )
+        finding.start()
+        translated = self.translate(term, lang, into, sentence, film, before, after)
+        finding.join(DEFINITION_GRACE_SECONDS)
+
+        payload = held.get("entry") or _empty(term, "The dictionary did not answer in time.")
+        payload = {**payload, "translation": translated}
+        # A word with no dictionary entry but a translation is a useful
+        # answer, not an unavailable one - which is the normal case for
+        # every language except English, and for every phrase.
+        if payload["translation"] and not payload.get("definitions"):
+            payload.pop("unavailable", None)
         return payload
 
     def _definition(self, term: str, lang: str) -> dict[str, Any]:
@@ -348,11 +392,22 @@ class Lookups:
             # 404. Saying so is more useful than a failed request.
             return _empty(term, "Phrases are not in the dictionary.")
 
-        payload = self._fetch(term, lang)
-        # Only a real answer is worth keeping. Caching a network failure would
-        # make it permanent.
-        if payload.get("definitions"):
-            self._write(term, lang, payload)
+        if time.monotonic() < self._dictionary_rests_until:
+            return _empty(term, "Could not reach the dictionary.")
+
+        payload, settled = self._fetch(term, lang)
+        if not settled:
+            # Caching a network failure would make it permanent, so it is not
+            # cached - and asking again for the next word, and the one after
+            # that, is what made every hover cost the timeout. See REST_SECONDS.
+            self._dictionary_rests_until = time.monotonic() + REST_SECONDS
+            return payload
+        # Kept even when it is empty. "This word has no entry" is an answer and
+        # it does not change, so the old test on `definitions` alone threw away
+        # half of what the dictionary said - and the rare words study mode marks
+        # are exactly the ones a word dictionary 404s on, so the words the
+        # reader hovers most were the words that never cached.
+        self._write(term, lang, payload)
         return payload
 
     def translate(
@@ -398,12 +453,32 @@ class Lookups:
                 if answered is None:
                     self._gloss_rests_until = time.monotonic() + GLOSS_REST_SECONDS
 
-        cached = self._read_translation(term.lower(), lang, into)
+        cached = self._held_translation(term.lower(), lang, into)
         if cached is not None:
             return cached
 
-        answer = self._fetch_google(term, lang, into) or self._fetch_translation(term, lang, into)
-        if answer:
+        # Google, and the archive only when Google could not be ASKED.
+        #
+        # It used to fall through on Google's ANSWER being empty rather than on
+        # Google being unavailable - and _short_gloss answers "" for every word
+        # that comes back unchanged, which is what a translator says about a
+        # proper noun. So every name in the film paid for a Google round trip
+        # and then an archive one. Measured through the running daemon on
+        # 2026-09-08: "Adama" took 12.44s, six seconds of it a 504 from an
+        # archive that was never going to translate a name.
+        answered = self._fetch_google_many([term], lang, into)
+        asked = bool(answered)
+        answer = answered.get(term, "")
+        if not asked and time.monotonic() >= self._archive_rests_until:
+            answer, reached = self._fetch_translation(term, lang, into)
+            asked = reached
+            if not reached:
+                self._archive_rests_until = time.monotonic() + REST_SECONDS
+        if asked:
+            # Written even when it is empty, for the same reason a 404 from the
+            # dictionary is written: "there is no translation for this" is an
+            # answer, and without keeping it every name in the film pays a round
+            # trip every single time it is hovered.
             self._write_translation(term.lower(), lang, into, answer)
         return answer
 
@@ -716,6 +791,27 @@ class Lookups:
         text = stored.get("translation")
         return str(text) if isinstance(text, str) and text else None
 
+    def _held_translation(
+        self, term: str, language: str, target: str, sentence: str = ""
+    ) -> str | None:
+        """The stored answer, INCLUDING a stored empty one.
+
+        _read_translation answers "the useful text, or None", which cannot tell
+        a word nobody has looked up from one the translator had nothing to say
+        about. Everywhere else that distinction does not matter; in translate()
+        it is the whole point, because a name is hovered as often as any other
+        word and re-asking for one is the slowest answer the daemon gives.
+        """
+        path = self._translation_path(term, language, target, sentence)
+        if not path.exists():
+            return None
+        try:
+            stored = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        text = stored.get("translation")
+        return text if isinstance(text, str) else None
+
     def _write_translation(
         self, term: str, language: str, target: str, text: str, sentence: str = ""
     ) -> None:
@@ -740,7 +836,14 @@ class Lookups:
 
     # --- network ------------------------------------------------------------
 
-    def _fetch(self, term: str, language: str) -> dict[str, Any]:
+    def _fetch(self, term: str, language: str) -> tuple[dict[str, Any], bool]:
+        """The entry, and whether the dictionary settled the question.
+
+        Settled means it answered: an entry, or a 404 saying this word has
+        none. Both are worth keeping. A 500, a timeout, a host that does not
+        resolve - those leave the question open, and caching one would make a
+        bad evening permanent.
+        """
         url = DICTIONARY_URL.format(lang=language, word=urllib.parse.quote(term, safe=""))
         request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         try:
@@ -748,16 +851,21 @@ class Lookups:
                 raw = json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as error:
             if error.code == 404:
-                return _empty(term, "No dictionary entry for that word.")
+                return _empty(term, "No dictionary entry for that word."), True
             logger.debug("dictionary HTTP %s term=%s", error.code, term)
-            return _empty(term, f"Dictionary returned HTTP {error.code}.")
+            return _empty(term, f"Dictionary returned HTTP {error.code}."), False
         except (urllib.error.URLError, TimeoutError, ValueError, OSError) as error:
             logger.debug("dictionary unreachable term=%s error=%s", term, error)
-            return _empty(term, "Could not reach the dictionary.")
+            return _empty(term, "Could not reach the dictionary."), False
 
-        return {"query": term, **condense(raw), "source": "dictionaryapi.dev"}
+        return {"query": term, **condense(raw), "source": "dictionaryapi.dev"}, True
 
-    def _fetch_translation(self, term: str, language: str, target: str) -> str:
+    def _fetch_translation(self, term: str, language: str, target: str) -> tuple[str, bool]:
+        """What the archive says, and whether the archive was reached at all.
+
+        The caller needs both: "" from a reachable archive is knowledge worth
+        keeping, and "" from one that timed out is not.
+        """
         query = urllib.parse.urlencode({"q": term, "langpair": f"{language}|{target}"})
         request = urllib.request.Request(
             f"{TRANSLATE_URL}?{query}", headers={"User-Agent": USER_AGENT}
@@ -769,8 +877,8 @@ class Lookups:
             # Silent: the definition is still worth showing, and a learner does
             # not need to be told the translator was busy.
             logger.debug("translation unreachable term=%s error=%s", term, error)
-            return ""
-        return pick_translation(raw, term)
+            return "", False
+        return pick_translation(raw, term), True
 
     def _fetch_google_many(
         self, terms: list[str], language: str, target: str
@@ -837,10 +945,6 @@ class Lookups:
             logger.debug("google answered %d of %d", len(said), len(terms))
             return {}
         return {term: _short_gloss(answer, term) for term, answer in zip(terms, said)}
-
-    def _fetch_google(self, term: str, language: str, target: str) -> str:
-        """One word, no line. "" when no key is configured or anything fails."""
-        return self._fetch_google_many([term], language, target).get(term, "")
 
     def _gloss(
         self,

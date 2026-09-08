@@ -18,6 +18,7 @@ import pytest
 from subtitle_daemon.lookups import (
     GLOSS_PROBE,
     GOOGLE_BATCH,
+    REST_SECONDS,
     Lookups,
     _short_gloss,
     clean_translation,
@@ -96,18 +97,70 @@ def test_a_cached_entry_is_served_from_disk(lookups: Lookups, tmp_path: Path) ->
     assert result["source"].endswith("(cached)")
 
 
-def test_a_failed_lookup_is_not_cached(lookups: Lookups, monkeypatch: Any) -> None:
-    """Caching a network failure would make it permanent."""
-    calls = []
+def test_a_dictionary_that_cannot_be_reached_is_rested_rather_than_cached(
+    lookups: Lookups, monkeypatch: Any
+) -> None:
+    """Two mistakes are available here and both were made in turn.
 
-    def fail(term: str, language: str) -> dict[str, Any]:
+    Caching a network failure makes it permanent. Asking again for the very
+    next word makes every hover pay the timeout - measured from this machine,
+    6.12s a word, for a host that never answers at all. So: nothing is written,
+    and nothing is asked again until the rest is over.
+    """
+    calls: list[str] = []
+    clock = [0.0]
+
+    def fail(term: str, language: str) -> tuple[dict[str, Any], bool]:
         calls.append(term)
-        return {"query": term, "definitions": [], "unavailable": "Could not reach the dictionary."}
+        return (
+            {
+                "query": term,
+                "definitions": [],
+                "unavailable": "Could not reach the dictionary.",
+            },
+            False,
+        )
 
     monkeypatch.setattr(lookups, "_fetch", fail)
+    monkeypatch.setattr("subtitle_daemon.lookups.time.monotonic", lambda: clock[0])
     lookups.get("warrant", "en")
     lookups.get("warrant", "en")
-    assert calls == ["warrant", "warrant"], "the failure was cached and never retried"
+    assert calls == ["warrant"], "the second word paid the timeout all over again"
+    assert not lookups._path("warrant", "en").exists(), "the failure was cached"
+
+    clock[0] += REST_SECONDS + 1
+    lookups.get("warrant", "en")
+    assert calls == ["warrant", "warrant"], "the dictionary was never asked again"
+
+
+def test_a_word_the_dictionary_has_no_entry_for_is_cached(
+    lookups: Lookups, monkeypatch: Any
+) -> None:
+    """A 404 is an answer and it does not change.
+
+    Keeping only entries threw away half of what the dictionary said, and the
+    rare words study mode marks are exactly the ones a word dictionary 404s on
+    - so the words the reader hovers most were the words that never cached.
+    """
+    calls: list[str] = []
+
+    def missing(term: str, language: str) -> tuple[dict[str, Any], bool]:
+        calls.append(term)
+        return (
+            {
+                "query": term,
+                "definitions": [],
+                "phonetic": "",
+                "translation": "",
+                "unavailable": "No dictionary entry for that word.",
+            },
+            True,
+        )
+
+    monkeypatch.setattr(lookups, "_fetch", missing)
+    assert lookups.get("warrant", "en")["definitions"] == []
+    assert lookups.get("warrant", "en")["definitions"] == []
+    assert calls == ["warrant"], "a settled answer was asked for twice"
 
 
 def test_a_word_that_could_escape_the_cache_directory_does_not(lookups: Lookups) -> None:
@@ -144,7 +197,9 @@ def test_a_corrupt_cache_file_is_a_miss_rather_than_a_crash(
 ) -> None:
     lookups._path("warrant", "en").write_text("{ this is not json", encoding="utf-8")
     monkeypatch.setattr(
-        lookups, "_fetch", lambda term, language: {"query": term, "definitions": [], "phonetic": ""}
+        lookups,
+        "_fetch",
+        lambda term, language: ({"query": term, "definitions": [], "phonetic": ""}, True),
     )
     assert lookups.get("warrant", "en")["definitions"] == []
 
@@ -242,9 +297,9 @@ def test_translating_into_the_same_language_asks_nobody(lookups: Lookups) -> Non
 def test_a_translation_is_cached_on_disk_and_reused(lookups: Lookups, monkeypatch: Any) -> None:
     calls = []
 
-    def once(term: str, language: str, target: str) -> str:
+    def once(term: str, language: str, target: str) -> tuple[str, bool]:
         calls.append(term)
-        return "açıkçası"
+        return "açıkçası", True
 
     monkeypatch.setattr(lookups, "_fetch_translation", once)
     assert lookups.translate("frankly", "en", "tr") == "açıkçası"
@@ -256,16 +311,39 @@ def test_a_word_with_no_dictionary_still_carries_its_translation(
     lookups: Lookups, monkeypatch: Any
 ) -> None:
     # The normal case for every language but English, and for every phrase.
-    monkeypatch.setattr(lookups, "_fetch_translation", lambda *args: "açıkçası")
+    monkeypatch.setattr(lookups, "_fetch_translation", lambda *args: ("açıkçası", True))
     payload = lookups.get("dürüst", "tr", "en")
     assert payload["translation"] == "açıkçası"
     assert "unavailable" not in payload, "a translation is an answer, not a failure"
 
 
-def test_a_failed_translation_is_not_cached(lookups: Lookups, monkeypatch: Any) -> None:
-    monkeypatch.setattr(lookups, "_fetch_translation", lambda *args: "")
+def test_an_archive_that_could_not_be_reached_is_not_cached(
+    lookups: Lookups, monkeypatch: Any
+) -> None:
+    monkeypatch.setattr(lookups, "_fetch_translation", lambda *args: ("", False))
     lookups.translate("frankly", "en", "tr")
     assert not lookups._translation_path("frankly", "en", "tr").exists()
+
+
+def test_a_word_with_no_translation_is_remembered_as_having_none(
+    lookups: Lookups, monkeypatch: Any
+) -> None:
+    """"There is no translation for this" is an answer, and it does not change.
+
+    A name is hovered as often as any other word, and the old rule - write only
+    a non-empty answer - meant every one of them went back to the wire every
+    time. Measured through the running daemon on 2026-09-08: "Adama" took
+    12.44s, and took it again on the next hover.
+    """
+    calls: list[str] = []
+    monkeypatch.setattr(
+        lookups,
+        "_fetch_translation",
+        lambda term, *a: (calls.append(term) or ("", True)),
+    )
+    assert lookups.translate("Adama", "en", "tr") == ""
+    assert lookups.translate("Adama", "en", "tr") == ""
+    assert calls == ["Adama"], "asked twice about a word it has no answer for"
 
 
 # --- the gloss ------------------------------------------------------------------
@@ -485,7 +563,7 @@ def test_an_explanation_is_not_a_gloss(glosser: Lookups, monkeypatch: Any) -> No
         monkeypatch,
         json.dumps({"g": ["Bu kelime burada zaman ayırmak anlamında kullanılmıştır."]}),
     )
-    monkeypatch.setattr(glosser, "_fetch_translation", lambda *args: "")
+    monkeypatch.setattr(glosser, "_fetch_translation", lambda *args: ("", True))
     assert glosser.translate("spare", "en", "tr", "Can you spare a minute?") == ""
 
 
@@ -502,7 +580,7 @@ def test_a_failing_endpoint_is_left_alone_for_a_while(
         raise TimeoutError("no model there")
 
     monkeypatch.setattr("subtitle_daemon.lookups.urllib.request.urlopen", refuse)
-    monkeypatch.setattr(glosser, "_fetch_translation", lambda *args: "parça")
+    monkeypatch.setattr(glosser, "_fetch_translation", lambda *args: ("parça", True))
     assert glosser.translate("spare", "en", "tr", "Spare a minute?") == "parça"
     assert glosser.translate("chamber", "en", "tr", "In the chamber.") == "parça"
     assert len(tries) == 1, "the second word asked a model that had just failed"
@@ -516,13 +594,38 @@ def test_the_tiers_fall_in_order(tmp_path: Path, monkeypatch: Any) -> None:
         lookups, "_gloss", lambda asks, *a, **kw: asked.append("gloss") or ["" for _ in asks]
     )
     monkeypatch.setattr(
-        lookups, "_fetch_google", lambda *a: asked.append("google") or "yedek"
+        lookups,
+        "_fetch_google_many",
+        lambda terms, *a: asked.append("google") or {t: "yedek" for t in terms},
     )
     monkeypatch.setattr(
-        lookups, "_fetch_translation", lambda *a: asked.append("archive") or "parça"
+        lookups, "_fetch_translation", lambda *a: asked.append("archive") or ("parça", True)
     )
     assert lookups.translate("spare", "en", "tr", "One spare engine.") == "yedek"
     assert asked == ["gloss", "google"], "the archive answered over a tier that could"
+
+
+def test_the_archive_is_not_asked_about_a_word_google_already_answered(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Google answering "" is an answer, not a failure.
+
+    _short_gloss returns "" for every word that comes back unchanged, which is
+    what a translator says about a proper noun. Falling through to the archive
+    on that spent a second round trip on a name no archive translates:
+    measured through the running daemon, "Adama" took 12.44s, six seconds of it
+    the archive's own 504.
+    """
+    asked: list[str] = []
+    lookups = Lookups(tmp_path, google_key="a-key")
+    monkeypatch.setattr(
+        lookups, "_fetch_google_many", lambda terms, *a: {t: "" for t in terms}
+    )
+    monkeypatch.setattr(
+        lookups, "_fetch_translation", lambda *a: asked.append("archive") or ("parça", True)
+    )
+    assert lookups.translate("Adama", "en", "tr") == ""
+    assert asked == [], "the archive was asked about a word Google had answered"
 
 
 def test_the_archive_still_answers_when_nothing_is_configured(
@@ -530,7 +633,7 @@ def test_the_archive_still_answers_when_nothing_is_configured(
 ) -> None:
     """No model, no key, no daemon-side anything: the feature this replaced has
     to keep working for whoever cloned the repo and started it."""
-    monkeypatch.setattr(lookups, "_fetch_translation", lambda *args: "parça")
+    monkeypatch.setattr(lookups, "_fetch_translation", lambda *args: ("parça", True))
     assert lookups.translate("spare", "en", "tr", "One spare engine.") == "parça"
 
 
@@ -716,8 +819,13 @@ def test_a_proper_noun_the_model_refused_is_not_then_translated(
 
     monkeypatch.setattr(glosser, "_gloss", fake_gloss)
     monkeypatch.setattr("subtitle_daemon.lookups.time.monotonic", lambda: clock[0])
+    # On _fetch_google_many, which is what gloss_many actually calls. It used to
+    # be on a single-word wrapper the bulk path never touched, so the guard this
+    # case is named for was not being exercised at all.
     monkeypatch.setattr(
-        Lookups, "_fetch_google", lambda self, term, *a: "sayfa-numarası-yap"
+        Lookups,
+        "_fetch_google_many",
+        lambda self, terms, *a: {t: "sayfa-numarası-yap" for t in terms},
     )
     items = [
         {"term": "Paige", "sentence": "Paige, come down here."},

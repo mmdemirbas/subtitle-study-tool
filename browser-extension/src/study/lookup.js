@@ -212,13 +212,30 @@ export async function lookup({
    * probe and then fails the lookup sends every word to the archive AND files
    * each one under its line. That is the shape the months-long shadowing bug
    * had, and it burned the allowance ten times faster while it ran. */
-  const up = await daemonUp();
   const bare = `${language}>${target}:${term}`;
   const byLine = sentence ? `${bare}@${sentence}` : bare;
   await loadCache();
 
-  const hit = up ? cache.get(byLine) : cache.get(bare);
-  if (hit) return { ...hit, source: `${hit.source} (cached)` };
+  /* The cache is read BEFORE the daemon is probed.
+   *
+   * daemonUp() is a real request to /health, and the probe's answer is only
+   * held for five seconds - so a reader hovering their way through a scene paid
+   * a round trip to be told the daemon is running, before a lookup that was
+   * going to be answered from this map anyway. An answer filed under the line
+   * can only have come from a daemon that read the line, so finding one settles
+   * the question the probe was going to ask.
+   *
+   * The bare key cannot be served this early. With the daemon up it is the
+   * archive's context-free answer, and the daemon deserves its turn at the line
+   * first - which is what the fall-through at the bottom is for. */
+  const known = cache.get(byLine);
+  if (known) return { ...known, source: `${known.source} (cached)` };
+
+  const up = await daemonUp();
+  if (!up && sentence) {
+    const flat = cache.get(bare);
+    if (flat) return { ...flat, source: `${flat.source} (cached)` };
+  }
 
   /* The film and the neighbouring lines are not in the key, for the reason the
    * daemon's `_translation_path` gives at length: they help answer the
