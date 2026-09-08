@@ -3530,6 +3530,21 @@
     const response = await api.daemon("search", {
       query,
       title: query ? "" : context.title || document.title,
+      /* The id the page stated, which the panel used to throw away.
+       *
+       * Auto-attach has always sent it and this screen never did, so the
+       * moment a reader opened the list by hand the search fell back to
+       * matching titles as text - and a title is language-specific where an id
+       * is not. Reported as "searching for the English name finds far fewer
+       * Turkish subtitles than searching the Turkish name". With an id there is
+       * no name to get wrong.
+       *
+       * Sent even when the query was typed. Correcting a bad guess at the
+       * TITLE does not make the page's id wrong, and the daemon falls through
+       * to the title path when the id turns up nothing. */
+      imdb_id: context.imdbId ?? undefined,
+      // And the other names for it, for the page that has no id to give.
+      altTitles: context.altTitles ?? undefined,
       year: context.year ?? undefined,
       /* Sent even when the query was typed. The season and episode are facts
        * about what is on screen, not about the words in the box - and a viewer

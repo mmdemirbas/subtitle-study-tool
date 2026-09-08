@@ -1039,11 +1039,49 @@
      * digit. Nothing about this is specific to any one site: it is the
      * vocabulary Google, IMDb and every SEO plugin already emit. */
     let fromMetadata = null;
+    /* Other names for the same programme, and a link to what it IS.
+     *
+     * A film has one title per country, and each subtitle upload carries
+     * whichever one the uploader typed - so searching the English name of a
+     * film for a Turkish subtitle finds a fraction of what is there. Reported
+     * as exactly that. schema.org already has the words for both halves of the
+     * answer and neither was being read: `alternateName` is the vocabulary
+     * term for "also called", and `sameAs` is how a page links to the thing's
+     * entry somewhere authoritative - which for a film is usually IMDb.
+     *
+     * An id is the better of the two by a distance, because it ends the
+     * question: search by it and the language of the title stops mattering.
+     * The names are the fallback for a page that has no id to give. Both are
+     * standard vocabulary rather than anything this extension invented, so a
+     * player that already emits schema.org for search engines is emitting
+     * them today. */
+    const altTitles = [];
+    let statedImdb = "";
+    const noteAlso = (value) => {
+      for (const one of Array.isArray(value) ? value : [value]) {
+        const text = String(one ?? "").trim();
+        if (text && text.length <= 120 && !altTitles.includes(text)) altTitles.push(text);
+      }
+    };
+    const noteImdb = (value) => {
+      for (const one of Array.isArray(value) ? value : [value]) {
+        const found = IMDB_LINK.exec(String(one ?? ""));
+        if (found && !statedImdb) statedImdb = found[1];
+      }
+    };
     for (const item of readJsonLd()) {
       if (!SCHEMA_VIDEO_TYPE.test(schemaType(item))) continue;
       push(item.name, "json-ld");
       if (item.partOfSeries?.name) push(item.partOfSeries.name, "json-ld-series");
       noteYear(item.datePublished || item.dateCreated || item.copyrightYear);
+      noteAlso(item.alternateName);
+      noteAlso(item.partOfSeries?.alternateName);
+      /* A series' id, not the episode's, when both are stated - the episode's
+       * is the more precise answer and `announced` already carries it. Taken
+       * from the series only when the episode offers none, which is the shape
+       * a catalogue page usually has. */
+      noteImdb(item.sameAs);
+      noteImdb(item.partOfSeries?.sameAs);
       if (!fromMetadata) fromMetadata = statedEpisode(item);
     }
 
@@ -1098,6 +1136,12 @@
     return {
       candidates,
       year,
+      /* Beside the candidates rather than among them. They are not competing
+       * guesses at the one right title - they are the same programme's other
+       * names, and every one of them is a second way into an index that holds
+       * only one. */
+      altTitles,
+      statedImdb,
       url: location.href,
       isTopFrame: window === window.top,
       /* Reported beside the candidates rather than instead of them, so a frame
@@ -1116,6 +1160,10 @@
   }
 
   const SCHEMA_VIDEO_TYPE = /^(Movie|TVEpisode|TVSeries|VideoObject|CreativeWork)$/i;
+
+  /* An IMDb title id inside a link. `sameAs` is a URL, and this is the only
+   * part of it worth keeping. */
+  const IMDB_LINK = /imdb\.com\/title\/(tt\d+)/i;
 
   /* `@type` is a string or a list of them, and both are valid JSON-LD. */
   function schemaType(item) {
@@ -4042,9 +4090,21 @@
 
     const imdb = String(stated.imdb ?? "").trim();
     const year = statedNumber(stated.year);
+    /* Other names for the same programme, if the player knows any.
+     *
+     * Additive inside v1, deliberately, rather than a v2. Bumping the version
+     * makes every older extension discard the WHOLE announcement over one
+     * field it does not need - a working handshake traded for an extra name. A
+     * reader that does not know this field ignores it and gets what it always
+     * got; a player that does not send it is unaffected. schema.org
+     * `alternateName` says the same thing in standard vocabulary and is read
+     * whether or not the player announces, so this is the shortcut rather than
+     * the only route. */
+    const also = Array.isArray(stated.altTitles) ? stated.altTitles : [];
     return {
       kind,
       title,
+      altTitles: also.map((one) => String(one ?? "").trim()).filter(Boolean).slice(0, 6),
       year: year !== null && year > 1800 ? year : null,
       season: kind === "episode" ? season : null,
       episode: kind === "episode" ? episode : null,

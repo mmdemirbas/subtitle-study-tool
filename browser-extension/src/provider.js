@@ -220,6 +220,7 @@ export async function search(args) {
       season: args.season,
       episode: args.episode,
       imdb_id: args.imdb_id,
+      altTitles: args.altTitles,
     }),
   );
 }

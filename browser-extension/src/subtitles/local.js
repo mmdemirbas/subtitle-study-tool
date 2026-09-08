@@ -126,6 +126,10 @@ export class LocalService {
 
     const languages = params.languages?.length ? params.languages : this.languages;
     const imdbId = params.imdb_id || null;
+    /* Other names for the same programme, best first. A film has one title per
+     * country and each upload carries whichever one the uploader typed, so
+     * each of these is a separate way into the index. */
+    const altTitles = (params.altTitles || []).map((one) => String(one || "").trim()).filter(Boolean);
 
     const response = {
       guess: {
@@ -149,7 +153,7 @@ export class LocalService {
       return response;
     }
 
-    const key = await cache.searchKey({ query, languages, year, season, episode, imdbId });
+    const key = await cache.searchKey({ query, languages, year, season, episode, imdbId, altTitles });
     const cached = await cache.getSearch(key);
     if (cached) {
       const replayed = { ...response, ...cached, from_cache: true };
@@ -170,6 +174,7 @@ export class LocalService {
         season,
         episode,
         imdbId,
+        altTitles,
       }));
     } catch (error) {
       response.error = error.message;
@@ -206,12 +211,23 @@ export class LocalService {
       return response;
     }
 
+    /* Scored against every name the programme is known by, and the best of
+     * them wins. Each upload carries one title, whichever the uploader typed,
+     * so a row holding the Turkish name of an English film matches a name the
+     * page gave us and not the one that was typed - and scoring it against the
+     * typed name alone would mark the right answer "weak match" and rank it
+     * below a wrong one. */
+    const names = [query, ...altTitles];
     const results = found.map((item) => ({
       ...item,
-      match_score: matching.bestScore(query, [item.movie_name || "", item.release || ""], {
-        queryYear: year,
-        candidateYear: item.year,
-      }),
+      match_score: Math.max(
+        ...names.map((name) =>
+          matching.bestScore(name, [item.movie_name || "", item.release || ""], {
+            queryYear: year,
+            candidateYear: item.year,
+          }),
+        ),
+      ),
     }));
 
     /* Rank by match first. OpenSubtitles' own ordering is fuzzy enough to put
@@ -261,7 +277,7 @@ export class LocalService {
    * distinguish "wrong title" from "not in the database". `/features` can: it
    * is the title index. Both calls are free - only downloading is metered.
    */
-  async searchUpstream({ query, languages, year, season, episode, imdbId }) {
+  async searchUpstream({ query, languages, year, season, episode, imdbId, altTitles = [] }) {
     /* An id names one thing, so it is asked for by itself.
      *
      * The season and episode do not go with it. `imdb_id` matches a feature,
@@ -287,7 +303,23 @@ export class LocalService {
       if (found.length) return { found, resolved: statedFeature(imdbId, query, year, season), rivals: [] };
     }
 
-    const { best: resolved, rivals } = await this.pickFeature(query, year, season !== null);
+    let { best: resolved, rivals } = await this.pickFeature(query, year, season !== null);
+
+    /* The name the page printed is not always the name the index holds.
+     *
+     * A film has one title per country, and each upload carries whichever one
+     * the uploader typed. Searching "Once Upon a Crime" for a Turkish subtitle
+     * finds a fraction of what searching its Turkish title finds. Any other
+     * name for the same programme is therefore a second way into the index -
+     * and once ONE of them resolves, everything below runs on an IMDb id,
+     * where the language of the title stops mattering at all.
+     *
+     * Tried in order and only while nothing has resolved, so a page that
+     * states no other name makes exactly the calls it always made. */
+    for (const other of altTitles) {
+      if (resolved) break;
+      ({ best: resolved, rivals } = await this.pickFeature(other, year, season !== null));
+    }
 
     if (resolved) {
       let found;
@@ -310,14 +342,24 @@ export class LocalService {
     }
 
     // No confident title match. Narrow by media type so a film search does not
-    // drown in episodes that merely share a word.
+    // drown in episodes that merely share a word. Each name in turn, for the
+    // reason above: the index may hold only one of them.
+    const names = [query, ...altTitles];
     const mediaType = season !== null ? "episode" : "movie";
-    let found = await this.client.search({ query, languages, year, season, episode, mediaType });
-    if (found.length) return { found, resolved, rivals };
+    let found = [];
+    for (const name of names) {
+      found = await this.client.search({
+        query: name, languages, year, season, episode, mediaType,
+      });
+      if (found.length) return { found, resolved, rivals };
+    }
 
     // Last resort: unfiltered. Catches series searched without an episode
     // number, and anything the type filter misclassifies.
-    found = await this.client.search({ query, languages, year, season, episode });
+    for (const name of names) {
+      found = await this.client.search({ query: name, languages, year, season, episode });
+      if (found.length) break;
+    }
     return { found, resolved, rivals };
   }
 

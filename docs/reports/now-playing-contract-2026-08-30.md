@@ -282,6 +282,64 @@ does not depend on that crossing at all, since a DOM mutation is a DOM mutation
 in both worlds, and it fires in the same turn as the event would; so the event
 is what has not been proven end to end, not the noticing.
 
+## The other names a programme goes by (added 2026-09-08)
+
+A film has one title per country, and each subtitle upload carries whichever
+one the uploader typed. Searching "Once Upon a Crime" for a Turkish subtitle
+finds a fraction of what searching its Turkish title finds - reported as
+exactly that.
+
+Two ways in, both standard, neither invented here. Prefer the first.
+
+**An id, through schema.org `sameAs`.** A page that links to its IMDb entry has
+stated the one fact that ends the question, because a search by id has no title
+to get wrong:
+
+```html
+<script type="application/ld+json">
+{ "@context": "https://schema.org", "@type": "Movie", "name": "Once Upon a Crime",
+  "sameAs": "https://www.imdb.com/title/tt0105130/" }
+</script>
+```
+
+The reader takes the `tt…` out of any `imdb.com/title/…` URL in `sameAs`, on the
+video node or on its `partOfSeries`. It ranks below a now-playing announcement's
+own `imdb` and above nothing, which is what the field held before.
+
+**Other names, through schema.org `alternateName`.** For a page with no id:
+
+```html
+"alternateName": ["Suclu Bir Zamanlar", "Il etait une fois le crime"]
+```
+
+Up to six are kept. They are held *beside* the title candidates and never
+ranked among them: they are not competing guesses at the one right title, they
+are the same programme's other names, and each is a separate way into an index
+that holds only one of them. The search tries the page's own title first, then
+each other name in turn, and stops at the first that resolves - so a page that
+states none makes exactly the requests it always made. Once any of them
+resolves, everything after it runs on an IMDb id.
+
+**And in the announcement, for a player that would rather say it directly.**
+`altTitles` is an optional array of strings, additive inside `v: 1`:
+
+```js
+video.dataset.ssoNowPlaying = JSON.stringify({
+  v: 1, kind: "movie", title: "Once Upon a Crime", imdb: "tt0105130",
+  altTitles: ["Suclu Bir Zamanlar"],
+});
+```
+
+Additive rather than a `v: 2`, deliberately. The version gate discards the whole
+object on an unknown `v`, so bumping it would make every older extension throw
+away a working handshake over one field it does not need. A reader that does not
+know `altTitles` ignores it and gets what it always got.
+
+The names are also scored against: a row whose `movie_name` is the Turkish title
+of an English film matches a name the page gave and not the one that was typed,
+and scoring it against the typed name alone marked the right answer "weak match"
+and ranked it below a wrong one.
+
 ## What was deliberately left out
 
 - **`upNext` beyond warming the search.** Added 2026-09-02, and the reservation

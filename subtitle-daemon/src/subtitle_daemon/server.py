@@ -261,6 +261,14 @@ class Service:
 
         languages = _languages(params, self.config.default_languages)
         imdb_id = _first(params, "imdb_id")
+        # Other names for the same programme, best first.
+        #
+        # A film has one title per country and the index holds whichever one the
+        # uploader typed, so searching an English name for a Turkish subtitle
+        # finds a fraction of what is there. Repeated rather than
+        # comma-separated: a title may contain a comma, and a delimiter that can
+        # appear inside a value is not a delimiter.
+        alt_titles = [text.strip() for text in params.get("alt", []) if text.strip()]
 
         response: dict[str, Any] = {
             "guess": {
@@ -286,7 +294,7 @@ class Service:
             response["error"] = "no OpenSubtitles API key configured"
             return response
 
-        key = _cache_key(query, languages, year, season, episode, imdb_id)
+        key = _cache_key(query, languages, year, season, episode, imdb_id, alt_titles)
         cached = self.cache.get_search(key)
         if cached is not None:
             # Restore the whole derived envelope, not just the rows. The
@@ -308,6 +316,7 @@ class Service:
                 season=season,
                 episode=episode,
                 imdb_id=imdb_id,
+                alt_titles=alt_titles,
             )
         except OpenSubtitlesError as err:
             response["error"] = str(err)
@@ -347,12 +356,20 @@ class Service:
 
         results = [item.as_dict() for item in found]
 
+        # Scored against every name the programme is known by, and the best of
+        # them wins. Each upload carries one title, whichever one the uploader
+        # typed, so a row holding the Turkish name of an English film matches a
+        # name the page gave us and not the one that was typed - and scoring it
+        # against the typed name alone would mark the right answer "weak match"
+        # and rank it below a wrong one.
+        names = [query, *alt_titles]
         for item in results:
-            item["match_score"] = matching.best_score(
-                query,
-                [str(item.get("movie_name") or ""), str(item.get("release") or "")],
-                query_year=year,
-                candidate_year=item.get("year"),
+            candidate = [str(item.get("movie_name") or ""), str(item.get("release") or "")]
+            item["match_score"] = max(
+                matching.best_score(
+                    name, candidate, query_year=year, candidate_year=item.get("year")
+                )
+                for name in names
             )
 
         # Rank by match first. OpenSubtitles' own ordering is fuzzy enough to
@@ -450,6 +467,7 @@ class Service:
         season: int | None,
         episode: int | None,
         imdb_id: str | None,
+        alt_titles: list[str] | None = None,
     ) -> tuple[list[Any], Any, list[Any]]:
         """Resolve the title, then search for it exactly.
 
@@ -491,6 +509,25 @@ class Service:
 
         resolved, rivals = self._pick_feature(query, year, want_series=season is not None)
 
+        # The name the page printed is not always the name the index holds.
+        #
+        # A film has one title per country. Searching "Once Upon a Crime" for a
+        # Turkish subtitle finds a fraction of what searching its Turkish title
+        # finds, because the uploader typed the title their audience knows. Any
+        # other name for the same programme is therefore a second way into the
+        # index - and once ONE of them resolves, everything below runs on an
+        # IMDb id, where the language of the title stops mattering at all.
+        #
+        # Tried in order and only while nothing has resolved, so a page that
+        # states nothing extra makes exactly the calls it always made.
+        others = alt_titles or []
+        for other in others:
+            if resolved is not None:
+                break
+            resolved, rivals = self._pick_feature(
+                other, year, want_series=season is not None
+            )
+
         if resolved is not None:
             if resolved.is_series:
                 found = client.search(
@@ -512,24 +549,32 @@ class Service:
                 return found, resolved, rivals
 
         # No confident title match. Narrow by media type so a film search does
-        # not drown in episodes that merely share a word.
+        # not drown in episodes that merely share a word. Each name in turn,
+        # for the reason above: the index may hold only one of them.
+        names = [query, *others]
         media_type = "episode" if season is not None else "movie"
-        found = client.search(
-            query=query,
-            languages=languages,
-            year=year,
-            season=season,
-            episode=episode,
-            media_type=media_type,
-        )
-        if found:
-            return found, resolved, rivals
+        for name in names:
+            found = client.search(
+                query=name,
+                languages=languages,
+                year=year,
+                season=season,
+                episode=episode,
+                media_type=media_type,
+            )
+            if found:
+                return found, resolved, rivals
 
         # Last resort: unfiltered. Catches series searched without an episode
         # number, and anything the type filter misclassifies.
-        return client.search(
-            query=query, languages=languages, year=year, season=season, episode=episode
-        ), resolved, rivals
+        found = []
+        for name in names:
+            found = client.search(
+                query=name, languages=languages, year=year, season=season, episode=episode
+            )
+            if found:
+                break
+        return found, resolved, rivals
 
     def _pick_feature(
         self, query: str, year: int | None, *, want_series: bool
@@ -994,9 +1039,17 @@ def _cache_key(
     season: int | None,
     episode: int | None,
     imdb_id: str | None,
+    alt_titles: list[str] | None = None,
 ) -> str:
     parts = [query.lower(), ",".join(sorted(languages)), str(year), str(season), str(episode),
              str(imdb_id)]
+    # The other names belong in the key because they change the answer: a search
+    # made before the page offered them found less, and replaying that envelope
+    # would hide the better one for the six hours it lives. Appended only when
+    # there are any, so a search that offers none keys exactly as it always did
+    # and every entry already on disk stays reachable.
+    if alt_titles:
+        parts.append(",".join(name.lower() for name in alt_titles))
     raw = "|".join(parts)
     # A readable name, plus a digest of what it was made from.
     #

@@ -686,8 +686,8 @@ async function planAutoAttach(tab, frameId) {
    * whichever frame names the episode, which on an embedded player is often
    * the player's frame and nowhere else. */
   const context = await pageContextForTab(tab, frameId);
-  const { title, year, season, episode, imdbId } = context;
-  return planFor({ title, year, season, episode, imdbId, languages, context });
+  const { title, year, season, episode, imdbId, altTitles } = context;
+  return planFor({ title, year, season, episode, imdbId, altTitles, languages, context });
 }
 
 /* Which files a programme should be given, and whether it should be given any.
@@ -699,13 +699,28 @@ async function planAutoAttach(tab, frameId) {
  * allowance spent to save nothing. Every refusal below is a refusal to
  * prefetch as much as it is a refusal to attach.
  */
-async function planFor({ title, year, season, episode, imdbId, languages, context = null }) {
+async function planFor({
+  title,
+  year,
+  season,
+  episode,
+  imdbId,
+  altTitles = [],
+  languages,
+  context = null,
+}) {
   /* An id, where the page announced one, is what turns the search from two
    * calls into one: the daemon resolves a title through /features before it
    * can search exactly, and an id it was given needs no resolving. It also
    * ends the whole class of wrong-film failures - "Prime Video: Crime 101"
    * returning Ekusute - because there is no fuzzy step left to be wrong. */
-  const found = await search({ title, year, season, episode, languages, imdb_id: imdbId });
+  /* And the other names the page gave for it, for the pages that have no id.
+   * A film has one title per country and each upload carries whichever one the
+   * uploader typed, so a search on the English name of a film finds a fraction
+   * of the subtitles in another language. */
+  const found = await search({
+    title, year, season, episode, languages, imdb_id: imdbId, altTitles,
+  });
 
   const plan = {
     languages,
@@ -897,6 +912,7 @@ async function warmNext(tabId, next, committed) {
     season: next.season,
     episode: next.episode,
     imdbId: next.imdb,
+    altTitles: next.altTitles || [],
     languages,
   });
 

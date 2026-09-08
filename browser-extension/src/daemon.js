@@ -118,7 +118,16 @@ export async function health() {
 }
 
 /** Search for subtitles. Free — this never costs download quota. */
-export function search({ title, query, languages, year, season, episode, imdb_id: imdbId }) {
+export function search({
+  title,
+  query,
+  languages,
+  year,
+  season,
+  episode,
+  imdb_id: imdbId,
+  altTitles = [],
+}) {
   const params = new URLSearchParams();
   if (title) params.set("title", title);
   if (query) params.set("query", query);
@@ -132,6 +141,9 @@ export function search({ title, query, languages, year, season, episode, imdb_id
    * no-daemon path used the id. Two answers to one question, decided by
    * whether a background process happened to be running. */
   if (imdbId) params.set("imdb_id", imdbId);
+  // Repeated rather than comma-separated: a title may contain a comma, and a
+  // delimiter that can appear inside a value is not a delimiter.
+  for (const name of altTitles) params.append("alt", name);
   return call(`/search?${params.toString()}`);
 }
 
@@ -445,15 +457,35 @@ export async function pageContextForTab(tab, videoFrameId = null) {
     reports.find((report) => report.frameId === videoFrameId && report.info.announced)?.info
       .announced ?? reports.find((report) => report.info.announced)?.info.announced ?? null;
 
+  /* Every other name any frame offered, in the order they were found.
+   *
+   * Not ranked, because they are not competing answers: the index holds one
+   * title per upload and it is whichever one the uploader typed, so each of
+   * these is a separate way in. Capped, because they are appended to a query
+   * string and a page with a long list of them is a page guessing rather than
+   * stating. */
+  const altTitles = [];
+  for (const report of reports) {
+    for (const name of report.info.altTitles || []) {
+      if (!altTitles.includes(name) && altTitles.length < 6) altTitles.push(name);
+    }
+  }
+  /* An id the page linked to with schema.org `sameAs`. Below an announcement
+   * and above nothing, which is what the field held before. */
+  const linkedImdb =
+    reports.find((report) => report.frameId === videoFrameId && report.info.statedImdb)?.info
+      .statedImdb ?? reports.find((report) => report.info.statedImdb)?.info.statedImdb ?? null;
+
   if (announced) {
     return {
       title: announced.title,
+      altTitles: [...new Set([...(announced.altTitles || []), ...altTitles])].slice(0, 6),
       titleSource: "the page's now-playing announcement",
       year: announced.year,
       season: announced.season,
       episode: announced.episode,
       episodeSource: announced.season === null ? null : "the page's now-playing announcement",
-      imdbId: announced.imdb,
+      imdbId: announced.imdb || linkedImdb,
       announced,
       candidateCount: candidates.length,
       framesAsked: reports.length,
@@ -468,6 +500,7 @@ export async function pageContextForTab(tab, videoFrameId = null) {
     // The tab title is the last resort and a worse signal than any of the
     // above, so it is worth knowing in the report when it was what got used.
     title: best?.text || tab.title || "",
+    altTitles,
     titleSource: best ? `${best.source} (frame ${best.frameId})` : "tab.title (fallback)",
     // The year travels with the title. Without it a common name like "Mercy"
     // cannot be resolved to one film - the index holds eighteen of them.
@@ -475,7 +508,10 @@ export async function pageContextForTab(tab, videoFrameId = null) {
     season: episode?.season ?? null,
     episode: episode?.episode ?? null,
     episodeSource: episode?.source ?? null,
-    imdbId: null,
+    // No longer always null: a page that links to its IMDb entry with
+    // schema.org `sameAs` has stated the one fact that ends the title
+    // question, and nothing was reading it.
+    imdbId: linkedImdb,
     announced: null,
     candidateCount: candidates.length,
     framesAsked: reports.length,

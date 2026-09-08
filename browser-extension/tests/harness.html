@@ -1077,6 +1077,50 @@
         }
       });
 
+      /* Reported: "some movies have alternative names in other languages, so
+       * searching for 'Once Upon a Crime' to find Turkish subtitles reveals
+       * far fewer results than searching by the original Turkish name. I'd
+       * prefer standard means, so any third-party movie app and any
+       * third-party subtitle app could work together."
+       *
+       * schema.org already has the words for both halves and neither was being
+       * read. `alternateName` is the vocabulary term for "also called", and
+       * `sameAs` is how a page links to the thing's entry somewhere
+       * authoritative - which for a film is IMDb, and an id ends the question
+       * outright because the language of the title stops mattering.
+       */
+      check("a page's other names and its IMDb link are read, because both are standard", async () => {
+        const script = document.createElement("script");
+        script.type = "application/ld+json";
+        script.textContent = JSON.stringify({
+          "@context": "https://schema.org",
+          "@type": "Movie",
+          name: "Once Upon a Crime",
+          alternateName: ["Suclu Bir Zamanlar", "Il etait une fois le crime"],
+          sameAs: ["https://www.imdb.com/title/tt0105130/", "https://example.invalid/x"],
+          datePublished: "1992-03-06",
+        });
+        document.head.append(script);
+        try {
+          const info = askPage();
+          if (!info) throw new Error("nothing answered sso:pageInfo");
+          if (!info.altTitles?.includes("Suclu Bir Zamanlar"))
+            throw new Error(`the other names were not read: ${JSON.stringify(info.altTitles)}`);
+          if (info.altTitles.length !== 2)
+            throw new Error(`expected both other names, got ${JSON.stringify(info.altTitles)}`);
+          if (info.statedImdb !== "tt0105130")
+            throw new Error(`the IMDb link was not read: ${info.statedImdb}`);
+          /* And they stay out of the candidate list. They are not competing
+           * guesses at the one right title - they are the same programme's
+           * other names, and ranking them against it would let a foreign name
+           * win the search the page's own name should have made. */
+          if (info.candidates.some((c) => c.text === "Suclu Bir Zamanlar"))
+            throw new Error("an alternative name was offered as a title guess");
+        } finally {
+          script.remove();
+        }
+      });
+
       /* The other standard statement a page makes about what it is playing, and
        * the one that covers sites with no structured data at all. Measured
        * first: an isolated world can read what the page set, which is the only

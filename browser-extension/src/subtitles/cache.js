@@ -287,7 +287,7 @@ export async function findByContent(digest) {
  * season, the episode and the imdb id with it: S01E01 and S01E02 keyed
  * identically. Searches cost no quota, so nothing was paid in downloads - it
  * was paid by auto-attach ranking another programme's files. */
-export async function searchKey({ query, languages, year, season, episode, imdbId }) {
+export async function searchKey({ query, languages, year, season, episode, imdbId, altTitles }) {
   const parts = [
     String(query).toLowerCase(),
     [...languages].sort().join(","),
@@ -296,6 +296,13 @@ export async function searchKey({ query, languages, year, season, episode, imdbI
     episode === null || episode === undefined ? "None" : String(episode),
     imdbId === null || imdbId === undefined ? "None" : String(imdbId),
   ];
+  /* The other names belong in the key because they change the answer: a search
+   * made before the page offered them found less, and replaying that envelope
+   * would hide the better one for as long as it lives. Appended only when there
+   * are any, so a search that offers none keys exactly as it always did and
+   * every entry already stored stays reachable. Mirrors _cache_key in
+   * subtitle-daemon/src/subtitle_daemon/server.py. */
+  if (altTitles?.length) parts.push(altTitles.map((name) => name.toLowerCase()).join(","));
   const raw = parts.join("|");
   const slug = raw.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 100);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(raw));

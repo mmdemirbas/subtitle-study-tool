@@ -625,6 +625,55 @@ def test_a_result_already_on_disk_says_how_much_is_in_it(http) -> None:
     assert "lines" not in missing, "a file not on disk was measured, which costs a download"
 
 
+def test_a_title_the_index_holds_under_another_name_is_still_found(http) -> None:
+    """A film has one title per country, and each upload carries whichever one
+    the uploader typed.
+
+    Reported: searching "Once Upon a Crime" for Turkish subtitles returns far
+    fewer results than searching the Turkish name of the same film. Any other
+    name for the programme is a second way into the index, and once one of them
+    resolves everything after it runs on an IMDb id, where the language of the
+    title stops mattering at all.
+    """
+    base, stub = http
+    asked: list[str] = []
+
+    def features(query: str):
+        asked.append(query)
+        # The index has never heard of the English name.
+        if query == "Suclu Bir Zamanlar":
+            return [make_feature("Suclu Bir Zamanlar", imdb_id="104084", year=1992)]
+        return []
+
+    stub.features = features  # type: ignore[assignment]
+    stub.results = [make_result(7, "Suclu Bir Zamanlar", release="Suclu.1992.DVDRip")]
+
+    _status, found = _get(
+        base,
+        "/search?query=Once+Upon+a+Crime&alt=Suclu+Bir+Zamanlar&languages=tr",
+    )
+
+    assert asked == ["Once Upon a Crime", "Suclu Bir Zamanlar"], (
+        f"the other name was not tried, or was tried first: {asked}"
+    )
+    assert found["resolved"]["imdb_id"] == "104084"
+    assert [item["file_id"] for item in found["results"]] == [7]
+    # And it is not marked a weak match. The row carries the name the page gave
+    # as an alternative, not the one that was typed, and scoring it against the
+    # typed name alone would rank the right answer below a wrong one.
+    assert found["results"][0]["match_score"] >= found["auto_attach_threshold"]
+    assert not found.get("low_confidence")
+
+
+def test_a_search_with_no_other_names_makes_the_calls_it_always_made(http) -> None:
+    """The alternative names are additive. A page that states none has to
+    produce exactly the request set it produced before they existed."""
+    base, stub = http
+    _status, _found = _get(base, "/search?query=Sicario&languages=en")
+    assert stub.feature_lookups == 1
+    assert len(stub.search_calls) == 1
+
+
 def test_a_replayed_search_knows_what_has_been_downloaded_since(http) -> None:
     """The order this searched in six hours ago is not evidence about the cache.
 
