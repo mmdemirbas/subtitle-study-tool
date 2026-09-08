@@ -181,6 +181,28 @@ def to_vtt(cues: list[Cue]) -> str:
     return "\n".join(parts)
 
 
+_WORD = re.compile(r"[^\W_]+", re.UNICODE)
+
+
+def measure(rendered: list[dict[str, object]]) -> dict[str, int]:
+    """How much is actually said in a subtitle: lines, and words.
+
+    Two uploads of one film are routinely not the same subtitle. One carries
+    every line; another only the parts spoken in a foreign language; a third was
+    cut down by whoever retimed it. A search result says how often a file was
+    downloaded and nothing at all about what is in it, so these two numbers are
+    what separate "the whole film" from "a quarter of it".
+
+    Counted over the RENDERED text - what to_json produces - so positioning and
+    styling tags are already gone, and the answer matches the JavaScript's to
+    the word without either side having to strip markup of its own.
+    """
+    words = 0
+    for cue in rendered:
+        words += len(_WORD.findall(str(cue.get("text") or "")))
+    return {"lines": len(rendered), "words": words}
+
+
 def to_json(cues: list[Cue]) -> list[dict[str, object]]:
     """Render cues in the shape the extension overlay consumes.
 

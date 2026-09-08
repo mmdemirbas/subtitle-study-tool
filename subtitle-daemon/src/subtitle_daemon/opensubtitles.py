@@ -82,6 +82,18 @@ class SearchResult:
     download_count: int
     from_trusted: bool
     hearing_impaired: bool
+    # What is IN the file, as far as a search result can say before it is
+    # downloaded. foreign_parts_only is the one that changes the answer most:
+    # it means the upload deliberately carries only the lines spoken in another
+    # language, so a reader choosing on download count alone picks a file with
+    # a tenth of the dialogue in it and cannot see why.
+    foreign_parts_only: bool
+    machine_translated: bool
+    ai_translated: bool
+    # The uploaders' own verdict. Votes travel with it because a 10 from one
+    # person and a 9 from four hundred are not the same claim.
+    ratings: float | None
+    votes: int
     fps: float | None
     url: str
 
@@ -98,6 +110,11 @@ class SearchResult:
             "download_count": self.download_count,
             "from_trusted": self.from_trusted,
             "hearing_impaired": self.hearing_impaired,
+            "foreign_parts_only": self.foreign_parts_only,
+            "machine_translated": self.machine_translated,
+            "ai_translated": self.ai_translated,
+            "ratings": self.ratings,
+            "votes": self.votes,
             "fps": self.fps,
             "url": self.url,
         }
@@ -369,6 +386,11 @@ def _parse_search_item(item: Any) -> SearchResult | None:
         download_count=_as_int(attributes.get("download_count")) or 0,
         from_trusted=bool(attributes.get("from_trusted")),
         hearing_impaired=bool(attributes.get("hearing_impaired")),
+        foreign_parts_only=bool(attributes.get("foreign_parts_only")),
+        machine_translated=bool(attributes.get("machine_translated")),
+        ai_translated=bool(attributes.get("ai_translated")),
+        ratings=_as_float(attributes.get("ratings")) or None,
+        votes=_as_int(attributes.get("votes")) or 0,
         fps=_as_float(attributes.get("fps")),
         url=str(attributes.get("url") or ""),
     )

@@ -4277,6 +4277,86 @@
         }
       });
 
+      check("a result says what is in it, in columns that line up", async () => {
+        /* Reported twice over: "it would be better to see more data ... a
+         * statistics/metric about the richness of the subtitle, so I can choose
+         * more smartly", and "the same type of data in rows, aligned vertically
+         * so I can scan top-down".
+         *
+         * Two things can go wrong independently, so both are checked. The
+         * fields can be missing - which a field list catches. Or they can all
+         * be there and start at a different x on each row, which is what a flex
+         * row packed to content does, and which no assertion about text can
+         * see. The second one IS the request.
+         */
+        const shadow = panelShadow();
+        const was = window.__stubDaemon;
+        window.__stubDaemon = {
+          search: () => ({
+            auto_attach_threshold: 0.75,
+            results: [
+              {
+                file_id: 21, language: "tr", movie_name: "Mercy",
+                release: "Mercy.2026.WEB-DL.RARBG", year: 2026, download_count: 12400,
+                match_score: 1.0, identified: true,
+                // Already downloaded, so it can be measured for nothing.
+                cached: true, lines: 1103, words: 7412,
+              },
+              {
+                file_id: 22, language: "tr", movie_name: "Mercy",
+                release: "Mercy.2026.CAM", year: 2026, download_count: 40,
+                match_score: 0.9, identified: true,
+                foreign_parts_only: true, machine_translated: true,
+              },
+            ],
+          }),
+        };
+        try {
+          shadow.querySelector(".sso-add").click();
+          await sleep(80);
+          [...shadow.querySelectorAll("button")].find((b) => b.textContent === "Search").click();
+          await sleep(220);
+
+          const rows = [...shadow.querySelectorAll(".sso-result")];
+          if (rows.length !== 2) throw new Error(`the list drew ${rows.length} rows, want 2`);
+
+          const said = (row, name) => row.querySelector(`.sso-result__${name}`)?.textContent ?? "";
+          const want = { name: "Mercy.2026.WEB-DL.RARBG", year: "2026", dl: "12k", words: "7.4k" };
+          for (const [field, text] of Object.entries(want)) {
+            if (said(rows[0], field) !== text)
+              throw new Error(`the ${field} column reads "${said(rows[0], field)}", want "${text}"`);
+          }
+
+          /* Blank rather than zero on the row that is not on disk. A number
+           * there would have cost a download to find out, and the downloads
+           * are the thing being chosen between. */
+          if (said(rows[1], "words") !== "\u00b7")
+            throw new Error(`an unmeasured row printed "${said(rows[1], "words")}" for its words`);
+
+          const flags = [...rows[1].querySelectorAll(".sso-result__flags .sso-tag")]
+            .map((chip) => chip.textContent);
+          for (const chip of ["foreign parts", "machine"]) {
+            if (!flags.includes(chip))
+              throw new Error(`the flags read "${flags.join(", ")}" - no "${chip}"`);
+          }
+          if (rows[0].querySelector(".sso-result__flags").textContent.includes("foreign"))
+            throw new Error("a flag from one row was drawn on another");
+
+          // And the alignment, which is the half a field list cannot check.
+          for (const column of ["year", "dl", "words"]) {
+            const xs = rows.map((row) =>
+              Math.round(row.querySelector(`.sso-result__${column}`).getBoundingClientRect().left),
+            );
+            if (xs[0] !== xs[1])
+              throw new Error(`the ${column} column starts at ${xs.join(" and ")} - it is ragged`);
+          }
+        } finally {
+          window.__stubDaemon = was ?? null;
+          shadow.querySelector(".sso-panel__back")?.click();
+          await sleep(120);
+        }
+      });
+
       check("picking a result does not move the target out from under you", async () => {
         /* Reported: "when I select a subtitle from the list 1, it switches to
          * list 2 immediately". It did - the target flipped after every attach

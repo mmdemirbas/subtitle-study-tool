@@ -121,9 +121,34 @@ class Service:
         )
         self.client = Client(config.api_key) if config.has_api_key else None
         self._lock = threading.Lock()
+        # Lines and words per cached file_id. A file on disk does not change,
+        # so this is held for the life of the process. See _measure_cached.
+        self._measured: dict[int, dict[str, int]] = {}
 
         if self.client and config.can_login:
             self.client.login(config.username or "", config.password or "")
+
+    def _measure_cached(self, file_id: int) -> dict[str, int] | None:
+        """Lines and words for a file already on disk, or None.
+
+        Only for rows that are already cached, which is a handful of any result
+        set. Nothing is downloaded to measure anything: a download is metered,
+        and spending one to answer "is this subtitle any good" would cost the
+        reader the very thing they are choosing between.
+        """
+        held = self._measured.get(file_id)
+        if held is not None:
+            return held
+        item = self.cache.get_subtitle(file_id)
+        if item is None:
+            return None
+        try:
+            text, _ = subtitles.decode(item.read_bytes())
+            counted = subtitles.measure(subtitles.to_json(subtitles.parse_srt(text)))
+        except (OSError, ValueError):
+            return None
+        self._measured[file_id] = counted
+        return counted
 
     # --- operations ---------------------------------------------------------
 
@@ -390,6 +415,10 @@ class Service:
         on_disk = {item.file_id for item in self.cache.list_subtitles()}
         for item in results:
             item["cached"] = item["file_id"] in on_disk
+            # And how much is in it, for the ones that can be answered without
+            # spending anything. See _measure_cached.
+            if item["cached"]:
+                item.update(self._measure_cached(item["file_id"]) or {})
 
         # A held file costs nothing, so auto-attach should reach for it before
         # spending a download on another upload of the same film.
@@ -945,9 +974,14 @@ def _file_id(value: Any) -> int | None:
 def _cues_response(raw: bytes, meta: dict[str, Any], *, from_cache: bool) -> dict[str, Any]:
     text, encoding = subtitles.decode(raw)
     cues = subtitles.parse_srt(text)
+    rendered = subtitles.to_json(cues)
     return {
-        "meta": {**meta, "encoding": encoding, "cue_count": len(cues)},
-        "cues": subtitles.to_json(cues),
+        # `words` beside the older `cue_count`, which is the line count under
+        # its first name. Together they let the panel mark a result the reader
+        # has just downloaded without measuring it a second time.
+        "meta": {**meta, "encoding": encoding, "cue_count": len(cues),
+                 "words": subtitles.measure(rendered)["words"]},
+        "cues": rendered,
         "vtt": subtitles.to_vtt(cues),
         "from_cache": from_cache,
     }

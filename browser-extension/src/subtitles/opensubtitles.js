@@ -93,6 +93,18 @@ function parseSearchItem(item) {
     download_count: asInt(attributes.download_count) || 0,
     from_trusted: Boolean(attributes.from_trusted),
     hearing_impaired: Boolean(attributes.hearing_impaired),
+    /* What is IN the file, as far as a search result can say before it is
+     * downloaded. foreign_parts_only is the one that changes the answer most:
+     * it means the upload deliberately carries only the lines spoken in
+     * another language, so a reader choosing on download count alone picks a
+     * file with a tenth of the dialogue in it and cannot see why. */
+    foreign_parts_only: Boolean(attributes.foreign_parts_only),
+    machine_translated: Boolean(attributes.machine_translated),
+    ai_translated: Boolean(attributes.ai_translated),
+    /* The uploaders' own verdict. Votes travel with it because a 10 from one
+     * person and a 9 from four hundred are not the same claim. */
+    ratings: asFloat(attributes.ratings) || null,
+    votes: asInt(attributes.votes) || 0,
     fps: asFloat(attributes.fps),
     url: String(attributes.url || ""),
   };

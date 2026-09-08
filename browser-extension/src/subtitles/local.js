@@ -12,7 +12,7 @@
 import * as cache from "./cache.js";
 import * as matching from "./matching.js";
 import { Client, OpenSubtitlesError } from "./opensubtitles.js";
-import { decode, parseSrt, toJson, toVtt } from "./srt.js";
+import { decode, measure, parseSrt, toJson, toVtt } from "./srt.js";
 import { guess, resolve } from "./titles.js";
 
 export const DEFAULT_LANGUAGES = ["en"];
@@ -454,6 +454,35 @@ export class LocalService {
  * film first. Auto-attach took it and spent one of ten daily downloads on a
  * subtitle already held.
  */
+/* Lines and words per cached file_id, for the life of this worker. A file on
+ * disk does not change, and reading one out of IndexedDB to count it twice is
+ * a round trip spent on an answer already given. */
+const counts = new Map();
+
+/**
+ * Lines and words for a file already held, or null.
+ *
+ * Only for rows that are already cached, which is a handful of any result set.
+ * Nothing is downloaded to measure anything: a download is metered, and
+ * spending one to answer "is this subtitle any good" would cost the reader the
+ * very thing they are choosing between.
+ */
+async function measured(fileId) {
+  if (counts.has(fileId)) return counts.get(fileId);
+  try {
+    const record = await cache.getSubtitle(fileId);
+    if (!record) return null;
+    const { text } = decode(record.bytes);
+    const answer = measure(toJson(parseSrt(text)));
+    counts.set(fileId, answer);
+    return answer;
+  } catch {
+    // A subtitle that cannot be read is one without a measurement, not a
+    // search that fails.
+    return null;
+  }
+}
+
 async function applyCacheState(response, languages) {
   const results = response.results;
   if (!Array.isArray(results)) return;
@@ -461,6 +490,13 @@ async function applyCacheState(response, languages) {
   const held = await cache.listMeta();
   const onDisk = new Set(held.map((item) => item.file_id));
   for (const item of results) item.cached = onDisk.has(item.file_id);
+
+  // And how much is in the ones that can be answered without spending
+  // anything. See measured().
+  for (const item of results) {
+    if (!item.cached) continue;
+    Object.assign(item, (await measured(item.file_id)) || {});
+  }
 
   // A held file costs nothing, so auto-attach should reach for it before
   // spending a download on another upload of the same film.
@@ -490,9 +526,13 @@ export function cuesResponse(raw, meta, fromCache, { vtt = false } = {}) {
   const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
   const { text, encoding } = decode(bytes);
   const cues = parseSrt(text);
+  const rendered = toJson(cues);
   const response = {
-    meta: { ...meta, encoding, cue_count: cues.length },
-    cues: toJson(cues),
+    // `words` beside the older `cue_count`, which is the line count under its
+    // first name. Together they let the panel mark a result the reader has
+    // just downloaded without measuring it a second time.
+    meta: { ...meta, encoding, cue_count: cues.length, words: measure(rendered).words },
+    cues: rendered,
     from_cache: fromCache,
     served_by: "extension",
   };

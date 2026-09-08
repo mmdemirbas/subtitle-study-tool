@@ -3420,10 +3420,32 @@
     el.languageFilter.className = "sso-seg sso-seg--wrap";
     el.languageFilter.hidden = true;
 
+    /* Column labels, on the same grid as the rows under them. Without them the
+     * last column is a bare number, and a bare number in a subtitle list reads
+     * as a file size; with them it is how many words the file has to say,
+     * which is the whole reason it is there. Hidden until there is a list for
+     * it to label. */
+    el.resultsHead = document.createElement("div");
+    el.resultsHead.className = "sso-results__head";
+    el.resultsHead.hidden = true;
+    for (const label of ["", "", "year", "dl", "words"]) {
+      const cell = document.createElement("span");
+      cell.textContent = label;
+      el.resultsHead.append(cell);
+    }
+
     el.results = document.createElement("ul");
     el.results.className = "sso-results";
 
-    wrap.append(el.findFor, row, el.searchNote, el.tryBest, el.languageFilter, el.results);
+    wrap.append(
+      el.findFor,
+      row,
+      el.searchNote,
+      el.tryBest,
+      el.languageFilter,
+      el.resultsHead,
+      el.results,
+    );
     return wrap;
   }
 
@@ -3496,6 +3518,7 @@
 
   async function runSearch(query) {
     el.results.replaceChildren();
+    el.resultsHead.hidden = true;
     el.tryBest.hidden = true;
     el.searchNote.className = "sso-note";
     el.searchNote.textContent = "Searching…";
@@ -3552,11 +3575,49 @@
 
   let lastThreshold = 0.75;
 
+  /* A count in the room a column has. 12400 -> "12.4k". */
+  function compact(number) {
+    if (!Number.isFinite(number) || number <= 0) return "";
+    if (number < 1000) return String(number);
+    if (number < 10000) return `${(number / 1000).toFixed(1)}k`;
+    return `${Math.round(number / 1000)}k`;
+  }
+
+  function resultCell(className, text, title = "") {
+    const span = document.createElement("span");
+    span.className = className;
+    span.textContent = text;
+    if (title) span.title = title;
+    return span;
+  }
+
+  /* One row per upload, one column per field.
+   *
+   * It was a language chip and the film's NAME on one line - the same name on
+   * every row, because they are all uploads of the one film - and then a
+   * joined string of "release · year · N dl" underneath. So the thing that
+   * actually tells two rows apart was in the small grey line, and every number
+   * started at a different x. Reported as both: "it would be better to see
+   * more data", and "the same type of data in rows, aligned vertically so I
+   * can scan top-down".
+   *
+   * The release leads now, because it is what identifies the file. The film's
+   * name is in the hover text, where a name that is the same on every row
+   * belongs.
+   *
+   * `words` is the field the reader asked for and the only honest way to
+   * answer "is this one any richer": measured for a file already on disk, and
+   * blank otherwise, because measuring one costs a metered download. The three
+   * flags below are what a search result can say about the same question
+   * before it is downloaded - and "foreign parts" is the loudest of them, since
+   * it means the upload carries only the lines spoken in another language.
+   */
   function renderResults(results, threshold) {
     const shown = languageChoice
       ? results.filter((result) => (result.language || "").toLowerCase() === languageChoice)
       : results;
 
+    el.resultsHead.hidden = shown.length === 0;
     el.results.replaceChildren(
       ...shown.slice(0, 30).map((result) => {
         const item = document.createElement("li");
@@ -3564,39 +3625,51 @@
         b.type = "button";
         b.className = "sso-result";
 
-        const top = document.createElement("div");
-        top.className = "sso-result__top";
+        const name = result.release || result.movie_name || "Untitled";
+        b.append(
+          resultCell("sso-result__lang", (result.language || "??").toUpperCase()),
+          resultCell(
+            "sso-result__name",
+            name,
+            [result.movie_name, result.release].filter(Boolean).join(" — ") || name,
+          ),
+          resultCell("sso-result__year", result.year ? String(result.year) : "·"),
+          resultCell(
+            "sso-result__dl",
+            compact(result.download_count) || "·",
+            `${result.download_count || 0} downloads`,
+          ),
+          resultCell(
+            "sso-result__words",
+            compact(result.words) || "·",
+            result.words
+              ? `${result.words} words over ${result.lines} lines`
+              : "Counted once a subtitle is on disk. Measuring one costs a download, and the downloads are what you are choosing between.",
+          ),
+        );
 
-        const lang = document.createElement("span");
-        lang.className = "sso-result__lang";
-        lang.textContent = (result.language || "??").toUpperCase();
-
-        const name = document.createElement("span");
-        name.className = "sso-result__name";
-        name.textContent = result.movie_name || result.release || "Untitled";
-
-        top.append(lang, name);
-        if (result.cached) top.append(tag("cached", "sso-tag--free"));
-        /* Not on a row the search identified. The score compares the query
-         * against the uploader's own file name, and once the title has resolved
-         * and the episode agrees, every row is this programme whatever it was
-         * called - so the tag was marking correct results as poor ones, on
-         * every episode whose title happens to be long. It is what sends a
-         * reader back to reading release names by eye, which is how the
-         * previous episode's file came to be attached to this one. See
-         * markIdentified in provider.js. */
+        const flags = document.createElement("span");
+        flags.className = "sso-result__flags";
         if (!result.identified && result.match_score != null && result.match_score < threshold) {
-          top.append(tag("weak match", "sso-tag--weak"));
+          flags.append(tag("weak match", "sso-tag--weak"));
         }
-        if (result.hearing_impaired) top.append(tag("HI"));
+        if (result.cached) flags.append(tag("on disk", "sso-tag--free"));
+        if (result.foreign_parts_only) {
+          const chip = tag("foreign parts", "sso-tag--weak");
+          chip.title = "Only the lines spoken in another language, not the whole film.";
+          flags.append(chip);
+        }
+        if (result.ai_translated) flags.append(tag("AI", "sso-tag--weak"));
+        else if (result.machine_translated) flags.append(tag("machine", "sso-tag--weak"));
+        if (result.hearing_impaired) flags.append(tag("HI"));
+        /* Only with enough votes behind it to be a claim. A single 10 and a 9
+         * from four hundred people are not the same statement, and the panel
+         * has no room to print both numbers. */
+        if (result.ratings && result.votes >= 3) {
+          flags.append(tag(`★ ${result.ratings.toFixed(1)}`, ""));
+        }
+        b.append(flags);
 
-        const sub = document.createElement("span");
-        sub.className = "sso-result__sub";
-        sub.textContent = [result.release, result.year, `${result.download_count} dl`]
-          .filter(Boolean)
-          .join(" · ");
-
-        b.append(top, sub);
         b.addEventListener("click", () => api.detached(attachResult(result), "That subtitle"));
         item.append(b);
         return item;
@@ -3682,9 +3755,19 @@
           continue;
         }
         tried.push({ result, cues: response.cues });
+        /* Mark the row while the file is in hand.
+         *
+         * This already spends the downloads; measuring what came back costs
+         * nothing on top, and it is the only way a reader gets a word count
+         * for a subtitle they have not chosen yet. Whichever one wins, the two
+         * that lose stay in the list with their numbers on them - which is
+         * exactly the comparison "the richer one" needs. */
+        result.lines = response.meta?.cue_count ?? response.cues.length;
+        result.words = response.meta?.words ?? null;
       }
     } finally {
       el.tryBest.disabled = false;
+      renderResults(lastResults, lastThreshold);
     }
     if (!tried.length) {
       el.searchNote.className = "sso-note sso-note--warn";

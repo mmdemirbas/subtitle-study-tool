@@ -193,6 +193,28 @@ export function toJson(cues) {
 }
 
 /** Render cues as WebVTT, translating inline markup into VTT tags. */
+/* Words, as the daemon's subtitles.measure counts them: runs of letters and
+ * digits, over the RENDERED text, so markup and positioning tags are already
+ * gone and neither side has to strip them again. */
+const WORD = /[\p{L}\p{N}]+/gu;
+
+/**
+ * How much is actually said in a subtitle: lines, and words.
+ *
+ * Two uploads of one film are routinely not the same subtitle. One carries
+ * every line; another only the parts spoken in a foreign language; a third was
+ * cut down by whoever retimed it. A search result says how often a file was
+ * downloaded and nothing at all about what is in it, so these two numbers are
+ * what separate "the whole film" from "a quarter of it".
+ *
+ * Port of `measure` in subtitle-daemon/src/subtitle_daemon/subtitles.py.
+ */
+export function measure(rendered) {
+  let words = 0;
+  for (const cue of rendered) words += String(cue.text || "").match(WORD)?.length || 0;
+  return { lines: rendered.length, words };
+}
+
 export function toVtt(cues) {
   const parts = ["WEBVTT", ""];
   cues.forEach((cue, index) => {

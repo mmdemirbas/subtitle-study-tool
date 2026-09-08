@@ -1825,7 +1825,7 @@ input.sso-swatch::-webkit-color-swatch {
 
 .sso-results {
   max-height: 210px;
-  margin: 8px 0 0;
+  margin: 4px 0 0;
   padding: 0;
   overflow-y: auto;
   list-style: none;
@@ -1835,11 +1835,41 @@ input.sso-swatch::-webkit-color-swatch {
   border-top: 1px solid var(--sso-line-soft);
 }
 
+/* One column track per field, the same tracks on the header and on every row.
+ *
+ * It was two flex rows - a language chip and the film's name, then a joined
+ * string of "release · year · N dl" - so every number started at a different x
+ * and comparing two uploads meant reading both of them as sentences. Reported
+ * as exactly that: "the same type of data in rows, aligned vertically so I can
+ * scan top-down".
+ *
+ * The tracks are FIXED rather than content-sized. A column that moves when the
+ * result set changes is not a column, and every value in these three is short
+ * and bounded: a year is four digits, and the counts are shortened to "12.4k"
+ * before they are printed. The name gets whatever is left, which is what a
+ * variable-length field should get.
+ *
+ * The head is the same grid, so its labels sit over the columns they name. It
+ * is what makes a bare "1103" mean lines of dialogue rather than a file size. */
+.sso-results__head,
 .sso-result {
-  display: block;
+  display: grid;
+  grid-template-columns: 2.6ch minmax(0, 1fr) 4ch 4.6ch 5ch;
+  column-gap: 6px;
+  align-items: baseline;
   width: 100%;
-  padding: 7px 5px;
   text-align: left;
+}
+
+.sso-results__head {
+  padding: 0 5px 3px;
+  font-size: var(--sso-t-micro);
+  color: var(--sso-ink-3);
+  border-bottom: 1px solid var(--sso-line-soft);
+}
+
+.sso-result {
+  padding: 7px 5px;
   background: none;
   border: 0;
   border-radius: 0;
@@ -1854,12 +1884,6 @@ input.sso-swatch::-webkit-color-swatch {
   transform: none;
 }
 
-.sso-result__top {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-
 .sso-result__lang {
   font-size: 9.5px;
   font-weight: 700;
@@ -1868,7 +1892,6 @@ input.sso-swatch::-webkit-color-swatch {
 }
 
 .sso-result__name {
-  flex: 1;
   overflow: hidden;
   font-size: var(--sso-t-body);
   font-weight: 500;
@@ -1876,14 +1899,40 @@ input.sso-swatch::-webkit-color-swatch {
   white-space: nowrap;
 }
 
-.sso-result__sub {
-  display: block;
-  overflow: hidden;
-  margin-top: 1px;
+/* Right, because these are quantities and a quantity is compared by its last
+ * digit. The head's labels are right-aligned with them for the same reason. */
+.sso-results__head span:nth-child(n + 3),
+.sso-result__year,
+.sso-result__dl,
+.sso-result__words {
   font-size: var(--sso-t-micro);
   color: var(--sso-ink-3);
-  text-overflow: ellipsis;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* The one number the reader came here for, so it is not as quiet as the two
+ * beside it. Blank where the file is not on disk - measuring one costs a
+ * download, and spending a download to judge a subtitle costs the reader the
+ * thing they are choosing between. */
+.sso-result__words {
+  color: var(--sso-ink-2);
+}
+
+/* Under the name rather than beside it: they are a set of remarks about the
+ * upload, not a field, so they do not get a column of their own. Absent
+ * entirely on a row with nothing to remark on, which is most of them. */
+.sso-result__flags {
+  display: flex;
+  flex-wrap: wrap;
+  grid-column: 2 / -1;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.sso-result__flags:empty {
+  display: none;
 }
 
 .sso-tag {

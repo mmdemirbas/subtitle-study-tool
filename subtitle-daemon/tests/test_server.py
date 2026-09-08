@@ -54,6 +54,11 @@ def make_result(file_id: int, movie_name: str, **overrides: Any) -> SearchResult
         "download_count": 100,
         "from_trusted": True,
         "hearing_impaired": False,
+        "foreign_parts_only": False,
+        "machine_translated": False,
+        "ai_translated": False,
+        "ratings": None,
+        "votes": 0,
         "fps": 23.976,
         "url": f"https://example.invalid/{file_id}",
     }
@@ -110,6 +115,7 @@ def service(tmp_path: Path) -> Iterator[tuple[server_module.Service, StubClient]
     stub = StubClient()
     svc.client = stub  # type: ignore[assignment]  # structural stand-in for Client
     svc._lock = threading.Lock()
+    svc._measured = {}
     yield svc, stub
 
 
@@ -592,6 +598,31 @@ def test_a_cached_subtitle_for_the_title_is_offered_first(http) -> None:
     assert payload["results"][0]["file_id"] == 42, "the one we already have comes first"
     assert payload["results"][0]["cached"] is True
     assert payload["reusing_cached"] is True
+
+
+def test_a_result_already_on_disk_says_how_much_is_in_it(http) -> None:
+    """A search result says how often a file was downloaded and nothing about
+    what is in it, and two uploads of one film are routinely not the same
+    subtitle - one carries every line, another only the foreign-language parts.
+    For a file already held the answer costs a disk read, so it is given. For
+    one that is not, it would cost a metered download, so it is not: spending a
+    download to judge a subtitle costs the reader the thing they are choosing
+    between.
+    """
+    base, stub = http
+    stub.feature_list = [make_feature("Sicario", imdb_id="3397884", year=2015)]
+    stub.results = [make_result(999, "Sicario"), make_result(42, "Sicario")]
+
+    _post(base, "/fetch", {"file_id": 42, "imdb_id": "3397884", "language": "en"})
+    _status, found = _get(base, "/search?query=Sicario&languages=en")
+
+    held = next(item for item in found["results"] if item["file_id"] == 42)
+    # SRT above is two cues, "Hello" and "World".
+    assert held["lines"] == 2
+    assert held["words"] == 2
+
+    missing = next(item for item in found["results"] if item["file_id"] == 999)
+    assert "lines" not in missing, "a file not on disk was measured, which costs a download"
 
 
 def test_a_replayed_search_knows_what_has_been_downloaded_since(http) -> None:
