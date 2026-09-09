@@ -181,6 +181,27 @@ def to_vtt(cues: list[Cue]) -> str:
     return "\n".join(parts)
 
 
+def to_srt(cues: list[Cue]) -> str:
+    """Render cues back as SRT, renumbered from one.
+
+    The counterpart of parse_srt, and the format a subtitle is WRITTEN in - VTT
+    is what a browser reads and JSON is what the overlay reads, so neither of
+    them round-trips to a file anyone else can open. A subtitle this tool
+    produced itself has to be storable as an ordinary .srt, or it is only ever
+    usable from inside this tool.
+
+    Indices are 1..N rather than whatever the input carried, because parse_srt
+    does not keep the original numbering and a subtitle with gaps in its
+    numbering is not one every player accepts.
+    """
+    blocks = []
+    for index, cue in enumerate(cues, start=1):
+        blocks.append(
+            f"{index}\n{_fmt_srt(cue.start_ms)} --> {_fmt_srt(cue.end_ms)}\n{cue.text}\n"
+        )
+    return "\n".join(blocks)
+
+
 _WORD = re.compile(r"[^\W_]+", re.UNICODE)
 
 
@@ -235,6 +256,11 @@ def _to_ms(hours: str, minutes: str, seconds: str, fraction: str) -> int:
     # or two digits. Pad rather than misread ",5" as 5 ms.
     millis = int(fraction.ljust(3, "0")[:3])
     return ((int(hours) * 60 + int(minutes)) * 60 + int(seconds)) * 1000 + millis
+
+
+def _fmt_srt(ms: int) -> str:
+    """SRT separates the milliseconds with a comma where VTT uses a stop."""
+    return _fmt_vtt(ms).replace(".", ",")
 
 
 def _fmt_vtt(ms: int) -> str:
