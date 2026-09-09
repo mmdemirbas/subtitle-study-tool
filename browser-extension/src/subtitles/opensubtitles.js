@@ -47,17 +47,42 @@ function splitYearPrefix(name) {
   return [name.slice(match[0].length).trim(), Number(match[1])];
 }
 
+/* How many subtitles a title has in each language.
+ *
+ * Read because the scalar beside it is not a count of the same thing: on a
+ * Tvshow, `subtitles_count` counts what is filed against the show entry itself
+ * and not against its episodes, so a series whose subtitles all hang off
+ * episodes reports zero with a breakdown holding dozens next to it. */
+function languageCounts(raw) {
+  if (!raw || typeof raw !== "object") return {};
+  const counts = {};
+  for (const [code, value] of Object.entries(raw)) {
+    const number = asInt(value);
+    if (number) counts[String(code)] = number;
+  }
+  return counts;
+}
+
 function parseFeature(item) {
   const attributes = item && item.attributes;
   if (!attributes || typeof attributes !== "object") return null;
   if (attributes.imdb_id === null || attributes.imdb_id === undefined) return null;
   const featureType = String(attributes.feature_type || "");
+  const scalar = asInt(attributes.subtitles_count) || 0;
+  const byLanguage = languageCounts(attributes.subtitles_counts);
+  const perLanguage = Object.values(byLanguage).reduce((sum, n) => sum + n, 0);
   return {
     imdb_id: String(attributes.imdb_id),
     title: String(attributes.title || ""),
     year: asInt(attributes.year),
     feature_type: featureType,
-    subtitles_count: asInt(attributes.subtitles_count) || 0,
+    subtitles_count: scalar,
+    subtitles_by_language: byLanguage,
+    /* The larger of the two, so a ranking that used the scalar never sees a
+     * smaller number than it did before: "The Care Bears" reports 11 against a
+     * per-language map holding 1, and a Tvshow reports 0 against dozens. */
+    total_subtitles: Math.max(scalar, perLanguage),
+    languages: Object.keys(byLanguage).sort(),
     is_series: ["tvshow", "episode"].includes(featureType.toLowerCase()),
   };
 }

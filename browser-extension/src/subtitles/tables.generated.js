@@ -648,4 +648,4 @@ export const CANDIDATE_ENCODINGS = [
 
 export const SEARCH_TTL_SECONDS = 21600;
 
-export const SEARCH_SCHEMA_VERSION = 6;
+export const SEARCH_SCHEMA_VERSION = 7;

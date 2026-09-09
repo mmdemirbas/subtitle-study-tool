@@ -83,6 +83,8 @@ _CACHED_FIELDS = (
     "other_titles",
     "low_confidence",
     "not_in_database",
+    "missing_languages",
+    "available_languages",
     "error",
     "auto_attach_threshold",
 )
@@ -343,6 +345,24 @@ class Service:
                     }
                     for other in rivals
                 ]
+
+            # "No Turkish subtitle" and "no Turkish subtitle exists" are
+            # different answers, and only one of them is worth trying again.
+            # The title index says which languages a programme has, it comes
+            # back with the resolution and it costs nothing, so an empty result
+            # can name what is there instead of reading as a failed search.
+            #
+            # "Not Suitable for Work" (2026) is the case that prompted this: 13
+            # languages, none of them Turkish, on every episode of the series.
+            available = resolved.languages
+            if available:
+                have = {code.lower() for code in available}
+                missing = [
+                    language for language in languages if language.lower() not in have
+                ]
+                if missing:
+                    response["missing_languages"] = missing
+                    response["available_languages"] = available
         elif not found:
             # /features knows the whole catalogue. If it has never heard of the
             # title, no query rewriting will help - the subtitles do not exist.
@@ -607,10 +627,16 @@ class Service:
         # scorer's clash penalty, and a one-year disagreement is normal enough
         # that it dropped an exact title below the threshold and resolved to
         # nothing. The year is a ranking dimension below, not a score modifier.
+        # Counted per language, not by the scalar. A Tvshow's scalar counts
+        # only what is filed against the show entry itself, so a series whose
+        # subtitles all hang off its episodes reported zero and was dropped
+        # here as empty - which is why the show entry, an exact title match,
+        # never won and the exact `parent_imdb_id` + season + episode search
+        # below was unreachable for those shows.
         scored = [
             (matching.score(query, feature.title), feature)
             for feature in candidates
-            if feature.subtitles_count > 0
+            if feature.total_subtitles > 0
         ]
         if not scored:
             return None, []
@@ -621,7 +647,7 @@ class Service:
                 round(score, 1),
                 _type_agreement(feature, want_series=want_series),
                 _year_agreement(feature.year, year),
-                feature.subtitles_count,
+                feature.total_subtitles,
             )
 
         scored.sort(key=rank, reverse=True)
@@ -955,13 +981,24 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def _type_agreement(feature: Any, *, want_series: bool) -> int:
-    """1 when the entry is the kind of thing we are looking for, else -1.
+    """How well the kind of entry matches the kind of thing being looked for.
 
     A page with no season or episode detected is a film until shown otherwise.
     Without this, television episodes sharing a film's title win on subtitle
     count, which is how a 2016 episode was chosen for a 2025 film.
+
+    When a season and episode ARE known, the show outranks one of its own
+    episodes. Every episode of a series carries the series name, so all of them
+    score the same against it and the tie falls to whichever is most
+    downloaded: asking for "Not Suitable for Work" S01E01 resolved to the S01E03
+    entry. Resolving to the show instead searches `parent_imdb_id` with the
+    season and episode, which names one episode exactly.
     """
-    return 1 if feature.is_series == want_series else -1
+    if feature.is_series != want_series:
+        return -1
+    if want_series and feature.feature_type.lower() == "tvshow":
+        return 2
+    return 1
 
 
 def _year_agreement(candidate_year: int | None, wanted: int | None) -> int:

@@ -166,6 +166,24 @@ For series, agreement with the requested season and episode outranks
 everything else. Mislabelled uploads are common, and without that the
 most-downloaded episode of the show wins regardless of which was asked for.
 
+When a season and episode are known, step 1 resolves to the **show** rather
+than to one of its episodes. Every episode of a series carries the series name,
+so all of them score identically against it and the tie fell to whichever was
+most downloaded - asking for "Not Suitable for Work" S01E01 resolved to the
+S01E03 entry. A show resolves into `parent_imdb_id` plus the season and
+episode, which names one episode exactly.
+
+## When the answer is that it does not exist
+
+An empty result list has two causes with different remedies: the search missed,
+or nobody has subtitled this in the language asked for. `/features` says which,
+per language, and it is already in hand - so a search that finds nothing in the
+requested language comes back with `missing_languages` and
+`available_languages` rather than only an empty list. "Not Suitable for Work"
+(2026) has 13 languages across its episodes and no Turkish in any of them; no
+amount of re-querying was going to produce one, and the panel says so instead
+of "try a different title".
+
 ## Access control
 
 The daemon binds to `127.0.0.1`, which keeps other machines out. It does not
@@ -184,6 +202,17 @@ from `curl` or the address bar, not cross-site requests.
 ones are routinely cp1254. Decoding those as latin-1 does not raise — it
 silently produces mojibake — so `subtitles.decode` scores candidate encodings
 rather than taking the first that does not throw.
+
+**A series' subtitle count.** `/features` returns both a scalar
+`subtitles_count` and a per-language `subtitles_counts`, and on a Tvshow they
+count different things: the scalar counts what is filed against the show entry
+itself, not against its episodes. A series whose subtitles all hang off
+episodes therefore reports zero - "Not Suitable for Work" (2026) reports 0
+beside a breakdown holding 61, "Where the Bears Are" 0 beside 701, "Mercy
+Street" 0 beside 187 - and was dropped as an empty entry, which is what stopped
+a series ever resolving to its own show. Both are read and the larger is used,
+because neither is reliable alone: "The Care Bears" reports 11 beside a
+breakdown holding 1.
 
 **Title guessing.** `titles.guess` strips site branding, player chrome and
 release-scene tokens from a tab title, and pulls out season/episode. It is

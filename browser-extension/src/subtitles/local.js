@@ -28,12 +28,24 @@ const CACHED_FIELDS = [
   "other_titles",
   "low_confidence",
   "not_in_database",
+  "missing_languages",
+  "available_languages",
   "error",
   "auto_attach_threshold",
 ];
 
-/** 1 when the entry is the kind of thing we are looking for, else -1. */
-const typeAgreement = (feature, wantSeries) => (feature.is_series === wantSeries ? 1 : -1);
+/* How well the kind of entry matches the kind of thing being looked for.
+ *
+ * When a season and episode are known, the show outranks one of its own
+ * episodes: every episode carries the series name, so they all score the same
+ * against it and the tie falls to whichever is most downloaded - asking for
+ * "Not Suitable for Work" S01E01 resolved to the S01E03 entry. The show
+ * searches `parent_imdb_id` with the season and episode, which is exact. */
+function typeAgreement(feature, wantSeries) {
+  if (feature.is_series !== wantSeries) return -1;
+  if (wantSeries && String(feature.feature_type).toLowerCase() === "tvshow") return 2;
+  return 1;
+}
 
 /** 2 exact, 1 within a year, 0 unknown, -1 further away. A preference, not a filter. */
 function yearAgreement(candidateYear, wanted) {
@@ -86,6 +98,9 @@ const statedFeature = (imdbId, title, year, season) => ({
   year,
   feature_type: season === null ? "Movie" : "Episode",
   subtitles_count: 0,
+  total_subtitles: 0,
+  subtitles_by_language: {},
+  languages: [],
   is_series: season !== null,
 });
 
@@ -200,6 +215,21 @@ export class LocalService {
           imdb_id: other.imdb_id,
           type: other.feature_type,
         }));
+      }
+
+      /* "No Turkish subtitle" and "no Turkish subtitle exists" are different
+       * answers, and only one of them is worth trying again. The title index
+       * says which languages a programme has, it arrives with the resolution
+       * and it costs nothing, so an empty result can name what IS there
+       * instead of reading as a search that failed. */
+      const available = resolved.languages || [];
+      if (available.length) {
+        const have = new Set(available.map((code) => code.toLowerCase()));
+        const missing = languages.filter((language) => !have.has(language.toLowerCase()));
+        if (missing.length) {
+          response.missing_languages = missing;
+          response.available_languages = available;
+        }
       }
     } else if (!found.length) {
       /* /features knows the whole catalogue. If it has never heard of the
@@ -385,8 +415,11 @@ export class LocalService {
     /* Title similarity only. Feeding the year in here would apply the scorer's
      * clash penalty, and a one-year disagreement is normal enough that it
      * dropped an exact title below the threshold and resolved to nothing. */
+    /* Counted per language, not by the scalar: a series whose subtitles all
+     * hang off its episodes reports a scalar of zero and was dropped here as
+     * empty, which is why the show entry - an exact title match - never won. */
     const scored = candidates
-      .filter((feature) => feature.subtitles_count > 0)
+      .filter((feature) => (feature.total_subtitles ?? feature.subtitles_count) > 0)
       .map((feature) => ({ score: matching.score(query, feature.title), feature }));
     if (!scored.length) return { best: null, rivals: [] };
 
@@ -394,7 +427,7 @@ export class LocalService {
       bucket(score),
       typeAgreement(feature, wantSeries),
       yearAgreement(feature.year, year),
-      feature.subtitles_count,
+      feature.total_subtitles ?? feature.subtitles_count,
     ];
 
     scored.sort(byTuple(rank));

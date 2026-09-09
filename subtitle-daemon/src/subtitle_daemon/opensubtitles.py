@@ -61,10 +61,41 @@ class Feature:
     year: int | None
     feature_type: str  # "Movie" | "Tvshow" | "Episode"
     subtitles_count: int
+    # How many subtitles exist in each language, which for a series is the only
+    # count that means anything.
+    #
+    # `subtitles_count` on a Tvshow counts what is filed against the show entry
+    # itself, not against its episodes, so a show whose subtitles all hang off
+    # episodes reports zero next to a per-language breakdown that does not.
+    # Measured against the live index: "Not Suitable for Work" (2026) reports
+    # 0 with 61 across 13 languages beside it, "Where the Bears Are" reports 0
+    # with 701, "Mercy Street" 0 with 187, "Severance" (2022) 8 with 1258.
+    subtitles_by_language: dict[str, int] = field(default_factory=dict)
 
     @property
     def is_series(self) -> bool:
         return self.feature_type.lower() in ("tvshow", "episode")
+
+    @property
+    def total_subtitles(self) -> int:
+        """What this entry stands for, counted the same way for every kind.
+
+        Both numbers are read because neither is reliable alone: a Tvshow
+        under-reports the scalar, and "The Care Bears" reports 11 against a
+        per-language map holding 1. Taking the larger keeps a ranking that used
+        the scalar from ever seeing a smaller number than it did before.
+        """
+        return max(self.subtitles_count, sum(self.subtitles_by_language.values()))
+
+    @property
+    def languages(self) -> list[str]:
+        """The languages this entry actually has a subtitle in.
+
+        Free - it arrives with the title lookup - and it is the difference
+        between "we could not find a Turkish subtitle" and "there is no Turkish
+        subtitle to find", which are different problems with different remedies.
+        """
+        return sorted(code for code, count in self.subtitles_by_language.items() if count > 0)
 
 
 @dataclass(frozen=True)
@@ -340,12 +371,21 @@ def _parse_feature(item: Any) -> Feature | None:
     if imdb_id is None:
         return None
 
+    raw_counts = attributes.get("subtitles_counts")
+    by_language: dict[str, int] = {}
+    if isinstance(raw_counts, dict):
+        for code, count in raw_counts.items():
+            number = _as_int(count)
+            if number:
+                by_language[str(code)] = number
+
     return Feature(
         imdb_id=str(imdb_id),
         title=str(attributes.get("title") or ""),
         year=_as_int(attributes.get("year")),
         feature_type=str(attributes.get("feature_type") or ""),
         subtitles_count=_as_int(attributes.get("subtitles_count")) or 0,
+        subtitles_by_language=by_language,
     )
 
 

@@ -117,6 +117,40 @@ def test_feature_series_detection() -> None:
         assert feature is not None and feature.is_series
 
 
+def test_a_shows_own_count_is_read_per_language() -> None:
+    """`subtitles_count` on a Tvshow counts what is filed against the show
+    entry, not against its episodes, so a series whose subtitles all hang off
+    episodes reports zero beside a breakdown that does not. "Not Suitable for
+    Work" (2026) reports 0 with 61 across 13 languages."""
+    feature = _parse_feature(
+        feature_item(
+            feature_type="Tvshow",
+            subtitles_count=0,
+            subtitles_counts={"en": 7, "de": 7, "ru": 5, "zz": 0},
+        )
+    )
+    assert feature is not None
+    assert feature.subtitles_count == 0
+    assert feature.total_subtitles == 19
+    assert feature.languages == ["de", "en", "ru"], "a language with none of them is not one"
+
+
+def test_the_larger_of_the_two_counts_wins() -> None:
+    """Neither number is reliable alone: "The Care Bears" reports 11 against a
+    per-language map holding 1."""
+    feature = _parse_feature(feature_item(subtitles_count=11, subtitles_counts={"en": 1}))
+    assert feature is not None and feature.total_subtitles == 11
+
+
+def test_a_feature_with_no_breakdown_still_parses() -> None:
+    for absent in (None, "nonsense", 7, []):
+        feature = _parse_feature(feature_item(subtitles_counts=absent))
+        assert feature is not None
+        assert feature.subtitles_by_language == {}
+        assert feature.total_subtitles == 210
+        assert feature.languages == []
+
+
 def test_feature_without_imdb_id_is_dropped() -> None:
     item = feature_item()
     del item["attributes"]["imdb_id"]

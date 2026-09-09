@@ -453,6 +453,105 @@ def test_an_episode_search_still_prefers_series(http) -> None:
     assert payload["resolved"]["imdb_id"] == "2"
 
 
+def test_an_episode_search_prefers_the_show_over_one_of_its_own_episodes(http) -> None:
+    """A show entry searches one episode exactly; an episode entry gambles.
+
+    Every episode of a series carries the series name, so all of them score the
+    same against it and the tie fell to whichever was most downloaded.
+    """
+    base, stub = http
+    stub.feature_list = [
+        make_feature("mercy", imdb_id="1", feature_type="Episode", subtitles_count=900),
+        make_feature("mercy", imdb_id="2", feature_type="Tvshow", subtitles_count=5),
+    ]
+    _status, payload = _get(base, "/search?query=Mercy&season=1&episode=2")
+    assert payload["resolved"]["imdb_id"] == "2"
+    assert payload["resolved"]["type"] == "Tvshow"
+
+
+def test_a_show_whose_subtitles_hang_off_its_episodes_is_not_dropped(http) -> None:
+    """The shape "Not Suitable for Work" (2026) arrives in.
+
+    Its Tvshow entry reports `subtitles_count: 0` beside a per-language
+    breakdown holding 61, because the scalar counts only what is filed against
+    the show itself. Dropped as empty, the exact title match lost to whichever
+    episode was most downloaded: asking for S01E01 resolved to the S01E03 entry.
+    """
+    base, stub = http
+    episodes = [
+        ("41297712", "welcome to murray hill"),
+        ("41297903", "evil nepo son of the king"),
+        ("41298040", "the philadelphia thirst monster"),
+    ]
+    stub.feature_list = [
+        *(
+            make_feature(
+                f'"not suitable for work" {name}',
+                imdb_id=imdb_id,
+                year=2026,
+                feature_type="Episode",
+                subtitles_count=16,
+            )
+            for imdb_id, name in episodes
+        ),
+        make_feature(
+            "not suitable for work",
+            imdb_id="35823838",
+            year=2026,
+            feature_type="Tvshow",
+            subtitles_count=0,
+            subtitles_by_language={"en": 7, "de": 7, "ru": 5},
+        ),
+    ]
+    _status, payload = _get(base, "/search?query=Not+Suitable+for+Work&season=1&episode=1")
+    assert payload["resolved"]["imdb_id"] == "35823838"
+    assert payload["resolved"]["type"] == "Tvshow"
+
+
+def test_the_languages_a_title_has_are_named_when_the_one_asked_for_is_not_there(
+    http,
+) -> None:
+    """"We could not find a Turkish subtitle" and "there is no Turkish subtitle"
+    are different answers, and only one of them is worth trying again."""
+    base, stub = http
+    stub.results = []
+    stub.feature_list = [
+        make_feature(
+            "not suitable for work",
+            imdb_id="35823838",
+            year=2026,
+            feature_type="Tvshow",
+            subtitles_count=0,
+            subtitles_by_language={"en": 7, "de": 7, "ru": 5},
+        ),
+    ]
+    _status, payload = _get(
+        base, "/search?query=Not+Suitable+for+Work&season=1&episode=1&languages=tr"
+    )
+    assert payload["results"] == []
+    assert payload["missing_languages"] == ["tr"]
+    assert payload["available_languages"] == ["de", "en", "ru"]
+
+
+def test_a_language_that_is_there_is_not_reported_as_missing(http) -> None:
+    base, stub = http
+    stub.feature_list = [
+        make_feature(
+            "not suitable for work",
+            imdb_id="35823838",
+            year=2026,
+            feature_type="Tvshow",
+            subtitles_count=0,
+            subtitles_by_language={"en": 7, "tr": 2},
+        ),
+    ]
+    _status, payload = _get(
+        base, "/search?query=Not+Suitable+for+Work&season=1&episode=1&languages=tr"
+    )
+    assert "missing_languages" not in payload
+    assert "available_languages" not in payload
+
+
 def test_year_is_a_preference_not_a_filter(http) -> None:
     """Release years disagree between festival, wide release and region.
 

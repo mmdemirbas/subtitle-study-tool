@@ -3451,6 +3451,28 @@
 
   let languageChoice = "";
 
+  /* Which languages this programme has, when one that was asked for is not
+   * among them.
+   *
+   * Two different answers hide behind an empty result list, and they have
+   * different remedies: the search missed, or nobody has subtitled this in that
+   * language. The title index knows which, it arrives with the search and it
+   * costs nothing. "Not Suitable for Work" (2026) carries 13 languages and no
+   * Turkish, on every episode of the series, so no amount of retyping the title
+   * was ever going to produce one.
+   *
+   * Codes rather than names, because that is what the language filter beside it
+   * shows and a second vocabulary for the same thing reads as two things. */
+  function languageAbsenceNote(response) {
+    const missing = response.missing_languages || [];
+    const available = response.available_languages || [];
+    if (!missing.length || !available.length) return "";
+    const asked = missing.map((code) => code.toUpperCase()).join(", ");
+    const head = available.slice(0, 6).map((code) => code.toUpperCase()).join(", ");
+    const rest = available.length > 6 ? `, and ${available.length - 6} more` : "";
+    return `No ${asked} subtitle for this title. OpenSubtitles has ${head}${rest}.`;
+  }
+
   function renderLanguageFilter(results) {
     const counts = new Map();
     for (const result of results) {
@@ -3572,15 +3594,22 @@
      * with none. Both are cases where a button offering to try three would be
      * a button that cannot do what it says. */
     el.tryBest.hidden = lastResults.length < 2;
+    const absence = languageAbsenceNote(response);
     if (lastResults.length === 0) {
-      el.searchNote.textContent = "Nothing found. Try a different title.";
+      el.searchNote.className = "sso-note sso-note--warn";
+      /* "Try a different title" was the wrong instruction for the case that
+       * brought this up: the title was right and the subtitle does not exist.
+       * Sending the reader back to retype a correct title is worse than saying
+       * nothing, because it looks like something they can fix. */
+      el.searchNote.textContent = absence || "Nothing found. Try a different title.";
       return;
     }
 
     el.searchNote.className = response.low_confidence ? "sso-note sso-note--warn" : "sso-note";
-    el.searchNote.textContent = response.low_confidence
+    const headline = response.low_confidence
       ? "Nothing matched well. These are guesses — check before attaching."
       : `${lastResults.length} result${lastResults.length === 1 ? "" : "s"}`;
+    el.searchNote.textContent = absence ? `${headline} ${absence}` : headline;
 
     lastThreshold = response.auto_attach_threshold ?? 0.75;
     languageChoice = "";
