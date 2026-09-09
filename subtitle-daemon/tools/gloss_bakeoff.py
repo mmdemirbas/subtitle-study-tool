@@ -191,7 +191,8 @@ def plainly(model: str, ask: Ask, timeout: float) -> str:
     except Exception:
         return ""
     # The same shortening the daemon applies, so the two modes are comparable.
-    from subtitle_daemon.lookups import THINKING, _short_gloss
+    from subtitle_daemon.chat import THINKING
+    from subtitle_daemon.lookups import _short_gloss
 
     return _short_gloss(THINKING.sub("", said).strip().splitlines()[0] if said.strip() else "", ask.term)
 

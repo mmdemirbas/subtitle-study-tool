@@ -41,6 +41,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from . import chat
 from .config import USER_AGENT
 
 logger = logging.getLogger(__name__)
@@ -153,13 +154,7 @@ GOOGLE_BATCH = 128
 # this machine: no key, no quota, nothing about what the reader is watching
 # leaving the house, and a subtitle file is exactly the kind of thing worth not
 # sending anywhere. A hosted endpoint is the same code with a URL and a key.
-DEFAULT_GLOSS_URL = "http://127.0.0.1:11434/v1/chat/completions"
-
-# A reasoning model narrates before it answers, and ollama passes that through
-# in the message body when the template does not suppress it. Asking it not to
-# think is the first line of defence; cutting the block out is the second,
-# because the request that suppresses it is model-specific and this is not.
-THINKING = re.compile(r"<think>.*?</think>", re.DOTALL)
+DEFAULT_GLOSS_URL = chat.DEFAULT_URL
 
 # One request per twenty words. Small enough that a failure loses twenty answers
 # rather than six hundred, and that the first batch lands while the film is
@@ -982,70 +977,22 @@ class Lookups:
                 item["after"] = ask.after
             asked.append(item)
 
-        body = json.dumps(
-            {
-                "model": self._gloss_model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {
-                        "role": "user",
-                        "content": json.dumps(asked, ensure_ascii=False),
-                    },
-                ],
-                # Greedy, because a gloss is a lookup rather than a
-                # composition, and because the answer is written to disk the
-                # first time it is given - so whichever sample landed first is
-                # the one the reader keeps for good.
-                #
-                # At 0.2, one word in one line of the Battlestar miniseries
-                # came back as "temsil eden" in one request and "temsil etmek"
-                # in another; "tamir" and "tamir etmek" for another; and
-                # "itaatsiz" written "itaetsiz", which is a spelling nobody
-                # would choose. To a learner reading one chip those are not
-                # synonyms. What separates the sampling from the rest of the
-                # request in those pairs is exactly what could not be told
-                # apart while the decode was sampled, which is the point.
-                #
-                # It also makes `tools/gloss_context.py` able to measure
-                # anything: greedy, two identical requests must agree, so a
-                # difference between two runs is a difference in what was sent
-                # rather than a difference in what was drawn.
-                "temperature": 0,
-                "response_format": {"type": "json_object"},
-                # Honoured by the local runtimes and ignored by the hosted ones,
-                # which is why THINKING exists as well.
-                "chat_template_kwargs": {"enable_thinking": False},
-            }
-        ).encode("utf-8")
-        headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
-        # A model on this machine wants no Authorization header, and sending an
-        # empty one is how you get a 401 from something that has no accounts.
-        if self._gloss_key:
-            headers["Authorization"] = f"Bearer {self._gloss_key}"
-        request = urllib.request.Request(self._gloss_url, data=body, headers=headers)
-
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                raw = json.loads(response.read().decode("utf-8"))
-            said = THINKING.sub("", raw["choices"][0]["message"]["content"]).strip()
-            answers = json.loads(said)["g"]
-        except (
-            urllib.error.URLError,
-            TimeoutError,
-            ValueError,
-            OSError,
-            KeyError,
-            IndexError,
-            TypeError,
-        ) as error:
-            # Loud here, silent to the reader: the archive is still there and
-            # the definition is still worth showing. A misconfigured key is the
-            # most likely cause and it has to be findable in the log, because
-            # from the overlay it looks exactly like a word with no translation.
-            logger.warning(
-                "gloss unavailable for %s words from %s: %s", len(asks), self._gloss_url, error
-            )
+        said = chat.ask_json(
+            url=self._gloss_url,
+            model=self._gloss_model,
+            key=self._gloss_key,
+            system=system,
+            user=json.dumps(asked, ensure_ascii=False),
+            timeout=timeout,
+            what=f"gloss for {len(asks)} words",
+        )
+        # Loud in the log and silent to the reader: the archive is still there
+        # and the definition is still worth showing. A misconfigured key is the
+        # most likely cause, and from the overlay it looks exactly like a word
+        # with no translation - the log is the only place it can be found.
+        if not isinstance(said, dict):
             return None
+        answers = said.get("g")
 
         # A short array would pair every gloss after the gap with the wrong
         # word, which is worse than no gloss at all - a wrong meaning under a
