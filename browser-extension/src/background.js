@@ -769,10 +769,21 @@ async function planFor({
   const wantsEpisode = /tv|show|series|episode/i.test(found.resolved?.type || "");
   const askedEpisode = found.used?.season != null || found.used?.episode != null;
   if (wantsEpisode && !askedEpisode) {
+    /* What the daemon remembers fetching for this show, when the page says
+     * nothing. Still a refusal - a guess this good is still a guess and the
+     * download is not spent on it - but the panel opens with the next episode
+     * one click away rather than a box to type it into. */
+    const pad = (n) => String(n).padStart(2, "0");
+    const last = found.last_episode;
+    const next = found.next_episode;
+    const offer =
+      last && next
+        ? ` — the last one fetched for it was S${pad(last.season)}E${pad(last.episode)}; the panel offers S${pad(next.season)}E${pad(next.episode)}`
+        : " — pick one in the panel";
     return {
       ...plan,
       decision: "unknown-episode",
-      reason: `"${query}" is a series and nothing on the page says which episode — pick one in the panel`,
+      reason: `"${query}" is a series and nothing on the page says which episode${offer}`,
     };
   }
 

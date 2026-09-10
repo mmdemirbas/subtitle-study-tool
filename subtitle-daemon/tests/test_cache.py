@@ -140,3 +140,61 @@ def test_a_file_that_is_not_a_file_id_does_not_take_out_the_listing(tmp_path: Pa
     (tmp_path / "subtitles" / "notes.srt").write_bytes(SRT)
     (tmp_path / "subtitles" / "notes.json").write_text("{}")
     assert [held.file_id for held in cache.list_subtitles()] == [42]
+
+
+# --- which episode a held file is, and the furthest one for a series --------
+
+
+def test_a_download_that_stated_its_episode_is_that_episode(tmp_path: Path) -> None:
+    cache = Cache(tmp_path)
+    held = cache.put_subtitle(1, SRT, {"imdb_id": "312172", "season": 1, "episode": 3})
+    assert held.episode() == (1, 3)
+
+
+def test_a_file_from_before_the_numbers_were_recorded_is_read_from_its_name(tmp_path: Path) -> None:
+    """322 files were on disk before anything stored season and episode, and
+    every one of them says which episode it is in the names the uploader gave
+    it."""
+    cache = Cache(tmp_path)
+    by_movie = cache.put_subtitle(
+        1, SRT, {"movie_name": "Monk - S01E07  Mr. Monk and the Other Woman"}
+    )
+    by_release = cache.put_subtitle(
+        2, SRT, {"movie_name": "Monk", "release": "Monk.S01E02.Mr.Monk.and.the.Psychic.tr-tr"}
+    )
+    assert by_movie.episode() == (1, 7)
+    assert by_release.episode() == (1, 2)
+
+
+def test_the_stated_numbers_win_over_the_uploaders_name(tmp_path: Path) -> None:
+    cache = Cache(tmp_path)
+    held = cache.put_subtitle(
+        1, SRT, {"season": 2, "episode": 5, "movie_name": "Monk - S01E07 mislabelled"}
+    )
+    assert held.episode() == (2, 5)
+
+
+def test_a_film_is_not_an_episode(tmp_path: Path) -> None:
+    cache = Cache(tmp_path)
+    held = cache.put_subtitle(1, SRT, {"movie_name": "Blade Runner 2049", "release": "BR.2049.1080p"})
+    assert held.episode() is None
+
+
+def test_the_latest_episode_held_for_a_series_counts_every_language(tmp_path: Path) -> None:
+    cache = Cache(tmp_path)
+    cache.put_subtitle(1, SRT, {"imdb_id": "312172", "language": "en", "season": 1, "episode": 1})
+    cache.put_subtitle(2, SRT, {"imdb_id": "312172", "language": "tr", "season": 1, "episode": 3})
+    cache.put_subtitle(3, SRT, {"imdb_id": "312172", "language": "en", "season": 1, "episode": 2})
+    cache.put_subtitle(4, SRT, {"imdb_id": "999999", "language": "en", "season": 9, "episode": 9})
+    cache.put_subtitle(5, SRT, {"imdb_id": "312172", "language": "en", "movie_name": "Monk"})
+    assert cache.latest_episode("312172") == (1, 3)
+    assert cache.latest_episode("999999") == (9, 9)
+    assert cache.latest_episode("111111") is None
+    assert cache.latest_episode(None) is None
+
+
+def test_a_later_season_outranks_a_later_episode_number(tmp_path: Path) -> None:
+    cache = Cache(tmp_path)
+    cache.put_subtitle(1, SRT, {"imdb_id": "312172", "season": 1, "episode": 12})
+    cache.put_subtitle(2, SRT, {"imdb_id": "312172", "season": 2, "episode": 1})
+    assert cache.latest_episode("312172") == (2, 1)

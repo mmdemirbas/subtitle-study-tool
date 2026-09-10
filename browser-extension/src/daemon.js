@@ -165,11 +165,18 @@ export function fetchSubtitle(fileId, context = {}) {
 
 /** The title context to record alongside a downloaded subtitle. */
 export function subtitleContext(result, resolved) {
+  const number = (value) => (Number.isInteger(value) ? value : null);
   return {
     imdb_id: resolved?.imdb_id || null,
     language: result.language || null,
     movie_name: result.movie_name || null,
     release: result.release || null,
+    /* Which episode this is, stated, so the daemon can later say "the last
+     * one you fetched for this show was S01E02" on a page that does not say
+     * which episode is playing. Both names above carry the numbers too, but
+     * those are the uploader's claim; these are what the search asked for. */
+    season: number(result.season),
+    episode: number(result.episode),
   };
 }
 

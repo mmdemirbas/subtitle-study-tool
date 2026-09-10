@@ -533,6 +533,64 @@ def test_the_languages_a_title_has_are_named_when_the_one_asked_for_is_not_there
     assert payload["available_languages"] == ["de", "en", "ru"]
 
 
+def test_a_series_searched_without_an_episode_is_offered_the_one_after_the_last_held(
+    service, http
+) -> None:
+    """Prime Video plays an episode in place on the show's own page, where
+    nothing names the episode. One evening of Monk: S01E01, then S01E02, then
+    S01E03, each typed by hand."""
+    svc, _ = service
+    base, stub = http
+    svc.cache.put_subtitle(1, b"1\n00:00:01,000 --> 00:00:02,000\nx\n", {"imdb_id": "312172", "season": 1, "episode": 2})
+    stub.feature_list = [
+        make_feature("monk", imdb_id="312172", year=2002, feature_type="Tvshow", subtitles_count=400)
+    ]
+    _status, payload = _get(base, "/search?query=Monk")
+    assert payload["resolved"]["imdb_id"] == "312172"
+    assert payload["last_episode"] == {"season": 1, "episode": 2}
+    assert payload["next_episode"] == {"season": 1, "episode": 3}
+
+
+def test_the_offer_is_not_made_when_the_episode_was_asked_for(service, http) -> None:
+    svc, _ = service
+    base, stub = http
+    svc.cache.put_subtitle(1, b"1\n00:00:01,000 --> 00:00:02,000\nx\n", {"imdb_id": "312172", "season": 1, "episode": 2})
+    stub.feature_list = [
+        make_feature("monk", imdb_id="312172", year=2002, feature_type="Tvshow", subtitles_count=400)
+    ]
+    _status, payload = _get(base, "/search?query=Monk&season=1&episode=5")
+    assert "next_episode" not in payload
+    assert "last_episode" not in payload
+
+
+def test_the_offer_is_not_made_for_a_film_or_a_series_never_fetched(service, http) -> None:
+    svc, _ = service
+    base, stub = http
+    stub.feature_list = [make_feature("monk", imdb_id="312172", year=2002, feature_type="Tvshow", subtitles_count=400)]
+    _status, payload = _get(base, "/search?query=Monk")
+    assert "next_episode" not in payload, "nothing held for this series"
+
+    svc.cache.put_subtitle(1, b"1\n00:00:01,000 --> 00:00:02,000\nx\n", {"imdb_id": "3397884"})
+    stub.feature_list = [make_feature("Sicario", imdb_id="3397884", year=2015)]
+    _status, payload = _get(base, "/search?query=Sicario")
+    assert "next_episode" not in payload, "a film has no next episode"
+
+
+def test_the_offer_is_re_derived_on_a_cached_search(service, http) -> None:
+    """A fact about the download cache, not about the search: fetch S01E03 and
+    the replayed envelope has to offer S01E04, not S01E03 again."""
+    svc, _ = service
+    base, stub = http
+    svc.cache.put_subtitle(1, b"1\n00:00:01,000 --> 00:00:02,000\nx\n", {"imdb_id": "312172", "season": 1, "episode": 2})
+    stub.feature_list = [make_feature("monk", imdb_id="312172", year=2002, feature_type="Tvshow", subtitles_count=400)]
+    _status, first = _get(base, "/search?query=Monk")
+    assert first["next_episode"] == {"season": 1, "episode": 3}
+    svc.cache.put_subtitle(2, b"1\n00:00:01,000 --> 00:00:02,000\nx\n", {"imdb_id": "312172", "season": 1, "episode": 3})
+    _status, again = _get(base, "/search?query=Monk")
+    assert again.get("from_cache") is True
+    assert again["next_episode"] == {"season": 1, "episode": 4}
+
+
 def test_a_language_that_is_there_is_not_reported_as_missing(http) -> None:
     base, stub = http
     stub.feature_list = [

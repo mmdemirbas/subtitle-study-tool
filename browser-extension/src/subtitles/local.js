@@ -495,6 +495,8 @@ export class LocalService {
         language: body.language || null,
         movie_name: body.movie_name || null,
         release: body.release || null,
+        season: Number.isInteger(body.season) ? body.season : null,
+        episode: Number.isInteger(body.episode) ? body.episode : null,
       };
       const stored = await cache.putSubtitle(fileId, downloaded.content, meta);
       return cuesResponse(stored.bytes, stored.meta, false);

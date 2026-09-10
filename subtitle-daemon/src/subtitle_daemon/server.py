@@ -461,6 +461,25 @@ class Service:
         # spending a download on another upload of the same film.
         resolved = response.get("resolved")
         imdb_id = resolved.get("imdb_id") if isinstance(resolved, dict) else None
+
+        # A series searched without an episode, and what the disk remembers.
+        #
+        # Prime Video plays an episode in place on the show's own page, where
+        # nothing names the episode, so the search comes back as "which one?"
+        # and the viewer types it. Measured on one evening of Monk: S01E01,
+        # then S01E02, then S01E03, each typed by hand. The furthest episode
+        # already fetched for this show is the best guess there is at the next
+        # one, and it is offered rather than taken - a guess this good is still
+        # a guess. Here rather than in the envelope because it is a fact about
+        # the download cache, and re-derived on every reply for that reason.
+        used = response.get("used") if isinstance(response.get("used"), dict) else {}
+        is_series = isinstance(resolved, dict) and "tv" in str(resolved.get("type") or "").lower()
+        if is_series and used.get("season") is None and used.get("episode") is None:
+            last = self.cache.latest_episode(imdb_id)
+            if last is not None:
+                response["last_episode"] = {"season": last[0], "episode": last[1]}
+                response["next_episode"] = {"season": last[0], "episode": last[1] + 1}
+
         owned = self.cache.find_for_title(imdb_id, languages)
 
         already = None
@@ -705,6 +724,13 @@ class Service:
                 "language": str(body.get("language") or "") or None,
                 "movie_name": str(body.get("movie_name") or "") or None,
                 "release": str(body.get("release") or "") or None,
+                # Stated rather than left to be read back out of the names
+                # above: the names are the uploader's claim, these are what the
+                # search asked for. See CachedSubtitle.episode. Through
+                # _file_id for the same reason it exists - an int that is not
+                # a bool - so {"season": true} does not become season 1.
+                "season": _file_id(body.get("season")),
+                "episode": _file_id(body.get("episode")),
             }
             stored = self.cache.put_subtitle(file_id, downloaded.content, meta)
 

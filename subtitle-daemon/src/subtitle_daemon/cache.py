@@ -18,6 +18,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import titles
+
 SEARCH_TTL_SECONDS = 6 * 60 * 60
 
 # Bump when the shape or the derivation of cached search results changes -
@@ -51,6 +53,25 @@ class CachedSubtitle:
 
     def read_bytes(self) -> bytes:
         return self.path.read_bytes()
+
+    def episode(self) -> tuple[int, int] | None:
+        """Which episode this is, if it is one.
+
+        Stated in the sidecar when the download recorded it, and otherwise read
+        out of the names the uploader gave the file - "Monk - S01E07 Mr. Monk
+        and the Other Woman" - because 322 files were on disk before anything
+        recorded the numbers, and every one of them still says which episode it
+        is in its own name. The stated pair wins when both exist: a name is
+        the uploader's claim and the numbers are what the search asked for.
+        """
+        season, episode = self.meta.get("season"), self.meta.get("episode")
+        if isinstance(season, int) and isinstance(episode, int):
+            return season, episode
+        for name in (self.meta.get("movie_name"), self.meta.get("release")):
+            guessed = titles.guess(str(name or ""))
+            if guessed.season is not None and guessed.episode is not None:
+                return guessed.season, guessed.episode
+        return None
 
 
 class Cache:
@@ -113,6 +134,25 @@ class Cache:
             return (position, -float(item.meta.get("cached_at", 0)))
 
         return min(candidates, key=rank)
+
+    def latest_episode(self, imdb_id: str | None) -> tuple[int, int] | None:
+        """The furthest episode of a series held on disk, in any language.
+
+        A series page that does not say which episode is playing is the case
+        this answers: Prime Video plays an episode in place on the show's own
+        page and nothing on it names the episode. What the disk knows is which
+        episodes have already been fetched for this show - and a viewer who
+        fetched S01E02 last time is, more often than not, watching S01E03 now.
+        """
+        if not imdb_id:
+            return None
+        held = [
+            pair
+            for item in self.list_subtitles()
+            if str(item.meta.get("imdb_id") or "") == imdb_id
+            if (pair := item.episode()) is not None
+        ]
+        return max(held) if held else None
 
     def find_by_content(self, digest: str) -> CachedSubtitle | None:
         """An existing file with identical bytes, under any file_id."""

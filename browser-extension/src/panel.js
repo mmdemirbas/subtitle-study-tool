@@ -3411,6 +3411,25 @@
     el.tryBest.className = "sso-try";
     el.tryBest.hidden = true;
 
+    /* The episode after the last one fetched for this show, as one click.
+     *
+     * A series page that does not say which episode is playing - Prime Video
+     * plays one in place on the show's own page - comes back as "which one?",
+     * and the answer was typed into the box: one evening of Monk was S01E01,
+     * then S01E02, then S01E03, each by hand. The daemon now says which was
+     * fetched last, and the click runs the same search the typing did. */
+    el.tryNext = button("", {
+      onClick: () => {
+        if (!nextEpisode) return;
+        el.query.value = nextEpisode.query;
+        queryFromPage = false;
+        api.detached(runSearch(nextEpisode.query), "Trying the next episode");
+      },
+      title: "Search for the episode after the last one fetched for this series.",
+    });
+    el.tryNext.className = "sso-try";
+    el.tryNext.hidden = true;
+
     /* A results list for a dual setup is mostly the wrong language: a search
      * for two languages returns both, and picking the Turkish one out of forty
      * English ones by reading tags is the slow part. The filter is built from
@@ -3441,6 +3460,7 @@
       el.findFor,
       row,
       el.searchNote,
+      el.tryNext,
       el.tryBest,
       el.languageFilter,
       el.resultsHead,
@@ -3450,6 +3470,25 @@
   }
 
   let languageChoice = "";
+
+  /* The query the "next episode" button will run, or null. */
+  let nextEpisode = null;
+
+  function offerNextEpisode(response) {
+    const next = response.next_episode;
+    const last = response.last_episode;
+    const series = response.used?.query || "";
+    nextEpisode = null;
+    if (!next || !last || !series) {
+      el.tryNext.hidden = true;
+      return;
+    }
+    const pad = (n) => String(n).padStart(2, "0");
+    const label = `S${pad(next.season)}E${pad(next.episode)}`;
+    nextEpisode = { query: `${series} ${label}`, label };
+    el.tryNext.textContent = `Try ${label} \u00b7 last fetched S${pad(last.season)}E${pad(last.episode)}`;
+    el.tryNext.hidden = false;
+  }
 
   /* Which languages this programme has, when one that was asked for is not
    * among them.
@@ -3528,6 +3567,8 @@
     el.results?.replaceChildren();
     if (el.languageFilter) el.languageFilter.hidden = true;
     if (el.tryBest) el.tryBest.hidden = true;
+    if (el.tryNext) el.tryNext.hidden = true;
+    nextEpisode = null;
     if (el.searchNote) {
       el.searchNote.className = "sso-note";
       el.searchNote.textContent = "";
@@ -3542,6 +3583,7 @@
     el.results.replaceChildren();
     el.resultsHead.hidden = true;
     el.tryBest.hidden = true;
+    el.tryNext.hidden = true;
     el.searchNote.className = "sso-note";
     el.searchNote.textContent = "Searching…";
 
@@ -3594,6 +3636,7 @@
      * with none. Both are cases where a button offering to try three would be
      * a button that cannot do what it says. */
     el.tryBest.hidden = lastResults.length < 2;
+    offerNextEpisode(response);
     const absence = languageAbsenceNote(response);
     if (lastResults.length === 0) {
       el.searchNote.className = "sso-note sso-note--warn";

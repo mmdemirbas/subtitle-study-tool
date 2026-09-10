@@ -173,6 +173,23 @@ most downloaded - asking for "Not Suitable for Work" S01E01 resolved to the
 S01E03 entry. A show resolves into `parent_imdb_id` plus the season and
 episode, which names one episode exactly.
 
+## When the page does not say which episode
+
+A series searched without a season and episode comes back as a question, not a
+guess: fifty results across four seasons share the winning score, and the
+tiebreaks that would pick one know nothing about what is on screen. Prime Video
+is the case that made this matter - it plays an episode in place on the show's
+own page, where the address, the tab title and everything else stay the show's.
+
+What the disk does know is which episodes have already been fetched for this
+show. So a series search that asked for no episode also reports `last_episode`,
+the furthest one held in any language, and `next_episode`, the one after it -
+re-derived on every reply, including a cached one, because it is a fact about
+the download cache and not about the search. The panel turns it into one click.
+Files downloaded before the numbers were recorded are read from the names the
+uploader gave them; every one of the 322 held at the time says which episode it
+is in its own name.
+
 ## When the answer is that it does not exist
 
 An empty result list has two causes with different remedies: the search missed,
