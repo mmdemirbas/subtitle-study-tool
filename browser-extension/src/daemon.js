@@ -534,6 +534,15 @@ function pickEpisode(reports, videoFrameId) {
   const fromVideoTitle = at(videoFrameId)?.fromTitle;
   if (fromVideoTitle) return { ...fromVideoTitle, source: "the player frame's title" };
 
+  /* What the player wrote inside its own chrome, and only from the frame that
+   * holds the video: an overlay in some other frame is describing some other
+   * player. Ahead of the page's metadata, because on a series page that
+   * metadata describes the series and the overlay describes what is playing -
+   * Prime Video plays an episode in place on the show's own page, where the
+   * address, the title and everything typed about the page stay the show's. */
+  const fromPlayer = at(videoFrameId)?.fromPlayer;
+  if (fromPlayer) return { ...fromPlayer, source: "the player's own overlay" };
+
   for (const key of ["fromMetadata", "fromMarker", "fromTitle", "fromUrl"]) {
     const hit = reports.map((report) => report.info.episode?.[key]).find(Boolean);
     if (hit) {

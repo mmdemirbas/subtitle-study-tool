@@ -906,6 +906,68 @@ t(
   pageInfoReply = () => ({ ok: true });
 }
 
+/* A player that says which episode it is playing, on a page that does not.
+ *
+ * Prime Video, watching Monk: the film plays in place on the series page, so
+ * the address and the tab title never change, and while the video was live the
+ * page offered h1 "Monk" and title "Prime Video: Monk" and nothing else. Every
+ * episode source was null across four snapshots and the viewer picked S01E01,
+ * S01E02 and S01E03 by hand. The player's own overlay is the one string on the
+ * page that names what is on screen.
+ */
+{
+  const { pageContextForTab } = await import("../src/daemon.js");
+  frameList = [{ frameId: 0 }];
+  pageInfoReply = () => ({
+    ok: true,
+    candidates: [
+      { source: "h1", text: "Monk", episode: null },
+      { source: "document.title", text: "Prime Video: Monk", episode: null },
+    ],
+    episode: {
+      fromMetadata: null,
+      fromPlayer: { season: 1, episode: 7, matched: "S1 E7", text: "S1 E7 Mr. Monk and the Billionaire Mugger" },
+      fromTitle: null,
+      fromMarker: null,
+      fromUrl: null,
+    },
+  });
+
+  const context = await pageContextForTab({ id: 1, title: "Prime Video: Monk" }, 0);
+  t(
+    "the episode written inside the player is the episode",
+    context.season === 1 && context.episode === 7,
+    JSON.stringify({ season: context.season, episode: context.episode, source: context.episodeSource }),
+  );
+  t(
+    "and the source says so",
+    context.episodeSource === "the player's own overlay",
+    context.episodeSource,
+  );
+
+  /* ...but only from the frame that holds the video. An overlay in another
+   * frame is describing another player. */
+  frameList = [{ frameId: 0 }, { frameId: 7 }];
+  pageInfoReply = (message, options) =>
+    (options?.frameId ?? 0) === 7
+      ? { ok: true, candidates: [], episode: { fromPlayer: { season: 4, episode: 4, matched: "S4 E4" } } }
+      : {
+          ok: true,
+          candidates: [{ source: "document.title", text: "Prime Video: Monk", episode: null }],
+          episode: { fromMetadata: { season: 1, episode: 2, matched: "schema.org episodeNumber" } },
+        };
+  // The video is in frame 0; frame 7 is some other embed with its own overlay.
+  const elsewhere = await pageContextForTab({ id: 1, title: "Prime Video: Monk" }, 0);
+  t(
+    "an overlay in a frame that is not the player's is not believed over the page",
+    elsewhere.season === 1 && elsewhere.episode === 2,
+    JSON.stringify({ season: elsewhere.season, episode: elsewhere.episode, source: elsewhere.episodeSource }),
+  );
+
+  frameList = [{ frameId: 0 }];
+  pageInfoReply = () => ({ ok: true });
+}
+
 /* A page that announces what it is playing is not guessed at.
  *
  * The ranking above exists because a page states several names and labels none

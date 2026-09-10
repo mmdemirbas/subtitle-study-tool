@@ -1039,6 +1039,8 @@
      * digit. Nothing about this is specific to any one site: it is the
      * vocabulary Google, IMDb and every SEO plugin already emit. */
     let fromMetadata = null;
+    const video = state.video?.isConnected ? state.video : pickVideo();
+    const inPlayer = episodeInPlayer(video);
     /* Other names for the same programme, and a link to what it IS.
      *
      * A film has one title per country, and each subtitle upload carries
@@ -1149,13 +1151,18 @@
        * worker decides. A page that announces still contributes its guesses:
        * the log keeps them, which is how "it announced the wrong thing" can be
        * told apart from "it announced nothing". */
-      announced: announcedProgramme(state.video?.isConnected ? state.video : pickVideo()),
+      announced: announcedProgramme(video),
       episode: {
         fromMetadata,
+        fromPlayer: inPlayer,
         fromTitle: matchEpisode(document.title),
         fromMarker: selectedEpisodeOnPage(),
         fromUrl: matchEpisode(decodeURIComponent(location.pathname + location.search)),
       },
+      /* Evidence, not a source. Kept only when the player said something and
+       * none of it named an episode - the case where the next step is to read
+       * what it did say. */
+      playerText: video && !inPlayer ? playerTextSample(video) : [],
     };
   }
 
@@ -1509,6 +1516,90 @@
    * selection. Stops at the first one, unlike the diagnostic scan below which
    * gathers everything: this answers "which episode", that one answers "what
    * did you see", and only the second has a reason to keep looking. */
+  /* The episode written inside the player itself.
+   *
+   * Reported on Prime Video, watching Monk: the film plays in place on the
+   * series page, so the address and the tab title never change, and while the
+   * video was live the page offered exactly two strings - h1 "Monk" and title
+   * "Prime Video: Monk". No mediaSession, no schema.org, no Open Graph.
+   * Measured on four snapshots with the video playing. Every episode source
+   * above came back null and the viewer picked S01E01, S01E02, S01E03 by hand.
+   *
+   * What a player DOES render is its own overlay: the name of the thing it is
+   * playing, in its own chrome, beside its own controls. That text names one
+   * episode - the one on screen - and it carries no "selected" class, because
+   * it is not a choice among several. selectedEpisodeOnPage requires that
+   * evidence and so skips the one element on the page that is the answer.
+   *
+   * So this reads text INSIDE the video's own container and nothing outside
+   * it. The episode list on a series page says "S1 E1" fifteen times and lives
+   * outside the player; the overlay says it once and lives inside. The walk
+   * up from the <video> stops at the first ancestor much larger than the video
+   * - the player's wrapper is the video's size, the page is not - so the list
+   * below the fold is never read. No class names: the same rule finds the
+   * overlay on a player nobody has looked at. */
+  const PLAYER_GROWTH_LIMIT = 1.6;
+  const PLAYER_ANCESTOR_LIMIT = 8;
+  const PLAYER_TEXT_NODES = 2000;
+
+  function playerContainer(video) {
+    if (!video?.isConnected) return null;
+    const box = video.getBoundingClientRect();
+    const area = box.width * box.height;
+    if (!area) return null;
+    let widest = null;
+    let cursor = video.parentElement;
+    for (let depth = 0; cursor && depth < PLAYER_ANCESTOR_LIMIT; depth++, cursor = cursor.parentElement) {
+      const rect = cursor.getBoundingClientRect();
+      if (rect.width * rect.height > area * PLAYER_GROWTH_LIMIT) break;
+      widest = cursor;
+    }
+    return widest;
+  }
+
+  /* Short text nodes under the player, in document order. Bounded, because
+   * this runs inside every page snapshot and a player's chrome is a few dozen
+   * strings; two thousand nodes is a page, not a player. */
+  function playerStrings(container) {
+    const out = [];
+    if (!container) return out;
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+    let scanned = 0;
+    for (let node = walker.nextNode(); node && scanned < PLAYER_TEXT_NODES; node = walker.nextNode()) {
+      scanned++;
+      const text = String(node.nodeValue || "").replace(/\s+/g, " ").trim();
+      if (!text || text.length > 120) continue;
+      out.push({ text, node });
+    }
+    return out;
+  }
+
+  function episodeInPlayer(video) {
+    for (const { text, node } of playerStrings(playerContainer(video))) {
+      const match = matchEpisode(text);
+      if (match) return { ...match, text: text.slice(0, 80), path: nodePath(node.parentElement) };
+    }
+    return null;
+  }
+
+  /* What the player's chrome said, for the log, when nothing in it matched.
+   *
+   * A page nobody has seen is the case this exists for: if the overlay writes
+   * the episode in a notation matchEpisode does not know, the next thing to
+   * do is read what it wrote, and that is only possible if it was kept. A
+   * handful of distinct strings, not the whole subtree. */
+  function playerTextSample(video, limit = 12) {
+    const seen = new Set();
+    const sample = [];
+    for (const { text } of playerStrings(playerContainer(video))) {
+      if (seen.has(text)) continue;
+      seen.add(text);
+      sample.push(text.slice(0, 80));
+      if (sample.length >= limit) break;
+    }
+    return sample;
+  }
+
   function selectedEpisodeOnPage() {
     let scanned = 0;
     for (const node of document.querySelectorAll("a,button,li,span,div,option")) {

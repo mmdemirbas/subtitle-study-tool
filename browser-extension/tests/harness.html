@@ -1217,6 +1217,63 @@
         }
       });
 
+      /* Prime Video, watching Monk: the film plays in place on the series page,
+       * so the address and the tab title never change, and while the video was
+       * live the page offered h1 "Monk" and title "Prime Video: Monk" and
+       * nothing else - no mediaSession, no schema.org, no Open Graph, measured
+       * on four snapshots. The one string on such a page that names what is on
+       * screen is the player's own overlay, and it carries no "selected"
+       * marker because it is not a choice among several. Below it, the series
+       * page lists every episode in the same notation, fifteen times over. */
+      const primeLike = (overlayText) => {
+        const overlay = document.createElement("div");
+        overlay.className = "fake-overlay";
+        overlay.textContent = overlayText;
+        overlay.style.cssText = "position:absolute;top:8px;left:8px;color:#fff";
+        document.getElementById("player").append(overlay);
+        const list = document.createElement("ul");
+        list.className = "fake-episodes";
+        list.style.cssText = "position:relative;min-height:200vh";
+        for (let n = 1; n <= 15; n++) {
+          const item = document.createElement("li");
+          item.textContent = `S1 E${n} - Mr. Monk and episode ${n}`;
+          if (n === 1) item.className = "selected";
+          list.append(item);
+        }
+        document.body.append(list);
+        return () => { overlay.remove(); list.remove(); };
+      };
+
+      check("the episode written inside the player is read, and the list outside it is not", async () => {
+        const done = primeLike("S1 E7 Mr. Monk and the Billionaire Mugger");
+        try {
+          const info = askPage();
+          const seen = info.episode?.fromPlayer;
+          if (!seen || seen.season !== 1 || seen.episode !== 7)
+            throw new Error(`the overlay says S1 E7; fromPlayer was ${JSON.stringify(seen)}`);
+          if (info.playerText?.length)
+            throw new Error("evidence was kept although the player named the episode");
+        } finally {
+          done();
+        }
+      });
+
+      check("a player that names no episode leaves its words in the log", async () => {
+        const done = primeLike("Mr. Monk and the Billionaire Mugger");
+        try {
+          const info = askPage();
+          if (info.episode?.fromPlayer)
+            throw new Error(`nothing in the player says which episode; fromPlayer was ${JSON.stringify(info.episode.fromPlayer)}`);
+          const kept = info.playerText || [];
+          if (!kept.some((text) => text.includes("Billionaire Mugger")))
+            throw new Error(`the overlay's words were not kept: ${JSON.stringify(kept)}`);
+          if (kept.some((text) => /S1 E\d/.test(text)))
+            throw new Error(`the episode list outside the player leaked into the sample: ${JSON.stringify(kept)}`);
+        } finally {
+          done();
+        }
+      });
+
       /* A stated length is only worth having while it is a length a film could
        * have. The page is the last word once the element's own duration cannot
        * be trusted, so an impossible one goes straight onto the map, into the
