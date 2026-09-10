@@ -5328,18 +5328,45 @@
       start: streamTimeMs(track, cue.start, state.adDriftMs),
       text: cue.text,
     }));
-    const choices = globalThis.__ssoAlign.proposeAnchors(at, shown);
-    if (!choices.length) return null;
+    /* Every line, not only the eight nearest.
+     *
+     * Reported: "sometimes we are completely lost and want to find the exact
+     * line with searching for a phrase or word". Eight lines within thirty
+     * seconds is the right offer when the subtitle is nearly right, and the
+     * subtitle that is nearly right is not the one being fixed - a file that
+     * is four minutes out has nothing within thirty seconds of the playhead
+     * to choose between. So the whole file goes to the panel in its own
+     * order, each line with what picking it would do, and the eight nearest
+     * are marked rather than being the whole answer. One call through
+     * proposeAnchors with no window and no limit, so every line's arithmetic
+     * is the arithmetic the nearest eight always had. */
+    const every = globalThis.__ssoAlign.proposeAnchors(at, shown, {
+      windowMs: Infinity,
+      limit: Infinity,
+    });
+    if (!every.length) return null;
+    const near = new Set(
+      every
+        .filter((line) => Math.abs(line.offsetMs) <= 30000)
+        .slice(0, 8)
+        .map((line) => line.index),
+    );
+    const lines = every
+      .sort((x, y) => x.index - y.index)
+      .map((line) => ({
+        index: line.index,
+        startMs: line.startMs,
+        text: line.text,
+        // What to ADD, not where to land. See above.
+        moveMs: line.offsetMs,
+        near: near.has(line.index),
+      }));
     return {
       atMs: Math.round(at),
       slot,
-      choices: choices.map((choice) => ({
-        index: choice.index,
-        startMs: choice.startMs,
-        text: choice.text,
-        // What to ADD, not where to land. See above.
-        moveMs: choice.offsetMs,
-      })),
+      lines,
+      // The eight nearest, as before, for anything still reading them.
+      choices: lines.filter((line) => line.near),
     };
   }
 

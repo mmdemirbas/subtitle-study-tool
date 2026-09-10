@@ -293,6 +293,9 @@
 
     const body = document.createElement("div");
     body.className = "sso-panel__body";
+    // The one element that scrolls. `el.panel` is the window around it, and a
+    // scrollTop written there goes nowhere.
+    el.body = body;
 
     /* Screens, not a column of sections.
      *
@@ -2762,11 +2765,76 @@
     el.earNote = document.createElement("p");
     el.earNote.className = "sso-note";
 
+    /* A search over the lines. The list is the whole subtitle now, and a
+     * reader who is lost is looking for a phrase they just heard, not
+     * scrolling a thousand rows for it. Typing narrows the list to the lines
+     * that contain the words; clearing it brings the whole file back and
+     * scrolls to the playhead again. */
+    el.earSearch = document.createElement("input");
+    el.earSearch.type = "search";
+    el.earSearch.spellcheck = false;
+    el.earSearch.placeholder = "Find a line \u00b7 a word or a phrase you heard";
+    el.earSearch.className = "sso-ear__search";
+    el.earSearch.addEventListener("input", () => filterByEar(el.earSearch.value));
+    el.earSearch.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && el.earSearch.value) {
+        event.preventDefault();
+        el.earSearch.value = "";
+        filterByEar("");
+      }
+    });
+
     el.earList = document.createElement("div");
     el.earList.className = "sso-ear";
 
-    wrap.append(el.earNote, el.earList);
+    wrap.append(el.earNote, el.earSearch, el.earList);
     return wrap;
+  }
+
+  /* m:ss, or h:mm:ss past an hour, so a row can be found by when as well as by
+   * what. The same shape the card's readings use. */
+  function earStamp(ms) {
+    const all = Math.floor(Math.max(0, ms) / 1000);
+    const hours = Math.floor(all / 3600);
+    const minutes = Math.floor((all % 3600) / 60);
+    const seconds = all % 60;
+    const pad = (n) => String(n).padStart(2, "0");
+    return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
+  }
+
+  /* Case folded the way the reader's keyboard is, so "istanbul" finds
+   * "İstanbul" on a Turkish subtitle. */
+  const earFold = (text) => String(text || "").toLocaleLowerCase().replace(/\s+/g, " ").trim();
+
+  function filterByEar(query) {
+    const words = earFold(query).split(" ").filter(Boolean);
+    let shown = 0;
+    for (const row of el.earList.children) {
+      const hit = words.every((word) => row.dataset.fold.includes(word));
+      row.hidden = !hit;
+      if (hit) shown += 1;
+    }
+    if (!words.length) {
+      scrollByEarToNearest();
+      return;
+    }
+    el.earNote.textContent = shown
+      ? `${shown} line${shown === 1 ? "" : "s"} with those words. Pick the one you just heard.`
+      : "No line has those words.";
+  }
+
+  /* The nearest line to the middle of the list's window, without scrolling
+   * the page - scrollIntoView would take every ancestor with it. Written to
+   * the body, which is the element that scrolls; the first version wrote it
+   * to the window around the body and the list opened at line one. */
+  function scrollByEarToNearest() {
+    const nearest = el.earList.querySelector("[data-nearest='true']");
+    const scroller = el.body;
+    if (!nearest || !scroller) return;
+    el.earNote.textContent =
+      "Pick the line you just heard. Everything else moves with it when this is the first subtitle.";
+    const top = nearest.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
+    scroller.scrollTop = Math.max(0, top - scroller.clientHeight / 2 + nearest.offsetHeight / 2);
   }
 
   /* How much to move, said as the thing being done rather than as a number
@@ -2789,35 +2857,52 @@
     }
     earSlot = slot;
     earMoment = answer.atMs;
-    el.earNote.textContent =
-      "Pick the line you just heard. Everything else moves with it when this is the first subtitle.";
+    el.earSearch.value = "";
+    /* The whole subtitle in its own order, with the eight nearest the playhead
+     * marked and the single nearest scrolled to. Older daemons answer with the
+     * eight alone; those are still a list. */
+    const lines = answer.lines?.length ? answer.lines : answer.choices.map((c) => ({ ...c, near: true }));
+    let nearest = null;
+    for (const line of lines) {
+      if (!line.near) continue;
+      if (!nearest || Math.abs(line.moveMs) < Math.abs(nearest.moveMs)) nearest = line;
+    }
     el.earList.replaceChildren(
-      ...answer.choices.map((choice) => {
+      ...lines.map((line) => {
         const row = document.createElement("button");
         row.type = "button";
         row.className = "sso-ear__line";
+        row.dataset.near = line.near ? "true" : "false";
+        row.dataset.nearest = line === nearest ? "true" : "false";
+
+        const when = document.createElement("span");
+        when.className = "sso-ear__when";
+        when.textContent = earStamp(line.startMs);
 
         const said = document.createElement("span");
         said.className = "sso-ear__said";
-        said.textContent = (choice.text || "").replace(/\s+/g, " ").trim();
+        said.textContent = (line.text || "").replace(/\s+/g, " ").trim();
+        row.dataset.fold = earFold(said.textContent);
 
         const move = document.createElement("span");
         move.className = "sso-ear__move";
-        move.textContent = describeMove(choice.moveMs);
+        move.textContent = describeMove(line.moveMs);
 
-        row.append(said, move);
+        row.append(when, said, move);
         row.addEventListener("click", () => {
           /* The STEP, not the sum. The offset may be in another frame and may
            * have moved since this list was built - see the note on api.nudge. */
-          api.nudge(choice.moveMs, { slot: earSlot, quiet: true, how: "anchor" });
+          api.nudge(line.moveMs, { slot: earSlot, quiet: true, how: "anchor" });
           goRoot();
-          sayInPanel(earSlot, `Lined up by ear · ${describeMove(choice.moveMs)}`);
+          sayInPanel(earSlot, `Lined up by ear · ${describeMove(line.moveMs)}`);
           refresh(api.status());
         });
         return row;
       }),
     );
     goTo("ear");
+    // After goTo, which puts the panel back to the top.
+    scrollByEarToNearest();
   }
 
   /* Say something on one card, with at most one thing to do about it.
@@ -3032,7 +3117,9 @@
     for (const [key, node] of Object.entries(el.screens)) node.hidden = key !== name;
     el.back.hidden = name === "root";
     el.title.textContent = SCREEN_TITLES[name] || SCREEN_TITLES.root;
-    el.panel.scrollTop = 0;
+    // The body is what scrolls; written to the window this was a no-op, and a
+    // screen opened from a scrolled one opened scrolled.
+    if (el.body) el.body.scrollTop = 0;
     refresh(api.status());
     fitToViewport();
   }

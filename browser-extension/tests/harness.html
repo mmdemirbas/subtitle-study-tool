@@ -9046,10 +9046,19 @@
 
           const rows = [...panelShadow().querySelectorAll(".sso-ear__line")];
           if (rows.length !== 4)
-            throw new Error(`${rows.length} lines offered, want the four near the playhead`);
+            throw new Error(`${rows.length} lines offered, want every line of the file`);
           const order = rows.map((row) => row.querySelector(".sso-ear__said").textContent);
           if (order.join(",") !== "first,second,third,fourth")
-            throw new Error(`offered in the order ${order.join(", ")}, want nearest first`);
+            throw new Error(`offered in the order ${order.join(", ")}, want the file's own order`);
+          const lit = rows.filter((row) => row.dataset.near === "true").length;
+          if (lit !== 4) throw new Error(`${lit} of 4 lines within thirty seconds are lit as near`);
+          /* With the file already 5s late, "first" (2594000 in the file) sits at
+           * 2599000 on the video's clock, 1.2s from a playhead at 2600.5s less
+           * the reaction allowance; "third" is 4.8s off. The nearest mark
+           * follows the clock the reader hears, not the file's. */
+          const nearest = rows.find((row) => row.dataset.nearest === "true");
+          if (nearest?.querySelector(".sso-ear__said").textContent !== "first")
+            throw new Error(`the nearest mark is on "${nearest?.textContent}", want "first"`);
 
           /* "third" starts at 2600000 in its own file and the playhead is at
            * 2600.5s, so after a 300ms allowance for the reader's own reaction
@@ -9065,6 +9074,123 @@
           video.currentTime = wasTime;
           await sleep(500);
           await chrome.storage.local.remove("sso:offset:6901");
+          await chrome.storage.local.remove("sso:usedTiming");
+          for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({
+                cues: CUES, label: slot ? "second" : "first", fileId: slot + 1, language: "en", slot,
+              });
+            } else {
+              api.detach(slot);
+            }
+          }
+          if (!wasOpen) window.__ssoPanel.hide();
+          await sleep(150);
+        }
+      });
+
+      check("by ear lists the whole file, opens at the playhead, and finds a phrase", async () => {
+        /* Reported: "sometimes we are completely lost and want to find the
+         * exact line with searching for a phrase or word". Eight lines within
+         * thirty seconds are the right offer when the subtitle is nearly
+         * right, and a file four minutes out has nothing within thirty seconds
+         * to choose between. So the whole file is the list, in its own order;
+         * the nearest lines are lit and the list opens scrolled to them; and
+         * a search narrows it to the lines carrying the words. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+        const wasOpen = window.__ssoPanel.isOpen();
+        await window.__ssoPanel.show();
+
+        // Sixty lines, three seconds apart, one of which is the one being
+        // looked for - three minutes before the playhead, well outside any
+        // window of "near".
+        const LONG = Array.from({ length: 60 }, (_, i) => ({
+          start: 2400000 + i * 3000,
+          end: 2402000 + i * 3000,
+          text: i === 10 ? "So say we all, Galactica" : `line ${i + 1}`,
+        }));
+        try {
+          api.detach(1);
+          await api.attach({ cues: LONG, label: "EN \u00b7 Harness.Ear.Long", fileId: 6902, language: "en", slot: 0 });
+          api.setOffset(0, { slot: 0, quiet: true });
+          video.currentTime = 2520.5;   // beside line 41, at 2520000
+          await sleep(250);
+
+          panelShadow().querySelector(".sso-sync__align").click();
+          await sleep(300);
+
+          const shadow = panelShadow();
+          const rows = [...shadow.querySelectorAll(".sso-ear__line")];
+          if (rows.length !== 60) throw new Error(`${rows.length} rows, want all 60 lines`);
+          const near = rows.filter((row) => row.dataset.near === "true");
+          if (near.length !== 8) throw new Error(`${near.length} lines lit as near, want 8`);
+          const nearest = shadow.querySelector(".sso-ear__line[data-nearest='true']");
+          if (nearest?.querySelector(".sso-ear__said").textContent !== "line 41")
+            throw new Error(`the nearest mark is on "${nearest?.textContent}", want line 41`);
+          if (nearest.querySelector(".sso-ear__when").textContent !== "42:00")
+            throw new Error(`line 41 is stamped "${nearest.querySelector(".sso-ear__when").textContent}", want 42:00`);
+
+          /* Opened at the playhead: the nearest row is inside the panel's
+           * scrolled window, and the list did not start at line 1. */
+          const panel = shadow.querySelector(".sso-panel__body");
+          const box = panel.getBoundingClientRect();
+          const at = nearest.getBoundingClientRect();
+          if (at.top < box.top || at.bottom > box.bottom)
+            throw new Error(`the nearest line sits at ${Math.round(at.top)}..${Math.round(at.bottom)}, outside the panel's ${Math.round(box.top)}..${Math.round(box.bottom)}`);
+          if (panel.scrollTop === 0) throw new Error("the list opened at the top rather than at the playhead");
+
+          /* A search narrows to the lines with the words, wherever they are. */
+          const search = shadow.querySelector(".sso-ear__search");
+          search.value = "galactica";
+          search.dispatchEvent(new Event("input", { bubbles: true }));
+          await sleep(50);
+          const shown = rows.filter((row) => !row.hidden);
+          if (shown.length !== 1 || !/Galactica/.test(shown[0].textContent))
+            throw new Error(`"galactica" showed ${shown.length} lines: ${shown.map((r) => r.textContent).join(" | ").slice(0, 120)}`);
+          // The note on THIS screen: the one right above the search box.
+          const earNote = () => search.previousElementSibling.textContent;
+          if (!/1 line/.test(earNote()))
+            throw new Error(`the note says "${earNote()}"`);
+
+          /* Two words, in either order, both required. */
+          search.value = "all say";
+          search.dispatchEvent(new Event("input", { bubbles: true }));
+          await sleep(50);
+          if (rows.filter((row) => !row.hidden).length !== 1)
+            throw new Error("two words had to both be in the line, in any order");
+
+          /* Picking the found line lines the file up on it, however far away it
+           * is: it starts at 2430000, the playhead is 2520.5s, 300ms of
+           * reaction - the file is held back by 90200ms. */
+          shown[0].click();
+          await sleep(250);
+          const landed = api.status().tracks[0].offsetMs;
+          if (landed !== 90200)
+            throw new Error(`landed on ${landed}ms, want 90200 - a found line far from the playhead has to work like a near one`);
+
+          /* Cleared, the whole file is back. */
+          await window.__ssoPanel.show();
+          panelShadow().querySelector(".sso-sync__align").click();
+          await sleep(300);
+          const again = panelShadow();
+          const box2 = again.querySelector(".sso-ear__search");
+          box2.value = "zzz-nothing";
+          box2.dispatchEvent(new Event("input", { bubbles: true }));
+          await sleep(50);
+          if (!/No line/.test(box2.previousElementSibling.textContent))
+            throw new Error(`a search with no match did not say so: "${box2.previousElementSibling.textContent}"`);
+          box2.value = "";
+          box2.dispatchEvent(new Event("input", { bubbles: true }));
+          await sleep(50);
+          if ([...again.querySelectorAll(".sso-ear__line")].some((row) => row.hidden))
+            throw new Error("clearing the search left lines hidden");
+        } finally {
+          api.setOffset(0, { slot: 0, quiet: true });
+          video.currentTime = wasTime;
+          await sleep(500);
+          await chrome.storage.local.remove("sso:offset:6902");
           await chrome.storage.local.remove("sso:usedTiming");
           for (const slot of [0, 1]) {
             if (wasAttached[slot]) {

@@ -1203,6 +1203,33 @@ button.sso-ear__line {
   text-align: left;
 }
 
+/* The whole file is in the list now, and the eight lines nearest the playhead
+ * are the ones a reader who is only slightly out will want - so they are lit,
+ * and the nearest of them is where the list opens. A found line further away
+ * is the same row unlit; nothing about it is less pickable. */
+button.sso-ear__line[data-near="true"] {
+  background: var(--sso-surface-2);
+}
+
+button.sso-ear__line[data-nearest="true"] {
+  box-shadow: inset 2px 0 0 var(--sso-accent);
+}
+
+.sso-ear__search {
+  width: 100%;
+  margin: 0 0 var(--sso-s2);
+}
+
+/* One column of stamps, so the eye can read down it to a moment as well as to
+ * a word. Tabular figures because 0:59 and 1:00 must not jog. */
+.sso-ear__when {
+  flex: none;
+  min-width: 3.4em;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink-3);
+}
+
 .sso-ear__said {
   flex: 1 1 0;
   min-width: 0;
