@@ -1248,9 +1248,54 @@
    */
   /* The one place a track's position reaches the DOM, so the drag's probe and
    * the settings both move it by the same lever. */
+  /* The picture, which is what every stored position is a fraction of.
+   *
+   * Reported: leave fullscreen and the subtitles stay where the fullscreen
+   * picture had them, hanging in the page beside a player a third of the
+   * size; and in a window they could be dragged off the film onto the page
+   * around it. Both are one fact - the percentages were of the VIEWPORT, and
+   * the viewport and the picture only agree in fullscreen. So a position is
+   * now a fraction of the video element's box, and is written as pixels from
+   * that box each time the box is known to have moved: a resize, a fullscreen
+   * change, the video's own ResizeObserver, and a scroll, which is the one
+   * that moves an inline player without touching anything else.
+   *
+   * With no picture to speak of - before a video is picked, or one collapsed
+   * while loading - the window stands in, which is what the percentages
+   * always meant. Measured once per apply rather than once per box: the box
+   * is read with getBoundingClientRect, which is a forced layout. */
+  let pictureBox = null;
+
+  function measurePicture() {
+    const box = state.video?.getBoundingClientRect();
+    /* The host's scale is measured here with the box rather than at every
+     * write, for the same reason the box is: eight writes per apply, each a
+     * layout, on an apply that runs behind every scroll frame. */
+    const scale = hostScale();
+    pictureBox =
+      box && box.width >= 40 && box.height >= 40
+        ? { left: box.left, top: box.top, width: box.width, height: box.height, scale }
+        : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight, scale };
+    return pictureBox;
+  }
+
+  function pictureFrame() {
+    return pictureBox || measurePicture();
+  }
+
   function writePosition(root, x, y) {
-    root.style.setProperty("--sso-x", `${x}%`);
-    root.style.setProperty("--sso-y", `${y}%`);
+    const frame = pictureFrame();
+    /* Divided by the host's scale for the reason the font size is: inside a
+     * fullscreen element the page has scaled, a pixel written is not a pixel
+     * drawn. The video's box is measured in drawn pixels. */
+    const { scale } = frame;
+    root.style.setProperty("--sso-x", `${((frame.left + (frame.width * x) / 100) / scale).toFixed(2)}px`);
+    root.style.setProperty("--sso-y", `${((frame.top + (frame.height * y) / 100) / scale).toFixed(2)}px`);
+  }
+
+  function writeWidth(root, percent) {
+    const frame = pictureFrame();
+    root.style.setProperty("--sso-width", `${((frame.width * percent) / 100 / frame.scale).toFixed(2)}px`);
   }
 
   function measurePlacement(element, apply) {
@@ -2021,8 +2066,8 @@
   function applySettings() {
     if (views.length === 0) return;
     const { background, dimNonSpeech } = state.settings;
+    const { scale } = measurePicture();
     const picture = pictureHeight();
-    const scale = hostScale();
 
     views.forEach((view, slot) => {
       const track = state.settings.tracks[slot];
@@ -2045,7 +2090,7 @@
         align === "center" ? "center" : align === "left" ? "flex-start" : "flex-end",
       );
       writePosition(root, track.posX, track.posY);
-      root.style.setProperty("--sso-width", `${track.widthPercent}vw`);
+      writeWidth(root, track.widthPercent);
       root.style.setProperty("--sso-color", track.color || DEFAULT_TRACK.color);
       root.style.setProperty("--sso-family", FONTS[track.font] || FONTS.sans);
       root.style.setProperty("--sso-weight", String(track.weight ?? DEFAULT_TRACK.weight));
@@ -2060,7 +2105,7 @@
        * the same thing the per-track colour does for the subtitles. */
       const { stripRoot, stripTag } = view;
       writePosition(stripRoot, track.stripX, track.stripY);
-      stripRoot.style.setProperty("--sso-width", `${track.stripWidth}vw`);
+      writeWidth(stripRoot, track.stripWidth);
       stripRoot.style.setProperty("--sso-font-size", `${fontPx.toFixed(2)}px`);
       stripRoot.style.setProperty("--sso-bg", `rgba(0, 0, 0, ${alpha})`);
       stripRoot.style.setProperty("--sso-color", track.color || DEFAULT_TRACK.color);
@@ -2424,17 +2469,26 @@
       return;
     }
 
-    /* Keep the box on screen. The bound is a fact about the screen, so it is
-     * applied in screen pixels and converted afterwards - clamping the written
-     * percentage instead would assume those percentages span the viewport,
-     * which is the assumption `drag.map` exists to stop making.
+    /* Keep the box on the picture. The bound is a fact about the screen, so
+     * it is applied in screen pixels and converted afterwards - clamping the
+     * written percentage instead would assume those percentages span the
+     * picture exactly, which is the assumption `drag.map` exists to stop
+     * making.
+     *
+     * The picture and not the window: in a window the film is a box on a page,
+     * and a subtitle dragged onto the page around it is a subtitle that will
+     * be somewhere else again in fullscreen. With no picture the window is the
+     * picture, as everywhere else.
      *
      * Everything here is the box's top-left corner, because that is what the
      * map reports; the bottom-centre anchor the CSS uses differs from it by a
      * transform the map has already absorbed. */
     const box = drag.surface.root.getBoundingClientRect();
-    const onScreenX = (value) => clamp(value, 0, Math.max(0, window.innerWidth - box.width));
-    const onScreenY = (value) => clamp(value, 0, Math.max(0, window.innerHeight - box.height));
+    const frame = pictureFrame();
+    const onScreenX = (value) =>
+      clamp(value, frame.left, Math.max(frame.left, frame.left + frame.width - box.width));
+    const onScreenY = (value) =>
+      clamp(value, frame.top, Math.max(frame.top, frame.top + frame.height - box.height));
     let x = onScreenX(event.clientX - drag.grabX);
     let y = onScreenY(event.clientY - drag.grabY);
 
@@ -2539,7 +2593,8 @@
       }
     }
 
-    const percent = (((half * 2) / window.innerWidth) * 100) / hostScale();
+    // Of the picture, like the position it goes with.
+    const percent = ((half * 2) / pictureFrame().width) * 100;
     const { keys, minWidth } = drag.surface;
     const held = clamp(percent, minWidth, MAX_WIDTH_PERCENT);
     // A width the box is not allowed to take is not a width it lined up at.
@@ -7720,6 +7775,19 @@
     window.__ssoStudy?.rescale?.();
   };
 
+  /* A scroll moves an inline player and announces it to nothing the video
+   * observes: the element is the same size, the window is the same size, and
+   * only where the box is has changed. Once a frame, because scroll fires as
+   * often as the wheel turns and every apply is a layout. */
+  let scrollFrame = 0;
+  const onScroll = () => {
+    if (scrollFrame) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = 0;
+      applySettings();
+    });
+  };
+
   for (const type of ["keydown", "keyup", "keypress"]) {
     window.addEventListener(type, keepTypingInside, true);
   }
@@ -7729,6 +7797,7 @@
   document.addEventListener("keydown", onCaptureKey, true);
   document.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("resize", onViewportChange, { passive: true });
+  window.addEventListener("scroll", onScroll, { capture: true, passive: true });
   document.addEventListener("fullscreenchange", onViewportChange);
   document.addEventListener("webkitfullscreenchange", onViewportChange);
   document.addEventListener("pointerup", onGlobalPointerEnd, true);
@@ -7818,6 +7887,8 @@
     document.removeEventListener("keydown", onCaptureKey, true);
     document.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("resize", onViewportChange);
+    window.removeEventListener("scroll", onScroll, { capture: true });
+    if (scrollFrame) cancelAnimationFrame(scrollFrame);
     document.removeEventListener("fullscreenchange", onViewportChange);
     document.removeEventListener("webkitfullscreenchange", onViewportChange);
     document.removeEventListener("pointerup", onGlobalPointerEnd, true);

@@ -1447,12 +1447,33 @@
 
       check("the box moves exactly as far as the pointer, not further", async () => {
         await showSpeakerCue();
+        /* From the middle of the picture, so there is room to move in every
+         * direction. The case before this one drops the box at x=300, which
+         * on a picture this wide puts it against the left edge - and a box at
+         * the edge cannot move further left, which is a fact about the clamp
+         * and not about the arithmetic under test. It used to have a few
+         * pixels of slack there because the width was in vw and the position
+         * in %, which disagree by the scrollbar; they are measured against the
+         * same picture now. */
+        window.__ssoApi.updateTrackSettings(0, { posX: 50, posY: 50 });
+        await sleep(120);
         // Grabbed near the TOP of the box, which is where the old bug was worst:
         // the bottom anchor jumped to the pointer and the box gained its own
         // height on the way.
         const { movedX, movedY } = await grabAndDrag(24, 4, -70, -120);
         if (Math.abs(movedX - -70) > 3 || Math.abs(movedY - -120) > 3) {
-          throw new Error(`dragged by -70,-120 but the box moved ${Math.round(movedX)},${Math.round(movedY)}`);
+          const s = window.__ssoApi.status().settings.tracks[0];
+          const v = video.getBoundingClientRect();
+          const root = shadowOf().querySelector(".sso-root");
+          const others = [...document.querySelectorAll("div")]
+            .filter((d) => d.shadowRoot)
+            .map((d) => d.shadowRoot.firstElementChild?.className || "?")
+            .filter((c) => /sso-win|sso-strip|sso-root/.test(c));
+          throw new Error(
+            `dragged by -70,-120 but the box moved ${Math.round(movedX)},${Math.round(movedY)}` +
+            ` [viewport ${innerWidth}x${innerHeight}, video ${Math.round(v.left)},${Math.round(v.top)} ${Math.round(v.width)}x${Math.round(v.height)},` +
+            ` pos ${s.posX},${s.posY} w ${s.widthPercent}, --sso-x ${root.style.getPropertyValue("--sso-x")},` +
+            ` surfaces ${others.join(" | ")}]`);
         }
       });
 
@@ -1492,6 +1513,63 @@
         const s = window.__ssoApi.status().settings.tracks[0];
         if (s.posX !== 50 || s.posY !== 92 || s.placed)
           throw new Error(`reset left it at ${s.posX},${s.posY} placed=${s.placed}`);
+      });
+
+      check("a position is a fraction of the picture, not of the window", async () => {
+        /* Reported: leave fullscreen and the subtitles stay where the
+         * fullscreen picture had them, hanging in the page beside a player a
+         * third of the size; and in a window they could be dragged off the
+         * film onto the page around it. Both are one fact - the percentages
+         * were of the viewport, which only agrees with the picture in
+         * fullscreen. Here the player is shrunk to a box on the page, which is
+         * what every windowed streaming page looks like, and the subtitle has
+         * to be measured against THAT box: centred on it, its bottom edge at
+         * 92% of its height, and not draggable off it. */
+        const player = document.getElementById("player");
+        const was = player.style.cssText;
+        player.style.cssText = "position:fixed;inset:auto;left:100px;top:150px;width:600px;height:300px";
+        try {
+          window.dispatchEvent(new Event("resize"));
+          await showSpeakerCue();
+          await sleep(150);
+          window.__ssoApi.updateTrackSettings(0, { posX: 50, posY: 92, widthPercent: 80 });
+          await sleep(150);
+          const root = shadowOf().querySelector(".sso-root");
+          const box = root.getBoundingClientRect();
+          const centre = (box.left + box.right) / 2;
+          if (Math.abs(centre - 400) > 3)
+            throw new Error(`centred at ${Math.round(centre)}, want 400 - the middle of the picture, not of the window`);
+          if (Math.abs(box.bottom - (150 + 276)) > 3)
+            throw new Error(`bottom edge at ${Math.round(box.bottom)}, want 426 - 92% down the picture`);
+          if (Math.abs(box.width - 480) > 3)
+            throw new Error(`${Math.round(box.width)}px wide, want 480 - 80% of the picture`);
+
+          /* Dragged towards the page's corner, it stops at the picture's edge. */
+          const cue = shadowOf().querySelector(".sso-cue").getBoundingClientRect();
+          await dragCue(cue.left + 10, cue.top + 6, 1300, 850);
+          const after = shadowOf().querySelector(".sso-root").getBoundingClientRect();
+          if (after.right > 700 + 2 || after.bottom > 450 + 2)
+            throw new Error(`dragged to ${Math.round(after.right)},${Math.round(after.bottom)} - past the picture's 700,450`);
+          const s = window.__ssoApi.status().settings.tracks[0];
+          if (s.posX > 100 || s.posY > 100)
+            throw new Error(`stored as ${s.posX}%,${s.posY}% - outside the picture`);
+
+          /* The picture moves - a scroll, a theatre mode - and the box goes
+           * with it, in the same place ON the picture. */
+          window.__ssoApi.updateTrackSettings(0, { posX: 50, posY: 92 });
+          player.style.left = "300px";
+          player.style.top = "50px";
+          window.dispatchEvent(new Event("resize"));
+          await sleep(200);
+          const moved = shadowOf().querySelector(".sso-root").getBoundingClientRect();
+          if (Math.abs((moved.left + moved.right) / 2 - 600) > 3 || Math.abs(moved.bottom - 326) > 3)
+            throw new Error(`after the picture moved the box is at ${Math.round((moved.left + moved.right) / 2)},${Math.round(moved.bottom)}, want 600,326`);
+        } finally {
+          player.style.cssText = was;
+          window.dispatchEvent(new Event("resize"));
+          window.__ssoApi.resetPosition();
+          await sleep(200);
+        }
       });
 
       /* --- the lines a box is held to ---------------------------------------
