@@ -635,13 +635,20 @@
 
   function containGestures(panel) {
     panel.addEventListener("wheel", (event) => event.stopPropagation(), { passive: true });
-    panel.addEventListener("keydown", (event) => {
-      const target = event.composedPath?.()[0] ?? event.target;
-      const typing =
-        target?.isContentEditable ||
-        /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || "");
-      if (typing || PLAYER_KEYS.test(event.code)) event.stopPropagation();
-    });
+    /* All three key events, because a player is free to act on any of them -
+     * and one that toggles play on keyup heard every space typed into the
+     * search box while only keydown was stopped. The window-level guard in
+     * content.js is the one that reaches a field; this is what keeps the
+     * player keys on a focused button from seeking and scrolling the page. */
+    for (const type of ["keydown", "keyup", "keypress"]) {
+      panel.addEventListener(type, (event) => {
+        const target = event.composedPath?.()[0] ?? event.target;
+        const typing =
+          target?.isContentEditable ||
+          /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName || "");
+        if (typing || PLAYER_KEYS.test(event.code)) event.stopPropagation();
+      });
+    }
   }
 
   const SIZE_KEY = "sso:panelSize";
@@ -880,7 +887,9 @@
 
     for (const { root } of el.trackCards) {
       root.addEventListener("pointerdown", (event) => {
-        if (event.button !== 0 || drag) return;
+        // A press that never became a drag and never heard its release - a
+        // pointerup the page swallowed - is not a reason to refuse the next.
+        if (event.button !== 0 || drag?.started) return;
         const control = event.target.closest("button, input, select, textarea, .sso-map");
         if (control && !control.classList.contains("sso-track__label")) return;
         const all = rows();
@@ -898,15 +907,20 @@
           y: event.clientY,
           dy: 0,
           started: false,
+          pointerId: event.pointerId,
           // What one place is worth: a card, plus the gap the stylesheet keeps
           // between two of them.
           step: Math.round(all[pos].box.height + Math.max(0, all[1].box.top - all[0].box.bottom)),
         };
-        /* Capture throws for a pointer id that is not live, which is what a
-         * synthetic pointerdown produces. Same guard the map's drag carries. */
-        try {
-          root.setPointerCapture?.(event.pointerId);
-        } catch {}
+        /* NOT captured here. Capturing on the press retargets the release to
+         * the card, and a click is delivered to the nearest common ancestor of
+         * where the press landed and where the release did - the card, not
+         * the name inside it. So with two subtitles attached the name's own
+         * click and double-click never fired, and "double-click the name to
+         * replace it" did nothing on exactly the panel most readers have. The
+         * harness could not see it: a synthetic pointer id cannot be captured,
+         * so the dispatched dblclick reached the name every time. Capture is
+         * taken below, once the press has moved far enough to be a drag. */
       });
 
       root.addEventListener("pointermove", (event) => {
@@ -924,6 +938,11 @@
           drag.started = true;
           dragged = true;
           drag.row.card.root.dataset.dragging = "true";
+          /* Capture throws for a pointer id that is not live, which is what a
+           * synthetic pointerdown produces. Same guard the map's drag carries. */
+          try {
+            root.setPointerCapture?.(drag.pointerId);
+          } catch {}
         }
         event.preventDefault();
         show();

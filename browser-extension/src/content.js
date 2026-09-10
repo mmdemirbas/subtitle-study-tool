@@ -3116,11 +3116,46 @@
     "mousedown", "mouseup", "contextmenu",
   ];
 
+  /* Every host this frame has built. What the key guard below asks is "did
+   * this keystroke land in something of ours", and the shadow root a field
+   * lives in names its host. */
+  const HOSTS = new WeakSet();
+
   function keepPointersInside(node) {
     for (const type of ESCAPING_EVENTS) {
       node.addEventListener(type, (event) => event.stopPropagation());
     }
+    HOSTS.add(node);
     return node;
+  }
+
+  /* Typing in one of our fields must not reach the player. Reported on Prime
+   * Video: a space in the search box paused the film.
+   *
+   * The panel already stops keydown in the bubble phase, and that was not
+   * enough for two reasons that are both ordinary. A player is free to act on
+   * keyup, which nothing stopped; and a listener on the document in the
+   * CAPTURE phase runs before any listener inside a shadow tree can stop
+   * anything, whichever phase that one is in. The one place that runs before
+   * a document capture listener is a capture listener on the window, so that is
+   * where this stands, and it covers all three key events.
+   *
+   * Only for a field. Our own bindings in onKeyDown are a document capture
+   * listener too and would be silenced by this along with the page's - and
+   * they already ignore a field, so nothing of ours is lost. A key pressed
+   * with a panel BUTTON focused is left alone here, because that is how a
+   * nudge binding reaches onKeyDown while the panel has focus. */
+  function onOurField(event) {
+    const target = event.composedPath?.()[0] ?? event.target;
+    if (!target || !(target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || ""))) {
+      return false;
+    }
+    const root = target.getRootNode?.();
+    return Boolean(root && root.host && HOSTS.has(root.host));
+  }
+
+  function keepTypingInside(event) {
+    if (onOurField(event)) event.stopPropagation();
   }
 
   function makeLayer({ zIndex = "2147483646", interactive = true } = {}) {
@@ -7685,6 +7720,9 @@
     window.__ssoStudy?.rescale?.();
   };
 
+  for (const type of ["keydown", "keyup", "keypress"]) {
+    window.addEventListener(type, keepTypingInside, true);
+  }
   /* Before onKeyDown, so a keystroke being read as a binding is taken out of
    * the way first. Both are capture-phase at the document, so this one has to
    * be registered first to run first. */
@@ -7774,6 +7812,9 @@
     clearTimeout(mirrorTimer);
     videoResize?.disconnect();
     observedVideo = null;
+    for (const type of ["keydown", "keyup", "keypress"]) {
+      window.removeEventListener(type, keepTypingInside, true);
+    }
     document.removeEventListener("keydown", onCaptureKey, true);
     document.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("resize", onViewportChange);

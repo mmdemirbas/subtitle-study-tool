@@ -10339,9 +10339,22 @@
       window.__caseNames = cases.map((c) => c.name);
       window.__running = null;
 
+      /* Opened with ?manual, the page is set up and left alone: the subtitle
+       * attached, nothing running. That is for tests/realinput.mjs, which
+       * drives the page with a real mouse and keyboard from outside - the
+       * one kind of input the cases here cannot produce. A dispatched
+       * dblclick reaches a button whatever pointer capture did to the real
+       * one, so the case that "proved" the name could be double-clicked
+       * passed for a year while a real double-click did nothing. */
+      const manual = new URLSearchParams(location.search).has("manual");
+
       (async () => {
         await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1 });
         await sleep(250);
+        if (manual) {
+          document.getElementById("summary").textContent = "manual";
+          return;
+        }
 
         const out = document.getElementById("results");
         let passed = 0;
