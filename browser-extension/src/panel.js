@@ -3427,7 +3427,11 @@
       },
       title: "Search for the episode after the last one fetched for this series.",
     });
-    el.tryNext.className = "sso-try";
+    /* Its own class. It shares the try button's shape, and the harness finds
+     * that button by `.sso-try` - so giving this one the same name put a
+     * hidden button first in the tree and "nothing offered to try the best
+     * three" failed on a page that was offering it. */
+    el.tryNext.className = "sso-next";
     el.tryNext.hidden = true;
 
     /* A results list for a dual setup is mostly the wrong language: a search
