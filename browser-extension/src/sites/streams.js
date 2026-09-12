@@ -27,6 +27,13 @@
  *         tabii's API host and in the document, because that is the third
  *         way a web player gets its subtitles and nothing about tabii says
  *         which of the three it is.
+ *   cues  a player that hands its subtitles to the browser's own text tracks
+ *         has the cues in `video.textTracks`, and they are read from there
+ *         whatever the network shape was.
+ *
+ * Beside this runs `survey.js`, which writes the shape of everything the
+ * player does to the running log, so that a playback nobody was watching is
+ * enough to learn a player from.
  *
  * The title's id is the last part of the page's path when the list goes by,
  * which is what the offset store keys on. Everything found is posted with the
@@ -153,7 +160,10 @@
   };
 
   const noticed = (shape, tracks) => {
-    if (!tracks.length) return;
+    /* An empty list is news only from the shape that last had some - the
+     * video's text tracks gone with the video - not from a playlist that
+     * simply carried no subtitles. */
+    if (!tracks.length && latest?.shape?.[0] !== shape) return;
     latest = { titleId: titleId(), tracks, shape: [shape, ...new Set(tracks.map((track) => track.type).filter(Boolean))].slice(0, 12), at: Date.now() };
     post({ type: "tracks", ...latest });
   };
@@ -237,6 +247,42 @@
     trackKey = key;
     noticed("track", tracks);
   };
+  /* A player that hands its subtitles to the browser's own text tracks -
+   * `video.textTracks`, with the cues in them - whatever it fetched them
+   * as. The cues are read straight off the track and posted, so this is
+   * the one shape that needs no knowledge of the network at all; for a
+   * segmented stream they are the cues loaded so far, and are posted again
+   * as more land. */
+  let cueKey = "";
+  const cueTracks = () => {
+    const tracks = [];
+    [...document.querySelectorAll("video")].forEach((video, videoIndex) => {
+      [...(video.textTracks || [])].forEach((track, index) => {
+        const cues = track.cues ? [...track.cues] : [];
+        if (!cues.length || !/subtitles|captions/.test(track.kind)) return;
+        tracks.push({
+          language: track.language || "",
+          url: `texttrack:${videoIndex}:${index}`,
+          type: track.kind,
+          displayName: track.label || "",
+          format: "cues",
+          forced: /forced/i.test(track.label || ""),
+          keys: ["kind", "label", "language", "mode", "cues"],
+          cues: cues.map((cue) => ({ startMs: Math.round(cue.startTime * 1000), endMs: Math.round(cue.endTime * 1000), text: String(cue.text || "") })),
+        });
+      });
+    });
+    return tracks;
+  };
+  const watchCues = () => {
+    const tracks = cueTracks();
+    const key = tracks.map((track) => `${track.url}:${track.cues.length}`).join("|");
+    if (key === cueKey) return;
+    cueKey = key;
+    noticed("texttracks", tracks);
+  };
+  setInterval(watchCues, 5000);
+
   const observe = () => {
     if (!document.documentElement) return;
     new MutationObserver(watchTracks).observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["src"] });

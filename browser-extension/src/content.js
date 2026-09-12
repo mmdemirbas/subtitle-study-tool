@@ -1275,8 +1275,20 @@
   function onPageSubtitles(event) {
     if (event.source !== window || event.origin !== location.origin) return;
     const data = event.data;
-    if (!data || data.source !== PAGE_SUBTITLE_SOURCE || data.type !== "tracks") return;
+    if (!data || data.source !== PAGE_SUBTITLE_SOURCE) return;
     const site = siteName();
+    if (data.type === "survey") {
+      /* src/sites/survey.js: the shape of what the player did, for the log
+       * and nothing else. See that file for what is and is not in it. */
+      trace("survey", {
+        site,
+        entries: Array.isArray(data.entries) ? data.entries.slice(0, 400) : [],
+        page: data.page && typeof data.page === "object" ? data.page : {},
+        totals: data.totals && typeof data.totals === "object" ? data.totals : {},
+      });
+      return;
+    }
+    if (data.type !== "tracks") return;
     const titleId = String(data.titleId || "");
     const tracks = (Array.isArray(data.tracks) ? data.tracks : [])
       .filter((track) => track && typeof track.url === "string" && track.url)
@@ -1298,6 +1310,8 @@
           url: track.url,
           /* For a DASH manifest, which text track in it. */
           ...(track.dash && typeof track.dash === "object" ? { dash: { representation: String(track.dash.representation ?? ""), adaptation: String(track.dash.adaptation ?? "") } } : {}),
+          /* Read off the browser's own text track: nothing to fetch. */
+          ...(Array.isArray(track.cues) ? { cues: track.cues } : {}),
         };
       });
     const changed = pageSubtitles?.titleId !== titleId || pageSubtitles?.tracks.length !== tracks.length;
@@ -1327,7 +1341,7 @@
     return {
       site: pageSubtitles.site,
       titleId: pageSubtitles.titleId,
-      tracks: pageSubtitles.tracks.map(({ url, ...rest }) => rest),
+      tracks: pageSubtitles.tracks.map(({ url, cues, ...rest }) => (cues ? { ...rest, cueCount: cues.length } : rest)),
     };
   }
 

@@ -386,7 +386,7 @@
        * is in the manifest (world: MAIN, document_start). It wraps fetch and
        * XMLHttpRequest transparently, so every other case runs through the
        * wrapped pair and would notice if they were not. */
-      for (const src of ["sites/primevideo", "sites/netflix", "sites/streams", "sites/youtube", "align", "content", "panel", "study"]) {
+      for (const src of ["sites/primevideo", "sites/netflix", "sites/survey", "sites/streams", "sites/youtube", "align", "content", "panel", "study"]) {
         document.write(`<script src="../src/${src}.js?t=${Date.now()}"><\/script>`);
       }
     </script>
@@ -4624,6 +4624,83 @@
           window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
           await sleep(60);
         }
+      });
+
+      check("cues a player hands to the browser's own text track are read off it, whatever it fetched them as", async () => {
+        const own = () => window.__ssoApi.status().own;
+        const titleId = location.pathname.split("/").filter(Boolean).pop();
+        const video = document.createElement("video");
+        document.body.append(video);
+        try {
+          const track = video.addTextTrack("subtitles", "Deutsch", "de");
+          track.mode = "hidden";
+          track.addCue(new VTTCue(1, 2, "Hallo"));
+          track.addCue(new VTTCue(3, 4.5, "<i>Welt</i>"));
+          for (let i = 0; i < 280 && own()?.tracks?.[0]?.format !== "cues"; i++) await sleep(25);
+          const listed = own()?.tracks?.[0];
+          if (listed?.format !== "cues" || listed.id !== `page:${titleId}:de:subtitle` || listed.cueCount !== 2 || listed.cues) throw new Error(`listed ${JSON.stringify(own())}`);
+          const reply = await new Promise((resolve) => {
+            const onMessage = (event) => {
+              if (event.data?.source !== "sso-ear" || event.data.type !== "tracks" || event.data.tracks?.[0]?.format !== "cues") return;
+              window.removeEventListener("message", onMessage);
+              resolve(event.data);
+            };
+            window.addEventListener("message", onMessage);
+            window.postMessage({ source: "sso-ear", type: "ask" }, "*");
+          });
+          const cues = reply.tracks[0].cues;
+          if (cues.length !== 2 || cues[1].startMs !== 3000 || cues[1].endMs !== 4500 || cues[1].text !== "<i>Welt</i>" || reply.shape[0] !== "texttracks") throw new Error(JSON.stringify(reply));
+        } finally {
+          video.remove();
+          window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
+          await sleep(60);
+        }
+      });
+
+      /* The survey: what the player did, as shapes, written to the log so a
+       * playback nobody watched is enough to learn a player from. What is
+       * checked is that shape is all that leaves the page - no query value, no
+       * string value - and that each kind of body gets the digest that names
+       * its parts. */
+      check("the survey writes the shape of what the page fetched, and none of the values", async () => {
+        const seen = await tracing(async (traced) => {
+          await (await fetch("../tests/fixtures/tabii/apigateway/play.json?sessionToken=SECRET-VALUE&profile=12345")).json();
+          await new Promise((resolve, reject) => {
+            const request = new XMLHttpRequest();
+            request.open("GET", "../tests/fixtures/tabii/master.mpd?token=SECRET-VALUE");
+            request.setRequestHeader("X-Session", "SECRET-VALUE");
+            request.onload = resolve;
+            request.onerror = () => reject(new Error("xhr failed"));
+            request.send();
+          });
+          await (await fetch("../tests/fixtures/disneyplus/master.m3u8?v=2")).text();
+          await (await fetch("../tests/fixtures/youtube/api/timedtext?v=1234567890&pot=SECRET-VALUE")).text();
+          // Two flushes may be needed: one for what was pending, one for these.
+          const has = (test) => traced.some((a) => a.kind === "survey" && a.detail?.entries?.some(test));
+          for (let i = 0; i < 600 && !(has((e) => /master\.mpd/.test(e.url) && e.headers.includes("x-session")) && has((e) => /play\.json\?/.test(e.url)) && has((e) => /timedtext/.test(e.url))); i++) await sleep(25);
+          await sleep(100);
+        });
+        const surveys = seen.filter((a) => a.kind === "survey").map((a) => a.detail);
+        if (!surveys.length) throw new Error("no survey line was written");
+        const text = JSON.stringify(surveys);
+        // Header NAMES are recorded on purpose; their values, query values and body values are not.
+        const leak = /SECRET|Bir Dizi|1234567890/i.exec(text);
+        if (leak) throw new Error(`a value leaked: ...${text.slice(Math.max(0, leak.index - 60), leak.index + 200)}`);
+        const entries = surveys.flatMap((s) => s.entries);
+        const api = entries.find((e) => /apigateway\/play\.json\?/.test(e.url));
+        if (!api || !/\?profile,sessionToken$/.test(api.url) || api.method !== "GET" || api.count !== 1 || api.digest?.kind !== "json") throw new Error(`api entry ${JSON.stringify(api)}`);
+        if (!api.digest.paths.some((p) => p === "data.subtitles[].url=url(cdn.example .vtt)") || !api.digest.paths.some((p) => p === "data.subtitles[].language=lang:tr") || !api.digest.paths.some((p) => /^data\.title=str\(\d+\)$/.test(p)))
+          throw new Error(`api paths ${JSON.stringify(api.digest.paths)}`);
+        const mpd = entries.findLast((e) => /master\.mpd\?token$/.test(e.url));
+        if (!mpd || !mpd.headers.includes("x-session") || mpd.digest?.kind !== "mpd" || !/\?token$/.test(mpd.url) || mpd.count < 2) throw new Error(`mpd entries ${JSON.stringify(entries.filter((e) => /master\.mpd/.test(e.url)).map((e) => [e.url, e.count, e.headers]))} in ${surveys.length} batches`);
+        const stpp = mpd.digest.sets.find((set) => set.codecs === "stpp");
+        if (!stpp || stpp.by !== "SegmentTemplate" || stpp.timeline !== true || stpp.lang !== "en" || !stpp.roles.includes("Role=subtitle")) throw new Error(`stpp set ${JSON.stringify(mpd.digest.sets)}`);
+        const m3u8 = entries.find((e) => /master\.m3u8/.test(e.url));
+        if (!m3u8 || m3u8.digest?.kind !== "m3u8" || m3u8.digest.tags["EXT-X-MEDIA"] !== 5 || !m3u8.digest.media.some((line) => /TYPE=SUBTITLES,LANGUAGE=tr,NAME=Türkçe/.test(line))) throw new Error(`m3u8 entry ${JSON.stringify(m3u8)}`);
+        const vtt = entries.find((e) => /api\/timedtext\?pot,v$/.test(e.url));
+        if (!vtt || vtt.digest?.kind !== "vtt" || vtt.digest.cues !== 1) throw new Error(`vtt entry ${JSON.stringify(vtt)}`);
+        const page = surveys.map((s) => s.page).find((p) => p && Array.isArray(p.videos));
+        if (!page || !Array.isArray(page.players) || !Array.isArray(page.drm)) throw new Error(`page ${JSON.stringify(page)}`);
       });
 
       /* --- a subtitle nobody has made, made here ---------------------------------

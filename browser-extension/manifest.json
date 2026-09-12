@@ -93,6 +93,7 @@
         "https://*.tabii.com/*"
       ],
       "js": [
+        "src/sites/survey.js",
         "src/sites/streams.js"
       ],
       "run_at": "document_start",

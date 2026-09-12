@@ -9,6 +9,8 @@
  *   srt       one SRT file (a player handed a sidecar)
  *   hls-vtt   an HLS media playlist of WebVTT segments (Disney+)
  *   dash      a DASH MPD; `dash.representation` names the text track in it
+ *   cues      nothing to fetch: the cues came with the track, read off the
+ *             browser's own text track in the page
  *
  * Runs in the service worker, whose `fetch` has the host permissions and no
  * CORS to argue with. Segments go six at a time, which is what a browser
@@ -66,6 +68,13 @@ function kindOf(representation) {
 export async function readPageTrack(track) {
   const format = track.format || "ttml";
   const note = { format, segments: 0, failed: 0, bytes: 0 };
+
+  if (format === "cues") {
+    const cues = (Array.isArray(track.cues) ? track.cues : [])
+      .filter((cue) => Number.isFinite(cue?.startMs) && Number.isFinite(cue?.endMs) && typeof cue.text === "string")
+      .map((cue) => ({ startMs: cue.startMs, endMs: cue.endMs, text: cue.text }));
+    return { cues, note };
+  }
 
   if (format === "hls-vtt" || format === "dash") {
     const response = await fetch(track.url);

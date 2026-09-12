@@ -1787,6 +1787,10 @@ r/v/1.m3u8
   const wvttRead = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:4242:en:sdh" } }, sender);
   t("WebVTT in MP4 samples is refused by name rather than read as nothing",
     /WebVTT inside MP4/.test(wvttRead?.error || ""), JSON.stringify(wvttRead));
+  pageSubtitlesReply = () => ({ site: "tabii", titleId: "4242", tracks: [{ ...track("de", "subtitle", "texttrack:0:0"), id: "page:4242:de:subtitle", format: "cues", cues: [{ startMs: 1000, endMs: 2000, text: "Hallo" }, { startMs: 3000, endMs: 4000, text: "Welt" }, { startMs: "x", endMs: 5, text: 1 }] }] });
+  const offTrack = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:4242:de:subtitle" } }, sender);
+  t("cues read off the browser's own text track need no fetch, and a bad one costs one cue",
+    offTrack?.cues?.map((c) => c.text).join() === "Hallo,Welt" && offTrack.cues[1].start === 3000, JSON.stringify(offTrack));
   pageFiles = { "https://www.youtube.com/api/timedtext?v=x&fmt=vtt": "" };
   pageSubtitlesReply = () => ({ site: "YouTube", titleId: "x", tracks: [{ ...track("en", "subtitle", "https://www.youtube.com/api/timedtext?v=x&fmt=vtt"), id: "page:x:en:subtitle", format: "vtt" }] });
   const empty = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:x:en:subtitle" } }, sender);

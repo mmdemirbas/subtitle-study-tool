@@ -457,7 +457,29 @@ the bytes, `wvtt` is refused by name); an API answer is walked for objects
 with a `.vtt`/`.srt`/`.ttml` URL beside a language. `page.js` fetches
 segments six at a time and `joinSegments` drops a cue written into both
 segments it spans. Each post says which shape it came from - `m3u8`, `mpd`,
-`api`, `track` - which is what the first tabii playback's log line will say.
+`api`, `track`, `texttracks` - which is what the first tabii playback's log
+line will say. The last of those is `video.textTracks` read straight off the
+page's `<video>`, cues and all, posted as `format: "cues"` with the cues in
+the message: the one shape that needs no knowledge of the network.
+
+**`src/sites/survey.js` is how a player nobody here can watch gets learned.**
+It runs beside `streams.js` and writes the SHAPE of everything the player does
+- every fetch and XHR as method, URL with ids and query values taken out
+(`/watch/{n}?token,lang`), header names, status, content type, size, and a
+digest of the body (a JSON answer's key paths with each value's kind, a
+playlist's tags and `EXT-X-MEDIA` attributes, a manifest's adaptation sets, a
+subtitle file's cue count); each `<video>`'s src scheme, text tracks and
+`<track>` children; the player libraries on `window`; the DRM key systems
+asked for; elements whose class or id says subtitle - one entry per shape
+with a count, batched every 5 s, capped at 400 shapes, posted as
+`{ type: "survey" }` and written by `content.js` as a `survey` line in the
+running log. **To learn a player from a playback the reader did alone:**
+`jq -c 'select(.kind=="survey")' subtitle-daemon/logs/<date>.jsonl` and read
+the `entries` whose `digest.paths` name `subtitle`/`lang`/`url(...)`, the
+`mpd`/`m3u8` digests, and `page.videos[].textTracks`. Values never travel:
+the harness case "the survey writes the shape of what the page fetched, and
+none of the values" plants a token in a query, a header and a body and
+asserts none of them reach the trace.
 
 **Evidence, as of 2026-09-12.** The request path, the response path and the
 plain `fetch(url)` with no credentials were first read in the source of the

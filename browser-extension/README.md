@@ -247,8 +247,12 @@ player's captions on once** and every language is fetchable, and until then the
 attach says so. Netflix and Disney+ are built from the sources of the
 extensions that download from them; tabii from the spec and its public pages,
 reading a DASH or HLS manifest, an API answer naming subtitle files, or the
-`<track>` elements a player adds. All three wait on their first playback here -
-the running log says what was found.
+`<track>` elements a player adds, or the cues in the browser's own text tracks.
+All three wait on their first playback here. On tabii and Disney+ the
+extension also writes the shape of everything the player does to the running
+log - URLs with their ids and tokens taken out, key names, formats, never a
+value - so that one playback is enough to build the ear from, without anyone
+watching the network.
 
 Where the page carries only one of your two languages, that one comes from the
 page and the other is searched for as before, refused for the same reasons an
