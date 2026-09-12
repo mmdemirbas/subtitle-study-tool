@@ -421,24 +421,31 @@ window. The player's own copy is untouched. `content.js` loads at idle and may
 have missed it, so it posts `{ type: "ask" }` once its listener is up and the
 page world answers with the latest.
 
-**Evidence tiers, as of 2026-09-12.** The request path, the response path and
-the plain `fetch(url)` with no credentials that gets the file are `src` - read
-in the source of the "Amazon Prime Video - Subtitle Downloader" userscript
-(greasyfork 562565, v1.0.0), which does exactly this and re-asks the API with
-an envelope it digs out of the page's template JSON. The ear itself is `run` in
-the harness against `tests/fixtures/prime/GetVodPlaybackResources.json`, by
-fetch and by XHR in both response types. **What is NOT verified is the live
-answer's shape**: field names beyond `languageCode` and `url`, what `type`
-says for a [CC] track, whether the CDN URL really needs no cookie from the
-worker. The first playback with this installed writes a `pageSubtitles` line
-to the running log with the languages, the kinds, the hosts, the key names of
-the first entry and the answer's top-level names - and `pageFetch` with the
-HTTP status and cue count of the first file fetched. **Read those two lines
-before changing anything here.** A `pageSubtitles` line with an empty `tracks`
-and a `shape` that does not include `timedTextUrls` means the list moved; no
-line at all with the player playing means the request bypassed the hook (a
-worker, or a fetch captured before `document_start` - check
-`performance.getEntriesByType("resource")` for the URL).
+**Evidence, as of 2026-09-12.** The request path, the response path and the
+plain `fetch(url)` with no credentials were first read in the source of the
+"Amazon Prime Video - Subtitle Downloader" userscript (greasyfork 562565,
+v1.0.0), and then observed on one live playback the same day: the answer's top
+level carries `timedTextUrls` beside `playbackData`, `vodPlaylistedPlaybackUrls`,
+`trickplayUrls`, `vodXrayMetadata`; each track carries `displayName`,
+`format`, `languageCode`, `subtype`, `trackGroupId`, `type`, `url`; that
+episode had 37 tracks, English only as "English [CC]" (which `trackKind` reads
+from the display name), Turkish as "Türkçe"; language codes are `xx-yy`
+lowercase (`en-us`, `es-419`, `zh-hans`); the CDN is
+`cf-timedtext.aux.pv-cdn.net` and served both files to the worker with no
+cookie, 104,201 bytes / 1013 cues and 78,159 bytes / 803 cues, HTTP 200; the
+pair attached automatically and played in sync. The ear is also `run` in the
+harness against `tests/fixtures/prime/GetVodPlaybackResources.json`, by fetch
+and by XHR in both response types. **Every later playback still writes the
+same two lines** - `pageSubtitles` with languages, kinds, hosts, key names and
+the answer's top-level names, `pageFetch` with the HTTP status and cue count -
+so a change on Amazon's side is read out of the log rather than reproduced. A
+`pageSubtitles` line with empty `tracks` and a `shape` without `timedTextUrls`
+means the list moved; no line at all with the player playing means the
+request bypassed the hook (a worker, or a fetch captured before
+`document_start` - check `performance.getEntriesByType("resource")` for the
+URL). The zihin node
+`media-playback/systems/primevideo/findings/prime-video-hands-its-player-every-subtitle-as-signed-ttml.md`
+carries the evidence table.
 
 **Three things are load-bearing.**
 
