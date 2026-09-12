@@ -22,11 +22,13 @@ thing that knows what a right answer looks like.
 
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import re
-import urllib.error
-import urllib.request
+import socket
+import urllib.parse
+from collections.abc import Callable
 from typing import Any
 
 from .config import USER_AGENT
@@ -50,6 +52,7 @@ def ask_json(
     user: str,
     timeout: float,
     what: str = "request",
+    on_open: Callable[[Any], None] | None = None,
 ) -> Any | None:
     """Ask for a JSON object and return it parsed, or None if anything went wrong.
 
@@ -87,14 +90,35 @@ def ask_json(
     if key:
         headers["Authorization"] = f"Bearer {key}"
 
-    request = urllib.request.Request(url, data=body, headers=headers)
+    # http.client rather than urlopen, for one reason: urlopen blocks inside
+    # itself until the headers arrive, and a model that does not stream sends
+    # its headers with its answer - so for the whole of a generation there is
+    # no response object to hand out and nothing another thread could close.
+    # The connection exists from before the request is sent, and shutting its
+    # socket is what ends a wait wherever it is.
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        logger.warning("%s unavailable: %r is not an http(s) URL", what, url)
+        return None
+    make = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    connection = make(parsed.hostname, parsed.port, timeout=timeout)
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = json.loads(response.read().decode("utf-8"))
+        if on_open is not None:
+            on_open(connection)
+        connection.request("POST", path, body=body, headers=headers)
+        response = connection.getresponse()
+        data = response.read()
+        if response.status >= 400:
+            logger.warning("%s unavailable from %s: HTTP %d %s", what, url, response.status, data[:200].decode("utf-8", "replace"))
+            return None
+        raw = json.loads(data.decode("utf-8"))
         said = THINKING.sub("", raw["choices"][0]["message"]["content"]).strip()
         return json.loads(said)
     except (
-        urllib.error.URLError,
+        http.client.HTTPException,
         TimeoutError,
         ValueError,
         OSError,
@@ -104,3 +128,27 @@ def ask_json(
     ) as error:
         logger.warning("%s unavailable from %s: %s", what, url, error)
         return None
+    finally:
+        connection.close()
+
+
+def tear_down(connection: Any) -> None:
+    """End a request another thread is waiting on, wherever it is waiting.
+
+    Closing the connection is not enough: a thread inside recv() does not
+    notice its file closing. Shutting the socket down is what wakes it, with
+    an error ask_json turns into "could not be asked". Every step is best
+    effort - the request may already be over, and then there is nothing to
+    do; before it connected there is no socket yet, and close() is what stops
+    one being made.
+    """
+    sock = getattr(connection, "sock", None)
+    if sock is not None:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
+    try:
+        connection.close()
+    except (AttributeError, OSError):
+        pass

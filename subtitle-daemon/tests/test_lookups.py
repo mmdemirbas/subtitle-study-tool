@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
 from subtitle_daemon.lookups import (
     GLOSS_PROBE,
     GOOGLE_BATCH,
@@ -358,17 +359,13 @@ def test_a_word_with_no_translation_is_remembered_as_having_none(
 class _Answered:
     """One canned HTTP response, in the shape an OpenAI-compatible endpoint sends."""
 
+    status = 200
+
     def __init__(self, content: str) -> None:
         self._body = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
 
     def read(self) -> bytes:
         return self._body
-
-    def __enter__(self) -> _Answered:
-        return self
-
-    def __exit__(self, *_: Any) -> None:
-        return None
 
 
 @pytest.fixture
@@ -377,16 +374,32 @@ def glosser(tmp_path: Path) -> Lookups:
     return Lookups(tmp_path, gloss_model="a-model-that-is-never-called")
 
 
-def _answers(monkeypatch: Any, *replies: str) -> list[bytes]:
-    """Serve `replies` in order, and record every request body that was sent."""
+def _answers(monkeypatch: Any, *replies: str, refuse: Exception | None = None) -> list[bytes]:
+    """Serve `replies` in order, and record every request body that was sent.
+
+    Stubbed at the wire: this stands in for the connection chat.ask_json opens
+    to the model, so what the tier sends is what a real endpoint would have
+    read. With `refuse`, every request is recorded and then fails with it.
+    """
     sent: list[bytes] = []
     queue = list(replies)
 
-    def urlopen(request: Any, timeout: float = 0) -> _Answered:
-        sent.append(request.data)
-        return _Answered(queue.pop(0) if queue else queue[-1])
+    class Connection:
+        def __init__(self, host: str, port: int | None = None, timeout: float | None = None) -> None:
+            return None
 
-    monkeypatch.setattr("subtitle_daemon.lookups.urllib.request.urlopen", urlopen)
+        def request(self, method: str, path: str, body: bytes = b"", headers: Any = None) -> None:
+            sent.append(body)
+            if refuse is not None:
+                raise refuse
+
+        def getresponse(self) -> _Answered:
+            return _Answered(queue.pop(0) if queue else queue[-1])
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("subtitle_daemon.chat.http.client.HTTPConnection", Connection)
     return sent
 
 
@@ -573,13 +586,7 @@ def test_a_failing_endpoint_is_left_alone_for_a_while(
     """Without this every word looked up by hand pays the live timeout before
     the tier below gets its turn, and a reader who configured nothing would feel
     the whole feature stall."""
-    tries = []
-
-    def refuse(request: Any, timeout: float = 0) -> _Answered:
-        tries.append(timeout)
-        raise TimeoutError("no model there")
-
-    monkeypatch.setattr("subtitle_daemon.lookups.urllib.request.urlopen", refuse)
+    tries = _answers(monkeypatch, refuse=TimeoutError("no model there"))
     monkeypatch.setattr(glosser, "_fetch_translation", lambda *args: ("parça", True))
     assert glosser.translate("spare", "en", "tr", "Spare a minute?") == "parça"
     assert glosser.translate("chamber", "en", "tr", "In the chamber.") == "parça"
@@ -653,10 +660,7 @@ def test_a_batch_that_times_out_still_answers_from_the_tier_below(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     glosser = Lookups(tmp_path, gloss_model="a-slow-model", google_key="k")
-    monkeypatch.setattr(
-        "subtitle_daemon.lookups.urllib.request.urlopen",
-        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("too slow")),
-    )
+    _answers(monkeypatch, refuse=TimeoutError("too slow"))
     monkeypatch.setattr(
         Lookups, "_fetch_google_many", lambda self, terms, *a: {t: f"{t}-google" for t in terms}
     )
@@ -673,10 +677,7 @@ def test_the_context_free_answer_is_not_filed_where_the_contextual_one_goes(
     """Otherwise the model is never asked again. A bare-word answer under the
     word-and-line key is a wrong answer to a question nobody will re-ask."""
     glosser = Lookups(tmp_path, gloss_model="a-slow-model", google_key="k")
-    monkeypatch.setattr(
-        "subtitle_daemon.lookups.urllib.request.urlopen",
-        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("too slow")),
-    )
+    _answers(monkeypatch, refuse=TimeoutError("too slow"))
     monkeypatch.setattr(
         Lookups, "_fetch_google_many", lambda self, terms, *a: {t: "yerel" for t in terms}
     )
@@ -756,7 +757,7 @@ class _Raw:
     def __enter__(self) -> _Raw:
         return self
 
-    def __exit__(self, *args: Any) -> bool:
+    def __exit__(self, *args: object) -> bool:
         return False
 
 

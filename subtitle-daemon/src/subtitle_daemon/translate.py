@@ -56,7 +56,9 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from dataclasses import dataclass, field
+from typing import Any
 
 from . import chat
 from .subtitles import Cue
@@ -150,6 +152,11 @@ def _numbered(answer: object) -> dict[int, str]:
     return got
 
 
+class Cancelled(Exception):
+    """The job was stopped while a request was in flight. Not a failure of the
+    model and not an empty answer, so neither of those paths sees it."""
+
+
 @dataclass(frozen=True)
 class Attempt:
     """What one chunk produced, and what had to be done about it."""
@@ -186,12 +193,34 @@ class Translator:
         self.chunk = max(1, chunk)
         self.carry = max(0, carry)
         self.timeout = timeout
+        # Stopping. The event is read between requests; the open connection
+        # is what abort() tears down for the request in flight, because a
+        # thread blocked in a read cannot see an event. See chat.tear_down.
+        self.cancel = threading.Event()
+        self._open: Any = None
 
     @property
     def brief(self) -> str:
         return BRIEF.format(source=self.source, target=self.target)
 
+    def abort(self) -> None:
+        """Stop, now: the next request is never made, and the one in flight is
+        torn down so its chunk does not finish first."""
+        self.cancel.set()
+        held, self._open = self._open, None
+        if held is not None:
+            chat.tear_down(held)
+
     def _ask(self, prompt: str, what: str) -> dict[int, str] | None:
+        if self.cancel.is_set():
+            raise Cancelled()
+
+        def opened(connection: Any) -> None:
+            self._open = connection
+            # abort() may have run between the check above and the open.
+            if self.cancel.is_set():
+                chat.tear_down(connection)
+
         answer = chat.ask_json(
             url=self.url,
             model=self.model,
@@ -200,7 +229,11 @@ class Translator:
             user=prompt,
             timeout=self.timeout,
             what=what,
+            on_open=opened,
         )
+        self._open = None
+        if self.cancel.is_set():
+            raise Cancelled()
         return None if answer is None else _numbered(answer)
 
     def chunk_lines(self, cues: list[Cue], first: int, last: int, floor: int = 0) -> Attempt:

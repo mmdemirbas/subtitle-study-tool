@@ -183,3 +183,47 @@ def test_a_range_that_cannot_be_answered_reports_every_cue_in_it_as_missing(mode
     got = translate.Translator(carry=0).chunk_lines(CUES, 0, 2)
     assert got.missing == [1, 2], "not an empty list beside an empty result"
     assert got.error
+
+
+def test_abort_ends_the_request_in_flight_rather_than_waiting_for_it() -> None:
+    """Stop means now. A blocked read cannot see an event, so abort() tears the
+    socket down - checked against a real server that never answers."""
+    import threading
+    import time
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Silent(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            time.sleep(8)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Silent)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions"
+        translator = translate.Translator(model="stub", url=url, timeout=30, carry=0)
+        outcome: dict[str, object] = {}
+
+        def ask() -> None:
+            started = time.monotonic()
+            try:
+                translator.chunk_lines(CUES, 0, 2)
+                outcome["raised"] = None
+            except translate.Cancelled:
+                outcome["raised"] = "cancelled"
+            outcome["took"] = time.monotonic() - started
+
+        asker = threading.Thread(target=ask, daemon=True)
+        asker.start()
+        time.sleep(0.3)  # long enough for the request to be open and blocked
+        translator.abort()
+        asker.join(timeout=5)
+        assert outcome.get("raised") == "cancelled", outcome
+        assert float(outcome["took"]) < 3, f"abort waited for the request: {outcome['took']:.1f}s"  # type: ignore[arg-type]
+    finally:
+        server.shutdown()
+        server.server_close()

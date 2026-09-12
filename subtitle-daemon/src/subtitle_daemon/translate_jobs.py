@@ -180,6 +180,10 @@ class Jobs:
         self._queue: queue.Queue[str] = queue.Queue()
         self._cancel: dict[str, threading.Event] = {}
         self._running: str | None = None
+        # The translator working the running job, for cancel() to abort: the
+        # event alone waits for the request in flight, which on the local
+        # model is up to a chunk's worth of minutes.
+        self._active: Any = None
         self._worker: threading.Thread | None = None
 
     # --- the public surface -------------------------------------------------
@@ -268,6 +272,10 @@ class Jobs:
             event = self._cancel.get(key)
             if event is not None:
                 event.set()
+            if self._running == key and self._active is not None:
+                abort = getattr(self._active, "abort", None)
+                if abort is not None:
+                    abort()
             if job.state["status"] not in FINAL:
                 job.state["status"] = "cancelled"
                 self._save(job)
@@ -348,6 +356,12 @@ class Jobs:
         cancel = self._cancel.get(key) or threading.Event()
         cues = job.cues()
         translator = self._factory(job.state["source_language"], job.state["target"])
+        with self._lock:
+            self._active = translator
+            # cancel() may have run between the status check and here; a
+            # translator that exists now can be aborted, so ask it.
+            if cancel.is_set() and getattr(translator, "abort", None) is not None:
+                translator.abort()
 
         for first, last in job.bounds():
             if cancel.is_set():
@@ -356,7 +370,11 @@ class Jobs:
             if job.chunk_path(first, last).exists():
                 continue
             started = time.monotonic()
-            attempt = translator.chunk_lines(cues, first, last, floor=0)
+            try:
+                attempt = translator.chunk_lines(cues, first, last, floor=0)
+            except translate.Cancelled:
+                self._finish(job, "cancelled")
+                return
             took = time.monotonic() - started
             if attempt.error and not attempt.lines:
                 # A model that does not answer at all is a stopped job, not a
@@ -364,6 +382,7 @@ class Jobs:
                 with self._lock:
                     self._update(job, status="failed", error=attempt.error)
                     self._running = None
+                    self._active = None
                 return
             with self._lock:
                 # The chunk and the state under one lock, so a status read
@@ -405,9 +424,11 @@ class Jobs:
                 fresh = self._load(job.key)
                 if fresh is not None and fresh.state.get("status") == "queued":
                     self._running = None
+                    self._active = None
                     return
                 self._update(job, status=status)
                 self._running = None
+                self._active = None
                 return
             if status == "done":
                 cues = job.cues()
@@ -438,6 +459,7 @@ class Jobs:
                 )
                 self._update(job, status="done", sha256=stored.meta.get("sha256"), finished_at=time.time())
             self._running = None
+            self._active = None
             self._cancel.pop(job.key, None)
 
     # --- disk ------------------------------------------------------------------

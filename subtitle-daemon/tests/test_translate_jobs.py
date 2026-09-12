@@ -37,10 +37,17 @@ class StubTranslator:
         # after exactly the chunk it means to.
         self.gate = gate
 
+    def abort(self) -> None:
+        # What the real translator does to a request in flight: the wait ends
+        # with Cancelled rather than with an answer.
+        self.aborted = True
+        if self.gate is not None:
+            self.gate.put("abort")
+
     def chunk_lines(self, source: list[Cue], first: int, last: int, floor: int = 0) -> translate.Attempt:
         self.asked.append((first, last))
-        if self.gate is not None:
-            self.gate.get(timeout=5)
+        if self.gate is not None and self.gate.get(timeout=5) == "abort":
+            raise translate.Cancelled()
         if self.fail_at == (first, last):
             return translate.Attempt(missing=list(range(first + 1, last + 1)), error="the model went away")
         return translate.Attempt(lines={i + 1: source[i].text.replace("line", "satır") for i in range(first, last)})
@@ -170,17 +177,21 @@ def test_cancel_stops_before_the_next_chunk_and_a_restart_continues(tmp_path: Pa
         time.sleep(0.01)
     cancelled = jobs.cancel(started["job"])
     assert cancelled["status"] == "cancelled"
-    gate.put(1)  # the chunk in flight completes; nothing after it is asked
+    # The chunk in flight is torn down, not waited for: the stub was aborted
+    # and nothing landed for it.
+    assert getattr(stub, "aborted", False), "cancel did not abort the translator in flight"
     wait_for(jobs, started["job"], "cancelled")
     time.sleep(0.05)
     assert stub.asked == [(0, 4)]
-    # And asked for again, it goes on from the chunk that landed.
+    assert cancelled["done"] == 0 and jobs.status(started["job"])["done"] == 0
+    # And asked for again, it goes on from the first chunk with no file.
     again = jobs.start(source_id="13", source_language="en", target="tr", cues=cues(12), meta=META)
     assert again["status"] in ("queued", "running")
     gate.put(1)
     gate.put(1)
+    gate.put(1)
     wait_for(jobs, started["job"], "done")
-    assert stub.asked == [(0, 4), (4, 8), (8, 12)]
+    assert stub.asked == [(0, 4), (0, 4), (4, 8), (8, 12)]
 
 
 def test_a_cancel_and_an_immediate_restart_do_not_lose_the_restart(tmp_path: Path, cache: Cache) -> None:
