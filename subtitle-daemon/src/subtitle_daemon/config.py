@@ -53,6 +53,13 @@ class Config:
     gloss_url: str | None = None
     gloss_api_key: str | None = None
     google_api_key: str | None = None
+    # The model that translates a whole subtitle. Falls back to the gloss
+    # model's endpoint and key, since both are "an OpenAI-shaped chat
+    # endpoint, by default one on this machine", and to gemma3:4b - the local
+    # model the bake-off chose - when nothing names a model at all.
+    translate_model: str | None = None
+    translate_url: str | None = None
+    translate_api_key: str | None = None
 
     @property
     def has_api_key(self) -> bool:
@@ -98,4 +105,8 @@ def load() -> Config:
         gloss_url=pick("GLOSS_URL", "gloss_url"),
         gloss_api_key=pick("GLOSS_API_KEY", "gloss_api_key"),
         google_api_key=pick("GOOGLE_API_KEY", "google_api_key"),
+        translate_model=pick("TRANSLATE_MODEL", "translate_model"),
+        translate_url=pick("TRANSLATE_URL", "translate_url") or pick("GLOSS_URL", "gloss_url"),
+        translate_api_key=pick("TRANSLATE_API_KEY", "translate_api_key")
+        or pick("GLOSS_API_KEY", "gloss_api_key"),
     )

@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 
 from subtitle_daemon import server as server_module
+from subtitle_daemon import translate, translate_jobs
 from subtitle_daemon.cache import Cache
 from subtitle_daemon.config import Config
 from subtitle_daemon.lookups import Lookups
@@ -116,7 +117,17 @@ def service(tmp_path: Path) -> Iterator[tuple[server_module.Service, StubClient]
     svc.client = stub  # type: ignore[assignment]  # structural stand-in for Client
     svc._lock = threading.Lock()
     svc._measured = {}
+    # Translations against a model that answers at once, in Turkish-ish.
+    svc.jobs = translate_jobs.Jobs(
+        tmp_path / "jobs", svc.cache, model="stub-model", url="", key="", chunk=4,
+        translator_factory=lambda source, target: _InstantTranslator(),
+    )
     yield svc, stub
+
+
+class _InstantTranslator:
+    def chunk_lines(self, cues: list[Any], first: int, last: int, floor: int = 0) -> translate.Attempt:
+        return translate.Attempt(lines={i + 1: f"TR {cues[i].text}" for i in range(first, last)})
 
 
 @pytest.fixture
@@ -1239,3 +1250,133 @@ def test_a_gloss_request_without_items_is_answered_not_crashed(http) -> None:
     status, body = _post(base, "/gloss", {"language": "en", "target": "tr"})
     assert status == 200, body
     assert "error" in body
+
+
+# --- a whole subtitle, translated in the background --------------------------
+
+
+def _wait_translation(base: str, key: str, status: str = "done") -> dict[str, Any]:
+    import time
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        _status, payload = _get(base, f"/translate/{key}")
+        if payload.get("status") == status:
+            return payload
+        time.sleep(0.02)
+    raise AssertionError(f"translation never reached {status}: {payload}")
+
+
+def _delete_path(base: str, path: str) -> tuple[int, dict[str, Any]]:
+    request = urllib.request.Request(f"{base}{path}", method="DELETE")
+    with urllib.request.urlopen(request, timeout=5) as response:
+        return response.status, json.loads(response.read())
+
+
+def test_a_translation_is_started_from_cues_and_answers_with_its_progress(http) -> None:
+    base, _stub = http
+    cues = [{"start": i * 1000, "end": i * 1000 + 800, "text": f"line {i}"} for i in range(6)]
+    status, started = _post(base, "/translate", {
+        "source_id": "page:amzn1:en-us:sdh", "language": "en", "target": "tr", "cues": cues,
+        "imdb_id": "35823838", "movie_name": "Not Suitable for Work", "season": 1, "episode": 1,
+    })
+    assert status == 200 and "error" not in started, started
+    assert started["total"] == 6 and started["generated_file_id"] >= translate_jobs.GENERATED_BASE
+    done = _wait_translation(base, started["job"])
+    assert done["done"] == 6 and done["file_id"] == started["generated_file_id"]
+    assert done["model"] == "stub-model"
+
+    _status, listed = _get(base, "/translate")
+    assert [job["job"] for job in listed["jobs"]] == [started["job"]]
+    assert listed["model"] == "stub-model"
+
+    _status, with_cues = _get(base, f"/translate/{started['job']}?cues=1")
+    assert [cue["text"] for cue in with_cues["cues"]][:2] == ["TR line 0", "TR line 1"]
+    assert with_cues["translated_indexes"] == list(range(6))
+
+    # And the file is an ordinary cached subtitle now.
+    _status, held = _get(base, f"/cached/{done['file_id']}")
+    assert held["meta"]["generated"] is True and held["meta"]["language"] == "tr"
+    assert held["cues"][0]["text"] == "TR line 0"
+
+
+def test_a_translation_refuses_what_it_cannot_do(http) -> None:
+    base, _stub = http
+    cues = [{"start": 0, "end": 800, "text": "line"}]
+    _s, no_target = _post(base, "/translate", {"source_id": "1", "language": "en", "cues": cues})
+    assert "target" in no_target["error"]
+    _s, same = _post(base, "/translate", {"source_id": "1", "language": "en", "target": "en-gb", "cues": cues})
+    assert "already" in same["error"]
+    _s, absent = _post(base, "/translate", {"source_id": 424242, "language": "en", "target": "tr"})
+    assert "not on disk" in absent["error"]
+    _s, empty = _post(base, "/translate", {"source_id": "x", "language": "en", "target": "tr", "cues": []})
+    assert empty["error"] in ("nothing to translate", "source_id is required")
+    _s, missing = _get(base, "/translate/no-such-job")
+    assert missing["error"] == "no such translation"
+
+
+def test_a_cached_download_is_translated_from_the_disk(http, service) -> None:
+    base, _stub = http
+    svc, _ = service
+    svc.cache.put_subtitle(77, b"1\n00:00:01,000 --> 00:00:02,000\nHello\n\n2\n00:00:03,000 --> 00:00:04,000\nWorld\n", {
+        "file_id": 77, "language": "en", "imdb_id": "2149175", "movie_name": "The Americans",
+    })
+    _s, started = _post(base, "/translate", {"source_id": 77, "language": "en", "target": "tr", "imdb_id": "2149175"})
+    assert "error" not in started, started
+    done = _wait_translation(base, started["job"])
+    _s, held = _get(base, f"/cached/{done['file_id']}")
+    assert [cue["text"] for cue in held["cues"]] == ["TR Hello", "TR World"]
+    assert held["meta"]["source_id"] == "77"
+
+
+def test_a_generated_subtitle_is_a_search_result_and_the_language_stops_being_missing(http) -> None:
+    """The point of making the file: the next search for that episode finds
+    it, ranks it, and stops saying the language does not exist."""
+    base, stub = http
+    stub.results = []
+    stub.feature_list = [
+        make_feature(
+            "not suitable for work", imdb_id="35823838", year=2026, feature_type="Tvshow",
+            subtitles_count=0, subtitles_by_language={"en": 7, "de": 7},
+        ),
+    ]
+    _s, before = _get(base, "/search?query=Not+Suitable+for+Work&season=1&episode=1&languages=tr")
+    assert before["results"] == [] and before["missing_languages"] == ["tr"]
+
+    cues = [{"start": 0, "end": 800, "text": "line"}]
+    _s, started = _post(base, "/translate", {
+        "source_id": "page:x:en-us:subtitle", "language": "en", "target": "tr", "cues": cues,
+        "imdb_id": "35823838", "movie_name": "Not Suitable for Work", "season": 1, "episode": 1,
+    })
+    done = _wait_translation(base, started["job"])
+
+    _s, after = _get(base, "/search?query=Not+Suitable+for+Work&season=1&episode=1&languages=tr")
+    assert [row["file_id"] for row in after["results"]] == [done["file_id"]]
+    row = after["results"][0]
+    assert row["generated"] is True and row["cached"] is True and row["identified"] is True
+    assert row["language"] == "tr" and row["match_score"] == 1.0
+    assert "made from EN" in row["release"]
+    assert after["missing_languages"] == []
+    assert "tr" in after["available_languages"]
+
+    # Another episode of the same show does not get this one's file.
+    _s, other = _get(base, "/search?query=Not+Suitable+for+Work&season=1&episode=2&languages=tr")
+    assert other["results"] == []
+
+
+def test_a_translation_can_be_cancelled_and_forgotten(http) -> None:
+    base, _stub = http
+    cues = [{"start": i * 1000, "end": i * 1000 + 800, "text": f"line {i}"} for i in range(3)]
+    _s, started = _post(base, "/translate", {"source_id": "s", "language": "en", "target": "de", "cues": cues})
+    _wait_translation(base, started["job"])
+    _s, gone = _delete_path(base, f"/translate/{started['job']}?forget=1")
+    assert gone["forgotten"] is True
+    _s, listed = _get(base, "/translate")
+    assert listed["jobs"] == []
+
+
+def test_health_names_the_translation_model(http) -> None:
+    base, _stub = http
+    _s, payload = _get(base, "/health")
+    assert payload["translate_model"] == "stub-model"
+    assert payload["translating"] == 0

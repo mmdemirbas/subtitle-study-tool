@@ -38,6 +38,7 @@ from .cache import Cache
 from .config import CACHE_DIR, LOG_DIR, Config
 from .lookups import Lookups
 from .opensubtitles import Client, Feature, OpenSubtitlesError, QuotaExceededError
+from .translate_jobs import Jobs
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +71,13 @@ MAX_IMPORT_BODY_BYTES = 4 * 1024 * 1024
 # holds, so a bigger ceiling here costs disk, not memory.
 MAX_LOG_BODY_BYTES = 64 * 1024 * 1024
 
-_BODY_CEILINGS = {"/log": MAX_LOG_BODY_BYTES, "/cached": MAX_IMPORT_BODY_BYTES}
+_BODY_CEILINGS = {
+    "/log": MAX_LOG_BODY_BYTES,
+    "/cached": MAX_IMPORT_BODY_BYTES,
+    # A whole subtitle's cues as JSON: the same ceiling as an import, which is
+    # the same file arriving base64-encoded.
+    "/translate": MAX_IMPORT_BODY_BYTES,
+}
 
 # Everything a search derives about its result set, and therefore everything a
 # cache hit has to reproduce. Anything omitted here silently reverts to its
@@ -122,6 +129,17 @@ class Service:
             google_key=config.google_api_key,
         )
         self.client = Client(config.api_key) if config.has_api_key else None
+        # Whole-subtitle translations, as jobs that outlive their request. Its
+        # model and endpoint fall back to the gloss tier's, and the queue picks
+        # up whatever a previous process left unfinished.
+        self.jobs = Jobs(
+            CACHE_DIR / "translate-jobs",
+            self.cache,
+            model=config.translate_model or "",
+            url=config.translate_url or "",
+            key=config.translate_api_key or "",
+        )
+        self.jobs.resume_all()
         self._lock = threading.Lock()
         # Lines and words per cached file_id. A file on disk does not change,
         # so this is held for the life of the process. See _measure_cached.
@@ -188,6 +206,10 @@ class Service:
             "authenticated": bool(self.client and self.client.authenticated),
             "default_languages": list(self.config.default_languages),
             "cached_subtitles": len(self.cache.list_subtitles()),
+            # Which model would translate a whole subtitle, so the offer can
+            # name it - and how long a line takes on it, once one has run.
+            "translate_model": self.jobs.model,
+            "translating": sum(1 for job in self.jobs.list() if job["status"] in ("queued", "running")),
         }
 
     def lookup(self, params: dict[str, list[str]]) -> dict[str, Any]:
@@ -462,6 +484,8 @@ class Service:
         resolved = response.get("resolved")
         imdb_id = resolved.get("imdb_id") if isinstance(resolved, dict) else None
 
+        self._add_generated(response, results, imdb_id, languages)
+
         # A series searched without an episode, and what the disk remembers.
         #
         # Prime Video plays an episode in place on the show's own page, where
@@ -496,6 +520,72 @@ class Service:
             # Both directions: a promotion that no longer applies has to go,
             # or a deleted subtitle would still be advertised as held.
             response.pop("reusing_cached", None)
+
+    def _add_generated(
+        self,
+        response: dict[str, Any],
+        results: list[dict[str, Any]],
+        imdb_id: Any,
+        languages: tuple[str, ...],
+    ) -> None:
+        """Rows for the subtitles this daemon made itself, for this title.
+
+        A translation made here is on no index, so no search returns it and
+        no envelope holds it: it is added on every reply from the disk, the
+        way `cached` is re-derived, for the programme the search resolved and
+        the episode it asked for. Ranked as identified with a full score: it
+        was made from a file for exactly this episode, and its whole reason to
+        exist is that nothing else in its language does. Where a human upload
+        appears later it sits beside this one with its own name, and the
+        `generated` flag is what the panel shows.
+
+        The language then stops being "missing": the search's absence note is
+        about what can be had, and this can.
+        """
+        if not imdb_id:
+            return
+        used = response.get("used") if isinstance(response.get("used"), dict) else {}
+        asked = (used.get("season"), used.get("episode"))
+        wanted = {code.lower().split("-")[0] for code in languages}
+        present = {item.get("file_id") for item in results}
+        added: list[str] = []
+        for held in self.cache.list_subtitles():
+            if not held.meta.get("generated") or held.file_id in present:
+                continue
+            if str(held.meta.get("imdb_id") or "") != str(imdb_id):
+                continue
+            language = str(held.meta.get("language") or "").lower()
+            if wanted and language.split("-")[0] not in wanted:
+                continue
+            if asked != (None, None) and held.episode() != asked:
+                continue
+            row: dict[str, Any] = {
+                "file_id": held.file_id,
+                "language": language,
+                "movie_name": held.meta.get("movie_name") or "",
+                "release": held.meta.get("release") or "",
+                "season": held.meta.get("season"),
+                "episode": held.meta.get("episode"),
+                "download_count": 0,
+                "from_trusted": False,
+                "match_score": 1.0,
+                "identified": True,
+                "cached": True,
+                "generated": True,
+                "model": held.meta.get("model"),
+                "unrepaired": held.meta.get("unrepaired"),
+            }
+            row.update(self._measure_cached(held.file_id) or {})
+            results.insert(0, row)
+            added.append(language.split("-")[0])
+        if not added:
+            return
+        missing = response.get("missing_languages")
+        if isinstance(missing, list):
+            response["missing_languages"] = [code for code in missing if code not in added]
+        available = response.get("available_languages")
+        if isinstance(available, list):
+            response["available_languages"] = sorted(set(available) | set(added))
 
     def _search_upstream(
         self,
@@ -801,6 +891,77 @@ class Service:
         )
         return {"imported": True, "file_id": file_id, "sha256": stored.meta.get("sha256")}
 
+    # --- whole-subtitle translation ------------------------------------------
+
+    def translate_start(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Start translating a subtitle, or report the job already doing so.
+
+        The cues come in the body, whatever their source: a download the
+        daemon holds, a page's own track the daemon has never seen, a file the
+        reader opened. A cached file_id with no cues is read off the disk.
+        Everything else about the film travels as meta and lands in the
+        generated file's sidecar, so a later search finds it by title.
+        """
+        target = str(body.get("target") or "").strip().lower()
+        if not re.fullmatch(r"[a-z]{2,3}(-[a-z0-9]{2,4})?", target):
+            return {"error": "target must be a language code"}
+        source_language = str(body.get("language") or "").strip().lower()
+        if not source_language:
+            return {"error": "language of the source is required"}
+        if source_language.split("-")[0] == target.split("-")[0]:
+            return {"error": "the source is already in that language"}
+
+        raw_id = body.get("source_id")
+        source_id = str(raw_id) if isinstance(raw_id, (int, str)) and not isinstance(raw_id, bool) and str(raw_id) else ""
+        cues_in = body.get("cues")
+        cues: list[subtitles.Cue] = []
+        if isinstance(cues_in, list) and cues_in:
+            for entry in cues_in:
+                if not isinstance(entry, dict):
+                    continue
+                start, end = entry.get("start"), entry.get("end")
+                text = entry.get("text")
+                if isinstance(start, (int, float)) and isinstance(end, (int, float)) and isinstance(text, str) and text.strip():
+                    cues.append(subtitles.Cue(start_ms=int(start), end_ms=int(end), text=text))
+        elif (cached_id := _file_id(raw_id)) is not None:
+            held = self.cache.get_subtitle(cached_id)
+            if held is None:
+                return {"error": "that subtitle is not on disk; send its cues"}
+            text, _ = subtitles.decode(held.read_bytes())
+            cues = subtitles.parse_srt(text)
+            source_id = str(cached_id)
+        if not source_id:
+            return {"error": "source_id is required"}
+        if not cues:
+            return {"error": "nothing to translate"}
+
+        meta = {
+            "imdb_id": str(body.get("imdb_id") or "") or None,
+            "movie_name": str(body.get("movie_name") or "") or None,
+            "release": str(body.get("release") or "") or None,
+            "season": _file_id(body.get("season")),
+            "episode": _file_id(body.get("episode")),
+            "label": str(body.get("label") or "") or None,
+        }
+        started = self.jobs.start(
+            source_id=source_id, source_language=source_language, target=target, cues=cues, meta=meta,
+        )
+        if "error" not in started:
+            logger.info(
+                "translation %s: %s -> %s, %d cues, %s",
+                started["job"], source_language, target, len(cues), started["status"],
+            )
+        return started
+
+    def translate_status(self, key: str, *, with_cues: bool = False) -> dict[str, Any]:
+        return self.jobs.status(key, with_cues=with_cues)
+
+    def translate_list(self) -> dict[str, Any]:
+        return {"jobs": self.jobs.list(), "model": self.jobs.model}
+
+    def translate_cancel(self, key: str, *, forget: bool = False) -> dict[str, Any]:
+        return self.jobs.cancel(key, forget=forget)
+
     def cached_list(self) -> dict[str, Any]:
         return {
             "subtitles": [
@@ -907,6 +1068,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, self.service.lookup(params))
         elif parsed.path == "/cached":
             self._send(HTTPStatus.OK, self.service.cached_list())
+        elif parsed.path == "/translate":
+            self._send(HTTPStatus.OK, self.service.translate_list())
+        elif match := re.fullmatch(r"/translate/([A-Za-z0-9-]+)", parsed.path):
+            self._send(
+                HTTPStatus.OK,
+                self.service.translate_status(match.group(1), with_cues=bool(params.get("cues"))),
+            )
         elif match := re.fullmatch(r"/cached/(\d+)", parsed.path):
             self._send(
                 HTTPStatus.OK,
@@ -921,7 +1089,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._origin_ok():
             return
         parsed = urlparse(self.path)
-        if parsed.path not in ("/fetch", "/cached", "/log", "/gloss"):
+        if parsed.path not in ("/fetch", "/cached", "/log", "/gloss", "/translate"):
             self._send(HTTPStatus.NOT_FOUND, {"error": "no such endpoint"})
             return
 
@@ -958,6 +1126,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, self.service.append_log(body))
         elif parsed.path == "/gloss":
             self._send(HTTPStatus.OK, self.service.gloss(body))
+        elif parsed.path == "/translate":
+            self._send(HTTPStatus.OK, self.service.translate_start(body))
         else:
             self._send(HTTPStatus.OK, self.service.fetch(body))
 
@@ -969,6 +1139,11 @@ class _Handler(BaseHTTPRequestHandler):
 
         if match := re.fullmatch(r"/cached/(\d+)", parsed.path):
             self._send(HTTPStatus.OK, self.service.forget(int(match.group(1))))
+        elif match := re.fullmatch(r"/translate/([A-Za-z0-9-]+)", parsed.path):
+            self._send(
+                HTTPStatus.OK,
+                self.service.translate_cancel(match.group(1), forget=bool(params.get("forget"))),
+            )
         elif parsed.path == "/cached":
             self._send(
                 HTTPStatus.OK,
