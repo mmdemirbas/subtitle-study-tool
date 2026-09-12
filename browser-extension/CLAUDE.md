@@ -546,19 +546,27 @@ something the worker's plain GET did not send. A tabii `pageFetch` refusing
   with them, answered to the worker at the moment it fetches. The trace gets
   languages, kinds, hostnames and key names. Nothing writes a URL to storage
   or to the log; the harness case checks that `status()` carries no token.
-- **A list is the page's only while the page is the page it was posted
-  on.** Reported on tabii, 2026-09-13: Proxima was watched, closed, another
-  film opened through the site's own navigation - no reload, so `content.js`
-  and the ear lived on with Proxima's list, and the next film's automatic
-  attach found "a subtitle the page carries" and put Proxima's 1134 lines
-  under it (the log: `autoAttach` on `/tr/browse/...?dt=435499` with
-  `plan.best = page:163498:tr:subtitle`). `pageSubtitles.where` is the path
-  and query at post time; `ownStillHere()` drops the list the moment they
-  differ, traces `dropped: true`, and asks the ears again; an ear answers an
-  ask only for the path it heard the list on, or one heard in the last half
-  minute (a player that fetches the next title's list just before the site
-  changes the URL). The harness case "a page's own list is dropped when the
-  site navigates without a reload" is the regression test.
+- **A list is the page's only while the programme is the programme it was
+  posted for.** Reported on tabii, 2026-09-13: Proxima was watched, closed,
+  another film opened through the site's own navigation - no reload, so
+  `content.js` and the ear lived on with Proxima's list, and the next film's
+  automatic attach found "a subtitle the page carries" and put Proxima's 1134
+  lines under it (the log: `autoAttach` on `/tr/browse/...?dt=435499` with
+  `plan.best = page:163498:tr:subtitle`). Not a tabii thing: any single-page
+  player does it, and the local catalogue app swaps the stream without
+  moving the URL at all. So `dropOwn(reason)` runs on either sign of a new
+  programme - `ownStillHere()` when the path or query differ from
+  `pageSubtitles.where` (caught before the new video exists, which is when
+  the browse page ran its attach), and `noticeProgrammeChange()` when the
+  programme mark changes, before the worker hears of it (the same signal
+  that takes the last episode's subtitles off; not on a page's first mark).
+  Both trace `dropped: "navigation" | "programme"` and ask the ears again; an
+  ear answers an ask only for the path it heard the list on, or one heard in
+  the last half minute (a player that fetches the next title's list just
+  before the site changes the URL, or before the mark catches up). Two
+  harness cases are the regression tests: "...when the site navigates
+  without a reload" and "...when the programme changes and the URL does
+  not".
 - **A page track is a search result with a string id**, `page:<titleId>:<code>:<kind>`,
   and `isPageFile` in `daemon.js` is the one test. `pageResults` ranks them in
   the search's own shape - `identified`, `match_score: 1`, `cached` because it

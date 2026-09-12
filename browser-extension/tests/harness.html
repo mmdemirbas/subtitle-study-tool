@@ -4684,7 +4684,7 @@
             await sleep(50);
           });
           const dropped = seen.find((a) => a.kind === "pageSubtitles" && a.detail?.dropped);
-          if (!dropped || dropped.detail.titleId !== "P1") throw new Error(`no drop in the log: ${JSON.stringify(seen.map((a) => a.kind))}`);
+          if (!dropped || dropped.detail.titleId !== "P1" || dropped.detail.dropped !== "navigation") throw new Error(`no drop in the log: ${JSON.stringify(seen.map((a) => [a.kind, a.detail?.dropped]))}`);
 
           // The ears were asked, and the dropped list is not what any of them
           // answers with on THIS page. (An ear may answer with a list it heard
@@ -10442,6 +10442,45 @@
           document.title = wasTitle;
           setDuration(wasDuration);
           document.getElementById("ad-slot").innerHTML = "";
+          await sleep(1800);
+          window.__sent.length = 0;
+        }
+      });
+
+      /* The same, on a player that moves nothing in the URL - the local
+       * catalogue app swaps the stream and announces what it is playing. The
+       * programme mark is the signal, the one that takes the last episode's
+       * subtitles off. */
+      check("a page's own list is dropped when the programme changes and the URL does not", async () => {
+        const own = () => window.__ssoApi.status().own;
+        const video = document.getElementById("v");
+        const say = (fields) =>
+          (video.dataset.ssoNowPlaying = JSON.stringify({ v: 1, kind: "movie", year: 2019, ...fields }));
+        try {
+          // A programme, announced, and the page's list for it.
+          say({ title: "Film One", imdb: "tt7770101" });
+          await sleep(300);
+          window.postMessage({
+            source: "sso-ear", type: "tracks", titleId: "F1", shape: ["mpd"],
+            tracks: [{ language: "tr", url: "https://cdn.example/f1.mpd?token=SECRET", type: "", displayName: "Türkçe", format: "dash", forced: false, keys: [], dash: { representation: "t", adaptation: "0" } }],
+          }, "*");
+          for (let i = 0; i < 40 && own()?.titleId !== "F1"; i++) await sleep(25);
+          if (own()?.titleId !== "F1") throw new Error("the list did not arrive");
+
+          // The stream is swapped under the same URL.
+          const seen = await tracing(async () => {
+            say({ title: "Film Two", imdb: "tt7770102" });
+            // Gone; what an ear answers the re-ask with for THIS page may
+            // take its place, and that is the same-page rule, not a leak.
+            for (let i = 0; i < 120 && own()?.titleId === "F1"; i++) await sleep(25);
+            if (own()?.titleId === "F1") throw new Error(`still offering ${JSON.stringify(own())} on the next film`);
+            await sleep(50);
+          });
+          const dropped = seen.find((a) => a.kind === "pageSubtitles" && a.detail?.dropped);
+          if (dropped?.detail.dropped !== "programme" || dropped.detail.titleId !== "F1") throw new Error(`drop in the log: ${JSON.stringify(seen.map((a) => [a.kind, a.detail?.dropped]))}`);
+        } finally {
+          delete video.dataset.ssoNowPlaying;
+          window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
           await sleep(1800);
           window.__sent.length = 0;
         }

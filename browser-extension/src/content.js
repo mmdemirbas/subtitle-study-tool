@@ -1335,26 +1335,36 @@
     notify();
   }
 
-  /* A list is the page's only while the page is the page it was posted on.
+  /* A list is the page's only while the programme is the programme it was
+   * posted for.
    *
    * Reported on tabii: Proxima was watched, closed, and another film opened
    * through the site's own navigation - no reload, so this script and the
    * ear lived on, and with them Proxima's list. The next film's automatic
    * attach found "a subtitle the page carries" and put Proxima's lines under
-   * it. So a list carries the URL it was posted at, and is dropped the moment
-   * the path or query is something else; the ear is asked again, and answers
-   * only for the page it is on now (see the ears' `ask` handlers). YouTube's
-   * `&t=` and the like change the query and drop the list too, and the ear
-   * posts it straight back for the same video, which costs one message. */
+   * it. The same thing happens on any single-page player, URL or no URL: the
+   * local catalogue app swaps the stream and moves nothing else. So the list
+   * is dropped on either sign of a new programme - the path or query changing
+   * (caught before the new video even exists, which is when the browse page
+   * ran its automatic attach), or the programme mark changing (see
+   * noticeProgrammeChange, the same signal that takes the last episode's
+   * subtitles off). The ears are asked again each time, and answer only for
+   * the page they are on now or a list heard in the last half minute (see
+   * their `ask` handlers), so a list posted just before the mark caught up
+   * comes straight back, which costs one message. YouTube's `&t=` and the
+   * like change the query and cost the same message. */
   const pageWhere = () => `${location.pathname}${location.search}`;
 
+  function dropOwn(reason) {
+    if (!pageSubtitles) return;
+    trace("pageSubtitles", { site: pageSubtitles.site, titleId: pageSubtitles.titleId, dropped: reason, tracks: pageSubtitles.tracks.length });
+    pageSubtitles = null;
+    notify();
+    window.postMessage({ source: PAGE_SUBTITLE_SOURCE, type: "ask" }, "*");
+  }
+
   function ownStillHere() {
-    if (pageSubtitles && pageSubtitles.where !== pageWhere()) {
-      trace("pageSubtitles", { site: pageSubtitles.site, titleId: pageSubtitles.titleId, dropped: true, tracks: pageSubtitles.tracks.length });
-      pageSubtitles = null;
-      notify();
-      window.postMessage({ source: PAGE_SUBTITLE_SOURCE, type: "ask" }, "*");
-    }
+    if (pageSubtitles && pageSubtitles.where !== pageWhere()) dropOwn("navigation");
     return pageSubtitles;
   }
   setInterval(ownStillHere, 1000);
@@ -4688,6 +4698,11 @@
     if (!mark) return;
     const wait = settleFor(mark);
     if (mark !== programme.mark) {
+      /* The page's own list belonged to the programme that was; the ears are
+       * asked again for this one. Before the worker hears of the change, so
+       * its plan cannot find the old list. Not on the first mark of a page,
+       * which is the programme the list was posted for. */
+      if (programme.mark) dropOwn("programme");
       programme = { mark, since: performance.now(), told: programme.told };
       /* An inferred mark is given the window to stop moving. An announced one
        * is acted on in the turn it arrived in: returning here unconditionally
