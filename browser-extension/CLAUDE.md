@@ -471,10 +471,13 @@ carries the evidence table.
   declines while a page track is attached, because the next episode's list
   cannot be had before it plays and a download warmed now would lose to it.
 
-**`inject()` re-injects `content_scripts[0]` only**, so a Prime Video tab left
-open across an extension update has no ear until the tab is reloaded. The
-content script then reports `own: null`, the panel offers nothing, and the
-search runs as it always did.
+**`inject()` re-injects the ears too.** The content scripts go into every
+frame from `content_scripts[0]`; every further entry with `world: "MAIN"` goes
+into the top frame of a tab whose URL its `matches` fit (`matchesPattern`,
+the subset of the match-pattern grammar the manifest uses). A Prime Video tab
+left open across an update therefore hears the next episode's playback
+answer without a reload; the current one, already played, is gone either
+way. Each ear guards its own double injection.
 
 `parseTtml` in `src/subtitles/ttml.js` is a regex reader, because the worker
 has no `DOMParser`. Absolute `begin`/`end` on `<p>`, `dur` as a fallback, the

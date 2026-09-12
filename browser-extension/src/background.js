@@ -137,12 +137,62 @@ async function inject(tabId) {
       target: { tabId, allFrames: true },
       files: scripts.js,
     });
-    return true;
   } catch {
     // A restricted page (chrome://, the web store), or a tab this extension
     // has no host permission for.
     return false;
   }
+
+  /* The page-world ears - src/sites/*.js, declared as further content_scripts
+   * entries with world MAIN - go in too, on the tabs their patterns match.
+   * Without this a Prime Video tab left open across an update had no ear
+   * until it was reloaded, and the next episode's playback answer went by
+   * unheard. Each ear guards its own double injection, so a tab that already
+   * has one is unchanged. Failing to add one costs the ear, not the
+   * injection: the content scripts above are already in. */
+  let url = "";
+  try {
+    url = (await chrome.tabs.get(tabId))?.url || "";
+  } catch {
+    return true;
+  }
+  for (const entry of chrome.runtime.getManifest().content_scripts?.slice(1) || []) {
+    if (entry.world !== "MAIN" || !entry.js?.length) continue;
+    if (!(entry.matches || []).some((pattern) => matchesPattern(pattern, url))) continue;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, files: entry.js, world: "MAIN" });
+    } catch {
+      // The ear is a convenience on a page that is otherwise working.
+    }
+  }
+  return true;
+}
+
+/* A manifest match pattern against a URL: scheme, host with an optional
+ * leading wildcard, path with wildcards. Only what the manifest here uses;
+ * `<all_urls>` and a wildcard scheme are not, and answer false. */
+export function matchesPattern(pattern, url) {
+  const found = /^(https?|\*):\/\/(\*|(?:\*\.)?[^/*]+)(\/.*)$/.exec(pattern);
+  let target;
+  try {
+    target = new URL(url);
+  } catch {
+    return false;
+  }
+  if (!found) return false;
+  const [, scheme, host, path] = found;
+  if (scheme !== "*" && target.protocol !== `${scheme}:`) return false;
+  if (scheme === "*" && !/^https?:$/.test(target.protocol)) return false;
+  if (host !== "*") {
+    if (host.startsWith("*.")) {
+      const bare = host.slice(2);
+      if (target.hostname !== bare && !target.hostname.endsWith(`.${bare}`)) return false;
+    } else if (target.hostname !== host) {
+      return false;
+    }
+  }
+  const pathPattern = new RegExp(`^${path.split("*").map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`);
+  return pathPattern.test(target.pathname + target.search);
 }
 
 // --- sites that put subtitles on by themselves ------------------------------

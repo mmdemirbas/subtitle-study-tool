@@ -68,6 +68,8 @@ globalThis.addEventListener = (type, fn) => {
   (listeners.global[type] ||= []).push(fn);
 };
 let frameList = [{ frameId: 0 }];
+// Where the one tab is. The page-world ear goes in only on the hosts it is for.
+let tabUrl = "https://example.tv/watch/1";
 const store = {};
 const sentToTab = [];
 // Every scripting call the worker made, so a test can assert the injection
@@ -107,7 +109,11 @@ globalThis.chrome = {
      * it stands for is how a whole feature ran green having never run. */
     getManifest: () => ({
       version: "test",
-      content_scripts: [{ js: ["src/align.js", "src/content.js"], matches: ["<all_urls>"] }],
+      content_scripts: [
+        { js: ["src/align.js", "src/content.js"], matches: ["<all_urls>"] },
+        // The page-world ear, as the real manifest declares it.
+        { js: ["src/sites/primevideo.js"], matches: ["https://*.primevideo.com/*"], run_at: "document_start", world: "MAIN" },
+      ],
     }),
     getURL: (p) => `chrome-extension://test/${p}`,
     onInstalled: { addListener() {} },
@@ -148,8 +154,8 @@ globalThis.chrome = {
   },
   tabs: {
     onRemoved: { addListener: (fn) => listeners.removed.push(fn) },
-    async query() { return [{ id: 1, url: "https://example.tv/watch/1" }]; },
-    async get(id) { return { id, url: "https://example.tv/watch/1" }; },
+    async query() { return [{ id: 1, url: tabUrl }]; },
+    async get(id) { return { id, url: tabUrl }; },
     async create() { return {}; },
     async sendMessage(tabId, message) {
       sentToTab.push({ tabId, type: message.type, message });
@@ -507,6 +513,23 @@ t(
   sentToTab.some((m) => m.type === "sso:togglePanel"),
   sentToTab.map((m) => m.type).join(","),
 );
+
+t(
+  "and no page-world ear goes into a tab on a host that has none",
+  !injected.some((call) => call.world === "MAIN"),
+  JSON.stringify(injected),
+);
+
+// The same stale tab on Prime Video gets the ear as well, in the page's world.
+injected.length = 0;
+tabUrl = "https://www.primevideo.com/detail/0F73UBN1X5HC63POQZSJBLWXCP";
+await listeners.command("toggle-panel");
+t(
+  "a stale Prime Video tab gets the ear too, in the page's world",
+  injected.some((call) => call.world === "MAIN" && call.files?.[0] === "src/sites/primevideo.js" && call.target?.allFrames !== true),
+  JSON.stringify(injected),
+);
+tabUrl = "https://example.tv/watch/1";
 
 // A tab already running the current version is left alone.
 injected.length = 0;
