@@ -25,6 +25,7 @@ import {
   translateStatus,
 } from "./daemon.js";
 import { parseTtml } from "./subtitles/ttml.js";
+import { joinSegments, parseVtt, segmentUrls } from "./subtitles/vtt.js";
 import { measure, toJson } from "./subtitles/srt.js";
 /* Every call that used to go straight to the daemon goes through the provider,
  * which prefers the daemon and does the work here when it is not running. */
@@ -836,8 +837,40 @@ async function fetchPageSubtitle(tabId, frameId, fileId) {
     return { error: `The page's own subtitle could not be fetched (${response?.status ?? "no answer"})` };
   }
   const text = await response.text();
-  const rendered = toJson(parseTtml(text));
-  trace.record("pageFetch", { fileId, status: response.status, bytes: text.length, cueCount: rendered.length });
+  let cues;
+  let segments = 0;
+  if (track.format === "hls-vtt") {
+    /* A playlist of segments, not a file: each is fetched and the cues are
+     * joined, a cue written into two segments counting once. Six at a time,
+     * which is what a browser gives one host anyway. */
+    const urls = segmentUrls(text, track.url);
+    const parts = new Array(urls.length);
+    let next = 0;
+    let failed = 0;
+    const worker = async () => {
+      while (next < urls.length) {
+        const index = next++;
+        try {
+          const segment = await fetch(urls[index]);
+          if (!segment.ok) throw new Error(String(segment.status));
+          parts[index] = parseVtt(await segment.text());
+        } catch {
+          failed += 1;
+          parts[index] = [];
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(6, urls.length) }, worker));
+    segments = urls.length;
+    if (failed) trace.record("pageFetch", { fileId, segments, failed });
+    cues = failed === urls.length && urls.length ? [] : joinSegments(parts);
+  } else if (track.format === "vtt") {
+    cues = parseVtt(text);
+  } else {
+    cues = parseTtml(text);
+  }
+  const rendered = toJson(cues);
+  trace.record("pageFetch", { fileId, status: response.status, bytes: text.length, format: track.format || "ttml", segments, cueCount: rendered.length });
   if (!rendered.length) return { error: "The page's own subtitle file had no lines this could read" };
   return {
     cues: rendered,

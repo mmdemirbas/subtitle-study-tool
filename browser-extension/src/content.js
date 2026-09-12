@@ -1245,12 +1245,14 @@
    * them, and the running log gets the languages and the shape of the answer.
    * That shape is the evidence this feature is waiting on, so it is written on
    * every new title rather than once. */
-  const PAGE_SUBTITLE_SOURCE = "sso-prime";
+  const PAGE_SUBTITLE_SOURCE = "sso-ear";
   let pageSubtitles = null;
 
   function siteName() {
     const host = location.hostname;
     if (/(^|\.)primevideo\.com$/.test(host) || /(^|\.)amazon\./.test(host)) return "Prime Video";
+    if (/(^|\.)netflix\.com$/.test(host)) return "Netflix";
+    if (/(^|\.)disneyplus\.com$/.test(host)) return "Disney+";
     return host.replace(/^www\./, "");
   }
 
@@ -1258,10 +1260,12 @@
    * the lines spoken in another language and nothing else, which is not a
    * subtitle for the film; [CC] and SDH carry the sound descriptions a hearing
    * viewer does not want on screen twice. Both are offered, neither is picked
-   * first. */
+   * first. The words are each site's: Prime says "sdh" in the type, Netflix
+   * "closedcaptions", Disney+ "describes-music-and-sound" in the rendition's
+   * characteristics, and all three put "[CC]" in the name. */
   function trackKind(track) {
     if (track.forced) return "forced";
-    if (/sdh|hearing|\bcc\b|\[cc\]/i.test(`${track.type} ${track.displayName}`)) return "sdh";
+    if (/sdh|hearing|closedcaptions|describes-music-and-sound|\bcc\b|\[cc\]/i.test(`${track.type} ${track.displayName}`)) return "sdh";
     return "subtitle";
   }
 
@@ -1285,6 +1289,9 @@
           code,
           kind,
           displayName: String(track.displayName || ""),
+          /* How the worker should read the file: "ttml" (Prime, Netflix),
+           * "vtt", or "hls-vtt" for a playlist of segments (Disney+). */
+          format: String(track.format || "ttml"),
           url: track.url,
         };
       });
@@ -1300,9 +1307,10 @@
     trace("pageSubtitles", {
       site,
       titleId,
-      tracks: tracks.map((track) => ({ code: track.code, kind: track.kind, displayName: track.displayName })),
+      tracks: tracks.map((track) => ({ code: track.code, kind: track.kind, displayName: track.displayName, format: track.format })),
       hosts,
       keys: data.tracks?.[0]?.keys ?? [],
+      formats: data.tracks?.[0]?.formats ?? [],
       shape: data.shape ?? [],
     });
     notify();

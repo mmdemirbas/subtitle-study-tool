@@ -1646,6 +1646,94 @@ ${lines}
   await until(async () => (await warm())?.decision === "page-provides");
   t("and the log says why", (await warm())?.decision === "page-provides", JSON.stringify(await warm()));
 
+  /* The other two formats an ear can name. Netflix serves WebVTT when asked
+   * and TTML when not; Disney+ serves a playlist of WebVTT segments. */
+  const { parseVtt, joinSegments, subtitleRenditions, segmentUrls } = await import("../src/subtitles/vtt.js");
+  const vtt = parseVtt(`WEBVTT
+X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
+
+NOTE a comment block
+
+STYLE
+::cue { color: white }
+
+1
+00:00:01.500 --> 00:00:03.000 line:85% align:center
+Hello,
+world &amp; friends
+
+00:00:04.000 --> 00:00:05.000
+<i>Whispered</i> <c.yellow>aloud</c>
+
+01:00:06.000 --> 01:00:07.000
+<v Roslin>- Yes.</v>
+- No.
+
+00:00:08.000 --> 00:00:09.000
+♪♪
+
+00:00:09.000 --> 00:00:08.000
+Backwards
+
+00:10.000 --> 00:11.000
+Short stamp
+`);
+  const vttTexts = vtt.map((cue) => cue.text);
+  t("a WebVTT cue is a cue on the title's clock, its settings and header blocks ignored",
+    vtt[0]?.startMs === 1500 && vtt[0]?.endMs === 3000 && vttTexts[0] === "Hello,\nworld & friends", JSON.stringify(vtt[0]));
+  t("italics stay, a class tag and a voice tag go, a short stamp is read, an hour is an hour",
+    vttTexts[1] === "<i>Whispered</i> aloud" && vttTexts.includes("- Yes.\n- No.") && vtt.find((c) => c.text === "Short stamp")?.startMs === 10000 &&
+      vtt.find((c) => c.text === "- Yes.\n- No.")?.startMs === 3606000,
+    JSON.stringify(vtt.map((c) => [c.startMs, c.text])));
+  t("a cue with nothing to read, or with its end before its start, costs one cue",
+    !vttTexts.includes("♪♪") && !vttTexts.includes("Backwards") && vtt.length === 4, JSON.stringify(vttTexts));
+  const joined = joinSegments([
+    parseVtt("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nOne\n\n00:00:59.000 --> 00:01:01.000\nAcross\n"),
+    parseVtt("WEBVTT\n\n00:00:59.000 --> 00:01:01.000\nAcross\n\n00:01:02.000 --> 00:01:03.000\nTwo\n"),
+  ]);
+  t("a cue written into both segments it spans is one cue",
+    joined.map((c) => c.text).join() === "One,Across,Two", JSON.stringify(joined));
+  const master = `#EXTM3U
+#EXT-X-INDEPENDENT-SEGMENTS
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="eac-3",NAME="English",LANGUAGE="en",URI="r/a/en.m3u8"
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="sub-main",NAME="English [CC]",LANGUAGE="en",AUTOSELECT=YES,FORCED=NO,CHARACTERISTICS="public.accessibility.describes-music-and-sound",URI="r/s/en-cc/sub-main.m3u8"
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="sub-main",NAME="Türkçe",LANGUAGE="tr",FORCED=NO,URI="r/s/tr/sub-main.m3u8"
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="sub-main",NAME="English --Forced--",LANGUAGE="en",FORCED=YES,URI="r/s/en-forced/sub-main.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=1000,SUBTITLES="sub-main"
+r/v/1.m3u8
+`;
+  const renditions = subtitleRenditions(master, "https://cdn.example/t/1/ctr-all/master.m3u8");
+  t("an HLS master's subtitle renditions are read, with their playlists resolved against it",
+    renditions.length === 3 && renditions[0].url === "https://cdn.example/t/1/ctr-all/r/s/en-cc/sub-main.m3u8" &&
+      renditions[0].characteristics.includes("describes-music") && renditions[2].forced === true && renditions[1].language === "tr",
+    JSON.stringify(renditions));
+  t("a media playlist's segments are resolved against the playlist, comments and blanks skipped",
+    segmentUrls("#EXTM3U\n#EXTINF:6.0,\nseg-1.vtt\n\n#EXTINF:6.0,\n../seg-2.vtt\n#EXT-X-ENDLIST\n", "https://cdn.example/r/s/tr/sub-main.m3u8").join() ===
+      "https://cdn.example/r/s/tr/seg-1.vtt,https://cdn.example/r/s/seg-2.vtt",
+    JSON.stringify(segmentUrls("#EXTM3U\nseg-1.vtt\n", "https://cdn.example/r/s/tr/sub-main.m3u8")));
+
+  // The worker, given a Disney+ track: playlist, then every segment, joined.
+  pageFiles = {
+    "https://cdn.example/r/s/tr/sub-main.m3u8": "#EXTM3U\n#EXTINF:60.0,\nseg-1.vtt\n#EXTINF:60.0,\nseg-2.vtt\n#EXT-X-ENDLIST\n",
+    "https://cdn.example/r/s/tr/seg-1.vtt": "WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000\n\n00:00:01.000 --> 00:00:02.000\nBir\n\n00:00:59.000 --> 00:01:01.000\nSınırda\n",
+    "https://cdn.example/r/s/tr/seg-2.vtt": "WEBVTT\nX-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000\n\n00:00:59.000 --> 00:01:01.000\nSınırda\n\n00:01:02.000 --> 00:01:03.000\nİki\n",
+    "https://cdn.example/nf/tr.vtt": "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nNetflix Türkçesi\n",
+  };
+  pageSubtitlesReply = () => ({
+    site: "Disney+", titleId: "D1",
+    tracks: [
+      { ...track("tr", "subtitle", "https://cdn.example/r/s/tr/sub-main.m3u8"), id: "page:D1:tr:subtitle", format: "hls-vtt" },
+      { ...track("tr", "subtitle", "https://cdn.example/nf/tr.vtt"), id: "page:D1:tr:sdh", format: "vtt" },
+    ],
+  });
+  const hls = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:D1:tr:subtitle" } }, sender);
+  t("a playlist of segments is fetched segment by segment and read as one file",
+    hls?.served_by === "page" && hls.cues?.map((c) => c.text).join() === "Bir,Sınırda,İki" && hls.cues[2].start === 62000,
+    JSON.stringify(hls));
+  const plain = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:D1:tr:sdh" } }, sender);
+  t("and a WebVTT file is read as itself",
+    plain?.cues?.[0]?.text === "Netflix Türkçesi", JSON.stringify(plain));
+
   daemonAnswers = null;
   pageSubtitlesReply = () => null;
   pageFiles = {};

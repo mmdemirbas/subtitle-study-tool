@@ -416,10 +416,30 @@ worker's `webRequest` sees request bodies and not response bodies; nothing in
 the isolated world can read what the page's `fetch` returned. So
 `src/sites/primevideo.js` runs as `"world": "MAIN"` at `document_start`, wraps
 `fetch` and `XMLHttpRequest.prototype.open`, clones the answer, and posts
-`{ source: "sso-prime", type: "tracks", titleId, tracks, shape }` on the
+`{ source: "sso-ear", type: "tracks", titleId, tracks, shape }` on the
 window. The player's own copy is untouched. `content.js` loads at idle and may
 have missed it, so it posts `{ type: "ask" }` once its listener is up and the
 page world answers with the latest.
+
+**The other two ears speak the same message and differ in where the list
+goes by.** Each track carries `language, url, type, displayName, forced,
+format, keys`, and `format` is what the worker reads the file by: `ttml`
+(Prime, Netflix), `vtt`, or `hls-vtt` for a playlist of segments.
+`src/sites/netflix.js` wraps `JSON.parse`, because the manifest arrives
+inside an MSL envelope and is decrypted by the player before it is parsed -
+no fetch wrap sees it. A manifest is recognised by `result.movieId` beside
+`result.timedtexttracks` (older `textTracks`); a track's file is
+`ttDownloadables[format].downloadUrls` (an object) or `.urls[].url`, and
+`dfxp-ls-sdh` / `imsc1.1` are TTML in the player's default request, where
+`webvtt-lssdh-ios8` is not. The player prefetches the next episode's
+manifest, so every one is kept by `movieId` and the one posted is for the id
+on `[data-videoid]` or in `/watch/<id>`, checked once a second. Nothing
+rewrites the player's request. `src/sites/disneyplus.js` wraps XHR and fetch
+for `.m3u8`: the master playlist's `#EXT-X-MEDIA:TYPE=SUBTITLES` lines carry
+`NAME`, `LANGUAGE`, `FORCED`, `CHARACTERISTICS` and the `URI` of a playlist
+of WebVTT segments, resolved against the master. The worker's
+`fetchPageSubtitle` fetches that playlist, then every segment six at a time,
+and `joinSegments` drops a cue written into both segments it spans.
 
 **Evidence, as of 2026-09-12.** The request path, the response path and the
 plain `fetch(url)` with no credentials were first read in the source of the
@@ -445,7 +465,18 @@ request bypassed the hook (a worker, or a fetch captured before
 `document_start` - check `performance.getEntriesByType("resource")` for the
 URL). The zihin node
 `media-playback/systems/primevideo/findings/prime-video-hands-its-player-every-subtitle-as-signed-ttml.md`
-carries the evidence table.
+carries the evidence table. **Netflix and Disney+ are `src` tier**: read in
+Subadub (github rsimmons/subadub) and "Netflix - subtitle downloader"
+(greasyfork 26654) for the one, "Disney+ Subtitles Downloader Improved" (github
+Sen-Elsecaller, v2.16) for the other, all on 2026-09-12, and run in the
+harness against `tests/fixtures/netflix/manifest.json` and
+`tests/fixtures/disneyplus/master.m3u8`. Neither has been observed on a live
+playback yet. The first one writes the same `pageSubtitles` and `pageFetch`
+lines; a Netflix line with `formats` naming only `simplesdh` and `nflx-cmisc`
+means the TTML formats left the default request, and the answer is the request
+rewrite both scripts do (`profiles.unshift(...)` in a `JSON.stringify` wrap),
+deliberately not done here. A Disney+ `pageFetch` with `failed` equal to
+`segments` means the CDN wants something the worker's plain GET did not send.
 
 **Three things are load-bearing.**
 
@@ -477,7 +508,8 @@ into the top frame of a tab whose URL its `matches` fit (`matchesPattern`,
 the subset of the match-pattern grammar the manifest uses). A Prime Video tab
 left open across an update therefore hears the next episode's playback
 answer without a reload; the current one, already played, is gone either
-way. Each ear guards its own double injection.
+way. Each ear guards its own double injection, and every ear answers an
+`ask` - the harness, which loads all three, has to pick the answer it wants.
 
 `parseTtml` in `src/subtitles/ttml.js` is a regex reader, because the worker
 has no `DOMParser`. Absolute `begin`/`end` on `<p>`, `dur` as a fallback, the
@@ -486,7 +518,11 @@ styles by attribute or by a head style's id to `<i>`/`<b>`, other tags
 dropped, entities decoded, whitespace collapsed as `xml:space="default"` says.
 Times are absolute on the title's clock - which is the point: nothing to line
 up. A cue with no letter or digit is dropped, by the same `READABLE` rule the
-SRT reader exports.
+SRT reader exports. `parseVtt` in `src/subtitles/vtt.js` is its WebVTT twin -
+blocks split on blank lines, a timing regex, `<i>`/`<b>` kept and `<c>`/`<v>`
+dropped around their text, the `X-TIMESTAMP-MAP` an HLS segment carries
+ignored because the stamps are already on the title's clock - beside the two
+HLS readers, `subtitleRenditions` and `segmentUrls`.
 
 ## A subtitle being made is one subtitle, attached under its final id
 

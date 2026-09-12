@@ -1,0 +1,20 @@
+{
+  "version": "2.0",
+  "result": {
+    "movieId": 81000001,
+    "duration": 2700,
+    "timedtexttracks": [
+      { "language": null, "languageDescription": "Off", "isNoneTrack": true, "isForcedNarrative": false, "rawTrackType": "subtitles", "ttDownloadables": {} },
+      { "language": "en", "languageDescription": "English", "isNoneTrack": false, "isForcedNarrative": false, "rawTrackType": "subtitles", "trackType": "PRIMARY",
+        "ttDownloadables": { "dfxp-ls-sdh": { "downloadUrls": { "1": "https://cdn.example/nf/en.dfxp?token=SECRET" } }, "simplesdh": { "downloadUrls": { "1": "https://cdn.example/nf/en.simple?token=SECRET" } } } },
+      { "language": "en", "languageDescription": "English", "isNoneTrack": false, "isForcedNarrative": false, "rawTrackType": "closedcaptions",
+        "ttDownloadables": { "imsc1.1": { "urls": [ { "url": "https://cdn.example/nf/en-cc.xml?token=SECRET" } ] } } },
+      { "language": "tr", "languageDescription": "Turkish", "isNoneTrack": false, "isForcedNarrative": false, "rawTrackType": "subtitles",
+        "ttDownloadables": { "webvtt-lssdh-ios8": { "downloadUrls": { "1": "https://cdn.example/nf/tr.vtt?token=SECRET" } }, "dfxp-ls-sdh": { "downloadUrls": { "1": "https://cdn.example/nf/tr.dfxp?token=SECRET" } } } },
+      { "language": "es", "languageDescription": "Spanish", "isNoneTrack": false, "isForcedNarrative": true, "rawTrackType": "subtitles",
+        "ttDownloadables": { "dfxp-ls-sdh": { "downloadUrls": { "1": "https://cdn.example/nf/es-forced.dfxp?token=SECRET" } } } },
+      { "language": "de", "languageDescription": "German", "isNoneTrack": false, "isForcedNarrative": false, "rawTrackType": "subtitles",
+        "ttDownloadables": { "nflx-cmisc": { "downloadUrls": { "1": "https://cdn.example/nf/de.cmisc?token=SECRET" } } } }
+    ]
+  }
+}

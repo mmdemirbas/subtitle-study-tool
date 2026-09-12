@@ -30,7 +30,7 @@
  * the answer's shape was, which is the evidence the rest of this feature is
  * waiting on. */
 (() => {
-  const MARK = "sso-prime";
+  const MARK = "sso-ear";
   if (window.__ssoPrimeHooked) return;
   window.__ssoPrimeHooked = true;
 
@@ -52,7 +52,9 @@
         url: track?.url ?? "",
         type: track?.type ?? "",
         displayName: track?.displayName ?? "",
-        format: track?.format ?? "",
+        // The API says TTMLv2; the worker reads by this name. See vtt.js for
+        // the other value an ear can send.
+        format: "ttml",
         forced,
         keys: track && typeof track === "object" ? Object.keys(track) : [],
       }));

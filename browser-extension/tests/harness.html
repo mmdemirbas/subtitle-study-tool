@@ -386,7 +386,7 @@
        * is in the manifest (world: MAIN, document_start). It wraps fetch and
        * XMLHttpRequest transparently, so every other case runs through the
        * wrapped pair and would notice if they were not. */
-      for (const src of ["sites/primevideo", "align", "content", "panel", "study"]) {
+      for (const src of ["sites/primevideo", "sites/netflix", "sites/disneyplus", "align", "content", "panel", "study"]) {
         document.write(`<script src="../src/${src}.js?t=${Date.now()}"><\/script>`);
       }
     </script>
@@ -4421,7 +4421,83 @@
         await sleep(40);
         if (own()?.titleId !== "X2") throw new Error("an unrelated fetch changed the list");
 
-        window.postMessage({ source: "sso-prime", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
+        window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
+        await sleep(40);
+      });
+
+      /* Netflix: the manifest never crosses the network as JSON, so the ear is
+       * on JSON.parse, and the one for the title on screen is the one shown.
+       * Shape read in Subadub's and Tithen-Firion's sources (see
+       * src/sites/netflix.js); a live manifest's shape is what the running log
+       * will say. */
+      check("Netflix's manifest is overheard in JSON.parse, for the title the page shows", async () => {
+        const own = () => window.__ssoApi.status().own;
+        const text = await (await fetch("../tests/fixtures/netflix/manifest.json")).text();
+        const player = document.createElement("div");
+        player.dataset.videoid = "81000001";
+        document.body.append(player);
+        try {
+          // The next episode's manifest, prefetched: parsed, kept, not shown.
+          JSON.parse(text.replace("81000001", "81000002"));
+          await sleep(60);
+          if (own()?.titleId === "81000002") throw new Error("a prefetched manifest was shown as the title on screen");
+
+          const parsed = JSON.parse(text);
+          if (parsed.result.movieId !== 81000001) throw new Error("the wrapped parse did not hand the value back");
+          for (let i = 0; i < 40 && own()?.titleId !== "81000001"; i++) await sleep(25);
+          if (own()?.titleId !== "81000001") throw new Error(`after parse: ${JSON.stringify(own())}`);
+          const ids = own().tracks.map((t) => `${t.id}/${t.format}`).join();
+          if (ids !== "page:81000001:en:subtitle/ttml,page:81000001:en:sdh/ttml,page:81000001:tr:subtitle/ttml,page:81000001:es:forced/ttml")
+            throw new Error(ids);
+          if (JSON.stringify(own()).includes("SECRET")) throw new Error("a signed URL got into status()");
+
+          // The player moves on to the next episode: its manifest is already known.
+          player.dataset.videoid = "81000002";
+          for (let i = 0; i < 80 && own()?.titleId !== "81000002"; i++) await sleep(25);
+          if (own()?.titleId !== "81000002") throw new Error(`after the episode changed: ${own()?.titleId}`);
+        } finally {
+          player.remove();
+          window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
+          await sleep(40);
+        }
+      });
+
+      /* Disney+: HLS. The master playlist names every subtitle rendition,
+       * and each is a playlist of WebVTT segments the worker joins (tested in
+       * tests/worker.mjs). Shape read in the "Disney+ Subtitles Downloader
+       * Improved" source (see src/sites/disneyplus.js). */
+      check("Disney+'s master playlist is overheard by XHR, its subtitle renditions resolved against it", async () => {
+        const own = () => window.__ssoApi.status().own;
+        const url = "../tests/fixtures/disneyplus/master.m3u8?v=1";
+        await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.open("GET", url);
+          xhr.onload = resolve;
+          xhr.onerror = () => reject(new Error("xhr failed"));
+          xhr.send();
+        });
+        const titleId = location.pathname.split("/").filter(Boolean).pop();
+        for (let i = 0; i < 40 && own()?.titleId !== titleId; i++) await sleep(25);
+        if (own()?.titleId !== titleId) throw new Error(`after XHR: ${JSON.stringify(own())}`);
+        const tracks = own().tracks;
+        const ids = tracks.map((t) => `${t.id}/${t.format}`).join();
+        const expected = `page:${titleId}:en:sdh/hls-vtt,page:${titleId}:en:subtitle/hls-vtt,page:${titleId}:tr:subtitle/hls-vtt,page:${titleId}:en:forced/hls-vtt`;
+        if (ids !== expected) throw new Error(ids);
+        if (JSON.stringify(own()).includes("SECRET")) throw new Error("a signed URL got into status()");
+        const master = new URL(url, location.href);
+        const reply = await new Promise((resolve) => {
+          const onMessage = (event) => {
+            // Every ear answers an ask; the Prime one still holds its last answer.
+            if (event.data?.source !== "sso-ear" || event.data.type !== "tracks" || event.data.tracks?.[0]?.format !== "hls-vtt") return;
+            window.removeEventListener("message", onMessage);
+            resolve(event.data);
+          };
+          window.addEventListener("message", onMessage);
+          window.postMessage({ source: "sso-ear", type: "ask" }, "*");
+        });
+        const tr = reply.tracks.find((t) => t.language === "tr");
+        if (tr?.url !== new URL("r/s/tr/sub-main.m3u8?token=SECRET", master).href) throw new Error(`resolved to ${tr?.url}`);
+        window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
         await sleep(40);
       });
 
@@ -4722,7 +4798,7 @@
         };
         try {
           window.postMessage({
-            source: "sso-prime", type: "tracks", titleId: "T9", shape: ["timedTextUrls"],
+            source: "sso-ear", type: "tracks", titleId: "T9", shape: ["timedTextUrls"],
             tracks: [
               { language: "en-US", url: "https://cdn.example/en.dfxp?token=SECRET", type: "subtitle", displayName: "English", forced: false, keys: ["languageCode", "url"] },
               { language: "en-US", url: "https://cdn.example/en-cc.dfxp?token=SECRET", type: "sdh", displayName: "English [CC]", forced: false, keys: [] },
@@ -4756,7 +4832,7 @@
           if (track.cueCount !== 12) throw new Error(`${track.cueCount} cues`);
 
           // A page that carries nothing offers nothing, and says nothing.
-          window.postMessage({ source: "sso-prime", type: "tracks", titleId: "T10", shape: [], tracks: [] }, "*");
+          window.postMessage({ source: "sso-ear", type: "tracks", titleId: "T10", shape: [], tracks: [] }, "*");
           await sleep(60);
           if (!shadow.querySelector(".sso-own").hidden) throw new Error("still offering a list the page no longer has");
         } finally {
