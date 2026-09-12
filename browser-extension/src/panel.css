@@ -120,6 +120,26 @@ button.sso-add:hover:not(:disabled) {
 }
 
 /* Where the next result lands, said as a fact. */
+/* The page's own subtitles, above the search they make unnecessary. The note
+ * says whose they are; the row under it is one press per language, in the
+ * same segmented shape as the language filter further down, and its bottom
+ * margin is what keeps the search box from reading as part of the offer. */
+.sso-own {
+  margin-bottom: var(--sso-s3);
+}
+
+.sso-own .sso-note {
+  margin-bottom: var(--sso-s2);
+}
+
+/* Sized to their text, not shared out equally: the filter's chips are all a
+ * code and a count, but one of these can be "FR (foreign parts)" beside "EN",
+ * and equal shares put the long one on three lines and stretched the row to
+ * 49px for all four. Measured at the 340px the panel opens at. */
+.sso-own .sso-seg__b {
+  flex: 0 1 auto;
+}
+
 .sso-find__for {
   margin: 0 0 var(--sso-s2);
   color: var(--sso-ink-2);

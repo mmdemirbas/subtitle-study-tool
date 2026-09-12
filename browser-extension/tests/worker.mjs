@@ -39,6 +39,9 @@ globalThis.fetch = async (url, options) => {
     const answer = daemonAnswers(String(url));
     if (answer) return { ok: true, status: 200, json: async () => answer };
   }
+  if (Object.hasOwn(pageFiles, String(url))) {
+    return { ok: true, status: 200, text: async () => pageFiles[String(url)] };
+  }
   /* A packaged file, served off disk. rarity.js and phrases.js fetch their
    * tables through chrome.runtime.getURL rather than importing them, because a
    * service worker may not use dynamic import - so the shipped tables are only
@@ -73,7 +76,11 @@ const injected = [];
 let tabStatusReply = { ok: true, hasVideo: true, attached: false };
 // What each frame says about the page. Replaced by the pageContext cases.
 let pageInfoReply = () => ({ ok: true });
-
+// What the page's own player was handed, with the URLs. Null is every page
+// that is not a streaming site with a hook, which is nearly all of them.
+let pageSubtitlesReply = () => null;
+// The page's own subtitle files, by URL, as the CDN would serve them.
+let pageFiles = {};
 // Whether the tab has a content script that answers. False is a tab left open
 // across an extension update, which is the case the self-heal exists for.
 let pingAlive = false;
@@ -150,6 +157,7 @@ globalThis.chrome = {
       // Two frames describing the same page differently, which is the shape
       // pageContextForTab exists to reconcile. Set per case.
       if (message.type === "sso:pageInfo") return pageInfoReply(message, arguments[2]);
+      if (message.type === "sso:pageSubtitles") return pageSubtitlesReply(message, arguments[2]);
       if (message.type === "sso:ping") {
         // What Chrome does when nothing is listening in the tab.
         if (!pingAlive) throw new Error("Could not establish connection.");
@@ -1505,6 +1513,121 @@ ${lines}
   t("the spec's other spellings of a time",
     toMs("1.5s") === 1500 && toMs("750ms") === 750 && toMs("2m") === 120000 && toMs("00:01:00") === 60000 && toMs("12") === null,
     `${toMs("1.5s")} ${toMs("750ms")} ${toMs("2m")} ${toMs("00:01:00")} ${toMs("12")}`);
+
+  /* And the worker's side of it. The page carries EN, EN [CC], TR and a forced
+   * track; the reader wants EN then TR. */
+  const site = "Prime Video";
+  const track = (code, kind, url) => ({
+    id: `page:T1:${code}:${kind}`, language: code.split("-")[0], code, kind, displayName: code, url,
+  });
+  const onPage = {
+    site, titleId: "T1",
+    tracks: [
+      track("en-us", "sdh", "https://cdn.example/en-cc.dfxp"),
+      track("en-us", "subtitle", "https://cdn.example/en.dfxp"),
+      track("tr-tr", "subtitle", "https://cdn.example/tr.dfxp"),
+      track("en-us", "forced", "https://cdn.example/en-forced.dfxp"),
+    ],
+  };
+  pageFiles = {
+    "https://cdn.example/en.dfxp": ttml(`<p begin="00:00:01.000" end="00:00:02.000">Page English</p>`),
+    "https://cdn.example/en-cc.dfxp": ttml(`<p begin="00:00:01.000" end="00:00:02.000">[door] Page English</p>`),
+    "https://cdn.example/tr.dfxp": ttml(`<p begin="00:00:01.000" end="00:00:02.000">Sayfa Türkçesi</p>`),
+  };
+  const heldProvider = (await chrome.storage.local.get("sso:provider"))["sso:provider"];
+  await chrome.storage.local.set({ "sso:provider": { apiKey: "", languages: ["en", "tr"] } });
+  /* The daemon is up and answers the probe before anything asks it, or the
+   * provider marks it down and every question below is answered from the
+   * extension's own store - whose stub here has no disk behind it. */
+  daemonUp = true;
+  daemonAnswers = (url) => (String(url).endsWith("/health") ? { default_languages: ["en"] } : null);
+  await (await import("../src/provider.js")).daemonUp({ force: true });
+
+  const attaches = () => sentToTab.filter((m) => m.type === "sso:attach").map((m) => m.message.payload);
+  let searches = 0;
+  const counting = (answers) => (url) => {
+    if (String(url).includes("/search")) searches += 1;
+    return answers(url);
+  };
+
+  // Both languages on the page: no search, both attached, neither the [CC] nor the forced one.
+  pageSubtitlesReply = () => onPage;
+  searches = 0;
+  let tried = await attempt("3000|Prime E1", counting(americans()));
+  let got = attaches();
+  t("a page carrying both languages is not searched for at all",
+    searches === 0 && got.length === 2, `${searches} searches, ${got.length} attaches: ${JSON.stringify(tried)}`);
+  t("the plain track wins over [CC], and the forced track is never picked",
+    got[0]?.fileId === "page:T1:en-us:subtitle" && got[1]?.fileId === "page:T1:tr-tr:subtitle",
+    JSON.stringify(got.map((a) => a.fileId)));
+  t("the file is read into cues on the title's clock, labelled for the site",
+    got[0]?.cues?.[0]?.text === "Page English" && got[0]?.cues?.[0]?.start === 1000 && got[0]?.label === "EN · Prime Video",
+    JSON.stringify({ label: got[0]?.label, cue: got[0]?.cues?.[0] }));
+  t("the Turkish one too",
+    got[1]?.cues?.[0]?.text === "Sayfa Türkçesi" && got[1]?.language === "tr" && got[1]?.slot === 1,
+    JSON.stringify(got[1] && { label: got[1].label, slot: got[1].slot }));
+
+  // Only English on the page: the page's for EN, the search's for TR.
+  const enOnly = { ...onPage, tracks: onPage.tracks.filter((one) => one.language !== "tr") };
+  const withTurkish = (url) => {
+    const answer = americans()(url);
+    if (String(url).includes("/search")) {
+      answer.results.push({ file_id: 77, language: "tr", season: 3, episode: 13, movie_name: "The Americans", release: "The.Americans.S03E13.TR", match_score: 0.9 });
+    }
+    return answer;
+  };
+  pageSubtitlesReply = () => enOnly;
+  searches = 0;
+  tried = await attempt("3001|Prime E2", counting(withTurkish));
+  got = attaches();
+  t("a page carrying one language is searched for the other",
+    searches === 1 && got.length === 2 && got[0]?.fileId === "page:T1:en-us:subtitle" && got[1]?.fileId === 77,
+    `${searches} searches: ${JSON.stringify(got.map((a) => [a.slot, a.fileId]))} ${JSON.stringify(tried.said)}`);
+
+  // Only English on the page, and the search cannot say which episode: EN goes up, and the refusal is said for TR alone.
+  const noEpisode = (url) => {
+    const answer = americans()(url);
+    if (String(url).includes("/search")) {
+      answer.used = { query: "The Americans", languages: ["en", "tr"] };
+      answer.results.push({ file_id: 78, language: "tr", season: 1, episode: 2, movie_name: "The Americans", release: "The.Americans.S01E02.TR", match_score: 0.9 });
+    }
+    return answer;
+  };
+  pageInfoReply = () => ({ ok: true, candidates: [{ source: "json-ld-series", text: "The Americans", episode: null }] });
+  pageSubtitlesReply = () => enOnly;
+  tried = await attempt("3002|Prime E3", noEpisode);
+  got = attaches();
+  t("with the episode unknown, the page's English still goes up and the refusal is about the other language",
+    got.length === 1 && got[0]?.fileId === "page:T1:en-us:subtitle" && tried.said.some((m) => /^Only EN: for the other language/.test(m)),
+    JSON.stringify({ attached: got.map((a) => a.fileId), said: tried.said }));
+
+  // The panel's path: a fetch by id goes to the page, not to OpenSubtitles.
+  pageSubtitlesReply = () => onPage;
+  const fetched = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:T1:tr-tr:subtitle" } }, sender);
+  t("the panel can fetch a page track by its id",
+    fetched?.served_by === "page" && fetched.cues?.[0]?.text === "Sayfa Türkçesi" && fetched.meta?.words === 2,
+    JSON.stringify(fetched));
+  const stale = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:T1:de-de:subtitle" } }, sender);
+  t("and a track the page no longer offers is an error, not a silent nothing",
+    /no longer offers/.test(stale?.error || ""), JSON.stringify(stale));
+
+  // Nothing to warm for the next episode while the page is providing.
+  tabStatusReply = { ok: true, hasVideo: true, attached: true, tracks: [{ attached: true, fileId: "page:T1:en-us:subtitle" }] };
+  searches = 0;
+  daemonAnswers = counting(americans());
+  await ask({ type: "sso:warmNext", next: { title: "The Americans", season: 3, episode: 14 }, committed: true }, sender);
+  t("the next episode is not prefetched while the page carries its own subtitles",
+    searches === 0, `${searches} searches`);
+  const log = await import("../src/trace.js");
+  const warm = async () => (await log.entries()).filter((e) => e.kind === "warmNext").pop();
+  await until(async () => (await warm())?.decision === "page-provides");
+  t("and the log says why", (await warm())?.decision === "page-provides", JSON.stringify(await warm()));
+
+  daemonAnswers = null;
+  pageSubtitlesReply = () => null;
+  pageFiles = {};
+  tabStatusReply = { ok: true, hasVideo: true, attached: false };
+  await chrome.storage.local.set({ "sso:provider": heldProvider });
 }
 
 /* --- phrasal verbs -----------------------------------------------------------

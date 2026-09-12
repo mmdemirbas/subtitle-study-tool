@@ -4440,6 +4440,72 @@
           text: `line ${i}`,
         }));
 
+      /* --- the subtitles the page carries for itself ---------------------------
+       *
+       * On Prime Video a script in the page's own world overhears the player's
+       * playback answer and posts the subtitle list on the window. That script
+       * cannot run here - there is no player to overhear - so the case posts
+       * exactly what it would, and checks everything after the boundary: the
+       * content script's copy, what status() lets out, what the Find screen
+       * offers, and that a press fetches BY ID through the worker rather than
+       * carrying the URL into the panel.
+       */
+      check("the page's own subtitles are offered by language, and a press attaches one", async () => {
+        const shadow = panelShadow();
+        const fetched = [];
+        window.__stubDaemon = {
+          fetch: (args) => {
+            fetched.push(args.fileId);
+            return { cues: cuesEvery(3000, 0, 12), served_by: "page" };
+          },
+        };
+        try {
+          window.postMessage({
+            source: "sso-prime", type: "tracks", titleId: "T9", shape: ["timedTextUrls"],
+            tracks: [
+              { language: "en-US", url: "https://cdn.example/en.dfxp?token=SECRET", type: "subtitle", displayName: "English", forced: false, keys: ["languageCode", "url"] },
+              { language: "en-US", url: "https://cdn.example/en-cc.dfxp?token=SECRET", type: "sdh", displayName: "English [CC]", forced: false, keys: [] },
+              { language: "tr-TR", url: "https://cdn.example/tr.dfxp?token=SECRET", type: "subtitle", displayName: "Türkçe", forced: false, keys: [] },
+              { language: "fr-FR", url: "https://cdn.example/fr-forced.dfxp?token=SECRET", type: "", displayName: "Français", forced: true, keys: [] },
+            ],
+          }, "*");
+          await sleep(60);
+
+          const own = window.__ssoApi.status().own;
+          if (!own || own.tracks.length !== 4) throw new Error(`status carries ${own?.tracks?.length ?? "no"} tracks`);
+          if (JSON.stringify(own).includes("SECRET")) throw new Error("a signed URL got into status()");
+          const ids = own.tracks.map((t) => t.id);
+          const expected = ["page:T9:en-us:subtitle", "page:T9:en-us:sdh", "page:T9:tr-tr:subtitle", "page:T9:fr-fr:forced"];
+          if (ids.join() !== expected.join()) throw new Error(`ids ${ids.join(" ")}`);
+
+          shadow.querySelector(".sso-add").click();
+          await sleep(80);
+          const block = shadow.querySelector(".sso-own");
+          if (!block || block.hidden) throw new Error("the Find screen does not offer them");
+          const labels = [...block.querySelectorAll("button")].map((b) => b.textContent);
+          if (labels.join("|") !== "EN|EN [CC]|TR|FR (foreign parts)") throw new Error(`offered ${labels.join(" / ")}`);
+          if (!/carries 4 subtitles of its own/.test(block.textContent)) throw new Error(`note reads ${JSON.stringify(block.querySelector(".sso-note")?.textContent)}`);
+
+          [...block.querySelectorAll("button")].find((b) => b.textContent === "TR").click();
+          for (let i = 0; i < 40 && !window.__ssoApi.status().tracks.some((t) => t.fileId === "page:T9:tr-tr:subtitle"); i++) await sleep(25);
+          if (fetched.join() !== "page:T9:tr-tr:subtitle") throw new Error(`the worker was asked for ${JSON.stringify(fetched)}`);
+          const track = window.__ssoApi.status().tracks.find((t) => t.fileId === "page:T9:tr-tr:subtitle");
+          if (!track) throw new Error("nothing attached");
+          if (!/^TR · /.test(track.label) || track.language !== "tr") throw new Error(`label ${JSON.stringify(track.label)} language ${track.language}`);
+          if (track.cueCount !== 12) throw new Error(`${track.cueCount} cues`);
+
+          // A page that carries nothing offers nothing, and says nothing.
+          window.postMessage({ source: "sso-prime", type: "tracks", titleId: "T10", shape: [], tracks: [] }, "*");
+          await sleep(60);
+          if (!shadow.querySelector(".sso-own").hidden) throw new Error("still offering a list the page no longer has");
+        } finally {
+          window.__stubDaemon = null;
+          window.__ssoApi.detach(1);
+          window.__ssoApi.detach(0);
+          shadow.querySelector(".sso-panel__back")?.click();
+        }
+      });
+
       check("the best three are tried and the one that lines up is kept", async () => {
         const reference = cuesEvery(9000, 0, 90);
         await window.__ssoApi.attach({ cues: reference, label: "EN · ref", fileId: 601, slot: 0 });

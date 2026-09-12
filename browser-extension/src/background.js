@@ -11,12 +11,16 @@ import {
   attachToTab,
   forEpisode,
   gloss as glossWords,
+  isPageFile,
   pageContextForTab,
+  pageResults,
   pickBest,
   pickSecondLanguage,
   subtitleContext,
   tabStatus,
 } from "./daemon.js";
+import { parseTtml } from "./subtitles/ttml.js";
+import { measure, toJson } from "./subtitles/srt.js";
 /* Every call that used to go straight to the daemon goes through the provider,
  * which prefers the daemon and does the work here when it is not running. */
 import {
@@ -413,8 +417,12 @@ async function handleDaemonCall(op, args, sender) {
       const languages = args.languages?.length ? args.languages : await preferredLanguages();
       return search({ ...args, languages });
     }
-    case "fetch":
-      return fetchSubtitle(args.fileId, args.context || {});
+    case "fetch": {
+      if (!isPageFile(args.fileId)) return fetchSubtitle(args.fileId, args.context || {});
+      const tab = await tabToDiagnose(args.tabId, sender);
+      const status = tab?.id ? await tabStatus(tab.id) : null;
+      return fetchPageSubtitle(tab?.id, status?.frameId ?? TOP_FRAME, args.fileId);
+    }
     case "settings":
       return updateSettings(args.patch || {});
 
@@ -687,7 +695,83 @@ async function planAutoAttach(tab, frameId) {
    * the player's frame and nowhere else. */
   const context = await pageContextForTab(tab, frameId);
   const { title, year, season, episode, imdbId, altTitles } = context;
-  return planFor({ title, year, season, episode, imdbId, altTitles, languages, context });
+
+  /* What the page's own player was handed comes before any of that.
+   *
+   * A track the page carries is timed to this picture and named for the title
+   * on screen, so neither of the questions the search can get wrong - which
+   * episode, which release - is asked at all. Where it covers every preferred
+   * language there is no search; where it covers the first and not the second,
+   * the search runs for the second alone and is refused for exactly the
+   * reasons an attach would be, because a second subtitle from the wrong
+   * episode is the failure the refusals exist for. */
+  const own = pageResults(await send(tab.id, frameId, { type: "sso:pageSubtitles" }), languages);
+  const ownBest = pickBest(own, languages);
+  const plan = {
+    languages, title, year,
+    titleSource: context?.titleSource ?? null,
+    episodeSource: context?.episodeSource ?? null,
+    context,
+    own: own.map((result) => result.file_id),
+  };
+  if (ownBest) {
+    const { result: ownSecond, reason } = pickSecondLanguage({
+      results: own, languages, taken: ownBest.language, used: {}, resolved: true, threshold: 0, query: title,
+    });
+    if (ownSecond || languages.length < 2) {
+      return {
+        ...plan, decision: "attach", reason: "", query: title, threshold: 0,
+        found: { results: own, used: { query: title } }, best: ownBest, second: ownSecond, secondReason: reason,
+      };
+    }
+  }
+
+  const searched = await planFor({ title, year, season, episode, imdbId, altTitles, languages, context });
+  if (!ownBest) return searched;
+  if (searched.decision !== "attach") {
+    return {
+      ...plan, ...searched, decision: "attach", reason: "",
+      best: ownBest, second: null, secondReason: `for the other language, ${searched.reason}`,
+    };
+  }
+  const { result: second, reason: secondReason } = pickSecondLanguage({
+    results: searched.found.results, languages, taken: ownBest.language,
+    used: searched.found.used, resolved: Boolean(searched.found.resolved?.imdb_id),
+    threshold: searched.threshold, query: searched.query,
+  });
+  return { ...plan, ...searched, decision: "attach", reason: "", best: ownBest, second, secondReason };
+}
+
+/* One of the page's own tracks, fetched and read.
+ *
+ * The URL is asked for at the moment of fetching rather than carried in the
+ * plan: it is signed, it expires, and the content script is the only place it
+ * is held. No allowance is spent - this is the page's own CDN, not
+ * OpenSubtitles - so nothing here reports one. */
+async function fetchPageSubtitle(tabId, frameId, fileId) {
+  const own = tabId != null ? await send(tabId, frameId, { type: "sso:pageSubtitles" }) : null;
+  const track = own?.tracks?.find((candidate) => candidate.id === fileId);
+  if (!track) return { error: "The page no longer offers that subtitle - play the video and try again" };
+  let response = null;
+  try {
+    response = await fetch(track.url);
+  } catch {
+    response = null;
+  }
+  if (!response?.ok) {
+    trace.record("pageFetch", { fileId, status: response?.status ?? null });
+    return { error: `The page's own subtitle could not be fetched (${response?.status ?? "no answer"})` };
+  }
+  const text = await response.text();
+  const rendered = toJson(parseTtml(text));
+  trace.record("pageFetch", { fileId, status: response.status, bytes: text.length, cueCount: rendered.length });
+  if (!rendered.length) return { error: "The page's own subtitle file had no lines this could read" };
+  return {
+    cues: rendered,
+    meta: { file_id: fileId, language: track.language, cue_count: rendered.length, words: measure(rendered).words },
+    from_cache: false,
+    served_by: "page",
+  };
 }
 
 /* Which files a programme should be given, and whether it should be given any.
@@ -916,6 +1000,15 @@ async function warmNext(tabId, next, committed) {
   if (warmedFor.get(tabId) === key) return;
   warmedFor.set(tabId, key);
 
+  /* A page carrying its own subtitles for this episode will carry them for
+   * the next, and they cannot be had before it plays. A download warmed now
+   * would lose to them at the attach - allowance spent to save nothing. */
+  const playing = await tabStatus(tabId);
+  if (playing?.tracks?.some((track) => track.attached && isPageFile(track.fileId))) {
+    trace.record("warmNext", { tabId, next, committed, decision: "page-provides", reason: "the page carries its own subtitles" });
+    return;
+  }
+
   const languages = await preferredLanguages();
   const plan = await planFor({
     title: next.title,
@@ -1062,7 +1155,9 @@ async function autoAttach(tab, frameId, status, { replacing = false } = {}) {
 
 /** Download one result and put it on the named track. False if it did not land. */
 async function attachOne(tab, frameId, result, found, slot) {
-  const subtitle = await fetchSubtitle(result.file_id, subtitleContext(result, found.resolved));
+  const subtitle = isPageFile(result.file_id)
+    ? await fetchPageSubtitle(tab.id, frameId, result.file_id)
+    : await fetchSubtitle(result.file_id, subtitleContext(result, found.resolved));
   // What the day's allowance is down to, which is what decides whether the
   // next episode may be fetched before it is asked for. See warmNext.
   noteAllowance(subtitle);

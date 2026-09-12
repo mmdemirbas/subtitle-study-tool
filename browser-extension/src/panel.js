@@ -3466,6 +3466,24 @@
     el.findFor = document.createElement("p");
     el.findFor.className = "sso-note sso-find__for";
 
+    /* What the page carries for itself, before any search.
+     *
+     * A streaming player is handed every language the title has, as files
+     * timed to its own picture, and draws one of them at a time. Those files
+     * are the answer to both questions this screen otherwise asks the reader
+     * to settle by eye - which episode, which release - so they go first, by
+     * language, one press each. The list is `status().own`, overheard by the
+     * content script; see onPageSubtitles there. Hidden on the pages that
+     * carry nothing, which is most of them. */
+    el.own = document.createElement("div");
+    el.own.className = "sso-own";
+    el.own.hidden = true;
+    el.ownNote = document.createElement("p");
+    el.ownNote.className = "sso-note";
+    el.ownList = document.createElement("div");
+    el.ownList.className = "sso-seg sso-seg--wrap";
+    el.own.append(el.ownNote, el.ownList);
+
     const row = document.createElement("div");
     row.className = "sso-row";
     el.query = document.createElement("input");
@@ -3568,6 +3586,7 @@
 
     wrap.append(
       el.findFor,
+      el.own,
       row,
       el.searchNote,
       el.tryNext,
@@ -3648,6 +3667,52 @@
         });
         b.className = "sso-seg__b";
         b.dataset.on = value === languageChoice ? "true" : "false";
+        return b;
+      }),
+    );
+  }
+
+  /* One press per track the page carries, in the page's own order.
+   *
+   * The result handed to attachResult has the search's shape, so the fetch,
+   * the label and the note after it are the same code - the worker tells a
+   * page track from a download by its id. [CC] and forced-narrative tracks
+   * are offered by name and never first; the auto-attach picks the plain one
+   * for the same reason. */
+  let ownShown = "";
+  function renderOwn(own) {
+    if (!el.own) return;
+    const tracks = own?.tracks ?? [];
+    el.own.hidden = tracks.length === 0;
+    const key = tracks.map((track) => track.id).join("|");
+    if (key === ownShown) return;
+    ownShown = key;
+    if (!tracks.length) {
+      el.ownList.replaceChildren();
+      return;
+    }
+    el.ownNote.textContent = `${own.site} carries ${tracks.length === 1 ? "its own subtitle" : `${tracks.length} subtitles of its own`}, timed to this picture:`;
+    el.ownList.replaceChildren(
+      ...tracks.map((track) => {
+        const suffix = track.kind === "sdh" ? " [CC]" : track.kind === "forced" ? " (foreign parts)" : "";
+        const b = button(`${track.language.toUpperCase()}${suffix}`, {
+          onClick: () =>
+            api.detached(
+              attachResult({
+                file_id: track.id,
+                language: track.language,
+                release: track.kind === "sdh" ? `${own.site} [CC]` : own.site,
+                movie_name: track.displayName || "",
+                identified: true,
+                match_score: 1,
+                cached: true,
+                page: true,
+              }),
+              "The page's own subtitle",
+            ),
+          title: track.displayName ? `${track.displayName} · ${track.code}` : track.code,
+        });
+        b.className = "sso-seg__b";
         return b;
       }),
     );
@@ -4790,6 +4855,7 @@
       el.findFor.textContent = filling?.attached
         ? `Replacing subtitle ${targetSlot + 1} · ${filling.label || "attached"}`
         : `The result you pick becomes subtitle ${targetSlot + 1}.`;
+      renderOwn(status.own);
     }
 
     if (styleWindow?.isOpen()) {

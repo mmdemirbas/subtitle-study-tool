@@ -16,6 +16,12 @@ isolated `window` — never through the DOM, and never reachable from the page.
 | `panel.js` | 4.8k | the control panel window (search, attach, sync, settings) | `window.__ssoPanel`, `__ssoPanelTeardown` |
 | `study.js` | 3.2k | the word strips, the focus box, the deck, the lookup popup | `window.__ssoStudy`, `__ssoStudyTeardown` |
 
+One more runs in the **page's** world, not the extension's: `sites/primevideo.js`,
+declared as its own `content_scripts` entry with `"world": "MAIN"` on Prime
+Video's hosts only. It overhears the player's playback answer and posts the
+subtitle list on the window; `content.js` listens. See *The subtitles a page
+carries for itself* below before touching either end.
+
 `content.js` is the only one that touches the `<video>`. `panel.js` and
 `study.js` reach it exclusively through `window.__ssoApi`. Keep that direction:
 nothing in content.js should depend on the panel's internals, only on the
@@ -392,6 +398,85 @@ nobody corrected and then offer to stretch it.
 Ordering matters when zeroing a pair: **the lead first**, because zeroing it
 carries the follower. Zeroing the follower first and the lead second puts the
 follower back wherever the lead happened to be.
+
+## The subtitles a page carries for itself
+
+A streaming player is handed every language a title has, as files timed to its
+own picture. Those files answer by construction the two questions the rest of
+this extension spends its effort on - which episode is this, and where do the
+lines sit against the film - so where they can be had they come first, and the
+OpenSubtitles search is for what the page does not carry.
+
+**How the list is had, and why from the page's world.** On Prime Video the
+player POSTs `.../GetVodPlaybackResources?...&titleId=...` when playback starts,
+and the answer carries `timedTextUrls.result.subtitleUrls` - one entry per
+language with a signed URL to a TTML file - beside `forcedNarratives`. The list
+is in a response BODY. Resource timing sees the URL and not the body; the
+worker's `webRequest` sees request bodies and not response bodies; nothing in
+the isolated world can read what the page's `fetch` returned. So
+`src/sites/primevideo.js` runs as `"world": "MAIN"` at `document_start`, wraps
+`fetch` and `XMLHttpRequest.prototype.open`, clones the answer, and posts
+`{ source: "sso-prime", type: "tracks", titleId, tracks, shape }` on the
+window. The player's own copy is untouched. `content.js` loads at idle and may
+have missed it, so it posts `{ type: "ask" }` once its listener is up and the
+page world answers with the latest.
+
+**Evidence tiers, as of 2026-09-12.** The request path, the response path and
+the plain `fetch(url)` with no credentials that gets the file are `src` - read
+in the source of the "Amazon Prime Video - Subtitle Downloader" userscript
+(greasyfork 562565, v1.0.0), which does exactly this and re-asks the API with
+an envelope it digs out of the page's template JSON. The ear itself is `run` in
+the harness against `tests/fixtures/prime/GetVodPlaybackResources.json`, by
+fetch and by XHR in both response types. **What is NOT verified is the live
+answer's shape**: field names beyond `languageCode` and `url`, what `type`
+says for a [CC] track, whether the CDN URL really needs no cookie from the
+worker. The first playback with this installed writes a `pageSubtitles` line
+to the running log with the languages, the kinds, the hosts, the key names of
+the first entry and the answer's top-level names - and `pageFetch` with the
+HTTP status and cue count of the first file fetched. **Read those two lines
+before changing anything here.** A `pageSubtitles` line with an empty `tracks`
+and a `shape` that does not include `timedTextUrls` means the list moved; no
+line at all with the player playing means the request bypassed the hook (a
+worker, or a fetch captured before `document_start` - check
+`performance.getEntriesByType("resource")` for the URL).
+
+**Three things are load-bearing.**
+
+- **The URLs are signed and travel exactly once.** `status().own` is the list
+  WITHOUT them, for the panel and the mirror; `sso:pageSubtitles` is the list
+  with them, answered to the worker at the moment it fetches. The trace gets
+  languages, kinds, hostnames and key names. Nothing writes a URL to storage
+  or to the log; the harness case checks that `status()` carries no token.
+- **A page track is a search result with a string id**, `page:<titleId>:<code>:<kind>`,
+  and `isPageFile` in `daemon.js` is the one test. `pageResults` ranks them in
+  the search's own shape - `identified`, `match_score: 1`, `cached` because it
+  costs no download - so `pickBest`, `pickSecondLanguage`, `attachOne`, the
+  panel's rows and the fetch path need no second code. `attachOne` and the
+  worker's `fetch` op route on the id to `fetchPageSubtitle`, which asks the
+  frame for the URL, fetches it from the worker (host permissions, no CORS),
+  and reads it through `parseTtml` into the cues `parseSrt` makes.
+- **Page first, and the refusals still apply to the half the page does not
+  cover.** `planAutoAttach`: every preferred language on the page means no
+  search at all; the first language only means the page's for it and
+  `planFor`'s search for the second, with the second refused for exactly the
+  reasons an attach would be - a `too-weak` or `unknown-episode` answer becomes
+  `secondReason`, said as "Only EN: for the other language, ...". `warmNext`
+  declines while a page track is attached, because the next episode's list
+  cannot be had before it plays and a download warmed now would lose to it.
+
+**`inject()` re-injects `content_scripts[0]` only**, so a Prime Video tab left
+open across an extension update has no ear until the tab is reloaded. The
+content script then reports `own: null`, the panel offers nothing, and the
+search runs as it always did.
+
+`parseTtml` in `src/subtitles/ttml.js` is a regex reader, because the worker
+has no `DOMParser`. Absolute `begin`/`end` on `<p>`, `dur` as a fallback, the
+spec's clock, offset, frame and tick spellings, `<br/>` to a newline, `<span>`
+styles by attribute or by a head style's id to `<i>`/`<b>`, other tags
+dropped, entities decoded, whitespace collapsed as `xml:space="default"` says.
+Times are absolute on the title's clock - which is the point: nothing to line
+up. A cue with no letter or digit is dropped, by the same `READABLE` rule the
+SRT reader exports.
 
 ## The search pipeline exists twice, and the copy that runs is the quiet one
 

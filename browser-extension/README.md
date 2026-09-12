@@ -231,6 +231,29 @@ The boxes are anchored by their **bottom** edges. That is what keeps a two-line
 cue beside a one-line cue reading as a pair, and it also stops a subtitle
 sliding down the screen as a sentence grows onto a second line.
 
+## The subtitles the page already has
+
+A streaming player is handed every language a title has, as files timed to its
+own picture, and draws one of them at a time. On **Prime Video** the extension
+overhears that list when playback starts and offers it before any search: the
+Find screen opens with "Prime Video carries N subtitles of its own, timed to
+this picture" and one button per language, and the automatic attach takes them
+first - English and Turkish from the same source, both timed to the frame,
+with nothing to line up and no episode to guess.
+
+Where the page carries only one of your two languages, that one comes from the
+page and the other is searched for as before, refused for the same reasons an
+ordinary attach would refuse it. A `[CC]` track is offered by name and never
+picked first; a forced-narrative track - the lines spoken in another language,
+translated - is offered as *foreign parts* and never picked at all.
+
+How it works, and what is not yet verified, is in `CLAUDE.md` under *The
+subtitles a page carries for itself*. The short version: a script runs in the
+page's own world on Prime Video's hosts, reads a copy of the player's playback
+answer, and hands the subtitle list across. Nothing about the player's own
+request or its subtitles changes; turn the player's captions off if you do not
+want them drawn twice.
+
 ## Study mode
 
 Press <kbd>S</kbd>. The words in each line that are rare in film dialogue get

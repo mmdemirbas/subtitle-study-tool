@@ -579,6 +579,57 @@ function pickEpisode(reports, videoFrameId) {
  * The caller still has to check `match_score` against the threshold: this
  * returns the best candidate, not necessarily a good one.
  */
+/* --- the subtitles the page carries for itself ------------------------------
+ *
+ * A file the page's own player was handed is timed to the picture and named
+ * for the title actually playing, which are the two facts every refusal in
+ * planFor is about the lack of. So they are ranked as results, in the same
+ * shape the search returns, and everything that ranks, attaches and reports
+ * a result treats them as one - with an id the worker can tell apart, because
+ * fetching one is a different act from downloading one.
+ */
+export const PAGE_FILE = /^page:/;
+
+export function isPageFile(fileId) {
+  return typeof fileId === "string" && PAGE_FILE.test(fileId);
+}
+
+/* One result per preferred language the page covers, in preference order.
+ *
+ * A plain subtitle over a [CC] one where the title has both, because the sound
+ * descriptions are a second thing on screen for a viewer who can hear; never a
+ * forced-narrative track, which carries only the lines spoken in another
+ * language. Both are still offered by name in the panel. */
+const KIND_RANK = { subtitle: 0, sdh: 1 };
+
+export function pageResults(own, languages) {
+  const tracks = own?.tracks?.filter((track) => track.kind in KIND_RANK) ?? [];
+  const results = [];
+  for (const language of languages || []) {
+    const mine = tracks
+      .filter((track) => track.language === language)
+      .sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind]);
+    if (mine[0]) results.push(pageResult(own, mine[0]));
+  }
+  return results;
+}
+
+/* The search-result shape for one track, so the panel's rows and the worker's
+ * plan need no second code path. `cached` because it costs no download. */
+export function pageResult(own, track) {
+  return {
+    file_id: track.id,
+    language: track.language,
+    release: track.kind === "sdh" ? `${own.site} [CC]` : own.site,
+    movie_name: track.displayName || "",
+    identified: true,
+    match_score: 1,
+    cached: true,
+    page: true,
+    kind: track.kind,
+  };
+}
+
 export function pickBest(results, languages) {
   if (!results?.length) return null;
 
