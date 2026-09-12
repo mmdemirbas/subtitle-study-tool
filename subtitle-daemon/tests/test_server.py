@@ -1380,3 +1380,4 @@ def test_health_names_the_translation_model(http) -> None:
     _s, payload = _get(base, "/health")
     assert payload["translate_model"] == "stub-model"
     assert payload["translating"] == 0
+    assert payload["translate_seconds_per_cue"] == translate_jobs.SECONDS_PER_CUE, "the bake-off's rate before any job has run"

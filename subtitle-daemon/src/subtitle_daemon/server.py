@@ -209,6 +209,7 @@ class Service:
             # Which model would translate a whole subtitle, so the offer can
             # name it - and how long a line takes on it, once one has run.
             "translate_model": self.jobs.model,
+            "translate_seconds_per_cue": self.jobs.rate(),
             "translating": sum(1 for job in self.jobs.list() if job["status"] in ("queued", "running")),
         }
 

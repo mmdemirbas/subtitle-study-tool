@@ -286,6 +286,15 @@ class Jobs:
             found.sort(key=lambda item: float(item.get("created_at") or 0), reverse=True)
             return found
 
+    def rate(self) -> float:
+        """Seconds per cue on this machine, from the most recent job that
+        measured one, or the bake-off's number before any has."""
+        for job in self.list():
+            rate = job.get("seconds_per_cue")
+            if rate:
+                return round(float(rate), 3)
+        return SECONDS_PER_CUE
+
     def resume_all(self) -> int:
         """Re-queue every job a previous process left unfinished. Called once
         at startup; the in-flight chunk of a job that was `running` is the

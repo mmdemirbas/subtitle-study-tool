@@ -130,6 +130,10 @@ Downloaded subtitle files are not versioned: those are raw bytes.
 | `POST` | `/gloss` | Body `{"language", "target", "film", "items": [{"term", "sentence", "before", "after"}]}`. Many words with their lines, answered before they are asked. Free. |
 | `POST` | `/cached` | Body `{"file_id", "content"}` and the metadata beside it. Takes in a subtitle the extension downloaded while the daemon was stopped, so the same `file_id` is not paid for twice. |
 | `POST` | `/log` | Appends to the extension's running log. A browser extension cannot write a file without announcing every one, and this records while you watch. Larger body ceiling than the rest. |
+| `POST` | `/translate` | Body `{"source_id", "language", "target", "cues": [...]}` and the film's `imdb_id`, `movie_name`, `season`, `episode`. Starts translating a whole subtitle in the background, or reports the job already doing so. A cached `source_id` with no `cues` is read off the disk. |
+| `GET` | `/translate` | Every translation job the daemon holds, newest first, and the model in use. |
+| `GET` | `/translate/{job}` | One job's progress: `status`, `done` of `total` lines, `eta_seconds`, `file_id` once done. `?cues=1` adds the whole file as it stands - translated where a chunk has landed, the source text where not - and `translated_indexes`. |
+| `DELETE` | `/translate/{job}` | Stops a job between chunks; the chunk in flight completes. `?forget=1` removes its directory too. A stopped job goes on from where it was at the next `POST`. |
 | `DELETE` | `/cached/{file_id}` | Forgets one subtitle. |
 | `DELETE` | `/cached` | Forgets everything. `?searches_only=1` keeps the downloaded files and clears only the search cache, which is the one that costs nothing to rebuild. |
 
@@ -200,6 +204,39 @@ requested language comes back with `missing_languages` and
 (2026) has 13 languages across its episodes and no Turkish in any of them; no
 amount of re-querying was going to produce one, and the panel says so instead
 of "try a different title".
+
+## Making the subtitle that does not exist
+
+Where `missing_languages` names the language being learnt, the daemon can make
+the file from a subtitle that does exist, with a model on this machine. The
+extension offers it - on the Find screen, and as a toast when study is switched
+on with one subtitle - and nothing runs until the offer is accepted.
+
+The translation is a job, not a request: `POST /translate` returns at once, a
+thread walks the file forty cues at a time, and every chunk is written to
+`cache/translate-jobs/<job>/chunks/` the moment it lands. A restart of the
+daemon re-queues whatever was unfinished and starts at the first chunk with no
+file; a closed tab changes nothing. `GET /translate/{job}?cues=1` is the file as
+it stands, so the extension attaches it a few seconds in and swaps in more of it
+every few seconds. The finished file goes into the ordinary cache under a
+synthetic `file_id` (above 9e13, derived from the source and the language, so
+the same job always makes the same file) with `generated: true`, the model and
+the source in its sidecar - and from then on every search for that title and
+episode lists it, ranked as identified, and stops calling the language missing.
+
+What comes back is checked before it is believed - see `translate.py` for the
+two checks and `docs/reports/translate-bakeoff-2026-09-10.md` for why they are
+needed. A line the model could not translate keeps its source text, visibly,
+and the job reports how many.
+
+The model is `translate_model` in `config.local.json`, at `translate_url` with
+`translate_api_key`; the URL and key fall back to `gloss_url` and
+`gloss_api_key`, and the model to `gemma3:4b`, which the bake-off chose: about
+half a second a line on this machine, so an episode in the time it takes to
+make coffee. `TRANSLATE_MODEL`, `TRANSLATE_URL` and `TRANSLATE_API_KEY`
+override the file. Any endpoint speaking the OpenAI chat-completions shape
+works; `/health` names the model in use and the seconds per line the last job
+measured, which is what the offer's estimate is made from.
 
 ## Access control
 
