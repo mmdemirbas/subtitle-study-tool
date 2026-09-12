@@ -1315,7 +1315,7 @@
         };
       });
     const changed = pageSubtitles?.titleId !== titleId || pageSubtitles?.tracks.length !== tracks.length;
-    pageSubtitles = { site, titleId, tracks, at: Date.now() };
+    pageSubtitles = { site, titleId, tracks, at: Date.now(), where: pageWhere() };
     if (!changed) return;
     let hosts = [];
     try {
@@ -1335,9 +1335,33 @@
     notify();
   }
 
+  /* A list is the page's only while the page is the page it was posted on.
+   *
+   * Reported on tabii: Proxima was watched, closed, and another film opened
+   * through the site's own navigation - no reload, so this script and the
+   * ear lived on, and with them Proxima's list. The next film's automatic
+   * attach found "a subtitle the page carries" and put Proxima's lines under
+   * it. So a list carries the URL it was posted at, and is dropped the moment
+   * the path or query is something else; the ear is asked again, and answers
+   * only for the page it is on now (see the ears' `ask` handlers). YouTube's
+   * `&t=` and the like change the query and drop the list too, and the ear
+   * posts it straight back for the same video, which costs one message. */
+  const pageWhere = () => `${location.pathname}${location.search}`;
+
+  function ownStillHere() {
+    if (pageSubtitles && pageSubtitles.where !== pageWhere()) {
+      trace("pageSubtitles", { site: pageSubtitles.site, titleId: pageSubtitles.titleId, dropped: true, tracks: pageSubtitles.tracks.length });
+      pageSubtitles = null;
+      notify();
+      window.postMessage({ source: PAGE_SUBTITLE_SOURCE, type: "ask" }, "*");
+    }
+    return pageSubtitles;
+  }
+  setInterval(ownStillHere, 1000);
+
   /* Without the URLs, for the panel and the mirror. */
   function pageSubtitleSummary() {
-    if (!pageSubtitles) return null;
+    if (!ownStillHere()) return null;
     return {
       site: pageSubtitles.site,
       titleId: pageSubtitles.titleId,
@@ -7715,7 +7739,7 @@
       /* With the URLs, which status() leaves out: this is the worker about to
        * fetch one, and the only place the signed URL travels. */
       case "sso:pageSubtitles":
-        sendResponse(pageSubtitles);
+        sendResponse(ownStillHere());
         return false;
 
       case "sso:attach":

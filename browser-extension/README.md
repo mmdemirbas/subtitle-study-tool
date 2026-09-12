@@ -240,15 +240,16 @@ playback starts and offers it before any search: the Find screen opens with
 "Prime Video carries N subtitles of its own, timed to this picture" and one
 button per language, and the automatic attach takes them first - English and
 Turkish from the same source, both timed to the frame, with nothing to line up
-and no episode to guess. Prime Video is verified on a live playback. YouTube's
-list is verified; its files need the player's own proof-of-origin token, which
+and no episode to guess. Prime Video and tabii are verified on live playbacks
+(tabii's Turkish subtitle for a foreign film; its own Turkish films carry
+none). YouTube's list is verified; its files need the player's own proof-of-origin token, which
 the extension takes off the player's first caption request - so **turn the
 player's captions on once** and every language is fetchable, and until then the
 attach says so. Netflix and Disney+ are built from the sources of the
-extensions that download from them; tabii from the spec and its public pages,
-reading a DASH or HLS manifest, an API answer naming subtitle files, or the
-`<track>` elements a player adds, or the cues in the browser's own text tracks.
-All three wait on their first playback here. On tabii and Disney+ the
+extensions that download from them and wait on a playback nobody here can do.
+The ear for tabii and Disney+ reads a DASH or HLS manifest, an API answer
+naming subtitle files, the `<track>` elements a player adds, or the cues in
+the browser's own text tracks. On tabii and Disney+ the
 extension also writes the shape of everything the player does to the running
 log - URLs with their ids and tokens taken out, key names, formats, never a
 value - so that one playback is enough to build the ear from, without anyone

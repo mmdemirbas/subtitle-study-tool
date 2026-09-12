@@ -520,11 +520,18 @@ all on 2026-09-12, and run in the harness against
 `tests/fixtures/netflix/manifest.json` and
 `tests/fixtures/disneyplus/master.m3u8`. Neither has been observed on a live
 playback yet, and nobody here has an account to observe one. **tabii is
-`assumed`**: its public home page (2026-09-12, no session) lists an HLS and a
-DASH URL per live channel behind `eu1.tabii.com/apigateway` with a FairPlay
-certificate for the DRM, and its films are behind a login; the ear reads all
-three shapes a web player gets subtitles in and says which it saw. The first
-playback writes the same `pageSubtitles` and `pageFetch` lines; a Netflix line
+`run`**, from the survey of one playback on 2026-09-12 (Proxima, then a
+Turkish film): the player is Shaka over MSE with Widevine
+(`apigateway/drm/v1/wv`); the manifest is DASH, `GET eu1.tabii.com/apigateway/
+pbr/v1/media/{n}/{n}.mpd?bandwidth,height,subtitleType,width`, 6.7 KB,
+`application/dash+xml`, no Authorization header; video and audio sets are
+`SegmentBase+BaseURL` and protected, and the subtitle is one AdaptationSet
+with `mimeType="text/vtt" lang="tr" label=...` and a `Representation` whose
+`BaseURL` is one whole WebVTT file, unprotected. The worker's second fetch of
+the MPD and of that file worked without any header: `pageFetch` 1134 cues,
+attached and in sync. The catalog answer (`catalog/v1/show/{n}`) names the
+subtitles under `data.localization.subtitles[]` without URLs. A Turkish film
+had no text set at all, and its video no text track. The first playback writes the same `pageSubtitles` and `pageFetch` lines; a Netflix line
 with `formats` naming only `simplesdh` and `nflx-cmisc` means the TTML formats
 left the default request, and the answer is the request rewrite both scripts
 do (`profiles.unshift(...)` in a `JSON.stringify` wrap), deliberately not done
@@ -539,6 +546,19 @@ something the worker's plain GET did not send. A tabii `pageFetch` refusing
   with them, answered to the worker at the moment it fetches. The trace gets
   languages, kinds, hostnames and key names. Nothing writes a URL to storage
   or to the log; the harness case checks that `status()` carries no token.
+- **A list is the page's only while the page is the page it was posted
+  on.** Reported on tabii, 2026-09-13: Proxima was watched, closed, another
+  film opened through the site's own navigation - no reload, so `content.js`
+  and the ear lived on with Proxima's list, and the next film's automatic
+  attach found "a subtitle the page carries" and put Proxima's 1134 lines
+  under it (the log: `autoAttach` on `/tr/browse/...?dt=435499` with
+  `plan.best = page:163498:tr:subtitle`). `pageSubtitles.where` is the path
+  and query at post time; `ownStillHere()` drops the list the moment they
+  differ, traces `dropped: true`, and asks the ears again; an ear answers an
+  ask only for the path it heard the list on, or one heard in the last half
+  minute (a player that fetches the next title's list just before the site
+  changes the URL). The harness case "a page's own list is dropped when the
+  site navigates without a reload" is the regression test.
 - **A page track is a search result with a string id**, `page:<titleId>:<code>:<kind>`,
   and `isPageFile` in `daemon.js` is the one test. `pageResults` ranks them in
   the search's own shape - `identified`, `match_score: 1`, `cached` because it

@@ -159,12 +159,20 @@
     return tracks;
   };
 
+  /* What this ear saw, by shape, for the survey to write down beside what
+   * the player did: the one line that tells "the manifest went by and had
+   * no text" from "the manifest did not go by". */
+  const seen = { m3u8: 0, mpd: 0, api: 0, track: 0, texttracks: 0, posted: 0 };
+  window.__ssoStreamsState = () => ({ ...seen, latest: latest ? { where: latest.where, titleId: latest.titleId, tracks: latest.tracks.length, shape: latest.shape } : null });
+
   const noticed = (shape, tracks) => {
+    seen[shape] = (seen[shape] || 0) + 1;
     /* An empty list is news only from the shape that last had some - the
      * video's text tracks gone with the video - not from a playlist that
      * simply carried no subtitles. */
     if (!tracks.length && latest?.shape?.[0] !== shape) return;
-    latest = { titleId: titleId(), tracks, shape: [shape, ...new Set(tracks.map((track) => track.type).filter(Boolean))].slice(0, 12), at: Date.now() };
+    latest = { where: location.pathname, titleId: titleId(), tracks, shape: [shape, ...new Set(tracks.map((track) => track.type).filter(Boolean))].slice(0, 12), at: Date.now() };
+    seen.posted += 1;
     post({ type: "tracks", ...latest });
   };
 
@@ -207,6 +215,8 @@
           const resolved = this.responseURL || new URL(target, location.href).href;
           if (kind === "" || kind === "text") consider(resolved, this.responseText);
           else if (kind === "json") consider(resolved, JSON.stringify(this.response));
+          /* A player that asks for bytes and parses the manifest itself. */
+          else if (kind === "arraybuffer" && this.response?.byteLength < 4_000_000) consider(resolved, new TextDecoder().decode(this.response));
         } catch {
           // The player's own handler runs regardless.
         }
@@ -291,8 +301,13 @@
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", observe, { once: true });
   else observe();
 
+  /* An ask is answered only for the page the list was heard on: the content
+   * script asks after the site navigates without a reload, and Proxima's
+   * list is no answer on the next film's page. */
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.data?.source !== MARK || event.data.type !== "ask") return;
-    if (latest) post({ type: "tracks", ...latest });
+    /* Or heard in the last half minute: a player that fetches the next
+     * title's list just before the site changes the URL to it. */
+    if (latest && (latest.where === location.pathname || Date.now() - latest.at < 30_000)) post({ type: "tracks", ...latest });
   });
 })();

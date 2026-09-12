@@ -262,6 +262,7 @@
         let text;
         if (kind === "" || kind === "text") text = this.responseText;
         else if (kind === "json") text = JSON.stringify(this.response);
+        else if (kind === "arraybuffer" && this.response?.byteLength < BODY_MAX && !/^(video|audio|image|font)\//.test(type)) text = new TextDecoder().decode(this.response);
         answered(key, this.status, type, text);
       } catch {
         // The player's own handler runs regardless.
@@ -306,7 +307,13 @@
         return false;
       }
     });
-    return { videos, players, drm: [...drm], dom: [...dom].slice(0, 30) };
+    let ears = null;
+    try {
+      ears = typeof window.__ssoStreamsState === "function" ? window.__ssoStreamsState() : null;
+    } catch {
+      ears = null;
+    }
+    return { videos, players, drm: [...drm], dom: [...dom].slice(0, 30), ears };
   };
 
   const watchDom = () => {

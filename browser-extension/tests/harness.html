@@ -4657,6 +4657,51 @@
         }
       });
 
+      /* Reported on tabii: Proxima's list outlived Proxima, and the next film
+       * got Proxima's lines. The site navigates without a reload, so the list
+       * is tied to the URL it was posted at, dropped when that changes, and
+       * an ear answers the re-ask only for the page it is on. */
+      check("a page's own list is dropped when the site navigates without a reload, and the ear does not hand it back", async () => {
+        const own = () => window.__ssoApi.status().own;
+        const here = location.pathname + location.search;
+        const replies = [];
+        const onMessage = (event) => {
+          if (event.data?.source === "sso-ear" && event.data.type === "tracks" && event.data.tracks?.length) replies.push(event.data);
+        };
+        window.addEventListener("message", onMessage);
+        try {
+          window.postMessage({
+            source: "sso-ear", type: "tracks", titleId: "P1", shape: ["mpd"],
+            tracks: [{ language: "tr", url: "https://cdn.example/p1.mpd?token=SECRET", type: "", displayName: "Türkçe", format: "dash", forced: false, keys: [], dash: { representation: "t", adaptation: "0" } }],
+          }, "*");
+          for (let i = 0; i < 40 && own()?.titleId !== "P1"; i++) await sleep(25);
+          if (own()?.titleId !== "P1") throw new Error("the list did not arrive");
+
+          const seen = await tracing(async () => {
+            history.pushState({}, "", "/tests/elsewhere/next-film");
+            for (let i = 0; i < 80 && own(); i++) await sleep(25);
+            if (own()) throw new Error(`still offering ${JSON.stringify(own())} on another page`);
+            await sleep(50);
+          });
+          const dropped = seen.find((a) => a.kind === "pageSubtitles" && a.detail?.dropped);
+          if (!dropped || dropped.detail.titleId !== "P1") throw new Error(`no drop in the log: ${JSON.stringify(seen.map((a) => a.kind))}`);
+
+          // The ears were asked, and the dropped list is not what any of them
+          // answers with on THIS page. (An ear may answer with a list it heard
+          // in the last half minute, which is the next-title prefetch case.)
+          const before = replies.length;
+          window.postMessage({ source: "sso-ear", type: "ask" }, "*");
+          await sleep(150);
+          if (replies.slice(before).some((r) => r.titleId === "P1") || own()?.titleId === "P1") throw new Error("the dropped list came back on another page");
+        } finally {
+          window.removeEventListener("message", onMessage);
+          history.replaceState({}, "", here);
+          await sleep(1100);
+          window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
+          await sleep(40);
+        }
+      });
+
       /* The survey: what the player did, as shapes, written to the log so a
        * playback nobody watched is enough to learn a player from. What is
        * checked is that shape is all that leaves the page - no query value, no

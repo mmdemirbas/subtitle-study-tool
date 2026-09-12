@@ -78,6 +78,7 @@
       // A URL the page could fetch is a URL this can parse; nothing to do.
     }
     latest = {
+      where: location.pathname,
       titleId,
       tracks: tracksIn(data),
       /* For the log, when the list is not where it was expected: the answer's
@@ -118,9 +119,13 @@
   };
 
   /* The content script loads at document_idle and may have missed the answer;
-   * it asks, and gets the latest one. */
+   * it asks, and gets the latest one - if it was heard on this page. The
+   * content script also asks after the site navigates without a reload, and
+   * a list heard on another title's page is not an answer. */
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.data?.source !== MARK || event.data.type !== "ask") return;
-    if (latest) post({ type: "tracks", ...latest });
+    /* Or heard in the last half minute: a player that fetches the next
+     * title's list just before the site changes the URL to it. */
+    if (latest && (latest.where === location.pathname || Date.now() - latest.at < 30_000)) post({ type: "tracks", ...latest });
   });
 })();
