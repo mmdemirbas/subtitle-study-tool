@@ -4425,6 +4425,164 @@
         await sleep(40);
       });
 
+      /* --- a subtitle nobody has made, made here ---------------------------------
+       *
+       * The daemon does the making; what is under test is the extension's side
+       * of it - the offer on the Find screen, the confirmation that spends
+       * nothing until pressed, the file attached as it arrives under the id it
+       * will finish with, and the toast that offers it when study wants a
+       * second language. The daemon is stubbed as a job that advances one
+       * chunk per status call.
+       */
+      const GENERATED = 90_000_000_000_000 + 424242;
+      const makeJob = (total) => {
+        const state = { done: 0, total, status: "running", polls: 0 };
+        const cuesNow = () => Array.from({ length: total }, (_, i) => ({
+          start: i * 1000, end: i * 1000 + 900,
+          text: i < state.done ? `satır ${i + 1}` : `line ${i + 1}`,
+        }));
+        const status = () => ({
+          job: "13-abc-tr", status: state.status, source_language: "en", target: "tr", model: "gemma3:4b",
+          total, done: state.done, eta_seconds: (total - state.done) / 2, generated_file_id: GENERATED,
+          unrepaired: 0, missing: 0,
+        });
+        return {
+          state,
+          ops: {
+            languages: () => ({ languages: ["en", "tr"] }),
+            health: () => ({ ok: true, daemon_running: true, default_languages: ["en", "tr"], translate_model: "gemma3:4b", translate_seconds_per_cue: 0.5 }),
+            translations: () => ({ jobs: [] }),
+            pageContext: () => ({ title: "Mercy", imdbId: "31050594" }),
+            search: () => ({
+              used: { query: "Mercy", languages: ["en", "tr"] }, auto_attach_threshold: 0.75,
+              resolved: { title: "mercy", year: 2026, imdb_id: "31050594" },
+              results: [{ file_id: 1, language: "en", movie_name: "Mercy", release: "Mercy.2026.WEB", match_score: 1.0 }],
+              missing_languages: ["tr"], available_languages: ["en", "de"],
+            }),
+            translate: (args) => { state.started = args.body; return status(); },
+            translateStatus: (args) => {
+              state.polls += 1;
+              if (!args.cues) state.done = Math.min(total, state.done + 4);
+              if (state.done >= total) state.status = "done";
+              const out = status();
+              if (args.cues) { out.cues = cuesNow(); out.translated_indexes = Array.from({ length: state.done }, (_, i) => i); }
+              return out;
+            },
+            translateCancel: () => { state.status = "cancelled"; return status(); },
+          },
+        };
+      };
+
+      check("the Find screen offers to make the missing language, and the file arrives as it is made", async () => {
+        const job = makeJob(8);
+        window.__stubDaemon = job.ops;
+        const shadow = panelShadow();
+        try {
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 8), label: "EN · Mercy", fileId: 1, language: "en", slot: 0 });
+          await sleep(60);
+          shadow.querySelector(".sso-add").click();
+          await sleep(120);
+          [...shadow.querySelectorAll("button")].find((b) => b.textContent === "Search").click();
+          for (let i = 0; i < 40 && !/No TR subtitle exists/.test(shadow.querySelector(".sso-make")?.textContent || ""); i++) await sleep(25);
+
+          const block = shadow.querySelector(".sso-make");
+          if (!block || block.hidden) throw new Error("no offer on the Find screen");
+          if (!/No TR subtitle exists for this. One can be made from subtitle 1 \(EN\)/.test(block.textContent)) throw new Error(`offer reads ${JSON.stringify(block.textContent)}`);
+          const make = [...block.querySelectorAll("button")].find((b) => /^Make TR from EN/.test(b.textContent));
+          if (!make) throw new Error("no Make button");
+          make.click();
+          await sleep(30);
+          if (job.state.started) throw new Error("a press on the offer already started the job");
+          if (!/8 lines of subtitle 1 \(EN\) through gemma3:4b on this machine, about 1 min/.test(block.textContent)) throw new Error(`terms read ${JSON.stringify(block.textContent)}`);
+          const start = [...block.querySelectorAll("button")].find((b) => b.textContent === "Start");
+          if (!start) throw new Error("no Start button");
+          start.click();
+          for (let i = 0; i < 40 && !job.state.started; i++) await sleep(25);
+          if (!job.state.started) throw new Error("Start did not ask the daemon");
+          const body = job.state.started;
+          if (body.source_id !== "1" || body.language !== "en" || body.target !== "tr" || body.cues.length !== 8 || body.imdb_id !== "31050594")
+            throw new Error(`asked with ${JSON.stringify({ ...body, cues: body.cues.length })}`);
+
+          // The first chunk lands: attached under the id the file will finish with.
+          for (let i = 0; i < 80 && window.__ssoApi.status().tracks[1].fileId !== GENERATED; i++) await sleep(25);
+          const partial = window.__ssoApi.status().tracks[1];
+          if (partial.fileId !== GENERATED) throw new Error(`slot 1 holds ${partial.fileId}`);
+          if (partial.language !== "tr" || !/^TR · made from EN · \d+%$/.test(partial.label)) throw new Error(`label ${JSON.stringify(partial.label)}`);
+          if (!/Making a TR subtitle from EN with gemma3:4b · \d+ of 8 lines/.test(block.textContent)) throw new Error(`progress reads ${JSON.stringify(block.textContent)}`);
+          if (![...block.querySelectorAll("button")].some((b) => b.textContent === "Stop")) throw new Error("no Stop while making");
+
+          // ...and finishes, in place, with the same id and the model's name.
+          for (let i = 0; i < 200 && window.__ssoApi.status().translation?.status !== "done"; i++) await sleep(25);
+          const finished = window.__ssoApi.status().tracks[1];
+          if (finished.fileId !== GENERATED || finished.label !== "TR · made from EN by gemma3:4b") throw new Error(`finished as ${JSON.stringify([finished.fileId, finished.label])}`);
+          if (finished.cueCount !== 8) throw new Error(`${finished.cueCount} cues`);
+          if (!/TR subtitle made from EN by gemma3:4b, 8 lines/.test(block.textContent)) throw new Error(`done reads ${JSON.stringify(block.textContent)}`);
+          const toast = toastEl();
+          if (!/TR subtitle finished: 8 lines/.test(toast?.textContent || "")) throw new Error(`toast reads ${JSON.stringify(toast?.textContent)}`);
+        } finally {
+          window.__stubDaemon = null;
+          window.__ssoApi.cancelTranslation?.().catch?.(() => {});
+          window.__ssoApi.detach(1);
+          window.__ssoApi.detach(0);
+          shadow.querySelector(".sso-panel__back")?.click();
+        }
+      });
+
+      check("switching study on with one subtitle offers to make the other language, once the search says none exists", async () => {
+        const job = makeJob(4);
+        window.__stubDaemon = job.ops;
+        const studyWas = Boolean(window.__ssoApi.studySettings?.()?.enabled);
+        try {
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 4), label: "EN · Mercy", fileId: 1, language: "en", slot: 0 });
+          await sleep(60);
+          await window.__ssoStudy.setEnabled(true);
+          const toast = toastEl();
+          for (let i = 0; i < 80 && !/Make it/.test(toast?.querySelector(".sso-toast__action")?.textContent || ""); i++) await sleep(25);
+          if (!/No TR subtitle exists for this. Make one from the EN with gemma3:4b, about 1 min/.test(toast?.textContent || ""))
+            throw new Error(`toast reads ${JSON.stringify(toast?.textContent)}`);
+          toast.querySelector(".sso-toast__action").click();
+          for (let i = 0; i < 40 && !job.state.started; i++) await sleep(25);
+          if (!job.state.started) throw new Error("Make it did not start the job");
+          for (let i = 0; i < 200 && window.__ssoApi.status().translation?.status !== "done"; i++) await sleep(25);
+          if (window.__ssoApi.status().tracks[1].fileId !== GENERATED) throw new Error("the made file did not land in the empty slot");
+
+          // With a second language already on screen, study says nothing of the kind.
+          const offer = await window.__ssoApi.offerTranslation({ reason: "test" });
+          if (offer !== null) throw new Error(`offered ${JSON.stringify(offer)} with both languages attached`);
+        } finally {
+          window.__stubDaemon = null;
+          await window.__ssoStudy.setEnabled(studyWas);
+          window.__ssoApi.detach(1);
+          window.__ssoApi.detach(0);
+          await sleep(60);
+        }
+      });
+
+      check("where the language exists on OpenSubtitles, the offer is to find it, not to make it", async () => {
+        const job = makeJob(4);
+        window.__stubDaemon = {
+          ...job.ops,
+          search: () => ({
+            used: { query: "Mercy" }, resolved: { imdb_id: "31050594" },
+            results: [{ file_id: 5, language: "tr", movie_name: "Mercy", release: "Mercy.TR", match_score: 1.0 }],
+          }),
+        };
+        try {
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 4), label: "EN · Mercy", fileId: 1, language: "en", slot: 0 });
+          await sleep(60);
+          const offer = await window.__ssoApi.offerTranslation({ reason: "test" });
+          if (offer?.existing !== 1) throw new Error(`offer ${JSON.stringify(offer)}`);
+          const toast = toastEl();
+          if (!/OpenSubtitles has 1 for this/.test(toast?.textContent || "") || toast.querySelector(".sso-toast__action")?.textContent !== "Find one")
+            throw new Error(`toast reads ${JSON.stringify(toast?.textContent)}`);
+          if (job.state.started) throw new Error("started a translation of a subtitle that exists");
+        } finally {
+          window.__stubDaemon = null;
+          window.__ssoApi.detach(0);
+          await sleep(60);
+        }
+      });
+
       /* --- letting the timing choose the subtitle -----------------------------
        *
        * The point of the button is that it does NOT pick by name or by rank. So

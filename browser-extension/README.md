@@ -254,6 +254,40 @@ answer, and hands the subtitle list across. Nothing about the player's own
 request or its subtitles changes; turn the player's captions off if you do not
 want them drawn twice.
 
+## Making the subtitle nobody has uploaded
+
+OpenSubtitles can have thirteen languages for an episode and not the one you
+are learning, and no search produces a file that was never made. The daemon can
+make one from a subtitle that is on screen, with a model on this machine, and
+the extension offers it in three places - never without asking first:
+
+- **On the Find screen**, when a search comes back saying the language does not
+  exist: "No TR subtitle exists for this. One can be made from subtitle 1
+  (EN)." The first press shows the terms - how many lines, which model, about
+  how long - and the second starts it. Nothing runs before the second press.
+- **On the Find screen whenever a subtitle is attached** and a language you
+  want is not, whatever the search said. Same two presses.
+- **When study mode is switched on with one subtitle.** Study translates each
+  word into the other subtitle's language and quotes that subtitle's line, so
+  with one subtitle it has half of nothing to work from. A toast offers to make
+  the other language, with one button that is the confirmation - after a search
+  has said none exists. Where one does exist, the toast offers Find instead.
+
+The lines go up as they are made. A few seconds after Start the other slot
+holds the file with the first forty lines translated and the rest still in the
+source language, and every few seconds more of it arrives; the card says how
+far along it is and the Find screen says how long is left, with Stop beside it.
+The file is attached from the first moment under the id it will finish with, so
+a nudge made while it is being made is the finished file's offset too.
+
+The job belongs to the daemon, not to the tab. Closing the panel, the tab or
+the browser changes nothing; restarting the daemon costs the chunk in flight
+and nothing else. A finished file is kept in the daemon's cache with a
+"made here" chip, and the next search for that episode lists it like any other
+subtitle - so the second time you watch, it is simply there. The daemon's
+README says which model, how it is configured, and what is checked before an
+answer is believed.
+
 ## Study mode
 
 Press <kbd>S</kbd>. The words in each line that are rare in film dialogue get

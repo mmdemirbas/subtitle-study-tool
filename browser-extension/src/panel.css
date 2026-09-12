@@ -140,6 +140,21 @@ button.sso-add:hover:not(:disabled) {
   flex: 0 1 auto;
 }
 
+/* Making a subtitle: a note and, under it, the one or two buttons that act on
+ * it. Same shape as the page's own block above it, and for the same reason -
+ * the offer sits where the search it replaces would have been. */
+.sso-make {
+  margin-bottom: var(--sso-s3);
+}
+
+.sso-make .sso-note {
+  margin-bottom: var(--sso-s2);
+}
+
+.sso-make__row {
+  flex-wrap: wrap;
+}
+
 .sso-find__for {
   margin: 0 0 var(--sso-s2);
   color: var(--sso-ink-2);

@@ -485,6 +485,48 @@ Times are absolute on the title's clock - which is the point: nothing to line
 up. A cue with no letter or digit is dropped, by the same `READABLE` rule the
 SRT reader exports.
 
+## A subtitle being made is one subtitle, attached under its final id
+
+The daemon makes a whole-file translation as a job (`translate_jobs.py`; the
+daemon's README has the endpoints); this side follows it. Four things about
+the follower in `content.js` are load-bearing:
+
+- **The generated id is known before the first line exists**, because the
+  daemon derives it from the source and the language (`generated_file_id`,
+  above 9e13). The first partial attach therefore goes through `attach()`
+  under that id - so `loadOffset`, the study prefetch, the card and the
+  timing memory all see one file - and every later poll swaps `track.cues` in
+  place through `putTranslated` rather than attaching again. `attach()` resets
+  the corrections, re-arranges the boxes and re-reads the offset; a subtitle
+  that has grown by forty lines has changed none of that.
+- **The lines not yet translated are the source's**, by the daemon's
+  construction, so the box is readable from the first poll and the other
+  language arrives under the reader's eyes. `translationLabel` carries the
+  percentage while it is being made and the model's name once it is done.
+- **The poll is the extension's only claim on the job.** `TRANSLATE_POLL_MS`
+  without the cues, then once more with them only when `done` moved. A daemon
+  that stops answering slows the poll and keeps it; the job survives the
+  restart, so the follower must too. It does not survive a reload of the
+  page: the Find screen then lists the daemon's running jobs from
+  `GET /translate` and offers to attach one as it arrives, through
+  `followTranslation`.
+- **Nothing runs until the reader has said so, and the search is asked first.**
+  Three triggers, one confirmation each: the Find screen's block (`renderMake`
+  in `panel.js`) turns the offer into the terms on the first press and starts
+  on the second; the study toast (`offerTranslation`, called from
+  `sayWhatStudyIsDoing`) has one button that is the confirmation. Both ask the
+  search whether the language exists before offering to make it - a
+  translation of a film somebody has already subtitled is the poorer file,
+  slower. `isGeneratedFile` keeps a made file from being the source of
+  another.
+
+`status().translation` is the whole of what the panel reads, and `renderMake`
+is rebuilt only when what it would say changes, because `refresh` runs on
+every status tick. Generated rows come back from the daemon's search with
+`generated: true` and are chipped "made here"; the daemon ranks them as
+identified with a full score, which is deliberate and written down in
+`_add_generated`.
+
 ## The search pipeline exists twice, and the copy that runs is the quiet one
 
 `subtitle-daemon/` and `src/subtitles/` are the same pipeline in two languages.

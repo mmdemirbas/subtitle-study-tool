@@ -3278,6 +3278,13 @@
     refresh(api.status());
   }
 
+  /* The toast offering to find a subtitle lands here, from content.js. The
+   * panel may be shut; opening it is part of the ask. */
+  async function openFindFromOutside(slot) {
+    await show();
+    openFind(slot);
+  }
+
   function openFind(slot) {
     /* Clamped, because the plus passes the first free slot and there is not
      * always one - findIndex returns -1, which read as "becomes subtitle 0" on
@@ -3288,6 +3295,8 @@
     goTo("find");
     el.query.focus();
     el.query.select();
+    // The languages, the model and the daemon's jobs, asked once per opening.
+    api.detached(primeMake(), "The translation offer");
   }
 
 
@@ -3484,6 +3493,24 @@
     el.ownList.className = "sso-seg sso-seg--wrap";
     el.own.append(el.ownNote, el.ownList);
 
+    /* A subtitle nobody has made, made here.
+     *
+     * The case: OpenSubtitles has thirteen languages for an episode and the
+     * one being learnt is not among them, and no search produces a file that
+     * was never uploaded. The daemon can make one from a subtitle that IS on
+     * screen, with a model on this machine, at about half a second a line -
+     * ten minutes for an episode - and the lines go up as they are made. This
+     * block is the offer, the confirmation, and then the progress; one place,
+     * because they are three moments of one act. See renderMake. */
+    el.make = document.createElement("div");
+    el.make.className = "sso-make";
+    el.make.hidden = true;
+    el.makeNote = document.createElement("p");
+    el.makeNote.className = "sso-note";
+    el.makeRow = document.createElement("div");
+    el.makeRow.className = "sso-row sso-make__row";
+    el.make.append(el.makeNote, el.makeRow);
+
     const row = document.createElement("div");
     row.className = "sso-row";
     el.query = document.createElement("input");
@@ -3587,6 +3614,7 @@
     wrap.append(
       el.findFor,
       el.own,
+      el.make,
       row,
       el.searchNote,
       el.tryNext,
@@ -3599,6 +3627,8 @@
   }
 
   let languageChoice = "";
+  // What the last search said does not exist, for the offer to make it.
+  let lastMissing = [];
 
   /* The query the "next episode" button will run, or null. */
   let nextEpisode = null;
@@ -3718,6 +3748,145 @@
     );
   }
 
+  /* --- making a subtitle ---------------------------------------------------
+   *
+   * Three states in one block, decided from status() and the last search:
+   *
+   * - a job is running for this tab: its progress, and Stop;
+   * - nothing is running, a subtitle is attached, and a language the reader
+   *   wants is not: the offer, which a first press turns into the terms
+   *   (how many lines, which model, about how long) and a second press
+   *   starts. Nothing is spent before the second press;
+   * - the daemon holds a job this tab is not following - another tab
+   *   started it, or a reload lost the thread: attach it as it arrives.
+   *
+   * The languages come from the worker, which owns the list, and the model
+   * and its speed from the daemon's health; both are asked once per opening
+   * of the screen rather than on every status tick, and the block is only
+   * rebuilt when what it would say changes. */
+  let wanted = null;
+  let makerInfo = null;
+  let confirming = null;
+  let elsewhere = [];
+  let makeShown = "";
+
+  async function primeMake() {
+    const [languages, health, jobs] = await Promise.all([
+      api.daemon("languages", {}),
+      api.daemon("health", {}),
+      api.daemon("translations", {}),
+    ]);
+    wanted = Array.isArray(languages?.languages) ? languages.languages.map((code) => String(code).toLowerCase().slice(0, 2)) : null;
+    makerInfo = health && !health.transportError
+      ? { model: health.translate_model || "", secondsPerCue: Number(health.translate_seconds_per_cue) || 0.5, daemon: Boolean(health.daemon_running) }
+      : null;
+    elsewhere = Array.isArray(jobs?.jobs) ? jobs.jobs.filter((job) => job.status === "queued" || job.status === "running") : [];
+    makeShown = "";
+    renderMake(api.status());
+  }
+
+  const short = (code) => String(code || "").toLowerCase().slice(0, 2);
+  const minutesFor = (lines) => Math.max(1, Math.round((lines * (makerInfo?.secondsPerCue || 0.5)) / 60));
+
+  /* Which language to make, and from which subtitle. The language the search
+   * said is missing wins; otherwise the first wanted one not on screen. The
+   * source is the lead if it is not itself a made file, else any attached
+   * subtitle in another language. */
+  function makePlan(status) {
+    const attached = status.tracks.filter((track) => track.attached);
+    if (!attached.length) return null;
+    const have = new Set(attached.map((track) => short(track.language)));
+    const missing = (lastMissing || []).map(short).find((code) => code && !have.has(code));
+    const target = missing || (wanted || []).find((code) => code && !have.has(code));
+    if (!target) return null;
+    const lead = status.tracks[status.leadSlot];
+    const source =
+      (lead?.attached && short(lead.language) !== target && !isGenerated(lead.fileId) ? lead : null) ||
+      attached.find((track) => short(track.language) !== target && !isGenerated(track.fileId)) ||
+      null;
+    if (!source) return null;
+    return { target, source, into: status.tracks.findIndex((track) => !track.attached && track.slot !== source.slot) };
+  }
+
+  function isGenerated(fileId) {
+    return typeof fileId === "number" && fileId >= 90_000_000_000_000;
+  }
+
+  function renderMake(status) {
+    if (!el.make) return;
+    const running = status.translation;
+    const plan = running ? null : makePlan(status);
+    const key = JSON.stringify([
+      running && [running.job, running.status, running.done, running.total, running.error, running.etaSeconds],
+      plan && [plan.target, plan.source.slot, plan.source.cueCount],
+      confirming, elsewhere.map((job) => [job.job, job.done]), makerInfo?.model,
+    ]);
+    if (key === makeShown) return;
+    makeShown = key;
+    el.makeRow.replaceChildren();
+    el.makeNote.className = "sso-note";
+
+    if (running) {
+      const target = running.target.toUpperCase();
+      const from = (running.sourceLanguage || "").toUpperCase();
+      const into = `subtitle ${running.slot + 1}`;
+      if (running.status === "done") {
+        const kept = (running.unrepaired || 0) + (running.missing || 0);
+        el.makeNote.textContent = `${target} subtitle made from ${from} by ${running.model}, ${running.total} lines${kept ? `, ${kept} kept in ${from}` : ""} - in ${into}.`;
+      } else if (running.status === "failed" || running.status === "cancelled") {
+        el.makeNote.className = "sso-note sso-note--warn";
+        el.makeNote.textContent = running.status === "failed"
+          ? `Making the ${target} subtitle stopped: ${running.error || "the model gave up"}. ${running.done} of ${running.total} lines were made; starting again goes on from there.`
+          : `Making the ${target} subtitle was stopped at ${running.done} of ${running.total} lines.`;
+        el.makeRow.append(button("Go on", { primary: true, onClick: () => api.detached(api.followTranslation({ job: running.job, target: running.target, sourceLanguage: running.sourceLanguage, slot: running.slot }), "Going on with the translation") }));
+      } else {
+        const minutes = Math.round((running.etaSeconds || 0) / 60);
+        const left = running.etaSeconds ? (minutes >= 1 ? `about ${minutes} min left` : "under a minute left") : "";
+        const stalled = running.error ? ` The daemon is not answering (${running.error}); the job goes on when it is back.` : "";
+        el.makeNote.textContent = `Making a ${target} subtitle from ${from} with ${running.model} · ${running.done} of ${running.total} lines${left ? ` · ${left}` : ""} · in ${into}.${stalled}`;
+        el.makeRow.append(button("Stop", { onClick: () => api.detached(api.cancelTranslation(), "Stopping the translation") }));
+      }
+      el.make.hidden = false;
+      return;
+    }
+
+    const foreign = elsewhere.filter((job) => !status.tracks.some((track) => track.fileId === job.generated_file_id));
+    if (foreign.length && !plan) {
+      const job = foreign[0];
+      el.makeNote.textContent = `The daemon is making a ${String(job.target).toUpperCase()} subtitle${job.meta?.movie_name ? ` for ${job.meta.movie_name}` : ""}, ${job.done} of ${job.total} lines.`;
+      el.makeRow.append(button("Attach it as it arrives", { onClick: () => api.detached(api.followTranslation({ job: job.job, target: job.target, sourceLanguage: job.source_language }), "Following the translation") }));
+      el.make.hidden = false;
+      return;
+    }
+
+    if (!plan) {
+      el.make.hidden = true;
+      return;
+    }
+    const target = plan.target.toUpperCase();
+    const from = short(plan.source.language).toUpperCase();
+    const which = `subtitle ${plan.source.slot + 1} (${from})`;
+    if (confirming === plan.target) {
+      const model = makerInfo?.model || "the local model";
+      const where = plan.into >= 0 ? `subtitle ${plan.into + 1}` : "the other slot, replacing what is there";
+      el.makeNote.textContent = `${plan.source.cueCount} lines of ${which} through ${model}${makerInfo?.daemon === false ? "" : " on this machine"}, about ${minutesFor(plan.source.cueCount)} min. The ${target} lines go up in ${where} as they are made, and the file is kept for next time.`;
+      el.makeRow.append(
+        button(`Start`, { primary: true, onClick: () => {
+          confirming = null;
+          api.detached(api.startTranslation({ sourceSlot: plan.source.slot, target: plan.target }), "The translation");
+        } }),
+        button("Not now", { onClick: () => { confirming = null; makeShown = ""; renderMake(api.status()); } }),
+      );
+    } else {
+      const absent = (lastMissing || []).map(short).includes(plan.target);
+      el.makeNote.textContent = absent
+        ? `No ${target} subtitle exists for this. One can be made from ${which}.`
+        : `No ${target} subtitle is on screen. One can be made from ${which}.`;
+      el.makeRow.append(button(`Make ${target} from ${from}…`, { onClick: () => { confirming = plan.target; makeShown = ""; renderMake(api.status()); } }));
+    }
+    el.make.hidden = false;
+  }
+
   /* Put the page's own title in the box, unless somebody else got there
    * first. */
   function fillQueryFromPage() {
@@ -3738,6 +3907,9 @@
     searchedFor = mark;
     lastResults = [];
     lastResolved = null;
+    lastMissing = [];
+    confirming = null;
+    makeShown = "";
     languageChoice = "";
     el.results?.replaceChildren();
     if (el.languageFilter) el.languageFilter.hidden = true;
@@ -3806,6 +3978,8 @@
 
     lastResults = response.results || [];
     lastResolved = response.resolved || null;
+    lastMissing = Array.isArray(response.missing_languages) ? response.missing_languages : [];
+    makeShown = "";
     searchedFor = api.status().programme ?? null;
     /* Nothing to choose between with one result, and nothing to choose FROM
      * with none. Both are cases where a button offering to try three would be
@@ -3820,6 +3994,7 @@
        * Sending the reader back to retype a correct title is worse than saying
        * nothing, because it looks like something they can fix. */
       el.searchNote.textContent = absence || "Nothing found. Try a different title.";
+      renderMake(api.status());
       return;
     }
 
@@ -3827,12 +4002,14 @@
     const headline = response.low_confidence
       ? "Nothing matched well. These are guesses — check before attaching."
       : `${lastResults.length} result${lastResults.length === 1 ? "" : "s"}`;
-    el.searchNote.textContent = absence ? `${headline} ${absence}` : headline;
+    el.searchNote.textContent = absence ? `${headline}. ${absence}` : headline;
 
     lastThreshold = response.auto_attach_threshold ?? 0.75;
     languageChoice = "";
     renderLanguageFilter(lastResults);
     renderResults(lastResults, lastThreshold);
+    // The offer reads the search's absence note, so it is redrawn with it.
+    renderMake(api.status());
   }
 
   let lastThreshold = 0.75;
@@ -3915,7 +4092,14 @@
         if (!result.identified && result.match_score != null && result.match_score < threshold) {
           flags.append(tag("weak match", "sso-tag--weak"));
         }
-        if (result.cached) flags.append(tag("on disk", "sso-tag--free"));
+        /* A file this daemon made. Its release string already says from what
+         * and by which model; the chip is what makes it tell at a glance from
+         * an upload, since it sits in the same list with the same score. */
+        if (result.generated) {
+          const chip = tag("made here", "sso-tag--free");
+          chip.title = result.release || "Made by the daemon from another subtitle";
+          flags.append(chip);
+        } else if (result.cached) flags.append(tag("on disk", "sso-tag--free"));
         if (result.foreign_parts_only) {
           const chip = tag("foreign parts", "sso-tag--weak");
           chip.title = "Only the lines spoken in another language, not the whole film.";
@@ -4856,6 +5040,7 @@
         ? `Replacing subtitle ${targetSlot + 1} · ${filling.label || "attached"}`
         : `The result you pick becomes subtitle ${targetSlot + 1}.`;
       renderOwn(status.own);
+      renderMake(status);
     }
 
     if (styleWindow?.isOpen()) {
@@ -5119,7 +5304,7 @@
    * that - panel.js runs in every frame and defines this global whether or not
    * anything is on screen, so the first version of that field said true
    * everywhere and would have made "panel open" impossible to correlate with. */
-  window.__ssoPanel = { show, hide, toggle, reparent, rescale, applySize, sayInPanel, isOpen: isPanelVisible };
+  window.__ssoPanel = { show, hide, toggle, reparent, rescale, applySize, sayInPanel, isOpen: isPanelVisible, openFind: openFindFromOutside };
 
   window.__ssoPanelTeardown = () => {
     // Both live on hosts outside this shadow tree, so removing the panel does
