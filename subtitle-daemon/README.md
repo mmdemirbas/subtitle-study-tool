@@ -299,6 +299,12 @@ resolution, episode ranking, quota behaviour and the origin allowlist. A stub
 stands in for the API client, so no test makes a network call or spends real
 quota.
 
+`test_align.py` drives the extension's aligner over every pair of subtitles
+in the live download cache, and the cache grows with use: at 343 files that
+is 58,653 alignments, about ninety seconds across the cores on an idle
+machine. Those tests carry the `corpus` marker, so `uv run pytest -m "not
+corpus"` is the quick run and the plain one is the gate.
+
 The Crime 101 failure is pinned as a regression test in three places: the
 title guesser (`test_site_branding_is_stripped_from_either_end`), the scorer
 (`test_the_actual_bad_matches_score_below_auto_attach`) and the search endpoint

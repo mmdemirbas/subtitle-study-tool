@@ -121,17 +121,57 @@ def _noted() -> dict[str, str]:
     }
 
 
-def _identity(stem: str, sidecar: dict | None, noted: dict[str, str]) -> str | None:
+# "Series - SxxEyy  Title", which is how OpenSubtitles writes an episode's
+# movie_name. The parts are taken apart because the whole string is not one
+# spelling of one film: the same episode of The Americans arrived as "The
+# Americans - S01E04  In Control" and "ジ・アメリカンズ - S01E04  In Control",
+# and the aligner put them together at confidence 79 while the names said
+# they were different films.
+EPISODE = re.compile(r"^(?P<series>.+?)\s+-\s+S(?P<season>\d+)E(?P<episode>\d+)\s+(?P<title>.*)$")
+
+# Files whose metadata contradicts itself, excluded from both halves.
+#
+# Monk's first three episodes are numbered two ways: the two-part pilot is
+# S01E01 and S01E02 in one scheme and one episode in the other, so "S01E02"
+# is "Mr. Monk and the Candidate II" on one upload and "Mr. Monk and the
+# Psychic" on the next, and a release named Monk.S01E02 sits under a
+# movie_name that says Psychic and aligns with the pilot at confidence 940
+# and a shift of zero. Thirteen applied pairs across those files, every one
+# with two names that disagree. No rule over the names can settle which
+# episode a file is, so the aligner's answer about them is not judged either
+# way - the same treatment DIFFERENT_CUT gets, for the same reason.
+AMBIGUOUS_EPISODES = {("312172", 1, 1), ("312172", 1, 2), ("312172", 1, 3)}
+# The identity such a file gets: not None, which is "nothing said" and what
+# test_every_file_says_what_it_is guards against, but "no opinion".
+NO_OPINION = "?"
+
+
+def _identity(stem: str, sidecar: dict | None, noted: dict[str, str], series_imdb: dict[str, str]) -> str | None:
     """What film a cached download is of.
 
     Its own sidecar first, because that is the download speaking about itself.
-    Then what it was searched for, for the large part of the catalogue whose
-    `movie_name` comes back null. Hand-written names last and only for the two
-    files that have neither.
+    An episode is keyed by the series' imdb id where the sidecar or a sibling
+    knows it, else its name, with the episode's own title - the number is the
+    uploader's and the title is the programme's. Then what it was searched
+    for, for the large part of the catalogue whose `movie_name` comes back
+    null. Hand-written names last and only for the two files that have
+    neither. NO_OPINION for the files whose names cannot be trusted, which
+    `_relation` keeps out of both halves.
     """
     if stem in NO_METADATA:
         return NO_METADATA[stem]
-    return _same((sidecar or {}).get("movie_name")) or noted.get(stem)
+    name = (sidecar or {}).get("movie_name")
+    parsed = EPISODE.match(name or "")
+    if parsed:
+        series = _same(parsed["series"]) or ""
+        imdb = str((sidecar or {}).get("imdb_id") or series_imdb.get(series) or series)
+        season, episode = int(parsed["season"]), int(parsed["episode"])
+        if (imdb, season, episode) in AMBIGUOUS_EPISODES:
+            return NO_OPINION
+        # "(1)" and "(2)" on a two-part title are the uploader's again.
+        title = _same(re.sub(r"\s*\(.*$", "", parsed["title"])) or ""
+        return f"{imdb}:s{season:02d}e{episode:02d}:{title}"
+    return _same(name) or noted.get(stem)
 
 
 def _corpus() -> tuple[dict[str, list[int]], dict[str, str | None]]:
@@ -139,6 +179,7 @@ def _corpus() -> tuple[dict[str, list[int]], dict[str, str | None]]:
     starts: dict[str, list[int]] = {}
     films: dict[str, str | None] = {}
     noted = _noted()
+    sidecars: dict[str, dict | None] = {}
     for path in sorted(CACHE.glob("*.srt")):
         times = _starts(path)
         if len(times) < 12:
@@ -151,7 +192,17 @@ def _corpus() -> tuple[dict[str, list[int]], dict[str, str | None]]:
             except (OSError, ValueError):
                 sidecar = None
         starts[path.stem] = times
-        films[path.stem] = _identity(path.stem, sidecar, noted)
+        sidecars[path.stem] = sidecar
+    # A series' imdb id, from any sibling that carries it, so an upload whose
+    # sidecar has none - or names the series in another script - is keyed
+    # with the rest of the series rather than beside it.
+    series_imdb: dict[str, str] = {}
+    for sidecar in sidecars.values():
+        parsed = EPISODE.match((sidecar or {}).get("movie_name") or "")
+        if parsed and (sidecar or {}).get("imdb_id"):
+            series_imdb.setdefault(_same(parsed["series"]) or "", str(sidecar["imdb_id"]))  # type: ignore[index]
+    for stem, sidecar in sidecars.items():
+        films[stem] = _identity(stem, sidecar, noted, series_imdb)
     for path in sorted(VIEWER.glob("*.srt")):
         times = _starts(path)
         if len(times) < 12:
@@ -165,22 +216,61 @@ def _corpus() -> tuple[dict[str, list[int]], dict[str, str | None]]:
 
 
 def _run(pairs: list[tuple[str, list[int], list[int]]]) -> dict[str, dict]:
-    """Drive align.js under node over every pair in one process."""
-    # Over stdin, not argv: a hundred pairs of two thousand timestamps is
-    # several megabytes, and argv tops out well before that.
+    """Drive align.js over named (a, b) pairs; the shape the built cases use."""
+    files: dict[str, list[int]] = {}
+    named: list[tuple[str, str]] = []
+    for name, a, b in pairs:
+        files[f"{name}~a"], files[f"{name}~b"] = a, b
+        named.append((f"{name}~a", f"{name}~b"))
+    answers = _run_files(files, named)
+    return {name: answers[f"{name}~a|{name}~b"] for name, _a, _b in pairs}
+
+
+def _run_files(files: dict[str, list[int]], pairs: list[tuple[str, str]]) -> dict[str, dict]:
+    """Drive align.js under node over every pair, the files sent once each.
+
+    Over stdin, not argv, and the files once rather than once per pair. The
+    corpus is the live download cache and it grows: at 343 files and 58,653
+    pairs the per-pair payload was 843MB of JSON, past V8's string ceiling,
+    and node died on the read with `RangeError: Invalid string length` - five
+    errors that read as a node 26 problem until the size was measured. Files
+    once is 2.5MB.
+
+    And across worker threads, because 58,653 alignments at 10ms each is ten
+    minutes on one core; the gate has to stay something that is run.
+    """
     script = f"""
-    await import({json.dumps(str(ALIGN_JS))});
-    const align = globalThis.__ssoAlign;
+    import {{ Worker }} from "node:worker_threads";
+    import os from "node:os";
     let raw = "";
     process.stdin.setEncoding("utf8");
     for await (const chunk of process.stdin) raw += chunk;
+    const {{ files, pairs }} = JSON.parse(raw);
+    const lanes = Math.max(1, Math.min(os.availableParallelism?.() ?? 4, 8, pairs.length));
+    // Dynamic imports only: an eval'd worker is CommonJS on one node and a
+    // module on another, and a promise chain is the one shape both accept.
+    const code = `
+      Promise.all([import("node:worker_threads"), import({json.dumps(str(ALIGN_JS))})]).then(([threads]) => {{
+        const {{ parentPort, workerData }} = threads;
+        const align = globalThis.__ssoAlign;
+        const out = {{}};
+        for (const [x, y] of workerData.pairs) out[x + "|" + y] = align.align(workerData.files[x], workerData.files[y]);
+        parentPort.postMessage(out);
+      }});
+    `;
     const out = {{}};
-    for (const [name, a, b] of JSON.parse(raw)) out[name] = align.align(a, b);
+    await Promise.all(Array.from({{ length: lanes }}, (_, lane) => new Promise((resolve, reject) => {{
+      const mine = pairs.filter((_, index) => index % lanes === lane);
+      const worker = new Worker(code, {{ eval: true, workerData: {{ files, pairs: mine }} }});
+      worker.on("message", (part) => {{ Object.assign(out, part); resolve(); }});
+      worker.on("error", reject);
+      worker.on("exit", (status) => {{ if (status !== 0) reject(new Error(`worker exited ${{status}}`)); }});
+    }})));
     console.log(JSON.stringify(out));
     """
     done = subprocess.run(
         ["node", "--input-type=module", "-e", script],
-        input=json.dumps([[name, a, b] for name, a, b in pairs]),
+        input=json.dumps({"files": files, "pairs": [list(pair) for pair in pairs]}),
         capture_output=True,
         text=True,
         check=True,
@@ -196,6 +286,10 @@ def _relation(x: str, y: str, films: dict[str, str | None]) -> str:
         if x in group and y in group:
             return "cut"
     here, there = films.get(x), films.get(y)
+    # A file whose name cannot be trusted has no relation to anything; see
+    # AMBIGUOUS_EPISODES. Not "different", which is the claim that failed.
+    if here == NO_OPINION or there == NO_OPINION:
+        return "unknown"
     if here and there and here == there:
         return "same"
     return "different"
@@ -212,16 +306,15 @@ def films(corpus) -> dict[str, str | None]:
 
 
 @pytest.fixture(scope="module")
-def verdicts(corpus) -> dict[str, dict]:
+def verdicts(corpus, request: pytest.FixtureRequest) -> dict[str, dict]:
+    """Every pair of the corpus, aligned. Minutes: 343 files are 58,653 pairs
+    at 10ms each, spread over the cores. Skipped under `-m "not corpus"`."""
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
     files = corpus[0]
     if len(files) < 6:
         pytest.skip("not enough subtitle files in the repository to judge the gate")
-    pairs = [
-        (f"{x}|{y}", files[x], files[y]) for x, y in combinations(sorted(files), 2)
-    ]
-    return _run(pairs)
+    return _run_files(files, list(combinations(sorted(files), 2)))
 
 
 def test_every_file_says_what_it_is(films: dict[str, str | None]) -> None:
@@ -288,6 +381,7 @@ APPLIED_SHARE_FLOOR = 0.5
 WRONG_OFFER_RATE_CEILING = 0.0018
 
 
+@pytest.mark.corpus
 def test_the_same_film_is_usually_lined_up(
     verdicts: dict[str, dict], films: dict[str, str | None]
 ) -> None:
@@ -311,6 +405,7 @@ def test_the_same_film_is_usually_lined_up(
     )
 
 
+@pytest.mark.corpus
 def test_a_different_film_is_refused(
     verdicts: dict[str, dict], films: dict[str, str | None]
 ) -> None:
@@ -352,6 +447,7 @@ def test_a_different_film_is_refused(
     )
 
 
+@pytest.mark.corpus
 def test_the_gap_is_still_a_gap(
     verdicts: dict[str, dict], films: dict[str, str | None]
 ) -> None:
@@ -387,6 +483,7 @@ def test_the_gap_is_still_a_gap(
     )
 
 
+@pytest.mark.corpus
 def test_every_silent_application_pairs_better_than_chance(
     verdicts: dict[str, dict],
 ) -> None:
@@ -474,6 +571,7 @@ def test_a_language_that_subtitles_more_scenes_does_not_cause_a_wrong_shift() ->
     )
 
 
+@pytest.mark.corpus
 def test_a_different_cut_is_declined(verdicts: dict[str, dict]) -> None:
     """Same episode, but re-cut - and no single offset can fix it.
 
