@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 
 from . import chat
@@ -99,15 +100,25 @@ TRANSLATE every numbered line into {target}. Rules:
   setup, an order sounds like an order.
 - Keep proper nouns as they are. Keep [bracketed sound cues] bracketed and
   translate the words inside them.
+- Keep any <i> and <b> tags, around the same words: "<i>Is anyone there?</i>"
+  comes back as "<i>Burada biri var mı?</i>", not without the tags.
 - Keep the register: swearing stays swearing, military terms stay military.
 
 Answer with a JSON object only: {{"lines": [{{"n": 1, "tr": "..."}}]}}\
 """
 
 
+_TAG = re.compile(r"<[^>]+>")
+
+
 def speakers(text: str) -> int:
-    """How many dash-led lines a cue has, which is how many people speak in it."""
-    return sum(1 for line in text.split("\n") if line.lstrip().startswith("-"))
+    """How many dash-led lines a cue has, which is how many people speak in it.
+
+    Tags come off first: the extension now sends a cue's italics along, and
+    `<i>- Yes.</i>` is a speaker as much as `- Yes.` is. Read raw, an italic
+    exchange counted no speakers on either side and the one check that
+    catches a dropped speaker never ran on it."""
+    return sum(1 for line in text.split("\n") if _TAG.sub("", line).lstrip().startswith("-"))
 
 
 def render(cues: list[Cue], first: int, last: int, carry_from: int) -> str:

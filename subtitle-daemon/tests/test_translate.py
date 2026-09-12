@@ -150,6 +150,7 @@ def test_timings_are_the_originals_and_a_missing_line_keeps_its_english() -> Non
 
 def test_speakers_counts_dash_led_lines_only() -> None:
     assert translate.speakers("- A.\n- B.") == 2
+    assert translate.speakers("<i>- A.</i>\n<i>- B.</i>") == 2, "the extension sends the italics along"
     assert translate.speakers("A dash - inside a line.") == 0
     assert translate.speakers("  - indented still counts") == 1
     assert translate.speakers("plain line") == 0

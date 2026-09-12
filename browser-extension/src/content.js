@@ -6110,6 +6110,27 @@
     return others.find((index) => state.tracks[index].cues.length === 0) ?? others[0] ?? PRIMARY;
   }
 
+  /* A cue's text with its markup back on, for the model to carry across.
+   *
+   * The cues here are the overlay's: `text` is the dialogue with the tags
+   * removed, and the styling lives in `runs`. A translation made from `text`
+   * alone loses every italic in the film - the whispered line, the voice on
+   * the radio - so the tags are put back around each styled run and sent. A
+   * model that echoes them gives a file with the italics where they were; one
+   * that drops them gives what sending plain text would have. */
+  function cueMarkup(cue) {
+    if (!Array.isArray(cue.runs) || !cue.runs.length) return cue.text;
+    return cue.runs
+      .map((run) => {
+        const styles = Array.isArray(run.styles) ? run.styles : [];
+        let out = run.text;
+        if (styles.includes("b")) out = `<b>${out}</b>`;
+        if (styles.includes("i")) out = `<i>${out}</i>`;
+        return out;
+      })
+      .join("");
+  }
+
   async function startTranslation({ sourceSlot, target, slot = null } = {}) {
     const source = state.tracks[sourceSlot];
     if (!source?.cues.length) return { error: "There is no subtitle in that slot to translate" };
@@ -6123,7 +6144,7 @@
         source_id: String(source.fileId ?? `slot-${sourceSlot}`),
         language: source.language || "en",
         target,
-        cues: source.cues.map((cue) => ({ start: cue.start, end: cue.end, text: cue.text })),
+        cues: source.cues.map((cue) => ({ start: cue.start, end: cue.end, text: cueMarkup(cue) })),
         imdb_id: context.imdbId ?? undefined,
         movie_name: context.title ?? undefined,
         season: context.season ?? undefined,

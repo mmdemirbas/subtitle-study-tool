@@ -4478,7 +4478,10 @@
         window.__stubDaemon = job.ops;
         const shadow = panelShadow();
         try {
-          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 8), label: "EN · Mercy", fileId: 1, language: "en", slot: 0 });
+          // One italic line among the eight, so the request carries its tags.
+          const source = cuesEvery(1000, 0, 8);
+          source[2] = { ...source[2], text: "line 2 whispered", runs: [{ text: "line 2 " }, { text: "whispered", styles: ["i"] }] };
+          await window.__ssoApi.attach({ cues: source, label: "EN · Mercy", fileId: 1, language: "en", slot: 0 });
           await sleep(60);
           shadow.querySelector(".sso-add").click();
           await sleep(120);
@@ -4502,6 +4505,8 @@
           const body = job.state.started;
           if (body.source_id !== "1" || body.language !== "en" || body.target !== "tr" || body.cues.length !== 8 || body.imdb_id !== "31050594")
             throw new Error(`asked with ${JSON.stringify({ ...body, cues: body.cues.length })}`);
+          if (body.cues[2].text !== "line 2 <i>whispered</i>" || body.cues[0].text !== "line 0")
+            throw new Error(`the italics did not travel: ${JSON.stringify([body.cues[0].text, body.cues[2].text])}`);
 
           // The first chunk lands: attached under the id the file will finish with.
           for (let i = 0; i < 80 && window.__ssoApi.status().tracks[1].fileId !== GENERATED; i++) await sleep(25);
