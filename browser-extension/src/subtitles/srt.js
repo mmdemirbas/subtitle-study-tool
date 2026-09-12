@@ -44,7 +44,7 @@ const EXPECTED_LETTERS = /[çğıİöşüÇĞÖŞÜâîû]/g;
  * every one of them. This is exactly Python's `[^\W_]` - checked over all
  * 1,114,112 code points, the two disagree on none - so the daemon's copy of
  * this parser cannot drift from it. */
-const READABLE = /[\p{L}\p{N}]/u;
+export const READABLE = /[\p{L}\p{N}]/u;
 
 const TIMECODE =
   /(\d{1,3}):(\d{2}):(\d{2})[,.](\d{1,3})\s*-->\s*(\d{1,3}):(\d{2}):(\d{2})[,.](\d{1,3})/;

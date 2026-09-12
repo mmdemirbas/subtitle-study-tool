@@ -73,6 +73,7 @@ const injected = [];
 let tabStatusReply = { ok: true, hasVideo: true, attached: false };
 // What each frame says about the page. Replaced by the pageContext cases.
 let pageInfoReply = () => ({ ok: true });
+
 // Whether the tab has a content script that answers. False is a tab left open
 // across an extension update, which is the case the self-heal exists for.
 let pingAlive = false;
@@ -1447,6 +1448,63 @@ chrome.storage.local.set = instant.set;
   );
 
   daemonAnswers = null;
+}
+
+/* --- the subtitles the page carries for itself ---------------------------------
+ *
+ * A streaming player is handed every language a title has, timed to its own
+ * picture. The content script overhears the list (src/sites/primevideo.js) and
+ * answers `sso:pageSubtitles` with it; what is tested here is what the worker
+ * does with that answer - which is everything from "no search at all" to
+ * "the page's for one language and the search's for the other" - and that the
+ * file it fetches is read into the same cues a download is.
+ */
+{
+  const { parseTtml, toMs } = await import("../src/subtitles/ttml.js");
+
+  const ttml = (lines) => `<?xml version="1.0" encoding="UTF-8"?>
+<tt xmlns="http://www.w3.org/ns/ttml" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:ttp="http://www.w3.org/ns/ttml#parameter" ttp:tickRate="10000000" xml:lang="en-US">
+<head><styling>
+  <style xml:id="plain" tts:fontStyle="normal"/>
+  <style xml:id="ital" tts:fontStyle="italic"/>
+</styling></head>
+<body style="plain"><div>
+${lines}
+</div></body></tt>`;
+
+  const read = parseTtml(ttml(`
+  <p begin="00:00:01.500" end="00:00:03.000" region="r0">Hello,<br/>world &amp; friends</p>
+  <p begin="00:00:04.000" end="00:00:05.000"><span style="ital">Whispered</span> aloud</p>
+  <p begin="00:00:06.000" end="00:00:07.000" style="ital">All
+      italic</p>
+  <p begin="00:00:08.000" end="00:00:09.000">♪♪</p>
+  <p begin="00:00:10.000" dur="2s">With dur</p>
+  <p begin="150000000t" end="160000000t">Ticks</p>
+  <p begin="00:00:20:15" end="00:00:21:00">Frames</p>
+  <p begin="bogus" end="00:00:30.000">Dropped</p>
+  <p begin="00:00:12.000" end="00:00:13.000"><span tts:fontWeight="bold">Bold</span> and <span tts:fontStyle="italic">it</span></p>`));
+  const texts = read.map((cue) => cue.text);
+  t("a TTML paragraph is a cue on the title's own clock",
+    read[0]?.startMs === 1500 && read[0]?.endMs === 3000, JSON.stringify(read[0]));
+  t("a <br/> is a line break and an entity is its character",
+    texts[0] === "Hello,\nworld & friends", JSON.stringify(texts[0]));
+  t("a style named in the head reaches the span that names it",
+    texts[1] === "<i>Whispered</i> aloud", JSON.stringify(texts[1]));
+  t("a style on the paragraph covers the whole line, and its newlines collapse",
+    texts[2] === "<i>All\nitalic</i>", JSON.stringify(texts[2]));
+  t("a cue with nothing to read is not a cue, the same rule as SRT",
+    !texts.includes("♪♪"), JSON.stringify(texts));
+  t("dur, ticks and frames are read; a time nobody can read costs one cue",
+    read.some((c) => c.text === "With dur" && c.endMs === 12000) &&
+      read.some((c) => c.text === "Ticks" && c.startMs === 15000) &&
+      read.some((c) => c.text === "Frames" && c.startMs === 20500) &&
+      !texts.includes("Dropped"),
+    JSON.stringify(read.map((c) => [c.startMs, c.endMs, c.text])));
+  t("styles written on the span itself are read too",
+    texts.includes("<b>Bold</b> and <i>it</i>"), JSON.stringify(texts));
+  t("the spec's other spellings of a time",
+    toMs("1.5s") === 1500 && toMs("750ms") === 750 && toMs("2m") === 120000 && toMs("00:01:00") === 60000 && toMs("12") === null,
+    `${toMs("1.5s")} ${toMs("750ms")} ${toMs("2m")} ${toMs("00:01:00")} ${toMs("12")}`);
 }
 
 /* --- phrasal verbs -----------------------------------------------------------
