@@ -4452,6 +4452,7 @@
         });
         return {
           state,
+          status,
           ops: {
             languages: () => ({ languages: ["en", "tr"] }),
             health: () => ({ ok: true, daemon_running: true, default_languages: ["en", "tr"], translate_model: "gemma3:4b", translate_seconds_per_cue: 0.5 }),
@@ -4548,6 +4549,39 @@
           window.__ssoApi.detach(1);
           window.__ssoApi.detach(0);
           shadow.querySelector(".sso-panel__back")?.click();
+        }
+      });
+
+      check("attaching a file the daemon is still translating picks the job up again, as after a reload", async () => {
+        const job = makeJob(16);
+        job.state.done = 4;
+        job.ops.translations = () => ({ jobs: [{ ...job.status(), source_id: "1", meta: { movie_name: "Mercy" } }] });
+        window.__stubDaemon = job.ops;
+        try {
+          // A made file being attached asks nothing; a foreign source asks and finds nothing of its own.
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 8), label: "TR · made", fileId: GENERATED + 7, language: "tr", slot: 1 });
+          await sleep(60);
+          if (window.__ssoApi.status().translation) throw new Error("a made file attached picked up a job");
+          window.__ssoApi.detach(1);
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 8), label: "EN · other", fileId: 2, language: "en", slot: 0 });
+          await sleep(120);
+          if (window.__ssoApi.status().translation) throw new Error("a file no job is made from picked one up");
+          window.__ssoApi.detach(0);
+
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 8), label: "EN · Mercy", fileId: 1, language: "en", slot: 0 });
+          for (let i = 0; i < 80 && window.__ssoApi.status().translation?.job !== "13-abc-tr"; i++) await sleep(25);
+          const following = window.__ssoApi.status().translation;
+          if (following?.job !== "13-abc-tr" || following.slot !== 1) throw new Error(`following ${JSON.stringify(following)}`);
+          if (!/Going on with the TR subtitle being made for this: \d+ of 16 lines so far/.test(toastEl()?.textContent || "")) throw new Error(`toast reads ${JSON.stringify(toastEl()?.textContent)}`);
+          for (let i = 0; i < 80 && window.__ssoApi.status().tracks[1].fileId !== GENERATED; i++) await sleep(25);
+          if (window.__ssoApi.status().tracks[1].fileId !== GENERATED) throw new Error("the job's file did not land in the other slot");
+          for (let i = 0; i < 240 && window.__ssoApi.status().translation?.status !== "done"; i++) await sleep(25);
+          if (window.__ssoApi.status().translation?.status !== "done" || window.__ssoApi.status().tracks[1].cueCount !== 16) throw new Error("did not finish");
+        } finally {
+          window.__stubDaemon = null;
+          window.__ssoApi.cancelTranslation?.().catch?.(() => {});
+          window.__ssoApi.detach(1);
+          window.__ssoApi.detach(0);
         }
       });
 

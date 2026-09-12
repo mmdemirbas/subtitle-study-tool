@@ -287,8 +287,10 @@ in the daemon's config - and the lines that come back land in place.
 
 The job belongs to the daemon, not to the tab. Closing the panel, the tab or
 the browser changes nothing; restarting the daemon costs the chunk in flight
-and nothing else, and Stop on the Find screen ends it at once. A finished file
-is kept in the daemon's cache with a
+and nothing else, and Stop on the Find screen ends it at once. Reload the page
+and attach the source again - which the next episode does for you - and the
+job is picked up where it is, the made lines back in the other slot with a
+toast saying so. A finished file is kept in the daemon's cache with a
 "made here" chip, and the next search for that episode lists it like any other
 subtitle - so the second time you watch, it is simply there. The daemon's
 README says which model, how it is configured, and what is checked before an

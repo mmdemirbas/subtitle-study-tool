@@ -6367,6 +6367,12 @@
     const track = state.tracks[mine.slot];
     if (track.fileId !== mine.fileId || track.cues.length === 0) {
       await attach({ cues, label: translationLabel(mine), fileId: mine.fileId, language: mine.target, slot: mine.slot });
+      /* Said after the attach, whose own toast would otherwise cover it: a
+       * second subtitle appearing on its own after a reload wants a reason. */
+      if (mine.pickedUp) {
+        mine.pickedUp = false;
+        showToast(`Going on with the ${mine.target.toUpperCase()} subtitle being made for this: ${mine.done} of ${mine.total} lines so far.`);
+      }
       return;
     }
     /* In place: the same file, more of it translated. See attach for what a
@@ -6558,7 +6564,42 @@
     } else {
       showToast(said);
     }
+    /* Not awaited: a job the daemon is still working for this file is
+     * picked up in the background, and the attach is over either way. */
+    if (!isGeneratedFile(fileId)) pickUpTranslation(fileId).catch(() => {});
     return { ok: true, cueCount: track.cues.length, slot: index, aligned };
+  }
+
+  /* A translation the daemon is still making for the subtitle just attached,
+   * followed again after a reload.
+   *
+   * The job outlives the tab, and the tab that started it is the only one
+   * that was following it: reload the page - which is what a reader does when
+   * the player stalls, and what the next episode does for them - and the
+   * lines went on landing in the daemon with nothing on screen to receive
+   * them, until the reader found the "Attach it as it arrives" button on the
+   * Find screen. So every attach of a file that is not itself a made one
+   * asks whether a job is being made from it: the job's source is the file's
+   * id, and a page's own track has a stable id too. One request to the
+   * daemon per attach, and never over a job this tab is already following. */
+  async function pickUpTranslation(fileId) {
+    if (fileId == null) return null;
+    if (translating && !["done", "failed", "cancelled"].includes(translating.status)) return null;
+    const listed = await daemonCall("translations", {});
+    const jobs = (listed?.jobs || []).filter((job) => job.status === "queued" || job.status === "running");
+    if (!jobs.length) return null;
+    const attached = attachedTracks();
+    const ids = new Set(attached.map((track) => String(track.fileId)));
+    const job = jobs.find((job) => ids.has(String(job.source_id)));
+    if (!job) return null;
+    const sourceSlot = state.tracks.findIndex((track) => String(track.fileId) === String(job.source_id));
+    const summary = await followTranslation({
+      job: job.job, target: job.target, sourceLanguage: job.source_language, slot: slotForTranslation(sourceSlot),
+    });
+    if (summary?.error) return summary;
+    if (translating?.job === job.job) translating.pickedUp = true;
+    trace("translate", { job: job.job, pickedUp: true, fileId, done: job.done, total: job.total });
+    return summary;
   }
 
   /* The last subtitle taken off, so it can be put back.
