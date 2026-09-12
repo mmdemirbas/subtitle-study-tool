@@ -18,6 +18,10 @@ import {
   pickSecondLanguage,
   subtitleContext,
   tabStatus,
+  translateCancel,
+  translateList,
+  translateStart,
+  translateStatus,
 } from "./daemon.js";
 import { parseTtml } from "./subtitles/ttml.js";
 import { measure, toJson } from "./subtitles/srt.js";
@@ -496,6 +500,22 @@ async function handleDaemonCall(op, args, sender) {
        * daemon that answered nothing. That is the fourth of the four failures
        * the marks record exists to tell apart. See glossAhead in study.js. */
       return glossWords(args.items || [], args.language, args.target, args.film);
+
+    /* A whole subtitle translated in the daemon, as a job. Daemon only: the
+     * extension's own store has no model behind it, and a transport failure
+     * comes back as the same { transportError } every other op reports. */
+    case "translate":
+      return translateStart(args.body || {});
+    case "translateStatus":
+      return translateStatus(String(args.job || ""), { cues: Boolean(args.cues) });
+    case "translations":
+      return translateList();
+    case "translateCancel":
+      return translateCancel(String(args.job || ""), { forget: Boolean(args.forget) });
+    // Which languages the reader wants, in order, for the offer to name the
+    // one that is missing. The worker owns the list; see preferredLanguages.
+    case "languages":
+      return { languages: await preferredLanguages() };
     case "lookupReady":
       return { dictionary: await canReachDictionary() };
     case "deckSave":

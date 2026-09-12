@@ -1630,6 +1630,48 @@ ${lines}
   await chrome.storage.local.set({ "sso:provider": heldProvider });
 }
 
+/* --- a subtitle translated by the daemon, as a job -------------------------------
+ *
+ * Four ops and one list, all daemon-only: the extension's own store has no
+ * model behind it. What is checked is that each op reaches the daemon's
+ * endpoint with the body it was given, and that a daemon that is not there
+ * answers in the { transportError } shape every caller of api.daemon reads.
+ */
+{
+  const seen = [];
+  daemonUp = true;
+  daemonAnswers = (url) => {
+    const path = new URL(url).pathname + new URL(url).search;
+    seen.push(path);
+    if (path === "/health") return { default_languages: ["en", "tr"], translate_model: "gemma3:4b", translate_seconds_per_cue: 0.5 };
+    if (path === "/translate") return { job: "13-abc-tr", status: "queued", done: 0, total: 3, generated_file_id: 90000000000001 };
+    if (path === "/translate/13-abc-tr?cues=1") return { job: "13-abc-tr", status: "done", done: 3, total: 3, cues: [{ start: 0, end: 900, text: "satır 1" }] };
+    if (path === "/translate/13-abc-tr") return { job: "13-abc-tr", status: "running", done: 2, total: 3 };
+    return null;
+  };
+  await (await import("../src/provider.js")).daemonUp({ force: true });
+
+  const started = await ask({ type: "sso:daemon", op: "translate", args: { body: { source_id: "13", language: "en", target: "tr", cues: [{ start: 0, end: 900, text: "line 1" }] } } }, sender);
+  t("translate posts the body to /translate and answers with the job",
+    started?.job === "13-abc-tr" && started.generated_file_id === 90000000000001, JSON.stringify(started));
+  const progress = await ask({ type: "sso:daemon", op: "translateStatus", args: { job: "13-abc-tr" } }, sender);
+  const full = await ask({ type: "sso:daemon", op: "translateStatus", args: { job: "13-abc-tr", cues: true } }, sender);
+  t("translateStatus asks with and without the cues",
+    progress?.done === 2 && full?.cues?.[0]?.text === "satır 1" && seen.includes("/translate/13-abc-tr") && seen.includes("/translate/13-abc-tr?cues=1"),
+    JSON.stringify({ progress, full, seen }));
+  const languages = await ask({ type: "sso:daemon", op: "languages", args: {} }, sender);
+  t("languages answers the reader's list, best first",
+    Array.isArray(languages?.languages) && languages.languages[0] === "en", JSON.stringify(languages));
+
+  daemonUp = false;
+  daemonAnswers = null;
+  await (await import("../src/provider.js")).daemonUp({ force: true });
+  const down = await ask({ type: "sso:daemon", op: "translate", args: { body: {} } }, sender);
+  t("with the daemon down, translate answers in the shape every caller reads",
+    typeof down?.transportError === "string" && down.transportError.length > 0, JSON.stringify(down));
+  daemonUp = true;
+}
+
 /* --- phrasal verbs -----------------------------------------------------------
  *
  * The matcher, on its own. It is imported by the build script as well as by the

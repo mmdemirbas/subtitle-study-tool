@@ -264,6 +264,33 @@ export function forgetAll({ searchesOnly = false } = {}) {
 }
 
 /** Hand the daemon a subtitle the extension downloaded while it was stopped. */
+/* --- a whole subtitle, translated by the daemon in the background ------------
+ *
+ * Started once, polled by whoever is watching, and finished whether or not
+ * anybody is: the job lives in the daemon's cache directory and outlives the
+ * tab. `translateStatus` with `cues` is the whole file as it stands, the
+ * translated lines where a chunk has landed and the source where it has not,
+ * which is what gets attached while the rest arrives. */
+export function translateStart(body) {
+  return call("/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export function translateStatus(job, { cues = false } = {}) {
+  return call(`/translate/${encodeURIComponent(job)}${cues ? "?cues=1" : ""}`);
+}
+
+export function translateList() {
+  return call("/translate");
+}
+
+export function translateCancel(job, { forget = false } = {}) {
+  return call(`/translate/${encodeURIComponent(job)}${forget ? "?forget=1" : ""}`, { method: "DELETE" });
+}
+
 export function importSubtitle(body) {
   return call("/cached", {
     method: "POST",

@@ -6058,6 +6058,291 @@
     }
   }
 
+  // --- a subtitle being made ----------------------------------------------------
+
+  /* A translation the daemon is making for this tab, followed to the end.
+   *
+   * The job itself lives in the daemon - started once, resumed across its
+   * restarts, finished whether or not anybody is watching - and this is the
+   * watching: a poll every few seconds, and the file attached the moment any
+   * of it exists. The lines the model has not reached yet are the source's,
+   * so the box on screen is readable throughout and the other language
+   * arrives under the reader's eyes rather than in one piece at the end.
+   *
+   * The generated file's id is known from the start (the daemon derives it
+   * from the source and the language), so the first partial attach is under
+   * the same id the finished file will have: any nudge the reader makes while
+   * it is being made is the finished file's offset too. Everything that
+   * changes the film goes through attach() the first time and swaps the cues
+   * in place after that, because attach() also resets the corrections and
+   * re-arranges the boxes, and a subtitle that grows is still one subtitle. */
+  const TRANSLATE_POLL_MS = 4000;
+  let translating = null;
+  let translateTimer = null;
+
+  function daemonCall(op, args) {
+    /* The { transportError } shape is load-bearing - every caller checks it
+     * and none of them can catch, being click handlers. An orphaned context
+     * has to answer in the same shape rather than in a rejection or a null,
+     * or the reader gets a control that silently does nothing. */
+    if (!alive()) return Promise.resolve({ transportError: "Extension context invalidated" });
+    try {
+      return chrome.runtime
+        .sendMessage({ type: "sso:daemon", op, args })
+        .catch((error) => ({ transportError: String(error?.message || error) }));
+    } catch (error) {
+      orphan();
+      return Promise.resolve({ transportError: String(error?.message || error) });
+    }
+  }
+
+  function translationSummary() {
+    if (!translating) return null;
+    const { job, slot, sourceSlot, sourceLanguage, target, done, total, status, etaSeconds, model, error, unrepaired, missing } = translating;
+    return { job, slot, sourceSlot, sourceLanguage, target, done, total, status, etaSeconds, model, error, unrepaired, missing };
+  }
+
+  /* The slot a made subtitle goes in: the one that is not the source, empty
+   * first. With both full and neither the source, the first of them is
+   * replaced, which the panel says before it happens. */
+  function slotForTranslation(sourceSlot) {
+    const others = state.tracks.map((_, index) => index).filter((index) => index !== sourceSlot);
+    return others.find((index) => state.tracks[index].cues.length === 0) ?? others[0] ?? PRIMARY;
+  }
+
+  async function startTranslation({ sourceSlot, target, slot = null } = {}) {
+    const source = state.tracks[sourceSlot];
+    if (!source?.cues.length) return { error: "There is no subtitle in that slot to translate" };
+    const into = slot ?? slotForTranslation(sourceSlot);
+    if (translating && !["done", "failed", "cancelled"].includes(translating.status)) {
+      return { error: "A subtitle is already being made for this tab" };
+    }
+    const context = (await daemonCall("pageContext", {})) || {};
+    const started = await daemonCall("translate", {
+      body: {
+        source_id: String(source.fileId ?? `slot-${sourceSlot}`),
+        language: source.language || "en",
+        target,
+        cues: source.cues.map((cue) => ({ start: cue.start, end: cue.end, text: cue.text })),
+        imdb_id: context.imdbId ?? undefined,
+        movie_name: context.title ?? undefined,
+        season: context.season ?? undefined,
+        episode: context.episode ?? undefined,
+        label: source.label,
+      },
+    });
+    if (!started || started.transportError || started.error) {
+      const why = started?.transportError || started?.error || "the daemon did not answer";
+      showToast(`Could not start the translation: ${why}`);
+      return { error: why };
+    }
+    translating = {
+      job: started.job,
+      slot: into,
+      sourceSlot,
+      sourceLanguage: (source.language || "en").toLowerCase(),
+      target: target.toLowerCase(),
+      fileId: started.generated_file_id,
+      done: started.done,
+      total: started.total,
+      status: started.status,
+      etaSeconds: started.eta_seconds,
+      model: started.model,
+      unrepaired: started.unrepaired,
+      missing: started.missing,
+      error: "",
+      shown: -1,
+    };
+    trace("translate", {
+      job: started.job, target, sourceSlot, slot: into, sourceFileId: source.fileId,
+      cueCount: source.cues.length, model: started.model, status: started.status, etaSeconds: started.eta_seconds,
+    });
+    notify();
+    scheduleTranslationPoll(0);
+    return translationSummary();
+  }
+
+  /* A job started elsewhere - another tab, an earlier visit - attached to this
+   * one as it arrives. The panel lists the daemon's jobs and offers this. */
+  async function followTranslation({ job, target, sourceLanguage = "", slot = null } = {}) {
+    const status = await daemonCall("translateStatus", { job, cues: false });
+    if (!status || status.transportError || status.error) {
+      return { error: status?.transportError || status?.error || "no such translation" };
+    }
+    translating = {
+      job,
+      slot: slot ?? slotForTranslation(-1),
+      sourceSlot: null,
+      sourceLanguage: (sourceLanguage || status.source_language || "").toLowerCase(),
+      target: (target || status.target || "").toLowerCase(),
+      fileId: status.generated_file_id,
+      done: status.done, total: status.total, status: status.status, etaSeconds: status.eta_seconds,
+      model: status.model, unrepaired: status.unrepaired, missing: status.missing, error: "", shown: -1,
+    };
+    notify();
+    scheduleTranslationPoll(0);
+    return translationSummary();
+  }
+
+  async function cancelTranslation() {
+    if (!translating) return { error: "nothing is being made" };
+    const answer = await daemonCall("translateCancel", { job: translating.job });
+    trace("translate", { job: translating.job, cancelled: true, done: translating.done, total: translating.total });
+    clearTimeout(translateTimer);
+    translateTimer = null;
+    translating = null;
+    notify();
+    return answer?.error ? { error: answer.error } : { ok: true };
+  }
+
+  function scheduleTranslationPoll(delay) {
+    clearTimeout(translateTimer);
+    translateTimer = setTimeout(() => {
+      pollTranslation().catch(() => {});
+    }, delay);
+  }
+
+  async function pollTranslation() {
+    if (!translating || !alive()) return;
+    const mine = translating;
+    const status = await daemonCall("translateStatus", { job: mine.job, cues: false });
+    if (translating !== mine) return;
+    if (!status || status.transportError) {
+      // The daemon is down or restarting. The job survives that; keep asking.
+      mine.error = status?.transportError || "the daemon did not answer";
+      notify();
+      scheduleTranslationPoll(TRANSLATE_POLL_MS * 3);
+      return;
+    }
+    if (status.error) {
+      mine.status = "failed";
+      mine.error = String(status.error);
+      showToast(`The ${mine.target.toUpperCase()} subtitle could not be made: ${status.error}`);
+      notify();
+      return;
+    }
+    Object.assign(mine, {
+      done: status.done, total: status.total, status: status.status, etaSeconds: status.eta_seconds,
+      model: status.model, unrepaired: status.unrepaired, missing: status.missing, error: "",
+    });
+    if (status.done > mine.shown || (status.status === "done" && mine.shown < status.total)) {
+      const full = await daemonCall("translateStatus", { job: mine.job, cues: true });
+      if (translating !== mine) return;
+      if (Array.isArray(full?.cues) && full.cues.length) {
+        await putTranslated(mine, full.cues);
+        mine.shown = status.done;
+      }
+    }
+    notify();
+    if (status.status === "done") {
+      const kept = (status.unrepaired || 0) + (status.missing || 0);
+      showToast(
+        `${mine.target.toUpperCase()} subtitle finished: ${status.total} lines` +
+          (kept ? `, ${kept} left in ${mine.sourceLanguage.toUpperCase()}` : ""),
+      );
+      trace("translate", { job: mine.job, finished: true, total: status.total, unrepaired: status.unrepaired, missing: status.missing, model: status.model });
+      return;
+    }
+    if (status.status === "failed" || status.status === "cancelled") {
+      if (status.status === "failed") showToast(`The ${mine.target.toUpperCase()} subtitle stopped: ${status.error || "the model gave up"}`);
+      return;
+    }
+    scheduleTranslationPoll(TRANSLATE_POLL_MS);
+  }
+
+  /* The offer, where the extension notices a second language is wanted.
+   *
+   * Study is the case: its rail translates each word into the OTHER attached
+   * subtitle's language, and its cards quote that subtitle's line, so with one
+   * subtitle on screen half of what study does has nothing to work from. Said
+   * as a toast with the one button that is the confirmation, because nothing
+   * is spent until it is pressed - a whole file through a model on this
+   * machine is ten minutes of it running warm.
+   *
+   * Honest first: the search is free and cached, so before offering to make a
+   * subtitle it asks whether one already exists. If it does, the offer is to
+   * open Find; making a translation of a film somebody has already subtitled
+   * would be the poorer file, slower. */
+  async function offerTranslation({ reason = "" } = {}) {
+    if (translating && !["done", "failed", "cancelled"].includes(translating.status)) return null;
+    const attached = attachedTracks();
+    if (!attached.length) return null;
+    const short = (code) => String(code || "").toLowerCase().slice(0, 2);
+    const languages = ((await daemonCall("languages", {}))?.languages || []).map(short).filter(Boolean);
+    const have = new Set(attached.map((track) => short(track.language)));
+    const target = languages.find((code) => !have.has(code));
+    if (!target) return null;
+    const source = attached.find((track) => short(track.language) && !isGeneratedFile(track.fileId)) || attached[0];
+    const sourceSlot = state.tracks.indexOf(source);
+    const from = short(source.language || "en").toUpperCase();
+    const context = (await daemonCall("pageContext", {})) || {};
+    const found = await daemonCall("search", {
+      title: context.title || document.title,
+      imdb_id: context.imdbId ?? undefined,
+      altTitles: context.altTitles ?? undefined,
+      year: context.year ?? undefined,
+      season: context.season ?? undefined,
+      episode: context.episode ?? undefined,
+      languages: [target],
+    });
+    const rows = (found?.results || []).filter((row) => short(row.language) === target);
+    const offer = { reason, target, sourceSlot, existing: rows.length };
+    if (rows.length) {
+      showToast(
+        `Study reads better with a ${target.toUpperCase()} line under the ${from}: OpenSubtitles has ${rows.length} for this.`,
+        { action: { label: "Find one", onClick: () => window.__ssoPanel?.openFind?.(slotForTranslation(sourceSlot)) } },
+      );
+      trace("translateOffer", { ...offer, offered: "find" });
+      return offer;
+    }
+    const health = (await daemonCall("health", {})) || {};
+    const model = health.translate_model || "the local model";
+    const minutes = Math.max(1, Math.round((source.cues.length * (Number(health.translate_seconds_per_cue) || 0.5)) / 60));
+    showToast(
+      `No ${target.toUpperCase()} subtitle exists for this. Make one from the ${from} with ${model}, about ${minutes} min? The lines appear as they are made.`,
+      {
+        action: {
+          label: "Make it",
+          onClick: () => {
+            startTranslation({ sourceSlot, target }).catch((error) => {
+              showToast(`The translation did not start - ${error?.message || error}`);
+            });
+          },
+        },
+      },
+    );
+    trace("translateOffer", { ...offer, offered: "make", model, minutes });
+    return offer;
+  }
+
+  /* A file this daemon made, by its id. The daemon files them above 9e13;
+   * see translate_jobs.py. Never a source to translate FROM. */
+  function isGeneratedFile(fileId) {
+    return typeof fileId === "number" && fileId >= 90_000_000_000_000;
+  }
+
+  function translationLabel(mine) {
+    const from = `made from ${mine.sourceLanguage.toUpperCase()}`;
+    if (mine.status === "done") return `${mine.target.toUpperCase()} · ${from} by ${mine.model}`;
+    const percent = mine.total ? Math.round((100 * mine.done) / mine.total) : 0;
+    return `${mine.target.toUpperCase()} · ${from} · ${percent}%`;
+  }
+
+  async function putTranslated(mine, cues) {
+    const track = state.tracks[mine.slot];
+    if (track.fileId !== mine.fileId || track.cues.length === 0) {
+      await attach({ cues, label: translationLabel(mine), fileId: mine.fileId, language: mine.target, slot: mine.slot });
+      return;
+    }
+    /* In place: the same file, more of it translated. See attach for what a
+     * fresh attach would reset, none of which has changed. */
+    track.cues = cues;
+    track.label = translationLabel(mine);
+    track.activeIndexes = NEEDS_REDRAW;
+    lastStepMs = null;
+    notify();
+  }
+
   // --- attach / visibility --------------------------------------------------
 
   async function attach({ cues, label, fileId, language, slot = PRIMARY }) {
@@ -6614,6 +6899,8 @@
       duration: filmSeconds(),
       // What the page carries for itself, if it told us. See onPageSubtitles.
       own: pageSubtitleSummary(),
+      // A subtitle being made for this tab, if one is. See startTranslation.
+      translation: translationSummary(),
     };
   }
 
@@ -7071,6 +7358,10 @@
   const FORWARDED = [
     "attach",
     "detach",
+    "startTranslation",
+    "followTranslation",
+    "cancelTranslation",
+    "offerTranslation",
     "reorderTracks",
     "setVisible",
     "setOffset",
@@ -7457,6 +7748,10 @@
     status,
     attach,
     detach,
+    startTranslation,
+    followTranslation,
+    cancelTranslation,
+    offerTranslation,
     reorderTracks,
     setVisible,
     setOffset,
@@ -7778,21 +8073,7 @@
     toWorker: sendToWorker,
     readStored,
     writeStored,
-    daemon(op, args) {
-      /* The { transportError } shape is load-bearing - every caller checks it
-       * and none of them can catch, being click handlers. An orphaned context
-       * has to answer in the same shape rather than in a rejection or a null,
-       * or the reader gets a control that silently does nothing. */
-      if (!alive()) return Promise.resolve({ transportError: "Extension context invalidated" });
-      try {
-        return chrome.runtime
-          .sendMessage({ type: "sso:daemon", op, args })
-          .catch((error) => ({ transportError: String(error?.message || error) }));
-      } catch (error) {
-        orphan();
-        return Promise.resolve({ transportError: String(error?.message || error) });
-      }
-    },
+    daemon: daemonCall,
     /* Start work from somewhere that cannot await it.
      *
      * Every click handler here begins something asynchronous - a message to the
@@ -8013,6 +8294,7 @@
     for (const timer of rememberTimers.values()) clearTimeout(timer);
     rememberTimers.clear();
     clearTimeout(mirrorTimer);
+    clearTimeout(translateTimer);
     videoResize?.disconnect();
     observedVideo = null;
     for (const type of ["keydown", "keyup", "keypress"]) {

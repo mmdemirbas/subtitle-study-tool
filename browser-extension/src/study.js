@@ -3121,6 +3121,13 @@
         ? "Study mode on — rare words appear at the side"
         : "Study mode on — hover a word to look it up",
     );
+    /* Study wants a second language - its rail translates into the other
+     * attached subtitle's, its cards quote that subtitle's line - and with
+     * one subtitle on screen it has nothing to work from. The offer lives in
+     * content.js, which owns the film; it asks the search first and offers to
+     * make a subtitle only where none can be had, and says nothing where a
+     * second language is already on screen. */
+    Promise.resolve(api.offerTranslation?.({ reason: "study" })).catch(() => {});
   }
 
   let building = null;
