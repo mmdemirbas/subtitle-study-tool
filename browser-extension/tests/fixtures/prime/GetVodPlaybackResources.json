@@ -1,0 +1,16 @@
+{
+  "globalError": null,
+  "timedTextUrls": {
+    "result": {
+      "subtitleUrls": [
+        { "languageCode": "en-us", "type": "subtitle", "displayName": "English", "format": "TTMLv2", "url": "https://cdn.example/en.dfxp?token=SECRET" },
+        { "languageCode": "en-us", "type": "sdh", "displayName": "English [CC]", "format": "TTMLv2", "url": "https://cdn.example/en-cc.dfxp?token=SECRET" },
+        { "languageCode": "tr-tr", "type": "subtitle", "displayName": "Türkçe", "format": "TTMLv2", "url": "https://cdn.example/tr.dfxp?token=SECRET" }
+      ],
+      "forcedNarratives": [
+        { "languageCode": "fr-fr", "displayName": "Français", "format": "TTMLv2", "url": "https://cdn.example/fr-forced.dfxp?token=SECRET" }
+      ]
+    }
+  },
+  "playbackUrls": { "result": {} }
+}

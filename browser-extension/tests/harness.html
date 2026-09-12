@@ -382,7 +382,11 @@
        * document.write rather than appended elements: these are classic scripts
        * whose order matters, and this is the one construct that keeps a static
        * page's parse-order guarantee. */
-      for (const src of ["align", "content", "panel", "study"]) {
+      /* The Prime Video ear first, as the page's own script - which is what it
+       * is in the manifest (world: MAIN, document_start). It wraps fetch and
+       * XMLHttpRequest transparently, so every other case runs through the
+       * wrapped pair and would notice if they were not. */
+      for (const src of ["sites/primevideo", "align", "content", "panel", "study"]) {
         document.write(`<script src="../src/${src}.js?t=${Date.now()}"><\/script>`);
       }
     </script>
@@ -4378,6 +4382,47 @@
         }
         window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
         await sleep(30);
+      });
+
+      /* The ear itself: the player's playback answer, fetched the two ways a
+       * player fetches, is overheard and handed across. The fixture has the
+       * shape read in the userscript's source (see src/sites/primevideo.js);
+       * a live answer's shape is what the running log will say. */
+      check("the player's playback answer is overheard, by fetch and by XHR", async () => {
+        const url = (title) => `../tests/fixtures/prime/GetVodPlaybackResources.json?deviceID=browser&titleId=${title}`;
+        const own = () => window.__ssoApi.status().own;
+
+        // fetch: the player's own copy of the answer is untouched.
+        const response = await fetch(url("F1"));
+        const body = await response.json();
+        if (!body.timedTextUrls) throw new Error("the wrapped fetch did not hand the body back");
+        for (let i = 0; i < 40 && own()?.titleId !== "F1"; i++) await sleep(25);
+        if (own()?.titleId !== "F1") throw new Error(`after fetch: ${JSON.stringify(own())}`);
+        const ids = own().tracks.map((t) => t.id).join();
+        if (ids !== "page:F1:en-us:subtitle,page:F1:en-us:sdh,page:F1:tr-tr:subtitle,page:F1:fr-fr:forced") throw new Error(ids);
+        if (JSON.stringify(own()).includes("SECRET")) throw new Error("a signed URL got into status()");
+
+        // XHR, as text and as json.
+        for (const [title, kind] of [["X1", ""], ["X2", "json"]]) {
+          await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("GET", url(title));
+            if (kind) xhr.responseType = kind;
+            xhr.onload = resolve;
+            xhr.onerror = () => reject(new Error("xhr failed"));
+            xhr.send();
+          });
+          for (let i = 0; i < 40 && own()?.titleId !== title; i++) await sleep(25);
+          if (own()?.titleId !== title) throw new Error(`after XHR (${kind || "text"}): ${own()?.titleId}`);
+        }
+
+        // A request that is not the player's is not read.
+        await fetch("../tests/fixtures/prime/GetVodPlaybackResources.json".replace("GetVod", "Other"), { cache: "no-store" }).catch(() => {});
+        await sleep(40);
+        if (own()?.titleId !== "X2") throw new Error("an unrelated fetch changed the list");
+
+        window.postMessage({ source: "sso-prime", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
+        await sleep(40);
       });
 
       /* --- letting the timing choose the subtitle -----------------------------

@@ -1225,6 +1225,99 @@
     return found;
   }
 
+  // --- what the page's own player was given ----------------------------------
+
+  /* The subtitles the page carries for itself.
+   *
+   * A streaming player is handed every language the title has, as files timed
+   * to its own picture, and draws one of them. Those files answer both of the
+   * questions the rest of this extension spends its effort on - WHICH episode
+   * is this, and WHERE do the lines sit against the film - by construction,
+   * because the same server handed out the stream. So where they can be had
+   * they come first, and the search over OpenSubtitles is for what the page
+   * does not carry.
+   *
+   * They arrive by postMessage from `src/sites/<site>.js`, which runs in the
+   * page's own world and overhears the player's request; see that file for
+   * why nothing on this side of the boundary can. The URLs are signed and
+   * short-lived and are kept here and nowhere else: the worker asks for the
+   * list by message when it fetches one, `status()` carries a summary without
+   * them, and the running log gets the languages and the shape of the answer.
+   * That shape is the evidence this feature is waiting on, so it is written on
+   * every new title rather than once. */
+  const PAGE_SUBTITLE_SOURCE = "sso-prime";
+  let pageSubtitles = null;
+
+  function siteName() {
+    const host = location.hostname;
+    if (/(^|\.)primevideo\.com$/.test(host) || /(^|\.)amazon\./.test(host)) return "Prime Video";
+    return host.replace(/^www\./, "");
+  }
+
+  /* A track's kind, from the two fields that might say. Forced narratives are
+   * the lines spoken in another language and nothing else, which is not a
+   * subtitle for the film; [CC] and SDH carry the sound descriptions a hearing
+   * viewer does not want on screen twice. Both are offered, neither is picked
+   * first. */
+  function trackKind(track) {
+    if (track.forced) return "forced";
+    if (/sdh|hearing|\bcc\b|\[cc\]/i.test(`${track.type} ${track.displayName}`)) return "sdh";
+    return "subtitle";
+  }
+
+  function onPageSubtitles(event) {
+    if (event.source !== window || event.origin !== location.origin) return;
+    const data = event.data;
+    if (!data || data.source !== PAGE_SUBTITLE_SOURCE || data.type !== "tracks") return;
+    const site = siteName();
+    const titleId = String(data.titleId || "");
+    const tracks = (Array.isArray(data.tracks) ? data.tracks : [])
+      .filter((track) => track && typeof track.url === "string" && track.url)
+      .map((track) => {
+        const code = String(track.language || "").toLowerCase();
+        const kind = trackKind(track);
+        return {
+          /* The id everything else keys on - the offset store, the card, the
+           * worker's fetch. A string where OpenSubtitles ids are numbers, and
+           * the prefix is what the worker tests for. */
+          id: `page:${titleId}:${code}:${kind}`,
+          language: code.split(/[-_]/)[0],
+          code,
+          kind,
+          displayName: String(track.displayName || ""),
+          url: track.url,
+        };
+      });
+    const changed = pageSubtitles?.titleId !== titleId || pageSubtitles?.tracks.length !== tracks.length;
+    pageSubtitles = { site, titleId, tracks, at: Date.now() };
+    if (!changed) return;
+    let hosts = [];
+    try {
+      hosts = [...new Set(tracks.map((track) => new URL(track.url).hostname))];
+    } catch {
+      // A URL the player could fetch parses; a stray one is not worth a line.
+    }
+    trace("pageSubtitles", {
+      site,
+      titleId,
+      tracks: tracks.map((track) => ({ code: track.code, kind: track.kind, displayName: track.displayName })),
+      hosts,
+      keys: data.tracks?.[0]?.keys ?? [],
+      shape: data.shape ?? [],
+    });
+    notify();
+  }
+
+  /* Without the URLs, for the panel and the mirror. */
+  function pageSubtitleSummary() {
+    if (!pageSubtitles) return null;
+    return {
+      site: pageSubtitles.site,
+      titleId: pageSubtitles.titleId,
+      tracks: pageSubtitles.tracks.map(({ url, ...rest }) => rest),
+    };
+  }
+
   // --- placing things in a page that may have moved the coordinate system ----
 
   /* Work out how this element's own left/top relate to viewport pixels.
@@ -6519,6 +6612,8 @@
       settings: state.settings,
       currentTime: state.video ? streamNowMs() / 1000 : null,
       duration: filmSeconds(),
+      // What the page carries for itself, if it told us. See onPageSubtitles.
+      own: pageSubtitleSummary(),
     };
   }
 
@@ -7222,6 +7317,11 @@
       case "sso:diagnose":
         sendResponse(diagnose());
         return false;
+      /* With the URLs, which status() leaves out: this is the worker about to
+       * fetch one, and the only place the signed URL travels. */
+      case "sso:pageSubtitles":
+        sendResponse(pageSubtitles);
+        return false;
 
       case "sso:attach":
         if (!hasPlayableVideo()) {
@@ -7877,6 +7977,13 @@
     noticeUpNext();
   };
   document.addEventListener("sso:nowplaying", onAnnouncement, true);
+  /* The page's own subtitles, from the world this script cannot see into. The
+   * hook there runs at document_start and this runs at idle, so the answer
+   * may already have gone by: ask for it once the ear is open. */
+  window.addEventListener("message", onPageSubtitles);
+  /* "*" because the target is this very window and a file:// page has no
+   * origin to name; the guard is on the receiving side, in onPageSubtitles. */
+  window.postMessage({ source: PAGE_SUBTITLE_SOURCE, type: "ask" }, "*");
   const announcements = new MutationObserver(onAnnouncement);
   announcements.observe(document.documentElement, {
     subtree: true,
@@ -7925,6 +8032,7 @@
     document.removeEventListener("fullscreenchange", onFullscreenChange);
     document.removeEventListener("webkitfullscreenchange", onFullscreenChange);
     document.removeEventListener("sso:nowplaying", onAnnouncement, true);
+    window.removeEventListener("message", onPageSubtitles);
     announcements.disconnect();
     /* Guarded, because the commonest reason to be tearing down is that the
      * extension has just been reloaded - and reaching into chrome.runtime is
