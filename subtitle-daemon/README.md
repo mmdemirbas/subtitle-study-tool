@@ -133,7 +133,8 @@ Downloaded subtitle files are not versioned: those are raw bytes.
 | `POST` | `/translate` | Body `{"source_id", "language", "target", "cues": [...]}` and the film's `imdb_id`, `movie_name`, `season`, `episode`. Starts translating a whole subtitle in the background, or reports the job already doing so. A cached `source_id` with no `cues` is read off the disk. |
 | `GET` | `/translate` | Every translation job the daemon holds, newest first, and the model in use. |
 | `GET` | `/translate/{job}` | One job's progress: `status`, `done` of `total` lines, `eta_seconds`, `file_id` once done. `?cues=1` adds the whole file as it stands - translated where a chunk has landed, the source text where not - and `translated_indexes`. |
-| `DELETE` | `/translate/{job}` | Stops a job between chunks; the chunk in flight completes. `?forget=1` removes its directory too. A stopped job goes on from where it was at the next `POST`. |
+| `POST` | `/translate/{job}` | Goes on with a job from its key alone, no cues needed: a stopped or failed one from its next chunk, a finished one with the lines it kept in the source language, asked for one at a time and written into the file again. A job with nothing left answers with its status. |
+| `DELETE` | `/translate/{job}` | Stops a job at once; the request in flight is torn down and its chunk is asked for again on the next `POST`. `?forget=1` removes its directory too. |
 | `DELETE` | `/cached/{file_id}` | Forgets one subtitle. |
 | `DELETE` | `/cached` | Forgets everything. `?searches_only=1` keeps the downloaded files and clears only the search cache, which is the one that costs nothing to rebuild. |
 
@@ -227,7 +228,11 @@ episode lists it, ranked as identified, and stops calling the language missing.
 What comes back is checked before it is believed - see `translate.py` for the
 two checks and `docs/reports/translate-bakeoff-2026-09-10.md` for why they are
 needed. A line the model could not translate keeps its source text, visibly,
-and the job reports how many.
+and the job reports how many. Those lines can be asked for again later with
+`POST /translate/{job}`: one at a time, with more context above each than the
+chunk had, and usually after the model has been swapped for a bigger one; what
+comes back is checked the same way, lands in the chunk file that owns it, and
+the cached file is written again.
 
 The model is `translate_model` in `config.local.json`, at `translate_url` with
 `translate_api_key`; the URL and key fall back to `gloss_url` and

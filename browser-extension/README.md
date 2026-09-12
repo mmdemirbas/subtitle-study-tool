@@ -280,9 +280,15 @@ far along it is and the Find screen says how long is left, with Stop beside it.
 The file is attached from the first moment under the id it will finish with, so
 a nudge made while it is being made is the finished file's offset too.
 
+A line the model could not translate is left in the source language rather
+than invented, and the card says how many. "Try the N lines again" on the Find
+screen asks for those alone - worth pressing after switching to a bigger model
+in the daemon's config - and the lines that come back land in place.
+
 The job belongs to the daemon, not to the tab. Closing the panel, the tab or
 the browser changes nothing; restarting the daemon costs the chunk in flight
-and nothing else. A finished file is kept in the daemon's cache with a
+and nothing else, and Stop on the Find screen ends it at once. A finished file
+is kept in the daemon's cache with a
 "made here" chip, and the next search for that episode lists it like any other
 subtitle - so the second time you watch, it is simply there. The daemon's
 README says which model, how it is configured, and what is checked before an

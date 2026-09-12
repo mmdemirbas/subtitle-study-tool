@@ -36,7 +36,7 @@ globalThis.fetch = async (url, options) => {
     return { ok: true, status: 200, json: async () => ({ ok: true, file: "logs/today.jsonl" }) };
   }
   if (daemonAnswers) {
-    const answer = daemonAnswers(String(url));
+    const answer = daemonAnswers(String(url), options?.method || "GET");
     if (answer) return { ok: true, status: 200, json: async () => answer };
   }
   if (Object.hasOwn(pageFiles, String(url))) {
@@ -1663,12 +1663,13 @@ ${lines}
 {
   const seen = [];
   daemonUp = true;
-  daemonAnswers = (url) => {
+  daemonAnswers = (url, method) => {
     const path = new URL(url).pathname + new URL(url).search;
-    seen.push(path);
+    seen.push(`${method} ${path}`);
     if (path === "/health") return { default_languages: ["en", "tr"], translate_model: "gemma3:4b", translate_seconds_per_cue: 0.5 };
     if (path === "/translate") return { job: "13-abc-tr", status: "queued", done: 0, total: 3, generated_file_id: 90000000000001 };
     if (path === "/translate/13-abc-tr?cues=1") return { job: "13-abc-tr", status: "done", done: 3, total: 3, cues: [{ start: 0, end: 900, text: "satır 1" }] };
+    if (path === "/translate/13-abc-tr" && method === "POST") return { job: "13-abc-tr", status: "queued", done: 0, total: 2, retrying: true };
     if (path === "/translate/13-abc-tr") return { job: "13-abc-tr", status: "running", done: 2, total: 3 };
     return null;
   };
@@ -1680,8 +1681,11 @@ ${lines}
   const progress = await ask({ type: "sso:daemon", op: "translateStatus", args: { job: "13-abc-tr" } }, sender);
   const full = await ask({ type: "sso:daemon", op: "translateStatus", args: { job: "13-abc-tr", cues: true } }, sender);
   t("translateStatus asks with and without the cues",
-    progress?.done === 2 && full?.cues?.[0]?.text === "satır 1" && seen.includes("/translate/13-abc-tr") && seen.includes("/translate/13-abc-tr?cues=1"),
+    progress?.done === 2 && full?.cues?.[0]?.text === "satır 1" && seen.includes("GET /translate/13-abc-tr") && seen.includes("GET /translate/13-abc-tr?cues=1"),
     JSON.stringify({ progress, full, seen }));
+  const resumed = await ask({ type: "sso:daemon", op: "translateResume", args: { job: "13-abc-tr" } }, sender);
+  t("translateResume posts to the job with nothing but its key",
+    resumed?.retrying === true && resumed.total === 2 && seen.includes("POST /translate/13-abc-tr"), JSON.stringify({ resumed, seen }));
   const languages = await ask({ type: "sso:daemon", op: "languages", args: {} }, sender);
   t("languages answers the reader's list, best first",
     Array.isArray(languages?.languages) && languages.languages[0] === "en", JSON.stringify(languages));

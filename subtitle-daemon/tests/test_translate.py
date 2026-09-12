@@ -139,6 +139,22 @@ def test_context_never_reaches_back_past_where_the_job_started(model) -> None:
     assert "for context only" not in stub.prompts[0]
 
 
+def test_a_line_asked_again_carries_more_context_and_keeps_the_speaker_check(model) -> None:
+    """A retry that repeats the chunk's prompt gets the chunk's answer, since
+    the decode is greedy. So the line is asked with twice the carry above it,
+    and refused for the same reason the repair pass refuses."""
+    stub = model(rows((3, "- Sekreter Roslin.\n- Evet.")), rows((4, "- Adım Aaron Doral.")))
+    translator = translate.Translator(carry=1)
+    assert translator.again(CUES, 3) == "- Sekreter Roslin.\n- Evet."
+    assert "you'll call me later" in stub.prompts[0], "two lines of context, not the one the chunk had"
+    assert translator.again(CUES, 4) == "- Adım Aaron Doral."
+
+    model(rows((3, "- Sekreter Roslin.")))
+    assert translate.Translator(carry=0).again(CUES, 3) == "", "one speaker where the cue has two"
+    model(None)
+    assert translate.Translator(carry=0).again(CUES, 1) == "", "no answer is no better"
+
+
 def test_timings_are_the_originals_and_a_missing_line_keeps_its_english() -> None:
     made = translate.to_cues(CUES, {1: "Yani,", 2: ""}, 0, 3)
     assert [c.start_ms for c in made] == [1000, 2000, 3000]

@@ -4435,16 +4435,20 @@
        * chunk per status call.
        */
       const GENERATED = 90_000_000_000_000 + 424242;
-      const makeJob = (total) => {
-        const state = { done: 0, total, status: "running", polls: 0 };
+      const makeJob = (total, { kept = [] } = {}) => {
+        // `kept` are 1-based lines the model leaves in English; a resume
+        // asks for them one per poll and lands "tekrar N" for each.
+        const state = { done: 0, total, status: "running", polls: 0, kept: [...kept], landed: [], retry: null, resumed: 0 };
         const cuesNow = () => Array.from({ length: total }, (_, i) => ({
           start: i * 1000, end: i * 1000 + 900,
-          text: i < state.done ? `satır ${i + 1}` : `line ${i + 1}`,
+          text: state.landed.includes(i + 1) ? `tekrar ${i + 1}` : state.kept.includes(i + 1) ? `line ${i + 1}` : i < state.done ? `satır ${i + 1}` : `line ${i + 1}`,
         }));
         const status = () => ({
           job: "13-abc-tr", status: state.status, source_language: "en", target: "tr", model: "gemma3:4b",
-          total, done: state.done, eta_seconds: (total - state.done) / 2, generated_file_id: GENERATED,
-          unrepaired: 0, missing: 0,
+          generated_file_id: GENERATED, unrepaired: 0, missing: state.kept.length, retrying: Boolean(state.retry),
+          ...(state.retry
+            ? { total: state.retry.total, done: state.landed.length, eta_seconds: state.retry.total - state.landed.length }
+            : { total, done: state.done, eta_seconds: (total - state.done) / 2 }),
         });
         return {
           state,
@@ -4462,11 +4466,25 @@
             translate: (args) => { state.started = args.body; return status(); },
             translateStatus: (args) => {
               state.polls += 1;
-              if (!args.cues) state.done = Math.min(total, state.done + 4);
-              if (state.done >= total) state.status = "done";
+              if (state.retry) {
+                // The follower's first look is not a poll: nothing lands on it,
+                // so the panel is seen mid-retry before the second poll ends it.
+                if (!args.cues && state.retry.asked++ >= 1 && state.kept.length) state.landed.push(state.kept.shift());
+                if (!state.kept.length) { state.status = "done"; state.retry = null; }
+              } else {
+                if (!args.cues) state.done = Math.min(total, state.done + 4);
+                if (state.done >= total) state.status = "done";
+              }
               const out = status();
               if (args.cues) { out.cues = cuesNow(); out.translated_indexes = Array.from({ length: state.done }, (_, i) => i); }
               return out;
+            },
+            translateResume: (args) => {
+              state.resumed += 1;
+              if (args.job !== "13-abc-tr") return { error: "no such translation" };
+              if (state.status === "done" && state.kept.length) state.retry = { total: state.kept.length, asked: 0 };
+              state.status = "running";
+              return status();
             },
             translateCancel: () => { state.status = "cancelled"; return status(); },
           },
@@ -4524,6 +4542,52 @@
           if (!/TR subtitle made from EN by gemma3:4b, 8 lines/.test(block.textContent)) throw new Error(`done reads ${JSON.stringify(block.textContent)}`);
           const toast = toastEl();
           if (!/TR subtitle finished: 8 lines/.test(toast?.textContent || "")) throw new Error(`toast reads ${JSON.stringify(toast?.textContent)}`);
+        } finally {
+          window.__stubDaemon = null;
+          window.__ssoApi.cancelTranslation?.().catch?.(() => {});
+          window.__ssoApi.detach(1);
+          window.__ssoApi.detach(0);
+          shadow.querySelector(".sso-panel__back")?.click();
+        }
+      });
+
+      check("a finished subtitle with lines kept in English offers to try them again, and they land in place", async () => {
+        const job = makeJob(8, { kept: [2, 5] });
+        window.__stubDaemon = job.ops;
+        const shadow = panelShadow();
+        try {
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 8), label: "EN · Mercy", fileId: 1, language: "en", slot: 0 });
+          await sleep(60);
+          shadow.querySelector(".sso-add").click();
+          await sleep(120);
+          await window.__ssoApi.followTranslation({ job: "13-abc-tr", target: "tr", sourceLanguage: "en", slot: 1 });
+          for (let i = 0; i < 200 && window.__ssoApi.status().translation?.status !== "done"; i++) await sleep(25);
+          const block = shadow.querySelector(".sso-make");
+          for (let i = 0; i < 40 && !/kept in EN/.test(block?.textContent || ""); i++) await sleep(25);
+          if (!/TR subtitle made from EN by gemma3:4b, 8 lines, 2 kept in EN/.test(block.textContent)) throw new Error(`done reads ${JSON.stringify(block.textContent)}`);
+          const before = window.__ssoApi.status().tracks[1];
+          if (before.cueCount !== 8) throw new Error(`${before.cueCount} cues before the retry`);
+          const again = [...block.querySelectorAll("button")].find((b) => b.textContent === "Try the 2 lines again");
+          if (!again) throw new Error(`no retry button among ${JSON.stringify([...block.querySelectorAll("button")].map((b) => b.textContent))}`);
+          again.click();
+          for (let i = 0; i < 40 && !job.state.resumed; i++) await sleep(25);
+          if (job.state.resumed !== 1) throw new Error("the button did not ask the daemon to go on");
+
+          // While it runs, the progress is the retry's, and the file stays put.
+          for (let i = 0; i < 80 && !/Asking gemma3:4b again/.test(block.textContent); i++) await sleep(25);
+          if (!/Asking gemma3:4b again for the 2 lines kept in EN · \d of 2/.test(block.textContent)) throw new Error(`retry reads ${JSON.stringify(block.textContent)}`);
+          if (window.__ssoApi.status().tracks[1].fileId !== GENERATED) throw new Error("the retry re-attached the file");
+
+          for (let i = 0; i < 200 && window.__ssoApi.status().translation?.status !== "done"; i++) await sleep(25);
+          for (let i = 0; i < 40 && /Try the/.test(block.textContent); i++) await sleep(25);
+          if (!/TR subtitle made from EN by gemma3:4b, 8 lines - in subtitle 2/.test(block.textContent)) throw new Error(`after reads ${JSON.stringify(block.textContent)}`);
+          if ([...block.querySelectorAll("button")].some((b) => /^Try the/.test(b.textContent))) throw new Error("nothing is kept and the button is still there");
+          const cues = window.__ssoApi.status().tracks[1];
+          if (cues.fileId !== GENERATED || cues.cueCount !== 8) throw new Error(`after the retry: ${JSON.stringify([cues.fileId, cues.cueCount])}`);
+          // The lines the retry landed are the ones on screen now: in place,
+          // through the same track, not a fresh attach.
+          const texts = window.__ssoApi.cueTexts(1);
+          if (texts[1] !== "tekrar 2" || texts[4] !== "tekrar 5" || texts[0] !== "satır 1") throw new Error(`texts ${JSON.stringify(texts)}`);
         } finally {
           window.__stubDaemon = null;
           window.__ssoApi.cancelTranslation?.().catch?.(() => {});

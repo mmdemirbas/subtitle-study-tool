@@ -20,6 +20,7 @@ import {
   tabStatus,
   translateCancel,
   translateList,
+  translateResume,
   translateStart,
   translateStatus,
 } from "./daemon.js";
@@ -560,6 +561,8 @@ async function handleDaemonCall(op, args, sender) {
       return translateStatus(String(args.job || ""), { cues: Boolean(args.cues) });
     case "translations":
       return translateList();
+    case "translateResume":
+      return translateResume(String(args.job || ""));
     case "translateCancel":
       return translateCancel(String(args.job || ""), { forget: Boolean(args.forget) });
     // Which languages the reader wants, in order, for the offer to name the

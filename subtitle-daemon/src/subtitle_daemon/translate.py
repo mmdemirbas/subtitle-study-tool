@@ -309,6 +309,29 @@ class Translator:
         )
 
 
+    def again(self, cues: list[Cue], number: int, floor: int = 0) -> str:
+        """One cue asked for on its own, for a retry of what a chunk left in
+        the source language. "" when the model has nothing better.
+
+        Not the question that failed. The decode is greedy, so the prompt the
+        chunk used gets the answer it got; this one carries twice the context
+        above the cue, which is a different prompt, and a model that has been
+        swapped since - the reason most retries are pressed - sees the cue for
+        the first time either way. The answer is checked the way the repair
+        pass checks: a cue with two speakers that comes back with one is still
+        refused, and the line stays as it was.
+        """
+        got = self._ask(
+            render(cues, number - 1, number, max(floor, number - 1 - 2 * self.carry)),
+            f"retry of cue {number}",
+        )
+        said = ((got or {}).get(number) or "").strip()
+        said_by = speakers(cues[number - 1].text)
+        if not said or (said_by >= 2 and speakers(said) < said_by):
+            return ""
+        return said
+
+
 def to_cues(cues: list[Cue], lines: dict[int, str], first: int, last: int) -> list[Cue]:
     """The translated cues, keeping every timing and falling back to the original.
 

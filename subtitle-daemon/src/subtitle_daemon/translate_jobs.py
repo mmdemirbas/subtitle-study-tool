@@ -15,7 +15,10 @@ translation is a directory on disk and a thread that walks it:
 A restart re-queues every job whose status is not final and picks up at the
 first chunk with no file, which is the promise the translate module's
 docstring makes - "a browser tab closing, a daemon restart or a model falling
-over costs the chunk in flight and nothing else". The finished file goes into
+over costs the chunk in flight and nothing else". A done job can be asked to
+go on as well: the lines its chunks left in the source language are asked for
+one at a time, land in the chunk files that own them, and the file is written
+again - see resume(). The finished file goes into
 the ordinary subtitle cache under a synthetic file_id, with `generated` in its
 sidecar, so a later search for the same title finds it the way it finds any
 download.
@@ -152,6 +155,28 @@ class Job:
     def done_chunks(self) -> list[tuple[int, int]]:
         return [(first, last) for first, last in self.bounds() if self.chunk_path(first, last).exists()]
 
+    def land(self, number: int, text: str) -> None:
+        """A retried line, into the chunk file that owns it: the translation
+        where the source text stood, and the number moved from missing or
+        unrepaired to repaired. The chunk files stay the one record of what
+        was translated, so a restart after this sees the line landed."""
+        for first, last in self.bounds():
+            if not first < number <= last:
+                continue
+            path = self.chunk_path(first, last)
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = {}
+            lines = {int(row["n"]): str(row["tr"]) for row in data.get("lines", [])}
+            lines[number] = text
+            data["lines"] = [{"n": n, "tr": tr} for n, tr in sorted(lines.items())]
+            for name in ("missing", "unrepaired"):
+                data[name] = [n for n in data.get(name, []) if n != number]
+            data["repaired"] = sorted(set(data.get("repaired", [])) | {number})
+            path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            return
+
 
 class Jobs:
     """The job directory, its queue and the one thread that works it."""
@@ -247,6 +272,36 @@ class Jobs:
                 job.state["status"] = "queued"
                 job.state["error"] = ""
                 self._save(job)
+            self._enqueue(key)
+            return self._status_of(job)
+
+    def resume(self, key: str) -> dict[str, Any]:
+        """Go on with whatever this job has not translated.
+
+        For a job that failed or was stopped, that is the chunks with no file,
+        and start() would do the same given the cues again - this needs
+        nothing but the key, since the source is on disk. For a job that is
+        done, it is the lines the model never answered for or answered badly,
+        which were left in the source language on purpose; those are asked
+        for one at a time, and the file is written again when they are in. A
+        done job with nothing left, and a job still going, are answered with
+        their status and not queued twice.
+        """
+        with self._lock:
+            job = self._load(key)
+            if job is None:
+                return {"error": "no such translation"}
+            if job.state["status"] in ("queued", "running"):
+                return self._status_of(job)
+            if job.state["status"] == "done":
+                left = sorted(set(job.state.get("missing") or []) | set(job.state.get("unrepaired") or []))
+                if not left:
+                    return self._status_of(job)
+                job.state["retry"] = left
+                job.state["retry_total"] = len(left)
+            job.state["status"] = "queued"
+            job.state["error"] = ""
+            self._save(job)
             self._enqueue(key)
             return self._status_of(job)
 
@@ -398,6 +453,28 @@ class Jobs:
                     missing=sorted(set(job.state.get("missing") or []) | set(attempt.missing)),
                     seconds_per_cue=per_cue if known is None else (float(known) * 0.7 + per_cue * 0.3),
                 )
+
+        # Then the lines a retry asked for, one at a time. Each lands in its
+        # chunk file and comes off the list as it is answered, so a stop in
+        # the middle costs the line in flight and nothing else, like a chunk.
+        for number in [int(n) for n in job.state.get("retry") or []]:
+            if cancel.is_set():
+                self._finish(job, "cancelled")
+                return
+            try:
+                said = translator.again(cues, number, floor=0)
+            except translate.Cancelled:
+                self._finish(job, "cancelled")
+                return
+            with self._lock:
+                if said:
+                    job.land(number, said)
+                fields: dict[str, Any] = {"retry": [n for n in job.state.get("retry") or [] if int(n) != number]}
+                if said:
+                    fields["repaired"] = int(job.state.get("repaired") or 0) + 1
+                    fields["missing"] = [n for n in job.state.get("missing") or [] if int(n) != number]
+                    fields["unrepaired"] = [n for n in job.state.get("unrepaired") or [] if int(n) != number]
+                self._update(job, **fields)
         self._finish(job, "done")
 
     def _update(self, job: Job, **fields: Any) -> None:
@@ -457,7 +534,9 @@ class Jobs:
                         "missing": len(job.state.get("missing") or []),
                     },
                 )
-                self._update(job, status="done", sha256=stored.meta.get("sha256"), finished_at=time.time())
+                self._update(
+                    job, status="done", sha256=stored.meta.get("sha256"), finished_at=time.time(), retry=[], retry_total=0,
+                )
             self._running = None
             self._active = None
             self._cancel.pop(job.key, None)
@@ -507,6 +586,13 @@ class Jobs:
         state = job.state
         total = int(state.get("total") or 0)
         done = sum(last - first for first, last in job.done_chunks())
+        # While a retry is on, the progress IS the retry's: "3 of 7 lines" is
+        # what a reader watching it wants, and 1200 of 1200 says nothing.
+        # Done is the whole file again, since that is what the file holds.
+        retrying = bool(state.get("retry")) and state.get("status") != "done"
+        if retrying:
+            total = int(state.get("retry_total") or len(state["retry"]))
+            done = total - len(state["retry"])
         rate = state.get("seconds_per_cue")
         remaining = max(0, total - done)
         eta = remaining * (float(rate) if rate else SECONDS_PER_CUE)
@@ -519,6 +605,7 @@ class Jobs:
             "model": state.get("model"),
             "total": total,
             "done": done,
+            "retrying": retrying,
             "chunks_done": len(job.done_chunks()),
             "chunks_total": len(job.bounds()),
             "eta_seconds": int(eta) if state.get("status") in ("queued", "running") else 0,

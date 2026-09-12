@@ -3817,7 +3817,7 @@
     const running = status.translation;
     const plan = running ? null : makePlan(status);
     const key = JSON.stringify([
-      running && [running.job, running.status, running.done, running.total, running.error, running.etaSeconds],
+      running && [running.job, running.status, running.done, running.total, running.error, running.etaSeconds, running.retrying],
       plan && [plan.target, plan.source.slot, plan.source.cueCount],
       confirming, elsewhere.map((job) => [job.job, job.done]), makerInfo?.model,
     ]);
@@ -3830,20 +3830,29 @@
       const target = running.target.toUpperCase();
       const from = (running.sourceLanguage || "").toUpperCase();
       const into = `subtitle ${running.slot + 1}`;
+      const goOn = (what) => api.detached(api.resumeTranslation({ job: running.job, target: running.target, sourceLanguage: running.sourceLanguage, slot: running.slot }), what);
       if (running.status === "done") {
         const kept = (running.unrepaired || 0) + (running.missing || 0);
         el.makeNote.textContent = `${target} subtitle made from ${from} by ${running.model}, ${running.total} lines${kept ? `, ${kept} kept in ${from}` : ""} - in ${into}.`;
+        /* The kept lines are the ones the model never answered for or
+         * answered a speaker short. Asked for one at a time, and usually
+         * after the model was swapped for a bigger one, most of them come
+         * back; the button is offered rather than pressed for the reader
+         * because it costs a request per line. */
+        if (kept) el.makeRow.append(button(`Try the ${kept} line${kept === 1 ? "" : "s"} again`, { onClick: () => goOn("Trying the kept lines again") }));
       } else if (running.status === "failed" || running.status === "cancelled") {
         el.makeNote.className = "sso-note sso-note--warn";
         el.makeNote.textContent = running.status === "failed"
-          ? `Making the ${target} subtitle stopped: ${running.error || "the model gave up"}. ${running.done} of ${running.total} lines were made; starting again goes on from there.`
+          ? `Making the ${target} subtitle stopped: ${running.error || "the model gave up"}. ${running.done} of ${running.total} lines were made; going on starts from there.`
           : `Making the ${target} subtitle was stopped at ${running.done} of ${running.total} lines.`;
-        el.makeRow.append(button("Go on", { primary: true, onClick: () => api.detached(api.followTranslation({ job: running.job, target: running.target, sourceLanguage: running.sourceLanguage, slot: running.slot }), "Going on with the translation") }));
+        el.makeRow.append(button("Go on", { primary: true, onClick: () => goOn("Going on with the translation") }));
       } else {
         const minutes = Math.round((running.etaSeconds || 0) / 60);
         const left = running.etaSeconds ? (minutes >= 1 ? `about ${minutes} min left` : "under a minute left") : "";
         const stalled = running.error ? ` The daemon is not answering (${running.error}); the job goes on when it is back.` : "";
-        el.makeNote.textContent = `Making a ${target} subtitle from ${from} with ${running.model} · ${running.done} of ${running.total} lines${left ? ` · ${left}` : ""} · in ${into}.${stalled}`;
+        el.makeNote.textContent = running.retrying
+          ? `Asking ${running.model} again for the ${running.total} line${running.total === 1 ? "" : "s"} kept in ${from} · ${running.done} of ${running.total}${left ? ` · ${left}` : ""} · in ${into}.${stalled}`
+          : `Making a ${target} subtitle from ${from} with ${running.model} · ${running.done} of ${running.total} lines${left ? ` · ${left}` : ""} · in ${into}.${stalled}`;
         el.makeRow.append(button("Stop", { onClick: () => api.detached(api.cancelTranslation(), "Stopping the translation") }));
       }
       el.make.hidden = false;

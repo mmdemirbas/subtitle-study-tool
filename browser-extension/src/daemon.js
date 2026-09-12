@@ -287,6 +287,18 @@ export function translateList() {
   return call("/translate");
 }
 
+/** Go on with a job from its key alone: a stopped one from its next chunk, a
+ * finished one with the lines it kept in the source language. Nothing is
+ * sent but the key, since the daemon has the source on its disk - which is
+ * what makes this possible for a page's own track it never held as a file. */
+export function translateResume(job) {
+  return call(`/translate/${encodeURIComponent(job)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+}
+
 export function translateCancel(job, { forget = false } = {}) {
   return call(`/translate/${encodeURIComponent(job)}${forget ? "?forget=1" : ""}`, { method: "DELETE" });
 }

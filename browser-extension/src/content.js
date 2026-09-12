@@ -6098,8 +6098,8 @@
 
   function translationSummary() {
     if (!translating) return null;
-    const { job, slot, sourceSlot, sourceLanguage, target, done, total, status, etaSeconds, model, error, unrepaired, missing } = translating;
-    return { job, slot, sourceSlot, sourceLanguage, target, done, total, status, etaSeconds, model, error, unrepaired, missing };
+    const { job, slot, sourceSlot, sourceLanguage, target, done, total, status, etaSeconds, model, error, unrepaired, missing, retrying } = translating;
+    return { job, slot, sourceSlot, sourceLanguage, target, done, total, status, etaSeconds, model, error, unrepaired, missing, retrying };
   }
 
   /* The slot a made subtitle goes in: the one that is not the source, empty
@@ -6198,11 +6198,25 @@
       target: (target || status.target || "").toLowerCase(),
       fileId: status.generated_file_id,
       done: status.done, total: status.total, status: status.status, etaSeconds: status.eta_seconds,
-      model: status.model, unrepaired: status.unrepaired, missing: status.missing, error: "", shown: -1,
+      model: status.model, unrepaired: status.unrepaired, missing: status.missing, retrying: Boolean(status.retrying),
+      error: "", shown: -1,
     };
     notify();
     scheduleTranslationPoll(0);
     return translationSummary();
+  }
+
+  /* Go on with a job: a stopped one from where it stopped, a finished one
+   * with the lines it kept in the source language. Then followed like any
+   * other, from a clean slate - `shown` starts over, so what the retry lands
+   * is put on screen even though the count of made lines does not grow. */
+  async function resumeTranslation({ job, target, sourceLanguage = "", slot = null } = {}) {
+    const resumed = await daemonCall("translateResume", { job });
+    if (!resumed || resumed.transportError || resumed.error) {
+      return { error: resumed?.transportError || resumed?.error || "no such translation" };
+    }
+    trace("translate", { job, resumed: true, status: resumed.status, done: resumed.done, total: resumed.total, retrying: Boolean(resumed.retrying) });
+    return followTranslation({ job, target, sourceLanguage, slot: slot ?? translating?.slot ?? null });
   }
 
   async function cancelTranslation() {
@@ -6244,7 +6258,7 @@
     }
     Object.assign(mine, {
       done: status.done, total: status.total, status: status.status, etaSeconds: status.eta_seconds,
-      model: status.model, unrepaired: status.unrepaired, missing: status.missing, error: "",
+      model: status.model, unrepaired: status.unrepaired, missing: status.missing, retrying: Boolean(status.retrying), error: "",
     });
     if (status.done > mine.shown || (status.status === "done" && mine.shown < status.total)) {
       const full = await daemonCall("translateStatus", { job: mine.job, cues: true });
@@ -7381,6 +7395,7 @@
     "detach",
     "startTranslation",
     "followTranslation",
+    "resumeTranslation",
     "cancelTranslation",
     "offerTranslation",
     "reorderTracks",
@@ -7771,6 +7786,7 @@
     detach,
     startTranslation,
     followTranslation,
+    resumeTranslation,
     cancelTranslation,
     offerTranslation,
     reorderTracks,

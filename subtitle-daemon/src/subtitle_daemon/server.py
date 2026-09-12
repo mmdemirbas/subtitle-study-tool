@@ -960,6 +960,12 @@ class Service:
     def translate_list(self) -> dict[str, Any]:
         return {"jobs": self.jobs.list(), "model": self.jobs.model}
 
+    def translate_resume(self, key: str) -> dict[str, Any]:
+        resumed = self.jobs.resume(key)
+        if "error" not in resumed:
+            logger.info("translation %s: going on, %s", key, resumed["status"])
+        return resumed
+
     def translate_cancel(self, key: str, *, forget: bool = False) -> dict[str, Any]:
         return self.jobs.cancel(key, forget=forget)
 
@@ -1090,7 +1096,8 @@ class _Handler(BaseHTTPRequestHandler):
         if not self._origin_ok():
             return
         parsed = urlparse(self.path)
-        if parsed.path not in ("/fetch", "/cached", "/log", "/gloss", "/translate"):
+        resumed = re.fullmatch(r"/translate/([A-Za-z0-9-]+)", parsed.path)
+        if resumed is None and parsed.path not in ("/fetch", "/cached", "/log", "/gloss", "/translate"):
             self._send(HTTPStatus.NOT_FOUND, {"error": "no such endpoint"})
             return
 
@@ -1129,6 +1136,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(HTTPStatus.OK, self.service.gloss(body))
         elif parsed.path == "/translate":
             self._send(HTTPStatus.OK, self.service.translate_start(body))
+        elif resumed is not None:
+            self._send(HTTPStatus.OK, self.service.translate_resume(resumed.group(1)))
         else:
             self._send(HTTPStatus.OK, self.service.fetch(body))
 

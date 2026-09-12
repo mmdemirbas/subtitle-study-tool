@@ -1300,6 +1300,18 @@ def test_a_translation_is_started_from_cues_and_answers_with_its_progress(http) 
     assert held["cues"][0]["text"] == "TR line 0"
 
 
+def test_a_translation_goes_on_from_its_key(http) -> None:
+    base, _stub = http
+    cues = [{"start": i * 1000, "end": i * 1000 + 800, "text": f"line {i}"} for i in range(6)]
+    _status, started = _post(base, "/translate", {"source_id": "13", "language": "en", "target": "tr", "cues": cues})
+    _wait_translation(base, started["job"])
+    # Done with nothing kept: the answer is the status, and no cues are needed.
+    status, resumed = _post(base, f"/translate/{started['job']}", {})
+    assert status == 200 and resumed["status"] == "done" and resumed["file_id"] == started["generated_file_id"]
+    status, missing = _post(base, "/translate/no-such-job", {})
+    assert status == 200 and missing["error"] == "no such translation"
+
+
 def test_a_translation_refuses_what_it_cannot_do(http) -> None:
     base, _stub = http
     cues = [{"start": 0, "end": 800, "text": "line"}]

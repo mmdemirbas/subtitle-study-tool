@@ -52,6 +52,12 @@ class StubTranslator:
             return translate.Attempt(missing=list(range(first + 1, last + 1)), error="the model went away")
         return translate.Attempt(lines={i + 1: source[i].text.replace("line", "satır") for i in range(first, last)})
 
+    def again(self, source: list[Cue], number: int, floor: int = 0) -> str:
+        self.asked.append((number, number))
+        if self.gate is not None and self.gate.get(timeout=5) == "abort":
+            raise translate.Cancelled()
+        return "" if getattr(self, "still_stuck", set()) and number in self.still_stuck else source[number - 1].text.replace("line", "tekrar")
+
 
 def wait_for(jobs: translate_jobs.Jobs, key: str, status: str, seconds: float = 5.0) -> dict:
     deadline = time.monotonic() + seconds
@@ -212,16 +218,21 @@ def test_a_cancel_and_an_immediate_restart_do_not_lose_the_restart(tmp_path: Pat
     assert sorted(set(stub.asked)) == [(0, 4), (4, 8)]
 
 
-def test_lines_the_model_never_answered_keep_their_source_and_are_counted(tmp_path: Path, cache: Cache) -> None:
-    class Partial(StubTranslator):
-        def chunk_lines(self, source, first, last, floor=0):  # type: ignore[override]
-            attempt = super().chunk_lines(source, first, last, floor)
-            if first == 0:
-                lines = dict(attempt.lines)
-                lines.pop(2)
-                return translate.Attempt(lines=lines, missing=[2], unrepaired=[3])
-            return attempt
+class Partial(StubTranslator):
+    """Leaves line 2 unanswered and line 3 with a speaker short, in the first chunk."""
 
+    def chunk_lines(self, source, first, last, floor=0):  # type: ignore[override]
+        attempt = super().chunk_lines(source, first, last, floor)
+        if first == 0:
+            lines = dict(attempt.lines)
+            lines.pop(2)
+            # As the real translator leaves an unrepaired cue: in its source.
+            lines[3] = source[2].text
+            return translate.Attempt(lines=lines, missing=[2], unrepaired=[3])
+        return attempt
+
+
+def test_lines_the_model_never_answered_keep_their_source_and_are_counted(tmp_path: Path, cache: Cache) -> None:
     jobs = make_jobs(tmp_path, cache, Partial())
     started = jobs.start(source_id="13", source_language="en", target="tr", cues=cues(6), meta=META)
     done = wait_for(jobs, started["job"], "done")
@@ -229,6 +240,99 @@ def test_lines_the_model_never_answered_keep_their_source_and_are_counted(tmp_pa
     held = cache.get_subtitle(done["file_id"])
     assert held is not None and held.meta["missing"] == 1 and held.meta["unrepaired"] == 1
     assert "line 2" in held.read_bytes().decode("utf-8"), "visibly untranslated, not invented"
+
+
+def test_a_finished_job_asked_to_go_on_retries_its_kept_lines_and_writes_the_file_again(tmp_path: Path, cache: Cache) -> None:
+    stub = Partial()
+    jobs = make_jobs(tmp_path, cache, stub)
+    started = jobs.start(source_id="13", source_language="en", target="tr", cues=cues(6), meta=META)
+    done = wait_for(jobs, started["job"], "done")
+    assert done["missing"] == 1 and done["unrepaired"] == 1
+    before = cache.get_subtitle(done["file_id"]).read_bytes().decode("utf-8")  # type: ignore[union-attr]
+    assert "line 2" in before and "line 3" in before
+
+    resumed = jobs.resume(started["job"])
+    assert resumed["status"] in ("queued", "running")
+    assert resumed["total"] == 2 and resumed["retrying"] is True, "the progress is the retry's while it runs"
+    again = wait_for(jobs, started["job"], "done")
+    assert stub.asked[-2:] == [(2, 2), (3, 3)], "each kept line, on its own, and no chunk again"
+    assert again["missing"] == 0 and again["unrepaired"] == 0 and again["repaired"] == 2
+    assert again["total"] == 6 and again["done"] == 6 and again["retrying"] is False, "and the whole file again once done"
+    after = cache.get_subtitle(done["file_id"]).read_bytes().decode("utf-8")  # type: ignore[union-attr]
+    assert "tekrar 2" in after and "tekrar 3" in after and "line " not in after
+    assert cache.get_subtitle(done["file_id"]).meta["missing"] == 0  # type: ignore[union-attr]
+    # The chunk file is the record: a restart sees the lines landed.
+    chunk = json.loads((tmp_path / "jobs" / started["job"] / "chunks" / "0-4.json").read_text())
+    assert [row["tr"] for row in chunk["lines"]] == ["satır 1", "tekrar 2", "tekrar 3", "satır 4"]
+    assert chunk["missing"] == [] and chunk["unrepaired"] == [] and chunk["repaired"] == [2, 3]
+
+    # Nothing left: going on again is the status, not another job.
+    assert jobs.resume(started["job"])["status"] == "done"
+    assert len(stub.asked) == 4
+
+
+def test_a_line_the_model_still_cannot_do_stays_kept_and_the_job_still_finishes(tmp_path: Path, cache: Cache) -> None:
+    stub = Partial()
+    stub.still_stuck = {2}
+    jobs = make_jobs(tmp_path, cache, stub)
+    started = jobs.start(source_id="13", source_language="en", target="tr", cues=cues(6), meta=META)
+    wait_for(jobs, started["job"], "done")
+    jobs.resume(started["job"])
+    again = wait_for(jobs, started["job"], "done")
+    assert again["missing"] == 1 and again["unrepaired"] == 0 and again["repaired"] == 1
+    text = cache.get_subtitle(again["file_id"]).read_bytes().decode("utf-8")  # type: ignore[union-attr]
+    assert "line 2" in text and "tekrar 3" in text
+
+
+def test_a_stopped_job_goes_on_from_its_key_alone(tmp_path: Path, cache: Cache) -> None:
+    """The extension's "Go on" has no cues to send: a page's own track is not
+    on the daemon's disk, and the source in the job directory is."""
+    gate: queue.Queue = queue.Queue()
+    stub = StubTranslator(gate=gate)
+    jobs = make_jobs(tmp_path, cache, stub)
+    started = jobs.start(source_id="13", source_language="en", target="tr", cues=cues(8), meta=META)
+    gate.put(1)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and jobs.status(started["job"])["done"] < 4:
+        time.sleep(0.01)
+    jobs.cancel(started["job"])
+    wait_for(jobs, started["job"], "cancelled")
+    resumed = jobs.resume(started["job"])
+    assert resumed["status"] in ("queued", "running") and resumed["done"] == 4
+    gate.put(1)
+    gate.put(1)
+    done = wait_for(jobs, started["job"], "done")
+    assert done["done"] == 8 and stub.asked.count((0, 4)) == 1
+    assert jobs.resume("no-such-job") == {"error": "no such translation"}
+
+
+def test_a_stop_in_the_middle_of_a_retry_goes_on_with_the_lines_left(tmp_path: Path, cache: Cache) -> None:
+    class Gated(Partial):
+        def again(self, source, number, floor=0):  # type: ignore[override]
+            if self.gate is not None and self.gate.get(timeout=5) == "abort":
+                raise translate.Cancelled()
+            self.asked.append((number, number))
+            return source[number - 1].text.replace("line", "tekrar")
+
+    gate: queue.Queue = queue.Queue()
+    stub = Gated()
+    jobs = make_jobs(tmp_path, cache, stub)
+    started = jobs.start(source_id="13", source_language="en", target="tr", cues=cues(6), meta=META)
+    wait_for(jobs, started["job"], "done")
+    stub.gate = gate
+    jobs.resume(started["job"])
+    gate.put(1)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and jobs.status(started["job"])["done"] < 1:
+        time.sleep(0.01)
+    stopped = jobs.cancel(started["job"])
+    assert stopped["status"] == "cancelled" and stopped["done"] == 1 and stopped["total"] == 2
+    wait_for(jobs, started["job"], "cancelled")
+    jobs.resume(started["job"])
+    gate.put(1)
+    done = wait_for(jobs, started["job"], "done")
+    assert stub.asked[-2:] == [(2, 2), (3, 3)], "line 2 was not asked for twice"
+    assert done["repaired"] == 2 and done["missing"] == 0 and done["unrepaired"] == 0
 
 
 def test_the_generated_id_is_deterministic_high_and_exact() -> None:
