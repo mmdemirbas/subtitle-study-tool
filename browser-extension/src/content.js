@@ -1253,6 +1253,8 @@
     if (/(^|\.)primevideo\.com$/.test(host) || /(^|\.)amazon\./.test(host)) return "Prime Video";
     if (/(^|\.)netflix\.com$/.test(host)) return "Netflix";
     if (/(^|\.)disneyplus\.com$/.test(host)) return "Disney+";
+    if (/(^|\.)youtube\.com$/.test(host)) return "YouTube";
+    if (/(^|\.)tabii\.com$/.test(host)) return "tabii";
     return host.replace(/^www\./, "");
   }
 
@@ -1265,7 +1267,8 @@
    * characteristics, and all three put "[CC]" in the name. */
   function trackKind(track) {
     if (track.forced) return "forced";
-    if (/sdh|hearing|closedcaptions|describes-music-and-sound|\bcc\b|\[cc\]/i.test(`${track.type} ${track.displayName}`)) return "sdh";
+    if (/sdh|hearing|closedcaptions|describes-music-and-sound|caption|\bcc\b|\[cc\]/i.test(`${track.type} ${track.displayName}`)) return "sdh";
+    if (/\basr\b|auto-generated|automatic/i.test(`${track.type} ${track.displayName}`)) return "auto";
     return "subtitle";
   }
 
@@ -1293,6 +1296,8 @@
            * "vtt", or "hls-vtt" for a playlist of segments (Disney+). */
           format: String(track.format || "ttml"),
           url: track.url,
+          /* For a DASH manifest, which text track in it. */
+          ...(track.dash && typeof track.dash === "object" ? { dash: { representation: String(track.dash.representation ?? ""), adaptation: String(track.dash.adaptation ?? "") } } : {}),
         };
       });
     const changed = pageSubtitles?.titleId !== titleId || pageSubtitles?.tracks.length !== tracks.length;

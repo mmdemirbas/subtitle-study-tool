@@ -421,11 +421,21 @@ window. The player's own copy is untouched. `content.js` loads at idle and may
 have missed it, so it posts `{ type: "ask" }` once its listener is up and the
 page world answers with the latest.
 
-**The other two ears speak the same message and differ in where the list
-goes by.** Each track carries `language, url, type, displayName, forced,
-format, keys`, and `format` is what the worker reads the file by: `ttml`
-(Prime, Netflix), `vtt`, or `hls-vtt` for a playlist of segments.
-`src/sites/netflix.js` wraps `JSON.parse`, because the manifest arrives
+**The other ears speak the same message and differ in where the list goes
+by.** Each track carries `language, url, type, displayName, forced, format,
+keys`, and `format` is what `src/subtitles/page.js` reads the file by: `ttml`
+(Prime, Netflix), `vtt` (YouTube), `srt`, `hls-vtt` for a playlist of segments
+(Disney+), or `dash` with `dash.representation` naming the text track in the
+MPD (tabii). `src/sites/youtube.js` reads the player response - inlined as
+`ytInitialPlayerResponse` on the first page, fetched as `/youtubei/v1/player`
+on every navigation after - for `captions.playerCaptionsTracklistRenderer.
+captionTracks`, and asks each `baseUrl` for `fmt=vtt`. A `baseUrl` with
+`exp=xpe` answers 200 and nothing unless the request carries the player's
+proof-of-origin token (`pot`, `potc=1`, `c=WEB`, made by BotGuard in the
+page), so the ear overhears the player's own `/api/timedtext` requests, takes
+the three parameters off the first that has them, and posts every track's
+URL with them on; before that, `page.js` turns the empty answer into "turn
+the player's own captions on once". `src/sites/netflix.js` wraps `JSON.parse`, because the manifest arrives
 inside an MSL envelope and is decrypted by the player before it is parsed -
 no fetch wrap sees it. A manifest is recognised by `result.movieId` beside
 `result.timedtexttracks` (older `textTracks`); a track's file is
@@ -434,12 +444,20 @@ no fetch wrap sees it. A manifest is recognised by `result.movieId` beside
 `webvtt-lssdh-ios8` is not. The player prefetches the next episode's
 manifest, so every one is kept by `movieId` and the one posted is for the id
 on `[data-videoid]` or in `/watch/<id>`, checked once a second. Nothing
-rewrites the player's request. `src/sites/disneyplus.js` wraps XHR and fetch
-for `.m3u8`: the master playlist's `#EXT-X-MEDIA:TYPE=SUBTITLES` lines carry
-`NAME`, `LANGUAGE`, `FORCED`, `CHARACTERISTICS` and the `URI` of a playlist
-of WebVTT segments, resolved against the master. The worker's
-`fetchPageSubtitle` fetches that playlist, then every segment six at a time,
-and `joinSegments` drops a cue written into both segments it spans.
+rewrites the player's request. `src/sites/streams.js` (Disney+, tabii) wraps
+XHR and fetch for `.m3u8`, `.mpd` and tabii's `/apigateway/` answers, and
+watches the document for `<video><track src>`: an HLS master's
+`#EXT-X-MEDIA:TYPE=SUBTITLES` lines carry `NAME`, `LANGUAGE`, `FORCED`,
+`CHARACTERISTICS` and the `URI` of a playlist of WebVTT segments, resolved
+against the master; a DASH MPD's text AdaptationSets are named by `lang`,
+`Role` and mime type and the worker reads the MPD again through
+`src/subtitles/dash.js` (BaseURL files, SegmentTemplate with `$Number$` or a
+timeline, SegmentList; `stpp` segments have their TTML document taken out of
+the bytes, `wvtt` is refused by name); an API answer is walked for objects
+with a `.vtt`/`.srt`/`.ttml` URL beside a language. `page.js` fetches
+segments six at a time and `joinSegments` drops a cue written into both
+segments it spans. Each post says which shape it came from - `m3u8`, `mpd`,
+`api`, `track` - which is what the first tabii playback's log line will say.
 
 **Evidence, as of 2026-09-12.** The request path, the response path and the
 plain `fetch(url)` with no credentials were first read in the source of the
@@ -465,18 +483,32 @@ request bypassed the hook (a worker, or a fetch captured before
 `document_start` - check `performance.getEntriesByType("resource")` for the
 URL). The zihin node
 `media-playback/systems/primevideo/findings/prime-video-hands-its-player-every-subtitle-as-signed-ttml.md`
-carries the evidence table. **Netflix and Disney+ are `src` tier**: read in
-Subadub (github rsimmons/subadub) and "Netflix - subtitle downloader"
-(greasyfork 26654) for the one, "Disney+ Subtitles Downloader Improved" (github
-Sen-Elsecaller, v2.16) for the other, all on 2026-09-12, and run in the
-harness against `tests/fixtures/netflix/manifest.json` and
+carries the evidence table. **YouTube's list is `run`, its token `src`**: the
+response shape and `exp=xpe` were observed on a public video from a sandbox on
+2026-09-12, where `fmt=vtt` answered 200 and 0 bytes; the token's meaning is
+yt-dlp's `youtube/_video.py` (`requires_pot` on `exp` in `xpe`/`xpv`, params
+`pot`, `potc`, `c`), read directly the same day. Whether the worker's fetch
+with the page's token gets the file is what the first playback's `pageFetch`
+line will say (a `bytes: 0` with `pot` in the `pageSubtitles` shape means the
+token is bound to something the worker's request lacks). **Netflix and
+Disney+ are `src` tier**: read in Subadub (github rsimmons/subadub) and
+"Netflix - subtitle downloader" (greasyfork 26654) for the one, "Disney+
+Subtitles Downloader Improved" (github Sen-Elsecaller, v2.16) for the other,
+all on 2026-09-12, and run in the harness against
+`tests/fixtures/netflix/manifest.json` and
 `tests/fixtures/disneyplus/master.m3u8`. Neither has been observed on a live
-playback yet. The first one writes the same `pageSubtitles` and `pageFetch`
-lines; a Netflix line with `formats` naming only `simplesdh` and `nflx-cmisc`
-means the TTML formats left the default request, and the answer is the request
-rewrite both scripts do (`profiles.unshift(...)` in a `JSON.stringify` wrap),
-deliberately not done here. A Disney+ `pageFetch` with `failed` equal to
-`segments` means the CDN wants something the worker's plain GET did not send.
+playback yet, and nobody here has an account to observe one. **tabii is
+`assumed`**: its public home page (2026-09-12, no session) lists an HLS and a
+DASH URL per live channel behind `eu1.tabii.com/apigateway` with a FairPlay
+certificate for the DRM, and its films are behind a login; the ear reads all
+three shapes a web player gets subtitles in and says which it saw. The first
+playback writes the same `pageSubtitles` and `pageFetch` lines; a Netflix line
+with `formats` naming only `simplesdh` and `nflx-cmisc` means the TTML formats
+left the default request, and the answer is the request rewrite both scripts
+do (`profiles.unshift(...)` in a `JSON.stringify` wrap), deliberately not done
+here. A `pageFetch` with `failed` equal to `segments` means the CDN wants
+something the worker's plain GET did not send. A tabii `pageFetch` refusing
+"WebVTT inside MP4" means the one shape `dash.js` does not read yet.
 
 **Three things are load-bearing.**
 
@@ -509,7 +541,7 @@ the subset of the match-pattern grammar the manifest uses). A Prime Video tab
 left open across an update therefore hears the next episode's playback
 answer without a reload; the current one, already played, is gone either
 way. Each ear guards its own double injection, and every ear answers an
-`ask` - the harness, which loads all three, has to pick the answer it wants.
+`ask` - the harness, which loads all of them, has to pick the answer it wants.
 
 `parseTtml` in `src/subtitles/ttml.js` is a regex reader, because the worker
 has no `DOMParser`. Absolute `begin`/`end` on `<p>`, `dur` as a fallback, the

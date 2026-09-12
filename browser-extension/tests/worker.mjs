@@ -40,7 +40,12 @@ globalThis.fetch = async (url, options) => {
     if (answer) return { ok: true, status: 200, json: async () => answer };
   }
   if (Object.hasOwn(pageFiles, String(url))) {
-    return { ok: true, status: 200, text: async () => pageFiles[String(url)] };
+    const body = pageFiles[String(url)];
+    return {
+      ok: true, status: 200,
+      text: async () => (typeof body === "string" ? body : new TextDecoder().decode(body)),
+      arrayBuffer: async () => (typeof body === "string" ? new TextEncoder().encode(body).buffer : body.buffer),
+    };
   }
   /* A packaged file, served off disk. rarity.js and phrases.js fetch their
    * tables through chrome.runtime.getURL rather than importing them, because a
@@ -1733,6 +1738,60 @@ r/v/1.m3u8
   const plain = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:D1:tr:sdh" } }, sender);
   t("and a WebVTT file is read as itself",
     plain?.cues?.[0]?.text === "Netflix Türkçesi", JSON.stringify(plain));
+
+  /* DASH: the manifest names the text tracks; each is a file or a run of
+   * segments, and stpp segments carry a TTML document each. */
+  const { textRepresentations, durationSeconds, ttmlDocumentsIn } = await import("../src/subtitles/dash.js");
+  const mpd = await (await import("node:fs/promises")).readFile(new URL("./fixtures/tabii/master.mpd", import.meta.url), "utf-8");
+  const reps = textRepresentations(mpd, "https://cdn.example/tabii/ep1/master.mpd?token=SECRET");
+  t("an MPD's text adaptation sets are read, video and audio left alone",
+    reps.map((r) => `${r.id}/${r.lang}/${r.mimeType}`).join() === "t-en/en/application/mp4,t-tr/tr/text/vtt,t-en-forced/en/application/ttml+xml",
+    JSON.stringify(reps.map((r) => [r.id, r.lang, r.mimeType, r.codecs, r.role])));
+  t("a segment timeline becomes the run of URLs the player would fetch, initialization first, against the MPD's BaseURL",
+    reps[0].segments.join() === "https://cdn.example/tabii/ep1/s/t-en/init.mp4?token=SECRET,https://cdn.example/tabii/ep1/s/t-en/1.m4s?token=SECRET,https://cdn.example/tabii/ep1/s/t-en/2.m4s?token=SECRET",
+    JSON.stringify(reps[0].segments));
+  t("a representation's own BaseURL is one whole file, and the roles are read",
+    reps[1].file === "https://cdn.example/tabii/ep1/s/tr/all.vtt?token=SECRET" && reps[2].role === "forced-subtitle" && reps[1].accessibility === "2",
+    JSON.stringify([reps[1].file, reps[2].role, reps[1].accessibility]));
+  const numbered = textRepresentations(`<MPD mediaPresentationDuration="PT10S"><Period><AdaptationSet mimeType="text/vtt" lang="de"><SegmentTemplate media="$RepresentationID$-$Number%03d$.vtt" timescale="1" duration="4" startNumber="0"/><Representation id="x"/></AdaptationSet></Period></MPD>`, "https://cdn.example/d/m.mpd");
+  t("a fixed segment duration is counted out over the presentation's length, with the number's width",
+    numbered[0]?.segments.join() === "https://cdn.example/d/x-000.vtt,https://cdn.example/d/x-001.vtt,https://cdn.example/d/x-002.vtt" && durationSeconds("PT1H2M3.5S") === 3723.5,
+    JSON.stringify(numbered));
+  const stpp = new TextEncoder().encode(`\u0000\u0000\u0000\u0018ftypisom\u0000\u0000\u0000\u0000mdat<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="00:00:01.000" end="00:00:02.000">Segment one</p></div></body></tt>`);
+  t("the TTML document inside an stpp segment is taken out of its bytes",
+    ttmlDocumentsIn(stpp).length === 1 && ttmlDocumentsIn(stpp)[0].startsWith("<tt"), JSON.stringify(ttmlDocumentsIn(stpp)));
+
+  // The worker, given DASH tracks: the stpp run, the VTT file, and the way it says no to wvtt.
+  pageFiles = {
+    "https://cdn.example/tabii/ep1/master.mpd?token=SECRET": mpd,
+    "https://cdn.example/tabii/ep1/s/t-en/init.mp4?token=SECRET": new TextEncoder().encode("ftypisom no document here"),
+    "https://cdn.example/tabii/ep1/s/t-en/1.m4s?token=SECRET": new TextEncoder().encode(`mdat<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="00:00:01.000" end="00:00:02.000">One</p></div></body></tt>`),
+    "https://cdn.example/tabii/ep1/s/t-en/2.m4s?token=SECRET": new TextEncoder().encode(`mdat<tt xmlns="http://www.w3.org/ns/ttml"><body><div><p begin="00:00:11.000" end="00:00:12.000">Two</p></div></body></tt>`),
+    "https://cdn.example/tabii/ep1/s/tr/all.vtt?token=SECRET": "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nBir\n",
+    "https://cdn.example/w.mpd": `<MPD mediaPresentationDuration="PT10S"><Period><AdaptationSet mimeType="application/mp4" codecs="wvtt" lang="en"><SegmentTemplate media="w-$Number$.m4s" timescale="1" duration="5"/><Representation id="w"/></AdaptationSet></Period></MPD>`,
+  };
+  pageSubtitlesReply = () => ({
+    site: "tabii", titleId: "4242",
+    tracks: [
+      { ...track("en", "subtitle", "https://cdn.example/tabii/ep1/master.mpd?token=SECRET"), id: "page:4242:en:subtitle", format: "dash", dash: { representation: "t-en", adaptation: "2" } },
+      { ...track("tr", "subtitle", "https://cdn.example/tabii/ep1/master.mpd?token=SECRET"), id: "page:4242:tr:subtitle", format: "dash", dash: { representation: "t-tr", adaptation: "3" } },
+      { ...track("en", "sdh", "https://cdn.example/w.mpd"), id: "page:4242:en:sdh", format: "dash", dash: { representation: "w", adaptation: "0" } },
+    ],
+  });
+  const stppRead = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:4242:en:subtitle" } }, sender);
+  t("a DASH text track of stpp segments is read document by document, on the title's clock",
+    stppRead?.cues?.map((c) => c.text).join() === "One,Two" && stppRead.cues[1].start === 11000, JSON.stringify(stppRead));
+  const vttRead = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:4242:tr:subtitle" } }, sender);
+  t("a DASH text track that is one WebVTT file is read as that file",
+    vttRead?.cues?.[0]?.text === "Bir", JSON.stringify(vttRead));
+  const wvttRead = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:4242:en:sdh" } }, sender);
+  t("WebVTT in MP4 samples is refused by name rather than read as nothing",
+    /WebVTT inside MP4/.test(wvttRead?.error || ""), JSON.stringify(wvttRead));
+  pageFiles = { "https://www.youtube.com/api/timedtext?v=x&fmt=vtt": "" };
+  pageSubtitlesReply = () => ({ site: "YouTube", titleId: "x", tracks: [{ ...track("en", "subtitle", "https://www.youtube.com/api/timedtext?v=x&fmt=vtt"), id: "page:x:en:subtitle", format: "vtt" }] });
+  const empty = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:x:en:subtitle" } }, sender);
+  t("an empty answer says what to do about it rather than 'no lines'",
+    /turn the player's own captions on/.test(empty?.error || ""), JSON.stringify(empty));
 
   daemonAnswers = null;
   pageSubtitlesReply = () => null;

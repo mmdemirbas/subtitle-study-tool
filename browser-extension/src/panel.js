@@ -3724,14 +3724,14 @@
     el.ownNote.textContent = `${own.site} carries ${tracks.length === 1 ? "its own subtitle" : `${tracks.length} subtitles of its own`}, timed to this picture:`;
     el.ownList.replaceChildren(
       ...tracks.map((track) => {
-        const suffix = track.kind === "sdh" ? " [CC]" : track.kind === "forced" ? " (foreign parts)" : "";
+        const suffix = track.kind === "sdh" ? " [CC]" : track.kind === "forced" ? " (foreign parts)" : track.kind === "auto" ? " (auto)" : "";
         const b = button(`${track.language.toUpperCase()}${suffix}`, {
           onClick: () =>
             api.detached(
               attachResult({
                 file_id: track.id,
                 language: track.language,
-                release: track.kind === "sdh" ? `${own.site} [CC]` : own.site,
+                release: track.kind === "sdh" ? `${own.site} [CC]` : track.kind === "auto" ? `${own.site} (auto)` : own.site,
                 movie_name: track.displayName || "",
                 identified: true,
                 match_score: 1,

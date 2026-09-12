@@ -234,15 +234,21 @@ sliding down the screen as a sentence grows onto a second line.
 ## The subtitles the page already has
 
 A streaming player is handed every language a title has, as files timed to its
-own picture, and draws one of them at a time. On **Prime Video**, **Netflix**
-and **Disney+** the extension overhears that list when playback starts and
-offers it before any search: the Find screen opens with "Prime Video carries N
-subtitles of its own, timed to this picture" and one button per language, and
-the automatic attach takes them first - English and Turkish from the same
-source, both timed to the frame, with nothing to line up and no episode to
-guess. Prime Video is verified on a live playback; Netflix and Disney+ are
-built from the sources of the extensions that download from them and wait on
-their first playback here - the running log says what was found.
+own picture, and draws one of them at a time. On **Prime Video**, **YouTube**,
+**Netflix**, **Disney+** and **tabii** the extension overhears that list when
+playback starts and offers it before any search: the Find screen opens with
+"Prime Video carries N subtitles of its own, timed to this picture" and one
+button per language, and the automatic attach takes them first - English and
+Turkish from the same source, both timed to the frame, with nothing to line up
+and no episode to guess. Prime Video is verified on a live playback. YouTube's
+list is verified; its files need the player's own proof-of-origin token, which
+the extension takes off the player's first caption request - so **turn the
+player's captions on once** and every language is fetchable, and until then the
+attach says so. Netflix and Disney+ are built from the sources of the
+extensions that download from them; tabii from the spec and its public pages,
+reading a DASH or HLS manifest, an API answer naming subtitle files, or the
+`<track>` elements a player adds. All three wait on their first playback here -
+the running log says what was found.
 
 Where the page carries only one of your two languages, that one comes from the
 page and the other is searched for as before, refused for the same reasons an
@@ -253,10 +259,11 @@ translated - is offered as *foreign parts* and never picked at all.
 How it works, and what is not yet verified, is in `CLAUDE.md` under *The
 subtitles a page carries for itself*. The short version: a script runs in the
 page's own world on each site's hosts, reads a copy of what the player was
-given - Prime's playback answer, Netflix's manifest as it is parsed, Disney+'s
-HLS master playlist - and hands the subtitle list across. Nothing about the
-player's own request or its subtitles changes; turn the player's captions off
-if you do not want them drawn twice.
+given - Prime's playback answer, YouTube's player response, Netflix's manifest
+as it is parsed, Disney+'s and tabii's stream manifests - and hands the
+subtitle list across. Nothing about the player's own request or its subtitles
+changes; turn the player's captions off if you do not want them drawn twice
+(on YouTube, after they have been on once).
 
 ## Making the subtitle nobody has uploaded
 

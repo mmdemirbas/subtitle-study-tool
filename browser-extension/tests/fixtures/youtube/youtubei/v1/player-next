@@ -1,0 +1,17 @@
+{
+  "responseContext": {},
+  "playabilityStatus": { "status": "OK" },
+  "videoDetails": { "videoId": "aaaaaaaaaaa", "title": "A video", "lengthSeconds": "212" },
+  "captions": {
+    "playerCaptionsTracklistRenderer": {
+      "captionTracks": [
+        { "baseUrl": "https://www.youtube.com/api/timedtext?v=aaaaaaaaaaa&ei=E&caps=asr&opi=1&exp=xpe&xoaf=5&xowf=1&hl=en&ip=0.0.0.0&expire=1&sparams=ip,ipbits,expire,v,ei,caps,opi,exp,xoaf&signature=SECRET&key=yt8&lang=en", "name": { "simpleText": "English" }, "vssId": ".en", "languageCode": "en", "isTranslatable": true, "trackName": "" },
+        { "baseUrl": "https://www.youtube.com/api/timedtext?v=aaaaaaaaaaa&ei=E&exp=xpe&signature=SECRET&kind=asr&lang=en", "name": { "simpleText": "English (auto-generated)" }, "vssId": "a.en", "languageCode": "en", "kind": "asr", "isTranslatable": true, "trackName": "" },
+        { "baseUrl": "https://www.youtube.com/api/timedtext?v=aaaaaaaaaaa&ei=E&exp=xpe&signature=SECRET&lang=tr", "name": { "runs": [ { "text": "Turkish" } ] }, "vssId": ".tr", "languageCode": "tr", "isTranslatable": true, "trackName": "" }
+      ],
+      "audioTracks": [ { "captionTrackIndices": [0, 1, 2], "defaultCaptionTrackIndex": 0, "hasDefaultTrack": true, "captionsInitialState": "CAPTIONS_INITIAL_STATE_OFF_RECOMMENDED" } ],
+      "translationLanguages": [ { "languageCode": "ab", "languageName": { "simpleText": "Abkhazian" } } ],
+      "defaultAudioTrackIndex": 0
+    }
+  }
+}

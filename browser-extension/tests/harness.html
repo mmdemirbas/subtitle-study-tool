@@ -386,7 +386,7 @@
        * is in the manifest (world: MAIN, document_start). It wraps fetch and
        * XMLHttpRequest transparently, so every other case runs through the
        * wrapped pair and would notice if they were not. */
-      for (const src of ["sites/primevideo", "sites/netflix", "sites/disneyplus", "align", "content", "panel", "study"]) {
+      for (const src of ["sites/primevideo", "sites/netflix", "sites/streams", "sites/youtube", "align", "content", "panel", "study"]) {
         document.write(`<script src="../src/${src}.js?t=${Date.now()}"><\/script>`);
       }
     </script>
@@ -4465,7 +4465,7 @@
       /* Disney+: HLS. The master playlist names every subtitle rendition,
        * and each is a playlist of WebVTT segments the worker joins (tested in
        * tests/worker.mjs). Shape read in the "Disney+ Subtitles Downloader
-       * Improved" source (see src/sites/disneyplus.js). */
+       * Improved" source (see src/sites/streams.js). */
       check("Disney+'s master playlist is overheard by XHR, its subtitle renditions resolved against it", async () => {
         const own = () => window.__ssoApi.status().own;
         const url = "../tests/fixtures/disneyplus/master.m3u8?v=1";
@@ -4499,6 +4499,131 @@
         if (tr?.url !== new URL("r/s/tr/sub-main.m3u8?token=SECRET", master).href) throw new Error(`resolved to ${tr?.url}`);
         window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
         await sleep(40);
+      });
+
+      /* YouTube: the caption list is in the player response, inlined on the
+       * first page and fetched on every navigation after; the file needs the
+       * player's own proof-of-origin token, taken off its first timedtext
+       * request. List shape observed live 2026-09-12; the token read in
+       * yt-dlp (see src/sites/youtube.js). */
+      check("YouTube's caption list is read from the player response, and the player's proof is put on every track", async () => {
+        const own = () => window.__ssoApi.status().own;
+        const askEar = () => new Promise((resolve) => {
+          const onMessage = (event) => {
+            if (event.data?.source !== "sso-ear" || event.data.type !== "tracks" || !/timedtext/.test(event.data.tracks?.[0]?.url || "")) return;
+            window.removeEventListener("message", onMessage);
+            resolve(event.data);
+          };
+          window.addEventListener("message", onMessage);
+          window.postMessage({ source: "sso-ear", type: "ask" }, "*");
+        });
+        const flexy = document.createElement("ytd-watch-flexy");
+        flexy.setAttribute("video-id", "dQw4w9WgXcQ");
+        document.body.append(flexy);
+        try {
+          // The first page: the response is a global, found by the once-a-second look.
+          window.ytInitialPlayerResponse = await (await fetch("../tests/fixtures/youtube/youtubei/v1/player")).json();
+          for (let i = 0; i < 80 && own()?.titleId !== "dQw4w9WgXcQ"; i++) await sleep(25);
+          if (own()?.titleId !== "dQw4w9WgXcQ") throw new Error(`after the global: ${JSON.stringify(own())}`);
+          const ids = own().tracks.map((t) => `${t.id}/${t.format}`).join();
+          if (ids !== "page:dQw4w9WgXcQ:en:subtitle/vtt,page:dQw4w9WgXcQ:en:auto/vtt,page:dQw4w9WgXcQ:tr:subtitle/vtt") throw new Error(ids);
+          if (JSON.stringify(own()).includes("SECRET")) throw new Error("a signed URL got into status()");
+          const before = await askEar();
+          if (!/fmt=vtt/.test(before.tracks[0].url) || /pot=/.test(before.tracks[0].url) || !before.shape.includes("no-pot")) throw new Error(`before the proof: ${before.tracks[0].url} ${before.shape}`);
+
+          // The player asks for a track itself, with its proof: every track gets it.
+          await new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open("GET", "../tests/fixtures/youtube/api/timedtext?v=dQw4w9WgXcQ&lang=en&fmt=vtt&pot=PROOF-TOKEN&potc=1&c=WEB");
+            xhr.onload = resolve;
+            xhr.onerror = () => reject(new Error("xhr failed"));
+            xhr.send();
+          });
+          const after = await askEar();
+          if (!after.tracks.every((t) => /[?&]pot=PROOF-TOKEN(&|$)/.test(t.url) && /potc=1/.test(t.url) && /c=WEB/.test(t.url) && /fmt=vtt/.test(t.url))) throw new Error(`after the proof: ${after.tracks.map((t) => t.url).join(" ")}`);
+          if (!after.shape.includes("pot") || !after.shape.includes("exp=xpe")) throw new Error(`shape ${after.shape}`);
+
+          // A navigation: the next video's response arrives by fetch, and the page's element says which is on.
+          const second = await (await fetch("../tests/fixtures/youtube/youtubei/v1/player-next?prettyPrint=false")).json();
+          if (second.videoDetails.videoId !== "aaaaaaaaaaa") throw new Error("the wrapped fetch did not hand the body back");
+          await sleep(60);
+          if (own()?.titleId !== "dQw4w9WgXcQ") throw new Error("a prefetched response replaced the video on screen");
+          flexy.setAttribute("video-id", "aaaaaaaaaaa");
+          for (let i = 0; i < 80 && own()?.titleId !== "aaaaaaaaaaa"; i++) await sleep(25);
+          if (own()?.titleId !== "aaaaaaaaaaa" || own().tracks.length !== 3) throw new Error(`after the navigation: ${JSON.stringify(own())}`);
+        } finally {
+          flexy.remove();
+          delete window.ytInitialPlayerResponse;
+          window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
+          await sleep(40);
+        }
+      });
+
+      /* tabii, or any player handed a DASH manifest, an API answer naming
+       * subtitle files, or <track> elements. Written from the spec and from
+       * tabii's public home page (see src/sites/streams.js); no playback
+       * observed. */
+      check("a DASH manifest, an API answer and a <track> element are each read as the page's own subtitles", async () => {
+        const own = () => window.__ssoApi.status().own;
+        const titleId = location.pathname.split("/").filter(Boolean).pop();
+        const askEar = (test) => new Promise((resolve) => {
+          const onMessage = (event) => {
+            if (event.data?.source !== "sso-ear" || event.data.type !== "tracks" || !test(event.data)) return;
+            window.removeEventListener("message", onMessage);
+            resolve(event.data);
+          };
+          window.addEventListener("message", onMessage);
+          window.postMessage({ source: "sso-ear", type: "ask" }, "*");
+        });
+        const xhr = (url) => new Promise((resolve, reject) => {
+          const request = new XMLHttpRequest();
+          request.open("GET", url);
+          request.onload = resolve;
+          request.onerror = () => reject(new Error("xhr failed"));
+          request.send();
+        });
+        try {
+          // DASH: three text sets, the forced one marked, the worker told which representation.
+          await xhr("../tests/fixtures/tabii/master.mpd?token=SECRET");
+          for (let i = 0; i < 40 && own()?.tracks?.[0]?.format !== "dash"; i++) await sleep(25);
+          let ids = (own()?.tracks || []).map((t) => `${t.id}/${t.format}`).join();
+          if (ids !== `page:${titleId}:en:subtitle/dash,page:${titleId}:tr:subtitle/dash,page:${titleId}:en:forced/dash`) throw new Error(ids);
+          if (JSON.stringify(own()).includes("SECRET")) throw new Error("a signed URL got into status()");
+          const dash = await askEar((data) => data.tracks?.[0]?.format === "dash");
+          if (dash.tracks[0].dash?.representation !== "t-en" || dash.tracks[1].dash?.representation !== "t-tr" || !dash.shape.includes("mpd")) throw new Error(JSON.stringify([dash.tracks.map((t) => t.dash), dash.shape]));
+          if (dash.tracks[0].url !== new URL("../tests/fixtures/tabii/master.mpd?token=SECRET", location.href).href) throw new Error(`the MPD's URL is ${dash.tracks[0].url}`);
+
+          // An API answer naming sidecar files, by fetch.
+          const answer = await (await fetch("../tests/fixtures/tabii/apigateway/play.json")).json();
+          if (!answer.data.subtitles) throw new Error("the wrapped fetch did not hand the body back");
+          for (let i = 0; i < 40 && own()?.tracks?.[0]?.format !== "vtt"; i++) await sleep(25);
+          ids = (own()?.tracks || []).map((t) => `${t.id}/${t.format}`).join();
+          if (ids !== `page:${titleId}:tr:subtitle/vtt,page:${titleId}:en:subtitle/srt`) throw new Error(ids);
+          const api = await askEar((data) => data.shape?.[0] === "api");
+          if (!/data\.subtitles/.test(api.tracks[0].type) || api.tracks[0].displayName !== "Türkçe") throw new Error(JSON.stringify([api.tracks[0].type, api.tracks[0].displayName, api.shape]));
+
+          // A <track> element added to a <video>.
+          const video = document.createElement("video");
+          const track = document.createElement("track");
+          track.setAttribute("kind", "subtitles");
+          track.setAttribute("srclang", "de");
+          track.setAttribute("label", "Deutsch");
+          track.setAttribute("src", "../tests/fixtures/youtube/api/timedtext");
+          video.append(track);
+          document.body.append(video);
+          try {
+            for (let i = 0; i < 40 && own()?.tracks?.[0]?.language !== "de"; i++) await sleep(25);
+            ids = (own()?.tracks || []).map((t) => `${t.id}/${t.format}`).join();
+            if (ids !== `page:${titleId}:de:subtitle/vtt`) throw new Error(ids);
+            const element = await askEar((data) => data.shape?.[0] === "track");
+            if (element.tracks[0].displayName !== "Deutsch" || !element.tracks[0].keys.includes("srclang")) throw new Error(JSON.stringify(element.tracks[0]));
+          } finally {
+            video.remove();
+          }
+        } finally {
+          window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
+          await sleep(60);
+        }
       });
 
       /* --- a subtitle nobody has made, made here ---------------------------------

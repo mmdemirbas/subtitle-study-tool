@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" type="static" mediaPresentationDuration="PT0H0M20.0S" minBufferTime="PT2S" profiles="urn:mpeg:dash:profile:isoff-live:2011">
+  <BaseURL>https://cdn.example/tabii/ep1/</BaseURL>
+  <Period id="0" start="PT0S">
+    <AdaptationSet id="0" contentType="video" mimeType="video/mp4" codecs="avc1.640028">
+      <SegmentTemplate media="v/$RepresentationID$/$Number%05d$.m4s" initialization="v/$RepresentationID$/init.mp4" timescale="90000" duration="360000" startNumber="1"/>
+      <Representation id="v1080" bandwidth="4000000" width="1920" height="1080"/>
+    </AdaptationSet>
+    <AdaptationSet id="1" contentType="audio" mimeType="audio/mp4" lang="tr">
+      <Representation id="a1" bandwidth="128000"/>
+    </AdaptationSet>
+    <AdaptationSet id="2" contentType="text" mimeType="application/mp4" codecs="stpp" lang="en">
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="subtitle"/>
+      <Label>English</Label>
+      <SegmentTemplate media="s/$RepresentationID$/$Number$.m4s?token=SECRET" initialization="s/$RepresentationID$/init.mp4?token=SECRET" timescale="1000" startNumber="1">
+        <SegmentTimeline>
+          <S t="0" d="10000" r="1"/>
+        </SegmentTimeline>
+      </SegmentTemplate>
+      <Representation id="t-en" bandwidth="1000"/>
+    </AdaptationSet>
+    <AdaptationSet id="3" mimeType="text/vtt" lang="tr">
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="subtitle"/>
+      <Accessibility schemeIdUri="urn:tva:metadata:cs:AudioPurposeCS:2007" value="2"/>
+      <Representation id="t-tr" bandwidth="500">
+        <BaseURL>s/tr/all.vtt?token=SECRET</BaseURL>
+      </Representation>
+    </AdaptationSet>
+    <AdaptationSet id="4" mimeType="application/ttml+xml" lang="en">
+      <Role schemeIdUri="urn:mpeg:dash:role:2011" value="forced-subtitle"/>
+      <Representation id="t-en-forced" bandwidth="500">
+        <BaseURL>s/en-forced/all.ttml?token=SECRET</BaseURL>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>

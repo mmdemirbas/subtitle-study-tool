@@ -1,0 +1,12 @@
+{
+  "data": {
+    "id": 4242,
+    "title": "Bir Dizi",
+    "media": [ { "type": "dash", "drmSchema": "widevine", "url": "https://cdn.example/tabii/ep1/master.mpd?token=SECRET" } ],
+    "subtitles": [
+      { "language": "tr", "name": "Türkçe", "url": "https://cdn.example/tabii/ep1/s/tr/all.vtt?token=SECRET" },
+      { "language": "en", "name": "English", "url": "https://cdn.example/tabii/ep1/s/en/all.srt?token=SECRET", "forced": false }
+    ],
+    "poster": "https://cdn.example/tabii/ep1/poster.jpg"
+  }
+}

@@ -636,10 +636,14 @@ export function isPageFile(fileId) {
 /* One result per preferred language the page covers, in preference order.
  *
  * A plain subtitle over a [CC] one where the title has both, because the sound
- * descriptions are a second thing on screen for a viewer who can hear; never a
- * forced-narrative track, which carries only the lines spoken in another
- * language. Both are still offered by name in the panel. */
-const KIND_RANK = { subtitle: 0, sdh: 1 };
+ * descriptions are a second thing on screen for a viewer who can hear; an
+ * auto-generated one (YouTube's speech recognition) after both, since it has
+ * no punctuation and the odd wrong word; never a forced-narrative track,
+ * which carries only the lines spoken in another language. All are still
+ * offered by name in the panel. */
+const KIND_RANK = { subtitle: 0, sdh: 1, auto: 2 };
+
+const KIND_SUFFIX = { sdh: " [CC]", auto: " (auto)" };
 
 export function pageResults(own, languages) {
   const tracks = own?.tracks?.filter((track) => track.kind in KIND_RANK) ?? [];
@@ -659,7 +663,7 @@ export function pageResult(own, track) {
   return {
     file_id: track.id,
     language: track.language,
-    release: track.kind === "sdh" ? `${own.site} [CC]` : own.site,
+    release: `${own.site}${KIND_SUFFIX[track.kind] || ""}`,
     movie_name: track.displayName || "",
     identified: true,
     match_score: 1,

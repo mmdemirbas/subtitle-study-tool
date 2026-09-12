@@ -89,10 +89,21 @@
     },
     {
       "matches": [
-        "https://*.disneyplus.com/*"
+        "https://*.disneyplus.com/*",
+        "https://*.tabii.com/*"
       ],
       "js": [
-        "src/sites/disneyplus.js"
+        "src/sites/streams.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://*.youtube.com/*"
+      ],
+      "js": [
+        "src/sites/youtube.js"
       ],
       "run_at": "document_start",
       "world": "MAIN"
