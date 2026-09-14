@@ -7601,11 +7601,17 @@
   })();
   const oursByFile = (file) => Boolean(file) && String(file).startsWith(OUR_FILES);
 
+  /* Only errors of ours are written down. The page's own were, for a while,
+   * and every one of the 662 error lines in the first month of the log was a
+   * page's "ResizeObserver loop completed with undelivered notifications" -
+   * none of them from this extension, and each carrying the URL of whatever
+   * page it happened on, which for a script injected everywhere is every
+   * page the reader opens. A page's error is the page's. */
   const onWindowError = (event) => {
     const file = String(event.filename || "");
+    if (!oursByFile(file) && !oursByFile(event.error?.stack)) return;
     trace("error", {
       where: window === window.top ? "top frame" : "frame",
-      mine: oursByFile(file) || oursByFile(event.error?.stack),
       url: location.href,
       message: String(event.message || event.error?.message || event.error || "error"),
       stack: String(event.error?.stack || "").slice(0, 2000),
@@ -7614,10 +7620,10 @@
   };
   const onRejection = (event) => {
     const stack = String(event.reason?.stack || "");
+    // A rejection carries no filename, so the stack is the only witness.
+    if (!stack.includes(OUR_FILES)) return;
     trace("error", {
       where: window === window.top ? "top frame" : "frame",
-      // A rejection carries no filename, so the stack is the only witness.
-      mine: stack.includes(OUR_FILES),
       url: location.href,
       unhandledRejection: true,
       message: String(event.reason?.message || event.reason || "rejection"),
@@ -7698,6 +7704,13 @@
      * reset, so a tab that comes back to the front starts from zero rather than
      * reporting the whole time it spent hidden. */
     if (document.visibilityState === "hidden") return;
+    /* And not from a page with nothing of ours on it. The visibility gate
+     * above left the front tab of every page the reader had open, and over a
+     * month 12,368 of the 14,421 perf lines came from pages with nothing
+     * attached and no panel - mail, chat, consoles, each line naming the tab's
+     * title and URL. A long task on a page where this extension is only
+     * ticking is the page's, and there is no question here for it to answer. */
+    if (!anyAttached() && !seen.panels && !window.__ssoPanel?.isOpen?.() && role === "solo") return;
     trace("perf", {
       role,
       over: Math.round(over),

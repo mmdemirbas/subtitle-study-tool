@@ -173,7 +173,12 @@ questions kept being answered by guesswork:
 It also records every message shown to the reader (`said` — that is the
 extension's entire error surface), every attach and detach, every keyboard or
 toolbar command with the frame it addressed, every auto-attach plan, and every
-error or unhandled rejection that reached the top of a frame or the worker.
+error or unhandled rejection of the extension's own that reached the top of a
+frame or the worker. A page's own errors are not written down: the first
+month's 662 error lines were every one a page's ResizeObserver loop notice,
+each naming a page the reader had open. A `perf` line goes only from a frame
+with something attached, the panel open, or a split role; 12,368 of the first
+14,421 came from pages with none of those, title and URL included.
 
 **It goes to the daemon, and that is the third shape this took.** Both earlier
 ones are worth knowing so they are not tried again:

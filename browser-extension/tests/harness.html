@@ -11232,13 +11232,15 @@
            * the defect back still passed, because in 300 quiet milliseconds
            * nothing called trace at all.
            *
-           * A page error is the honest driver, and it is also the worst case.
-           * The extension listens for window errors in order to record them, so
-           * an orphaned frame answers the page's error by reaching for the
-           * worker, throwing a SECOND error from inside the error handler. */
+           * An error of the extension's own is the honest driver, and it is
+           * also the worst case. The extension listens for window errors in
+           * order to record its own (a page's are not written down, so one
+           * from the page's script would not reach trace() at all), so an
+           * orphaned frame answers by reaching for the worker, throwing a
+           * SECOND error from inside the error handler. */
           window.dispatchEvent(new ErrorEvent("error", {
             message: "the page itself blew up - sso-harness raised this on purpose",
-            filename: "https://example.invalid/player.js",
+            filename: chrome.runtime.getURL("src/content.js"),
             lineno: 1,
           }));
           // And several ticks besides, for whatever the timers would have done.
