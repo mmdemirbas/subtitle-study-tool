@@ -4746,9 +4746,11 @@
           });
           await (await fetch("../tests/fixtures/disneyplus/master.m3u8?v=2")).text();
           await (await fetch("../tests/fixtures/youtube/api/timedtext?v=1234567890&pot=SECRET-VALUE")).text();
+          // A media segment as octet-stream, the way tabii's CDN serves them: not read past its first bytes.
+          await (await fetch("../tests/fixtures/tabii/video_1.m4s")).arrayBuffer();
           // Two flushes may be needed: one for what was pending, one for these.
           const has = (test) => traced.some((a) => a.kind === "survey" && a.detail?.entries?.some(test));
-          for (let i = 0; i < 600 && !(has((e) => /master\.mpd/.test(e.url) && e.headers.includes("x-session")) && has((e) => /play\.json\?/.test(e.url)) && has((e) => /timedtext/.test(e.url))); i++) await sleep(25);
+          for (let i = 0; i < 600 && !(has((e) => /master\.mpd/.test(e.url) && e.headers.includes("x-session")) && has((e) => /play\.json\?/.test(e.url)) && has((e) => /timedtext/.test(e.url)) && has((e) => /video_1\.m4s/.test(e.url) && e.status === 200)); i++) await sleep(25);
           await sleep(100);
         });
         const surveys = seen.filter((a) => a.kind === "survey").map((a) => a.detail);
@@ -4770,6 +4772,10 @@
         if (!m3u8 || m3u8.digest?.kind !== "m3u8" || m3u8.digest.tags["EXT-X-MEDIA"] !== 5 || !m3u8.digest.media.some((line) => /TYPE=SUBTITLES,LANGUAGE=tr,NAME=Türkçe/.test(line))) throw new Error(`m3u8 entry ${JSON.stringify(m3u8)}`);
         const vtt = entries.find((e) => /api\/timedtext\?pot,v$/.test(e.url));
         if (!vtt || vtt.digest?.kind !== "vtt" || vtt.digest.cues !== 1) throw new Error(`vtt entry ${JSON.stringify(vtt)}`);
+        // The segment is counted, typed, and its body left alone: no digest, no byte count.
+        const segment = entries.find((e) => /video_1\.m4s$/.test(e.url));
+        if (!segment || segment.type !== "application/octet-stream" || segment.digest || segment.bytes !== undefined)
+          throw new Error(`segment entry ${JSON.stringify(segment)}`);
         const page = surveys.map((s) => s.page).find((p) => p && Array.isArray(p.videos));
         if (!page || !Array.isArray(page.players) || !Array.isArray(page.drm)) throw new Error(`page ${JSON.stringify(page)}`);
       });

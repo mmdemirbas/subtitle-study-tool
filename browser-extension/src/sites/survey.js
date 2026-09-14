@@ -43,6 +43,51 @@
   const BODY_MAX = 2_000_000;
   const PATHS = 80;
   const TEXT = /json|xml|text|mpegurl|vtt|javascript|dash|ttml/i;
+  /* A body is read when its type says text, or when the type says nothing
+   * useful (octet-stream, or none) and its first bytes read as one of the
+   * shapes digest() knows - a JSON bracket, a playlist's #, a tag, WEBVTT, an
+   * SRT counter. tabii's media segments come as binary/octet-stream by Range
+   * request, thousands an evening, and an MP4 box starts with a length whose
+   * high bytes are NUL: decoding one into a string to find that out is the
+   * player's main thread spent on nothing, so the first 64 bytes decide and
+   * the rest is only read when they say text. */
+  const worthReading = (type, length) => !(length > BODY_MAX) && !/^(video|audio|image|font)\//.test(type);
+  const looksLikeText = (bytes) => {
+    const head = bytes.subarray(0, 64);
+    for (const byte of head) if (byte === 0) return false;
+    const text = new TextDecoder().decode(head).replace(/^\uFEFF/, "").trimStart();
+    return /^(?:[[{#<W]|\d+\s*\r?\n)/.test(text);
+  };
+  /* The whole body as text, or undefined once the first chunk says binary.
+   * One clone, read as a stream, so a body found to be a segment costs one
+   * chunk and a cancel rather than a full decode. */
+  const bodyText = async (response) => {
+    const reader = response.clone().body?.getReader();
+    if (!reader) return undefined;
+    const chunks = [];
+    let size = 0;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (chunks.length === 0 && !looksLikeText(value)) {
+        reader.cancel().catch(() => {});
+        return undefined;
+      }
+      chunks.push(value);
+      size += value.byteLength;
+      if (size > BODY_MAX) {
+        reader.cancel().catch(() => {});
+        return undefined;
+      }
+    }
+    const whole = new Uint8Array(size);
+    let at = 0;
+    for (const chunk of chunks) {
+      whole.set(chunk, at);
+      at += chunk.byteLength;
+    }
+    return new TextDecoder().decode(whole);
+  };
 
   const post = (message) => window.postMessage({ source: MARK, ...message }, location.origin);
 
@@ -232,11 +277,9 @@
         .then((response) => {
           const type = response.headers.get("content-type") || "";
           const length = Number(response.headers.get("content-length"));
-          /* Read unless it is plainly media, or plainly big: a CDN serves a
-           * playlist or a subtitle as octet-stream often enough. */
-          const readable = !/^(video|audio|image|font)\//.test(type) && !(length > BODY_MAX);
-          if (readable) {
-            response.clone().text().then((text) => answered(key, response.status, type, text)).catch(() => answered(key, response.status, type));
+          if (worthReading(type, length)) {
+            const read = TEXT.test(type) ? response.clone().text() : bodyText(response);
+            read.then((text) => answered(key, response.status, type, text)).catch(() => answered(key, response.status, type));
           } else {
             answered(key, response.status, type);
           }
@@ -262,7 +305,7 @@
         let text;
         if (kind === "" || kind === "text") text = this.responseText;
         else if (kind === "json") text = JSON.stringify(this.response);
-        else if (kind === "arraybuffer" && this.response?.byteLength < BODY_MAX && !/^(video|audio|image|font)\//.test(type)) text = new TextDecoder().decode(this.response);
+        else if (kind === "arraybuffer" && this.response && worthReading(type, this.response.byteLength) && (TEXT.test(type) || looksLikeText(new Uint8Array(this.response)))) text = new TextDecoder().decode(this.response);
         answered(key, this.status, type, text);
       } catch {
         // The player's own handler runs regardless.
