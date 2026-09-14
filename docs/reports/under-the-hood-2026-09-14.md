@@ -96,6 +96,31 @@ previous copy asking once a second from an invalidated context. Quiet, since
 a list that has not moved is a no-op, but a timer in a dead closure for the
 life of the tab. Folded into the tick in `256fbcc`.
 
+**"Nothing matched "Scarpetta - Season 1" well", ten times, for the episode
+being watched.** Prime Video titles a series page "Prime Video: Scarpetta -
+Season 1" and puts the episode on the player's overlay; the overlay was read
+(S1 E1) but the query went out with "- Season 1" still in it, resolved to
+nothing, and fell back to the name score: 0.5882 against "Scarpetta - S01E01
+Bridge of Time (1)", under 0.75, five results each time and every one the
+right episode. Both title guessers now take a trailing "Season N" as the
+season; "Scarpetta" resolves to tt14786934 against the running daemon, and a
+resolved title attaches however its uploader named the file. `567ff9b`.
+
+**The survey read media segments to find out they were not playlists.** tabii
+serves them as binary/octet-stream by Range request, and the only thing
+keeping each one from being cloned and decoded into a string on the player's
+main thread was the 2 MB size cap - the log's survey entries show none
+digested, which is the cap working by luck. An untyped body is now read as a
+stream and the first 64 bytes decide. `808e61e`.
+
+Looked at and found in order: the 211 `seek` lines (171 are the catalogue
+app's own contract, `asked: "page"`; on Prime Video 35 of 35 element seeks
+landed); the 66 `warmNext` lines (all `attach`); our share of the 252 windows
+with a film attached since 10 September (tick 26ms median per ten seconds
+across 200 ticks, panel 1ms median and 84ms worst, map 86ms worst, against a
+page median of 60ms of long task); the daemon's stderr (four lines, no
+traceback); the "Monk" refusals (before `c75f539` landed the same day).
+
 ## What the source is made of
 
 | file | lines | top-level definitions | over 80 lines |
@@ -131,8 +156,12 @@ to the map means reading 714 lines to find the 20 that matter.
   four content scripts are plain scripts sharing globals, not modules, so a
   split is a fifth script in the manifest, the harness's load list and
   `inject()`, plus a global for the panel to reach it - the same shape
-  `study.js` took when it left `content.js`. About a day's work with a real
-  regression surface, and no defect behind it - only the reading cost above.
+  `study.js` took when it left `content.js`. Counted (`tmp/free-vars.mjs`):
+  `buildTimeline` reaches for 15 names in the panel's scope (`api`,
+  `playhead`, `button`, `screen`, `refresh`, `show`, `sayInPanel`, ...) and
+  `buildTrackCard` for 15, so the seam is a fifteen-item dependency bag, not
+  an interface. About a day's work with a real regression surface, no defect
+  behind it, and the closure moved rather than made smaller. Not done.
 - **1,238 corrections by hand in fifteen days** is the largest number in the
   log and not a tidy-up. `docs/reports/sync-by-hand-2026-09-03.md` is the
   standing analysis; nothing here changes it.
