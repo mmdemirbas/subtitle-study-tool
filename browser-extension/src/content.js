@@ -6940,6 +6940,11 @@
     // other's line for 50ms is exactly the frame somebody looks at.
     for (const view of views) view.cueBox.textContent = "";
     syncRootVisibility();
+    /* The order just chosen is the order the next film starts in. Reported:
+     * "I had 1=TR and 2=EN, dragged 2 to 1, and the next movie still gave me
+     * 1=TR and 2=EN" - the memory was written on every attach and never on a
+     * move, so a drag was undone by the next film. */
+    rememberLanguages();
     trace("reorder", {
       from: a,
       to: b,

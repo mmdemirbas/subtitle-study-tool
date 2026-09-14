@@ -8979,6 +8979,17 @@
         if (stored[0] !== "de" || stored[1] !== "fr")
           throw new Error(`remembered ${JSON.stringify(stored)}, want ["de","fr"]`);
 
+        /* Reported: "I had 1=TR and 2=EN, dragged 2 to 1, and the next movie
+         * still gave me 1=TR and 2=EN". A move is the reader choosing the
+         * order, and the memory has to follow it as it follows an attach. */
+        api.reorderTracks(1, 0);
+        await sleep(200);
+        const moved = (await chrome.storage.local.get("sso:usedLanguages"))["sso:usedLanguages"];
+        if (moved?.[0] !== "fr" || moved?.[1] !== "de")
+          throw new Error(`after the move remembered ${JSON.stringify(moved)}, want ["fr","de"]`);
+        api.reorderTracks(1, 0);
+        await sleep(200);
+
         /* And the arrangement needs no help - it lives in the settings, so a
          * new video keeps it. Worth asserting, because the thing that would
          * break it is attach() re-arranging over a layout already chosen. */
