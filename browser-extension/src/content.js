@@ -1379,11 +1379,15 @@
     window.postMessage({ source: PAGE_SUBTITLE_SOURCE, type: "ask" }, "*");
   }
 
+  /* Asked on every tick rather than on a timer of its own: a timer set here
+   * outlived its injection - nothing cleared it in __ssoTeardown - so every
+   * reload of the extension left the previous copy asking, once a second,
+   * from a context whose chrome.* had been invalidated. The tick is cleared
+   * on teardown and checks alive() first. */
   function ownStillHere() {
     if (pageSubtitles && pageSubtitles.where !== pageWhere()) dropOwn("navigation");
     return pageSubtitles;
   }
-  setInterval(ownStillHere, 1000);
 
   /* Without the URLs, for the panel and the mirror. */
   function pageSubtitleSummary() {
@@ -3844,6 +3848,9 @@
     /* Before the "no video here" exit below, because losing the video is
      * exactly the change the other frame has to be told about. */
     mindTheOtherFrame();
+    /* Before the "no video here" exit too: the navigation that takes the
+     * page's own list away is caught before the new page's video exists. */
+    ownStillHere();
 
     if (!state.video || !state.video.isConnected) {
       state.video = pickVideo();

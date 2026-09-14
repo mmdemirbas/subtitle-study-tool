@@ -266,12 +266,6 @@ export async function clearSearches() {
   return (keys || []).length;
 }
 
-/** An existing file with identical bytes, under any file_id. */
-export async function findByContent(digest) {
-  const records = await listMeta();
-  return records.find((item) => item.meta.sha256 === digest) || null;
-}
-
 // --- searches ---------------------------------------------------------------
 
 /* Same key derivation and the same staleness window as the daemon, so a search

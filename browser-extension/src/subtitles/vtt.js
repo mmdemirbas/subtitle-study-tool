@@ -88,43 +88,6 @@ export function joinSegments(segments) {
   return cues;
 }
 
-/* The attribute list of an `#EXT-X-MEDIA` line: `KEY=VALUE` pairs separated
- * by commas, with a quoted value allowed to hold commas of its own. */
-function attributes(line) {
-  const found = {};
-  const PAIR = /([A-Z0-9-]+)=("([^"]*)"|[^,]*)/g;
-  for (const match of line.matchAll(PAIR)) found[match[1]] = match[3] ?? match[2];
-  return found;
-}
-
-/**
- * The subtitle renditions an HLS master playlist names, each with its own
- * playlist URL resolved against the master's. `#EXT-X-MEDIA:TYPE=SUBTITLES`
- * lines only; the audio and video groups beside them are not read.
- */
-export function subtitleRenditions(master, masterUrl) {
-  const found = [];
-  for (const raw of String(master || "").split(/\r?\n/)) {
-    if (!raw.startsWith("#EXT-X-MEDIA:")) continue;
-    const attrs = attributes(raw.slice("#EXT-X-MEDIA:".length));
-    if (attrs.TYPE !== "SUBTITLES" || !attrs.URI) continue;
-    let url = "";
-    try {
-      url = new URL(attrs.URI, masterUrl).href;
-    } catch {
-      continue;
-    }
-    found.push({
-      name: attrs.NAME || "",
-      language: attrs.LANGUAGE || "",
-      forced: attrs.FORCED === "YES",
-      characteristics: attrs.CHARACTERISTICS || "",
-      url,
-    });
-  }
-  return found;
-}
-
 /** The segment URLs of a media playlist, resolved against the playlist's. */
 export function segmentUrls(playlist, playlistUrl) {
   const urls = [];
