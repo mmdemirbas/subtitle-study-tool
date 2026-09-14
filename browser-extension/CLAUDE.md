@@ -450,8 +450,7 @@ no fetch wrap sees it. A manifest is recognised by `result.movieId` beside
 manifest, so every one is kept by `movieId` and the one posted is for the id
 on `[data-videoid]` or in `/watch/<id>`, checked once a second. Nothing
 rewrites the player's request. `src/sites/streams.js` (Disney+, tabii) wraps
-XHR and fetch for `.m3u8`, `.mpd` and tabii's `/apigateway/` answers, and
-watches the document for `<video><track src>`: an HLS master's
+XHR and fetch for `.m3u8`, `.mpd` and tabii's `/apigateway/` answers: an HLS master's
 `#EXT-X-MEDIA:TYPE=SUBTITLES` lines carry `NAME`, `LANGUAGE`, `FORCED`,
 `CHARACTERISTICS` and the `URI` of a playlist of WebVTT segments, resolved
 against the master; a DASH MPD's text AdaptationSets are named by `lang`,
@@ -462,10 +461,31 @@ the bytes, `wvtt` is refused by name); an API answer is walked for objects
 with a `.vtt`/`.srt`/`.ttml` URL beside a language. `page.js` fetches
 segments six at a time and `joinSegments` drops a cue written into both
 segments it spans. Each post says which shape it came from - `m3u8`, `mpd`,
-`api`, `track`, `texttracks` - which is what the first tabii playback's log
-line will say. The last of those is `video.textTracks` read straight off the
-page's `<video>`, cues and all, posted as `format: "cues"` with the cues in
-the message: the one shape that needs no knowledge of the network.
+`api` - which is what the first tabii playback's log line will say.
+
+**The standard way needs no ear, and is read on every site.** `<track>`
+elements under the subject `<video>` and the TextTrack API
+(`video.textTracks`, with cues) are HTML's own way for a page to carry
+subtitles, and the document is shared with the isolated world - so
+`scanDomSubtitles()` in `content.js` reads both from the tick, once a second,
+diffed on a key. Asked for as "a standard protocol ... so it would extend to
+other third party web players", with the local catalogue app first: its
+player already writes a `<track kind="subtitles" src="/subtitle?path=...">`
+per sidecar and embedded subtitle, and nothing on its side changed. Three
+things are load-bearing. **Only the subject video's tracks** - a preview's
+are the preview's. **A `<track>` is fetched by its URL whatever its `mode`**
+(format from the extension, `auto` when there is none and `page.js` sniffs
+the first bytes), so the reader need not turn the page's captions on; a
+text track with no element behind it, or behind a `blob:` URL, is read off
+its cues once it has some. **These cues are on the element's clock**, as the
+standard says, and `ownTracks({ withUrls: true })` sends `shiftMs` - the
+page's `data-sso-time-offset` at the moment the worker fetches - which
+`readPageTrack` adds to every cue; an ear's list is on the title's clock and
+carries none. The two lists are merged for everything that asks, the ear's
+first (`ownTracks`), and `normaliseTracks` gives a second track of the same
+language and kind a numbered id rather than the same one. The ear used to
+read `<track>` and text tracks too; that was two copies of one reading and
+the copy in this world is the one that runs everywhere.
 
 **`src/sites/survey.js` is how a player nobody here can watch gets learned.**
 It runs beside `streams.js` and writes the SHAPE of everything the player does

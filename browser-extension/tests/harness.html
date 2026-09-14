@@ -4559,11 +4559,11 @@
         }
       });
 
-      /* tabii, or any player handed a DASH manifest, an API answer naming
-       * subtitle files, or <track> elements. Written from the spec and from
-       * tabii's public home page (see src/sites/streams.js); no playback
-       * observed. */
-      check("a DASH manifest, an API answer and a <track> element are each read as the page's own subtitles", async () => {
+      /* tabii, or any player handed a DASH manifest or an API answer naming
+       * subtitle files. Written from the spec and from tabii's public home
+       * page (see src/sites/streams.js), then observed on one playback
+       * (2026-09-12: the DASH shape). */
+      check("a DASH manifest and an API answer are each read as the page's own subtitles", async () => {
         const own = () => window.__ssoApi.status().own;
         const titleId = location.pathname.split("/").filter(Boolean).pop();
         const askEar = (test) => new Promise((resolve) => {
@@ -4602,58 +4602,95 @@
           const api = await askEar((data) => data.shape?.[0] === "api");
           if (!/data\.subtitles/.test(api.tracks[0].type) || api.tracks[0].displayName !== "Türkçe") throw new Error(JSON.stringify([api.tracks[0].type, api.tracks[0].displayName, api.shape]));
 
-          // A <track> element added to a <video>.
-          const video = document.createElement("video");
-          const track = document.createElement("track");
-          track.setAttribute("kind", "subtitles");
-          track.setAttribute("srclang", "de");
-          track.setAttribute("label", "Deutsch");
-          track.setAttribute("src", "../tests/fixtures/youtube/api/timedtext");
-          video.append(track);
-          document.body.append(video);
-          try {
-            for (let i = 0; i < 40 && own()?.tracks?.[0]?.language !== "de"; i++) await sleep(25);
-            ids = (own()?.tracks || []).map((t) => `${t.id}/${t.format}`).join();
-            if (ids !== `page:${titleId}:de:subtitle/vtt`) throw new Error(ids);
-            const element = await askEar((data) => data.shape?.[0] === "track");
-            if (element.tracks[0].displayName !== "Deutsch" || !element.tracks[0].keys.includes("srclang")) throw new Error(JSON.stringify(element.tracks[0]));
-          } finally {
-            video.remove();
-          }
         } finally {
           window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
           await sleep(60);
         }
       });
 
+      /* The standard way, which needs no ear: <track> elements under the
+       * video, and text tracks with cues in them. Asked for as "a standard
+       * protocol ... so it would extend to other third party web players",
+       * with the local catalogue app first - its player writes a <track> per
+       * subtitle of the file, at `/subtitle?path=...` with no extension. */
+      check("a <track> element under the video is the page's own subtitle, read by the standard and not by an ear", async () => {
+        const own = () => window.__ssoApi.status().own;
+        const titleId = location.pathname.split("/").filter(Boolean).pop();
+        const askOwn = () => {
+          let answer;
+          for (const listener of window.__listeners) listener({ type: "sso:pageSubtitles" }, {}, (reply) => { answer = reply; });
+          return answer;
+        };
+        const track = document.createElement("track");
+        track.setAttribute("kind", "subtitles");
+        track.setAttribute("srclang", "de");
+        track.setAttribute("label", "Deutsch");
+        track.setAttribute("src", "../tests/fixtures/youtube/api/timedtext?path=SECRET-PATH");
+        const chapters = document.createElement("track");
+        chapters.setAttribute("kind", "chapters");
+        chapters.setAttribute("src", "../tests/fixtures/youtube/api/timedtext");
+        video.append(track, chapters);
+        try {
+          for (let i = 0; i < 80 && own()?.tracks?.[0]?.language !== "de"; i++) await sleep(25);
+          const ids = (own()?.tracks || []).map((t) => `${t.id}/${t.format}`).join();
+          // No extension on the URL, so the bytes decide; the chapters track is not a subtitle.
+          if (ids !== `page:${titleId}:de:subtitle/auto`) throw new Error(ids);
+          if (own().site !== location.hostname || own().tracks[0].displayName !== "Deutsch") throw new Error(JSON.stringify(own()));
+          if (JSON.stringify(own()).includes("SECRET")) throw new Error("the track's URL got into status()");
+
+          // The worker gets the URL, and no shift on a player whose clock is the film's.
+          let asked = askOwn();
+          if (asked?.tracks?.[0]?.url !== new URL("../tests/fixtures/youtube/api/timedtext?path=SECRET-PATH", location.href).href) throw new Error(`the worker was handed ${asked?.tracks?.[0]?.url}`);
+          if (asked.tracks[0].shiftMs) throw new Error(`a shift of ${asked.tracks[0].shiftMs} with no offset`);
+
+          /* A player streaming from an offset: its <track> cues are on the
+           * element's clock, which is the film's less the offset. The shift
+           * travels with the URL, read at the moment the worker asks. */
+          video.dataset.ssoTimeOffset = "1500";
+          asked = askOwn();
+          if (asked?.tracks?.[0]?.shiftMs !== 1500000) throw new Error(`shift ${asked?.tracks?.[0]?.shiftMs}, want 1500000`);
+          delete video.dataset.ssoTimeOffset;
+          asked = askOwn();
+          if (asked.tracks[0].shiftMs) throw new Error("the shift outlived the offset");
+
+          // Gone from the document, gone from the list.
+          track.remove();
+          chapters.remove();
+          for (let i = 0; i < 80 && own()?.tracks?.length; i++) await sleep(25);
+          if (own()?.tracks?.length) throw new Error(`still listed after removal: ${JSON.stringify(own())}`);
+        } finally {
+          track.remove();
+          chapters.remove();
+          delete video.dataset.ssoTimeOffset;
+          await sleep(1100);
+        }
+      });
+
       check("cues a player hands to the browser's own text track are read off it, whatever it fetched them as", async () => {
         const own = () => window.__ssoApi.status().own;
         const titleId = location.pathname.split("/").filter(Boolean).pop();
-        const video = document.createElement("video");
-        document.body.append(video);
+        const askOwn = () => {
+          let answer;
+          for (const listener of window.__listeners) listener({ type: "sso:pageSubtitles" }, {}, (reply) => { answer = reply; });
+          return answer;
+        };
+        // A text track cannot be removed once made; it is emptied and disabled at the end instead.
+        const track = video.addTextTrack("subtitles", "Deutsch", "de");
+        const cues = [new VTTCue(1, 2, "Hallo"), new VTTCue(3, 4.5, "<i>Welt</i>")];
         try {
-          const track = video.addTextTrack("subtitles", "Deutsch", "de");
           track.mode = "hidden";
-          track.addCue(new VTTCue(1, 2, "Hallo"));
-          track.addCue(new VTTCue(3, 4.5, "<i>Welt</i>"));
-          for (let i = 0; i < 280 && own()?.tracks?.[0]?.format !== "cues"; i++) await sleep(25);
+          for (const cue of cues) track.addCue(cue);
+          for (let i = 0; i < 80 && own()?.tracks?.[0]?.format !== "cues"; i++) await sleep(25);
           const listed = own()?.tracks?.[0];
           if (listed?.format !== "cues" || listed.id !== `page:${titleId}:de:subtitle` || listed.cueCount !== 2 || listed.cues) throw new Error(`listed ${JSON.stringify(own())}`);
-          const reply = await new Promise((resolve) => {
-            const onMessage = (event) => {
-              if (event.data?.source !== "sso-ear" || event.data.type !== "tracks" || event.data.tracks?.[0]?.format !== "cues") return;
-              window.removeEventListener("message", onMessage);
-              resolve(event.data);
-            };
-            window.addEventListener("message", onMessage);
-            window.postMessage({ source: "sso-ear", type: "ask" }, "*");
-          });
-          const cues = reply.tracks[0].cues;
-          if (cues.length !== 2 || cues[1].startMs !== 3000 || cues[1].endMs !== 4500 || cues[1].text !== "<i>Welt</i>" || reply.shape[0] !== "texttracks") throw new Error(JSON.stringify(reply));
+          const asked = askOwn();
+          const got = asked?.tracks?.[0]?.cues;
+          if (!got || got.length !== 2 || got[1].startMs !== 3000 || got[1].endMs !== 4500 || got[1].text !== "<i>Welt</i>") throw new Error(JSON.stringify(asked));
         } finally {
-          video.remove();
-          window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
-          await sleep(60);
+          for (const cue of cues) track.removeCue(cue);
+          track.mode = "disabled";
+          for (let i = 0; i < 80 && own()?.tracks?.length; i++) await sleep(25);
+          if (own()?.tracks?.length) throw new Error(`an emptied text track is still listed: ${JSON.stringify(own())}`);
         }
       });
 

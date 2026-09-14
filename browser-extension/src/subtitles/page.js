@@ -11,6 +11,13 @@
  *   dash      a DASH MPD; `dash.representation` names the text track in it
  *   cues      nothing to fetch: the cues came with the track, read off the
  *             browser's own text track in the page
+ *   auto      a URL that says nothing (`/subtitle?path=...`): the first bytes
+ *             decide between the three file kinds
+ *
+ * A track read off the document - a <track> element or a text track - is on
+ * the ELEMENT's clock, and carries `shiftMs` from the frame when that clock
+ * is not the film's (a player streaming from an offset). It is added to every
+ * cue here, so what attaches is on the film's clock like everything else.
  *
  * Runs in the service worker, whose `fetch` has the host permissions and no
  * CORS to argue with. Segments go six at a time, which is what a browser
@@ -46,11 +53,26 @@ async function fetchAll(urls, read) {
   return { parts, failed };
 }
 
-/* One document of a known kind into cues. */
+/* One document of a known kind into cues; `auto` reads the first bytes. */
 function readText(text, kind) {
+  if (kind === "auto") kind = sniff(text);
   if (kind === "vtt") return parseVtt(text);
   if (kind === "srt") return parseSrt(text);
   return parseTtml(text);
+}
+
+function sniff(text) {
+  const head = text.slice(0, 300).replace(/^\uFEFF/, "").trimStart();
+  if (head.startsWith("WEBVTT")) return "vtt";
+  if (head.startsWith("<")) return "ttml";
+  if (/^\d+\s*\r?\n\s*\d\d:\d\d:\d\d[,.]\d{3}\s*-->/.test(head)) return "srt";
+  return "vtt";
+}
+
+function shifted(cues, shiftMs) {
+  const by = Number(shiftMs) || 0;
+  if (!by) return cues;
+  return cues.map((cue) => ({ ...cue, startMs: cue.startMs + by, endMs: cue.endMs + by }));
 }
 
 /* What a DASH representation's mime type says its bytes are. */
@@ -66,6 +88,12 @@ function kindOf(representation) {
  * how many failed - or throws an Error whose message the reader can act on.
  */
 export async function readPageTrack(track) {
+  const { cues, note } = await readTrack(track);
+  if (track.shiftMs) note.shiftMs = Number(track.shiftMs) || 0;
+  return { cues: shifted(cues, track.shiftMs), note };
+}
+
+async function readTrack(track) {
   const format = track.format || "ttml";
   const note = { format, segments: 0, failed: 0, bytes: 0 };
 

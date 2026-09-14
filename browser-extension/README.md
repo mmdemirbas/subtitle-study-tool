@@ -247,13 +247,24 @@ the extension takes off the player's first caption request - so **turn the
 player's captions on once** and every language is fetchable, and until then the
 attach says so. Netflix and Disney+ are built from the sources of the
 extensions that download from them and wait on a playback nobody here can do.
-The ear for tabii and Disney+ reads a DASH or HLS manifest, an API answer
-naming subtitle files, the `<track>` elements a player adds, or the cues in
-the browser's own text tracks. On tabii and Disney+ the
+The ear for tabii and Disney+ reads a DASH or HLS manifest or an API answer
+naming subtitle files. On tabii and Disney+ the
 extension also writes the shape of everything the player does to the running
 log - URLs with their ids and tokens taken out, key names, formats, never a
 value - so that one playback is enough to build the ear from, without anyone
 watching the network.
+
+**Any other player that does it the standard way needs no ear at all.** HTML's
+own way for a page to carry subtitles is `<track kind="subtitles" src srclang
+label>` under the `<video>`, and the TextTrack API is its programmatic twin
+(`video.addTextTrack(...)` with cues in it, which is what hls.js, Shaka and
+the like build). The extension reads both off the document on every site: a
+`<track>` with an http(s) `src` is fetched by the extension whatever its
+mode, so you need not turn the player's captions on; a text track with cues
+in it is read off the cues; and the format is the URL's extension, or the
+first bytes when it has none. The local catalogue app is the first player it
+is verified on - its `<track>` per sidecar and embedded subtitle, served as
+WebVTT from `/subtitle?path=...`, with no change on the app's side.
 
 Where the page carries only one of your two languages, that one comes from the
 page and the other is searched for as before, refused for the same reasons an
@@ -464,10 +475,37 @@ subtitles for an unrelated 2007 Japanese horror film.
 
 ### If you are building the site
 
-Four things the extension cannot work out on its own. The first is a standard
-and costs you nothing; the other three are three attributes on one element,
-none of them named after this extension and none of them an arrangement with
-it.
+**Your subtitles need no arrangement at all**: put them on the video the way
+HTML says, and the extension finds them.
+
+```html
+<video>
+  <track kind="subtitles" srclang="en" label="English" src="/subs/tt0903747.en.vtt">
+  <track kind="subtitles" srclang="tr" label="Türkçe" src="/subs/tt0903747.tr.srt">
+  <track kind="captions" srclang="en" label="English [CC]" src="/subs/tt0903747.en.sdh.vtt">
+</video>
+```
+
+WebVTT, SRT or TTML, told apart by the extension or by the first bytes when
+the URL has none (`/subtitle?path=...` is fine). `kind="captions"` is offered
+as `[CC]` and never picked first; a `label` containing "forced" is offered as
+foreign parts and never picked. Cross-origin is fine - the extension fetches
+from its own side - but a `blob:` URL is not, and for those, and for a player
+that builds its tracks in script, the cues are read off `video.textTracks`
+once the track has any (a track loads its cues when its `mode` is `hidden`
+or `showing`; a disabled one has none to give). Name the site in
+`<meta property="og:site_name">` and the subtitle is labelled with it.
+
+The cues of a `<track>` are on the **element's** clock, which is what the
+standard says they are. If your element's clock is not the film's - see
+`data-sso-time-offset` below - the extension adds the offset itself, so serve
+the cues shifted for the element as you would for the browser's own rendering
+and nothing else changes.
+
+Four more things the extension cannot work out on its own. The first is a
+standard and costs you nothing; the other three are three attributes on one
+element, none of them named after this extension and none of them an
+arrangement with it.
 
 **What is playing** — `data-sso-now-playing` on the `<video>`, a JSON object
 written whole. Everything in the table above is a way of *guessing* this, and

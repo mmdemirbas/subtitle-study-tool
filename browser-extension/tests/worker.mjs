@@ -1856,6 +1856,30 @@ Short stamp
   t("an empty answer says what to do about it rather than 'no lines'",
     /turn the player's own captions on/.test(empty?.error || ""), JSON.stringify(empty));
 
+  /* A <track> the document carries, the standard way. The catalogue app's
+   * URL has no extension, so the bytes say which of the three it is; and its
+   * cues are on the element's clock, which is the film's less the offset the
+   * page states - the frame sends the shift, the worker adds it. */
+  pageFiles = {
+    "http://localhost:5173/subtitle?path=a.mkv&stream=2&shift=1500": "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nBir\n",
+    "http://localhost:5173/subtitle?path=b.srt": "1\n00:00:01,000 --> 00:00:02,000\nOne\n\n2\n00:00:03,000 --> 00:00:04,000\nTwo\n",
+    "http://localhost:5173/subtitle?path=c.ttml": ttml(`<p begin="00:00:01.000" end="00:00:02.000">Eins</p>`),
+  };
+  pageSubtitlesReply = () => ({ site: "localhost", titleId: "tt1", tracks: [
+    { ...track("tr", "subtitle", "http://localhost:5173/subtitle?path=a.mkv&stream=2&shift=1500"), id: "page:tt1:tr:subtitle", format: "auto", shiftMs: 1500000 },
+    { ...track("en", "subtitle", "http://localhost:5173/subtitle?path=b.srt"), id: "page:tt1:en:subtitle", format: "auto" },
+    { ...track("de", "subtitle", "http://localhost:5173/subtitle?path=c.ttml"), id: "page:tt1:de:subtitle", format: "auto" },
+  ] });
+  const shiftedVtt = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:tt1:tr:subtitle" } }, sender);
+  t("a track with no extension is read by its first bytes, and the element clock's shift is added to every cue",
+    shiftedVtt?.cues?.[0]?.text === "Bir" && shiftedVtt.cues[0].start === 1501000 && shiftedVtt.cues[0].end === 1502000,
+    JSON.stringify(shiftedVtt?.cues));
+  const autoSrt = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:tt1:en:subtitle" } }, sender);
+  const autoTtml = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:tt1:de:subtitle" } }, sender);
+  t("SRT and TTML bodies are told apart the same way, and an unshifted track stays where it was",
+    autoSrt?.cues?.map((c) => c.text).join() === "One,Two" && autoSrt.cues[0].start === 1000 && autoTtml?.cues?.[0]?.text === "Eins",
+    JSON.stringify([autoSrt?.cues, autoTtml?.cues]));
+
   daemonAnswers = null;
   pageSubtitlesReply = () => null;
   pageFiles = {};

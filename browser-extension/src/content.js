@@ -1255,7 +1255,10 @@
     if (/(^|\.)disneyplus\.com$/.test(host)) return "Disney+";
     if (/(^|\.)youtube\.com$/.test(host)) return "YouTube";
     if (/(^|\.)tabii\.com$/.test(host)) return "tabii";
-    return host.replace(/^www\./, "");
+    /* What the site calls itself, the standard way, before its host name:
+     * a page's own subtitles are labelled with this. */
+    const named = document.querySelector('meta[property="og:site_name"]')?.getAttribute("content")?.trim();
+    return named || host.replace(/^www\./, "");
   }
 
   /* A track's kind, from the two fields that might say. Forced narratives are
@@ -1270,6 +1273,59 @@
     if (/sdh|hearing|closedcaptions|describes-music-and-sound|caption|\bcc\b|\[cc\]/i.test(`${track.type} ${track.displayName}`)) return "sdh";
     if (/\basr\b|auto-generated|automatic/i.test(`${track.type} ${track.displayName}`)) return "auto";
     return "subtitle";
+  }
+
+  /* The two-letter language a track's code means, which is what the
+   * preferred languages are written in. A player that takes `srclang` off
+   * the media container writes the container's three-letter code - the
+   * catalogue app's tracks are `eng` and `spa`, measured 2026-09-14 - and
+   * "eng" matched nothing in ["en", "tr"], so the page's own English was
+   * listed and never picked. BCP 47 canonicalisation is the standard's own
+   * answer (eng to en, ger and deu to de, chi and zho to zh), and Intl
+   * carries it; a tag it refuses keeps its first part as before. */
+  function languageOf(code) {
+    try {
+      return Intl.getCanonicalLocales(code)[0].split("-")[0].toLowerCase();
+    } catch {
+      return code.split(/[-_]/)[0];
+    }
+  }
+
+  /* One shape for a track wherever it came from - an ear's post or the
+   * document's own <track> elements - keyed the way everything else keys. */
+  function normaliseTracks(titleId, raw) {
+    const taken = new Map();
+    return raw
+      .filter((track) => track && typeof track.url === "string" && track.url)
+      .map((track) => {
+        const code = String(track.language || "").toLowerCase();
+        const kind = trackKind(track);
+        /* The id everything else keys on - the offset store, the card, the
+         * worker's fetch. A string where OpenSubtitles ids are numbers, and
+         * the prefix is what the worker tests for. A second track of the same
+         * language and kind - two English sidecars beside one file - gets a
+         * number, or the two would be one id and the second unreachable. */
+        const base = `page:${titleId}:${code}:${kind}`;
+        const nth = (taken.get(base) || 0) + 1;
+        taken.set(base, nth);
+        return {
+          id: nth === 1 ? base : `${base}:${nth}`,
+          language: languageOf(code),
+          code,
+          kind,
+          displayName: String(track.displayName || ""),
+          /* How the worker should read the file: "ttml" (Prime, Netflix),
+           * "vtt", "srt", "hls-vtt" for a playlist of segments (Disney+),
+           * "dash" for a manifest, "cues" for cues carried in the message,
+           * or "auto" when the URL says nothing and the bytes have to. */
+          format: String(track.format || "ttml"),
+          url: track.url,
+          /* For a DASH manifest, which text track in it. */
+          ...(track.dash && typeof track.dash === "object" ? { dash: { representation: String(track.dash.representation ?? ""), adaptation: String(track.dash.adaptation ?? "") } } : {}),
+          /* Read off the browser's own text track: nothing to fetch. */
+          ...(Array.isArray(track.cues) ? { cues: track.cues } : {}),
+        };
+      });
   }
 
   function onPageSubtitles(event) {
@@ -1290,30 +1346,7 @@
     }
     if (data.type !== "tracks") return;
     const titleId = String(data.titleId || "");
-    const tracks = (Array.isArray(data.tracks) ? data.tracks : [])
-      .filter((track) => track && typeof track.url === "string" && track.url)
-      .map((track) => {
-        const code = String(track.language || "").toLowerCase();
-        const kind = trackKind(track);
-        return {
-          /* The id everything else keys on - the offset store, the card, the
-           * worker's fetch. A string where OpenSubtitles ids are numbers, and
-           * the prefix is what the worker tests for. */
-          id: `page:${titleId}:${code}:${kind}`,
-          language: code.split(/[-_]/)[0],
-          code,
-          kind,
-          displayName: String(track.displayName || ""),
-          /* How the worker should read the file: "ttml" (Prime, Netflix),
-           * "vtt", or "hls-vtt" for a playlist of segments (Disney+). */
-          format: String(track.format || "ttml"),
-          url: track.url,
-          /* For a DASH manifest, which text track in it. */
-          ...(track.dash && typeof track.dash === "object" ? { dash: { representation: String(track.dash.representation ?? ""), adaptation: String(track.dash.adaptation ?? "") } } : {}),
-          /* Read off the browser's own text track: nothing to fetch. */
-          ...(Array.isArray(track.cues) ? { cues: track.cues } : {}),
-        };
-      });
+    const tracks = normaliseTracks(titleId, Array.isArray(data.tracks) ? data.tracks : []);
     /* A title that had subtitles a moment ago still has them.
      *
      * Prime Video's player asks for a title's resources more than once, and
@@ -1389,15 +1422,128 @@
     return pageSubtitles;
   }
 
-  /* Without the URLs, for the panel and the mirror. */
-  function pageSubtitleSummary() {
-    if (!ownStillHere()) return null;
+  /* --- the subtitles a page carries the standard way ---------------------------
+   *
+   * The ears above overhear players that keep their subtitle list to
+   * themselves. A player that does it the way HTML says - `<track>` elements
+   * under its `<video>`, or text tracks made with `addTextTrack` and filled
+   * with cues - needs no ear at all: the document is shared with this world,
+   * and `video.textTracks` is the standard's own programmatic surface for
+   * both. Asked for as "a standard protocol ... so it would extend to other
+   * third party web players", with the local catalogue app as the first,
+   * whose player already writes `<track kind="subtitles" src srclang label>`
+   * for every sidecar and embedded subtitle of the file it plays.
+   *
+   * Only the video being subtitled is read - a preview's tracks are the
+   * preview's. A `<track>` with an http(s) `src` is fetched by the worker,
+   * whatever its `mode`, so the reader need not turn the page's own captions
+   * on; the format is the URL's extension, or `auto` when it has none (the
+   * catalogue app serves `/subtitle?path=...`). A text track with no element
+   * behind it, or one behind a `blob:` URL, is read off its cues, and only
+   * once it has some - the browser loads a track's cues when its mode is
+   * hidden or showing, and a disabled one has none to give.
+   *
+   * These cues are on the ELEMENT's clock, as `<track>` cues always are, and
+   * the element's clock is the film's less `data-sso-time-offset` on a
+   * player that streams from an offset: the catalogue app shifts its
+   * WebVTT by the stream's start for exactly that reason. So a track from
+   * here carries `shiftMs`, read at the moment the worker fetches, and the
+   * worker adds it to every cue. An ear's list is on the title's clock and
+   * carries none.
+   *
+   * Scanned once a second from the tick and diffed on a key, so a list that
+   * has not changed costs a querySelectorAll on one element. The two lists
+   * are merged for everything that asks: the ear's first, then whatever the
+   * document adds that the ear did not already name. */
+  const DOM_SCAN_MS = 1000;
+  let domSubtitles = null;
+  let domKey = "";
+  let domScanAt = 0;
+  const TEXT_EXT = /\.(vtt|webvtt|srt|ttml|dfxp|xml)(?:[?#]|$)/i;
+
+  function domTitleId() {
+    return announcedProgramme()?.imdb || location.pathname.split("/").filter(Boolean).pop() || location.hostname;
+  }
+
+  function domTracks(video) {
+    const found = [];
+    const seen = new Set();
+    const cuesOf = (track) =>
+      [...track.cues].map((cue) => ({ startMs: Math.round(cue.startTime * 1000), endMs: Math.round(cue.endTime * 1000), text: String(cue.text || "") }));
+    for (const element of video.querySelectorAll("track")) {
+      const kind = element.kind || "subtitles";
+      if (kind !== "subtitles" && kind !== "captions") continue;
+      seen.add(element.track);
+      const label = element.label || "";
+      const common = { language: element.srclang || "", type: kind, displayName: label, forced: /forced/i.test(label), keys: [...element.attributes].map((attribute) => attribute.name) };
+      const url = element.src || "";
+      if (/^https?:/.test(url)) {
+        const ext = TEXT_EXT.exec(url)?.[1]?.toLowerCase();
+        const format = !ext ? "auto" : ext === "srt" ? "srt" : /vtt/.test(ext) ? "vtt" : "ttml";
+        found.push({ ...common, url, format });
+      } else if (element.track?.cues?.length) {
+        found.push({ ...common, url: `texttrack:${label}:${found.length}`, format: "cues", cues: cuesOf(element.track) });
+      }
+    }
+    [...(video.textTracks || [])].forEach((track, index) => {
+      if (seen.has(track) || !/subtitles|captions/.test(track.kind) || !track.cues?.length) return;
+      const label = track.label || "";
+      found.push({
+        language: track.language || "", type: track.kind, displayName: label, forced: /forced/i.test(label),
+        keys: ["kind", "label", "language", "mode", "cues"],
+        url: `texttrack:${label}:${index}`, format: "cues", cues: cuesOf(track),
+      });
+    });
+    return found;
+  }
+
+  function scanDomSubtitles({ force = false } = {}) {
+    const now = performance.now();
+    if (!force && now - domScanAt < DOM_SCAN_MS) return;
+    domScanAt = now;
+    const video = state.video;
+    const titleId = video ? domTitleId() : "";
+    const raw = video ? domTracks(video) : [];
+    const key = `${titleId}\n${raw.map((track) => `${track.url}|${track.language}|${track.type}|${track.cues?.length ?? ""}`).join("\n")}`;
+    if (key === domKey) return;
+    domKey = key;
+    domSubtitles = raw.length ? { site: siteName(), titleId, tracks: normaliseTracks(titleId, raw) } : null;
+    if (domSubtitles) {
+      trace("pageSubtitles", {
+        site: domSubtitles.site,
+        titleId,
+        tracks: domSubtitles.tracks.map((track) => ({ code: track.code, kind: track.kind, displayName: track.displayName, format: track.format })),
+        hosts: [...new Set(raw.map((track) => { try { return new URL(track.url).hostname; } catch { return ""; } }).filter(Boolean))],
+        keys: raw[0]?.keys ?? [],
+        shape: ["dom", ...new Set(raw.map((track) => track.format))],
+      });
+    }
+    notify();
+  }
+
+  /* Both lists as one, the ear's first. `withUrls` is for the worker about to
+   * fetch: URLs, cues and the element clock's shift travel then and only then. */
+  function ownTracks({ withUrls = false } = {}) {
+    const ear = ownStillHere();
+    if (!ear && !domSubtitles) return null;
+    const shiftMs = Math.round(startSeconds() * 1000);
+    const tracks = [...(ear?.tracks ?? [])];
+    const named = new Set(tracks.map((track) => track.url));
+    for (const track of domSubtitles?.tracks ?? []) {
+      if (!named.has(track.url)) tracks.push(shiftMs ? { ...track, shiftMs } : track);
+    }
+    const site = ear?.site ?? domSubtitles.site;
+    const titleId = ear?.titleId ?? domSubtitles.titleId;
+    if (withUrls) return { site, titleId, tracks };
     return {
-      site: pageSubtitles.site,
-      titleId: pageSubtitles.titleId,
-      tracks: pageSubtitles.tracks.map(({ url, cues, ...rest }) => (cues ? { ...rest, cueCount: cues.length } : rest)),
+      site,
+      titleId,
+      tracks: tracks.map(({ url, cues, ...rest }) => (cues ? { ...rest, cueCount: cues.length } : rest)),
     };
   }
+
+  /* Without the URLs, for the panel and the mirror. */
+  const pageSubtitleSummary = () => ownTracks();
 
   // --- placing things in a page that may have moved the coordinate system ----
 
@@ -3854,9 +4000,13 @@
 
     if (!state.video || !state.video.isConnected) {
       state.video = pickVideo();
-      if (!state.video) return;
+      if (!state.video) {
+        scanDomSubtitles();
+        return;
+      }
       applySettings();
     }
+    scanDomSubtitles();
     /* Every tick, not only when the video is first picked: attach() and the
      * frame probes also assign state.video, so hanging this off the "we just
      * found one" branch left the observer watching nothing on the path most
@@ -4726,6 +4876,8 @@
        * its plan cannot find the old list. Not on the first mark of a page,
        * which is the programme the list was posted for. */
       if (programme.mark) dropOwn("programme");
+      // And the document's own list is read again now, not up to a second on.
+      domScanAt = 0;
       programme = { mark, since: performance.now(), told: programme.told };
       /* An inferred mark is given the window to stop moving. An announced one
        * is acted on in the turn it arrived in: returning here unconditionally
@@ -7798,7 +7950,7 @@
       /* With the URLs, which status() leaves out: this is the worker about to
        * fetch one, and the only place the signed URL travels. */
       case "sso:pageSubtitles":
-        sendResponse(ownStillHere());
+        sendResponse(ownTracks({ withUrls: true }));
         return false;
 
       case "sso:attach":
