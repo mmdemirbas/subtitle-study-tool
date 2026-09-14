@@ -621,8 +621,16 @@ something the worker's plain GET did not send. A tabii `pageFetch` refusing
   says no "Looking for subtitles…", and a run that finds no video says so in
   the log rather than on screen (`noVideo`). The shortcut and the toolbar are
   questions and keep both the search and the answer. `status.seconds` is what
-  the worker decides on - `filmSeconds()`, the film's clock, null where nothing
-  can know yet, so a stream produced as it is sent is never "short".
+  the worker decides on - `believedSeconds()`: what the page states first,
+  the element's own only while it has never been seen to grow, null
+  otherwise. Measured on the catalogue app 2026-09-14: the programme was
+  announced the moment a minute of the stream had arrived, `filmSeconds()`
+  said 65, and a two-hour film was judged short - and the mark never moves
+  again, so a wrong "short" costs the film's whole search. Which is why a
+  short verdict is provisional as well: the frame remembers the length it
+  told, and when that grows past the bar or stops being believable it tells
+  the worker once more with `again: "grew"`, which is the one thing that
+  gets a mark past `handledProgramme`.
 
 **`inject()` re-injects the ears too.** The content scripts go into every
 frame from `content_scripts[0]`; every further entry with `world: "MAIN"` goes

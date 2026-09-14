@@ -10640,6 +10640,73 @@
         }
       });
 
+      /* The worker does not search for a programme under ten minutes by
+       * itself (a trailer, a preview), and judges that on `seconds` in the
+       * status the frame sends with the programme. Measured on the catalogue
+       * app 2026-09-14: the programme was announced the moment a minute of
+       * the stream had arrived, the element said 65, and a two-hour film was
+       * judged short. So the length sent is the page's stated one first, the
+       * element's own only while it has never grown - and a programme told
+       * on a short length is told AGAIN, once, when that length grows past
+       * the bar or stops being believable. */
+      check("a programme told as short is told again when its length turns out to be growing", async () => {
+        const video = document.getElementById("v");
+        const wasDuration = Object.getOwnPropertyDescriptor(video, "duration");
+        /* Whether the element's length was already distrusted when this
+         * started. Cases before this one grew it, cases after this one lean
+         * on that (a stated length only counts once the element's has grown),
+         * and a new resource forgets it - so it is put back at the end. */
+        const wasDistrusted = window.__ssoApi.status().seconds === null;
+        let arrived = 95;
+        Object.defineProperty(video, "duration", { get: () => arrived, configurable: true });
+        video.dispatchEvent(new Event("loadstart"));
+        const announce = () =>
+          (video.dataset.ssoNowPlaying = JSON.stringify({ v: 1, kind: "movie", title: "Still Arriving", year: 2020, imdb: "tt0000095" }));
+        const told = () => window.__sent.filter((m) => m.type === "sso:programme" && /tt0000095/.test(m.mark));
+        try {
+          await sleep(600);
+          window.__sent.length = 0;
+          announce();
+          for (let i = 0; i < 40 && told().length < 1; i++) await sleep(50);
+          if (told().length !== 1 || told()[0].again) throw new Error(`told ${JSON.stringify(told())}`);
+          const status = window.__ssoApi.status();
+          if (status.seconds !== 95) throw new Error(`the status says ${status.seconds}s for a 95s element that has never grown`);
+
+          // Then the length steps, the way a stream produced as it is sent does.
+          arrived = 98.3;
+          for (let i = 0; i < 60 && told().length < 2; i++) await sleep(50);
+          if (told().length !== 2 || told()[1].again !== "grew") throw new Error(`after the growth: ${JSON.stringify(told())}`);
+          if (window.__ssoApi.status().seconds !== null) throw new Error(`a grown length is still believed: ${window.__ssoApi.status().seconds}`);
+          // Once. Another step is not another programme.
+          arrived = 101.6;
+          await sleep(1200);
+          if (told().length !== 2) throw new Error(`told ${told().length} times`);
+
+          // A page that STATES its length is never short on what has arrived.
+          delete video.dataset.ssoNowPlaying;
+          await sleep(300);
+          arrived = 95;
+          video.dispatchEvent(new Event("loadstart"));
+          await sleep(600);
+          video.dataset.ssoNowPlaying = JSON.stringify({ v: 1, kind: "movie", title: "Stated", year: 2020, imdb: "tt0000096", durationSeconds: 5400 });
+          for (let i = 0; i < 40 && window.__ssoApi.status().seconds !== 5400; i++) await sleep(50);
+          if (window.__ssoApi.status().seconds !== 5400) throw new Error(`the stated length lost to the element's: ${window.__ssoApi.status().seconds}`);
+        } finally {
+          delete video.dataset.ssoNowPlaying;
+          Object.defineProperty(video, "duration", wasDuration);
+          video.dispatchEvent(new Event("loadstart"));
+          await sleep(600);
+          if (wasDistrusted) {
+            const settled = video.duration;
+            Object.defineProperty(video, "duration", { get: () => settled + 3.3, configurable: true });
+            await sleep(600);
+            Object.defineProperty(video, "duration", wasDuration);
+          }
+          await sleep(1200);
+          window.__sent.length = 0;
+        }
+      });
+
       check("what comes next is said as well, and is not what is playing", async () => {
         /* The app knows the next episode before anybody asks for it, and an
          * episode switch spends 10 to 37 seconds finding subtitles - measured

@@ -1702,6 +1702,17 @@ ${lines}
   t("a short programme's own track goes up and the other language is not searched for",
     searches === 0 && got.length === 1 && got[0]?.fileId === "page:T1:en-us:subtitle",
     `${searches} searches: ${JSON.stringify(got.map((a) => a.fileId))} ${JSON.stringify(toasts())}`);
+  // Told again once the length grew past the bar: the same mark, searched this time.
+  searches = 0;
+  sentToTab.length = 0;
+  tabStatusReply = { ok: true, hasVideo: true, attached: false, seconds: 5400 };
+  await ask({ type: "sso:programme", mark: "96|Trailer with captions", again: "grew" }, sender);
+  t("a programme told again after its length grew is searched for, mark and all",
+    searches === 1, `${searches} searches ${JSON.stringify(toasts())}`);
+  await ask({ type: "sso:programme", mark: "96|Trailer with captions" }, sender);
+  t("and without `again` the same mark is still one programme",
+    searches === 1, `${searches} searches`);
+  tabStatusReply = { ok: true, hasVideo: true, attached: false, seconds: 95 };
   // The shortcut on the same short programme is a question, and is searched.
   pageSubtitlesReply = () => null;
   searches = 0;

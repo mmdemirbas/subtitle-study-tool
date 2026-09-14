@@ -267,10 +267,13 @@ async function rememberSite(sender) {
 const handledProgramme = new Map();
 chrome.tabs.onRemoved.addListener((tabId) => handledProgramme.delete(tabId));
 
-async function onProgrammeChange(sender, mark) {
+async function onProgrammeChange(sender, mark, again = "") {
   const tab = sender?.tab;
   if (!tab?.id || !tab.url || !mark) return { ok: false };
-  if (handledProgramme.get(tab.id) === mark) return { ok: false, reason: "already handled" };
+  /* The frame says `again` when it has already told this mark once and the
+   * reason for the first run's verdict has gone - a programme judged short
+   * on a length that then grew. See SHORT_PROGRAMME_S. */
+  if (handledProgramme.get(tab.id) === mark && !again) return { ok: false, reason: "already handled" };
   handledProgramme.set(tab.id, mark);
 
   if (!(await autoSiteEnabled(tab.url))) return { ok: false, reason: "not this site" };
@@ -420,7 +423,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "sso:programme") {
-    onProgrammeChange(sender, message.mark).then(sendResponse, (error) =>
+    onProgrammeChange(sender, message.mark, message.again).then(sendResponse, (error) =>
       sendResponse({ ok: false, error: describe(error) }),
     );
     return true;

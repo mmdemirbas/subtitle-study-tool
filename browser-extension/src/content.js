@@ -699,6 +699,23 @@
     return startSeconds(video) + own;
   }
 
+  /* The length the worker may judge a programme SHORT on - a trailer, a
+   * preview - which is a harsher use of a length than drawing a map: a wrong
+   * "short" costs the search for the whole film, since the mark does not
+   * move again. So what the page states comes first, and the element's own
+   * number counts only while it has never been seen to grow. Measured on
+   * the catalogue app 2026-09-14, the first run of tools/probe-page-tracks:
+   * the programme was announced the moment sixty seconds of the stream had
+   * arrived, filmSeconds() said 65, and the plan came back "short" for a
+   * two-hour film the page had stated the length of. */
+  const SHORT_PROGRAMME_S = 600;
+  function believedSeconds(video = state.video) {
+    const stated = statedSeconds();
+    if (stated) return stated;
+    if (lengths.get(video)?.grew) return null;
+    return filmSeconds(video);
+  }
+
   /* How long the page SAYS the film is, from schema.org.
    *
    * Only consulted when the element's own number cannot be trusted, which is
@@ -4838,7 +4855,7 @@
    * and subtitles at the moment it changes. */
   const settleFor = (mark) => (mark.startsWith(ANNOUNCED_PREFIX) ? 0 : PROGRAMME_SETTLE_MS);
 
-  let programme = { mark: "", since: 0, told: "" };
+  let programme = { mark: "", since: 0, told: "", toldSeconds: null };
   /* The mark once it has stopped moving, which is what "a different programme"
    * means to anything outside this file.
    *
@@ -4878,7 +4895,7 @@
       if (programme.mark) dropOwn("programme");
       // And the document's own list is read again now, not up to a second on.
       domScanAt = 0;
-      programme = { mark, since: performance.now(), told: programme.told };
+      programme = { mark, since: performance.now(), told: programme.told, toldSeconds: programme.toldSeconds };
       /* An inferred mark is given the window to stop moving. An announced one
        * is acted on in the turn it arrived in: returning here unconditionally
        * cost a whole tick even where the wait is zero, and the tick during an
@@ -4897,7 +4914,21 @@
        * change. Once per programme. */
       notify();
     }
-    if (programme.told === mark || !settled) return;
+    if (!settled) return;
+    if (programme.told === mark) {
+      /* Told once as short, and the length has since grown past the bar or
+       * stopped being believable: a "short" verdict is provisional, since
+       * it cost the search, and the worker is told again, once, with `again`
+       * so it knows the mark is not new. A length that stays short stays
+       * told. */
+      const now = believedSeconds();
+      const was = programme.toldSeconds;
+      if (was !== null && was < SHORT_PROGRAMME_S && (now === null || now >= SHORT_PROGRAMME_S)) {
+        programme.toldSeconds = now;
+        sendToWorker({ type: "sso:programme", mark, again: "grew" }).catch(() => {});
+      }
+      return;
+    }
 
     /* A different programme, so last one's ad time is not this one's. Here
      * rather than in attach(), because it is the programme changing that makes
@@ -4908,6 +4939,7 @@
      * twenty times a second and this is a round trip; without it, twenty
      * requests go out before the first one is back. */
     programme.told = mark;
+    programme.toldSeconds = believedSeconds();
     sendToWorker({ type: "sso:programme", mark }).catch(() => {
       // No worker listening is not this frame's problem to report.
     });
@@ -7177,9 +7209,10 @@
       hasVideo: hasPlayableVideo(),
       // Not the same question. See videoComing.
       videoComing: videoComing(),
-      /* How long the programme is, on the film's clock, or null where nothing
-       * can know yet. The worker reads it to tell a trailer from a film. */
-      seconds: filmSeconds(),
+      /* How long the programme is, where something can be believed about it
+       * - see believedSeconds - or null. The worker reads it to tell a
+       * trailer from a film. */
+      seconds: believedSeconds(),
       attached: attached.length > 0,
       trackCount: attached.length,
       cueCount: lead.cues.length,
