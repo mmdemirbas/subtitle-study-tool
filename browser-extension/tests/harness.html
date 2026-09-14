@@ -4702,6 +4702,32 @@
         }
       });
 
+      check("a page's own list survives a second answer for the same title that carries no tracks", async () => {
+        const own = () => window.__ssoApi.status().own;
+        try {
+          window.postMessage({
+            source: "sso-ear", type: "tracks", titleId: "P2", shape: ["timedTextUrls"],
+            tracks: [{ language: "tr", url: "https://cdn.example/p2.ttml?token=SECRET", type: "", displayName: "Türkçe", format: "ttml", forced: false, keys: [] }],
+          }, "*");
+          for (let i = 0; i < 40 && own()?.titleId !== "P2"; i++) await sleep(25);
+          if (own()?.titleId !== "P2") throw new Error("the list did not arrive");
+          /* Prime's second resources answer for the same title, without the
+           * list - measured 2026-09-13, three seconds after the first. */
+          window.postMessage({ source: "sso-ear", type: "tracks", titleId: "P2", shape: ["timedTextUrls"], tracks: [] }, "*");
+          await sleep(100);
+          if (own()?.titleId !== "P2" || own().tracks.length !== 1)
+            throw new Error(`the empty answer took the list: ${JSON.stringify(own())}`);
+          // Another title's empty answer is that title having none.
+          window.postMessage({ source: "sso-ear", type: "tracks", titleId: "P3", shape: ["timedTextUrls"], tracks: [] }, "*");
+          await sleep(100);
+          if (own()?.titleId !== "P3" || own().tracks.length !== 0)
+            throw new Error(`another title's empty answer was ignored: ${JSON.stringify(own())}`);
+        } finally {
+          window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
+          await sleep(40);
+        }
+      });
+
       /* The survey: what the player did, as shapes, written to the log so a
        * playback nobody watched is enough to learn a player from. What is
        * checked is that shape is all that leaves the page - no query value, no

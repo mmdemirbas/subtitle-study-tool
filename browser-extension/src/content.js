@@ -1314,6 +1314,22 @@
           ...(Array.isArray(track.cues) ? { cues: track.cues } : {}),
         };
       });
+    /* A title that had subtitles a moment ago still has them.
+     *
+     * Prime Video's player asks for a title's resources more than once, and
+     * not every answer carries the list: on 2026-09-13 a full list for a
+     * title was followed three seconds later by an answer for the SAME title
+     * with no tracks in it, and the automatic attach planned on the first
+     * was fetched against the second - "The page no longer offers that
+     * subtitle - play the video and try again", twice, for a film that
+     * offered it fine. A player does not take a title's subtitles away
+     * between two requests; an empty answer for a title already listed is
+     * the other request, and the list stands. A different title's empty
+     * answer is still news - that title has none. */
+    if (tracks.length === 0 && pageSubtitles?.titleId === titleId && pageSubtitles.tracks.length > 0) {
+      pageSubtitles = { ...pageSubtitles, at: Date.now(), where: pageWhere() };
+      return;
+    }
     const changed = pageSubtitles?.titleId !== titleId || pageSubtitles?.tracks.length !== tracks.length;
     pageSubtitles = { site, titleId, tracks, at: Date.now(), where: pageWhere() };
     if (!changed) return;
