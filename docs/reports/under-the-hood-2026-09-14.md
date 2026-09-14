@@ -6,8 +6,8 @@ codebase and hunt the bugs and improve usability and performance further."
 Two sources, nothing reproduced. The running log, `subtitle-daemon/logs/*.jsonl`,
 fifteen days between 11 August and 14 September 2026: 24,973 lines, 50.5 MB.
 And a count over `browser-extension/src/` of every top-level definition, its
-length, and how many places in `src/` and `tests/` name it. `tmp/log-survey.py`,
-`tmp/log-survey2.py` and `tmp/code-survey.mjs` are the scripts; they print the
+length, and how many places in `src/` and `tests/` name it. `browser-extension/tools/survey-log.py`
+and `browser-extension/tools/survey-code.mjs` are the scripts; they print the
 numbers below and nothing else.
 
 ## What the log is made of
@@ -156,7 +156,7 @@ to the map means reading 714 lines to find the 20 that matter.
   four content scripts are plain scripts sharing globals, not modules, so a
   split is a fifth script in the manifest, the harness's load list and
   `inject()`, plus a global for the panel to reach it - the same shape
-  `study.js` took when it left `content.js`. Counted (`tmp/free-vars.mjs`):
+  `study.js` took when it left `content.js`. Counted (`browser-extension/tools/free-vars.mjs`):
   `buildTimeline` reaches for 15 names in the panel's scope (`api`,
   `playhead`, `button`, `screen`, `refresh`, `show`, `sayInPanel`, ...) and
   `buildTrackCard` for 15, so the seam is a fifteen-item dependency bag, not
