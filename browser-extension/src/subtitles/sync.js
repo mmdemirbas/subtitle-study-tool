@@ -40,7 +40,7 @@ const fromBase64 = (text) => Uint8Array.from(atob(text), (char) => char.charCode
  * Failures are counted, not thrown: a sync that cannot finish should cost the
  * convergence, not the search the user is waiting for.
  */
-export async function converge(daemon) {
+export async function converge(daemon, { thenPull = false } = {}) {
   const result = { deleted: 0, pushed: 0, pulled: 0, failed: 0 };
 
   /* Deletions first, and before anything is listed. A subtitle deleted here
@@ -98,21 +98,36 @@ export async function converge(daemon) {
     }
   }
 
-  for (const item of theirs.subtitles || []) {
-    if (myIds.has(item.file_id)) continue;
-    try {
-      const response = await daemon.cachedOne(item.file_id, { content: true });
-      if (!response.content) {
+  /* The other direction is the slow half, and nothing a search needs.
+   *
+   * Measured 2026-09-14 against the daemon this repo is used with: 350 files
+   * held, one copied in every 0.7s, so a fresh profile spends four minutes
+   * here - and with the whole convergence awaited before any search, the
+   * first "Looking for subtitles…" of a new install stood for four minutes
+   * with nothing after it. The daemon ranks a search against its own store,
+   * which the copies coming THIS way cannot change; only the deletions and
+   * the pushes above can. So with `thenPull` the counts so far are returned
+   * now with the copy still running behind `pulling`, and provider.js lets a
+   * search go after the first half and makes the cache's own operations wait
+   * for the whole. */
+  const pulling = (async () => {
+    for (const item of theirs.subtitles || []) {
+      if (myIds.has(item.file_id)) continue;
+      try {
+        const response = await daemon.cachedOne(item.file_id, { content: true });
+        if (!response.content) {
+          result.failed++;
+          continue;
+        }
+        const { file_id: fileId, ...meta } = item;
+        await cache.importSubtitle(fileId, fromBase64(response.content), meta);
+        result.pulled++;
+      } catch {
         result.failed++;
-        continue;
       }
-      const { file_id: fileId, ...meta } = item;
-      await cache.importSubtitle(fileId, fromBase64(response.content), meta);
-      result.pulled++;
-    } catch {
-      result.failed++;
     }
-  }
-
-  return result;
+    return result;
+  })();
+  if (thenPull) return { ...result, pulling };
+  return pulling;
 }

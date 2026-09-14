@@ -33,7 +33,11 @@ const PROBE_TTL_MS = 5000;
 
 let probe = { at: 0, up: false, why: "" };
 let lastUp = false;
+/* The convergence the daemon's arrival started: the whole of it, which the
+ * cache's own operations wait for, and its first half - the deletions and the
+ * pushes - which is all a search or a fetch has to wait for. See converge. */
 let syncing = null;
+let pushed = null;
 let service = null;
 let serviceKey = null;
 
@@ -103,15 +107,27 @@ export async function daemonUp({ force = false } = {}) {
    * finish before anything searches: a search that ran first would rank against
    * a stale view of what is held and could spend a download on a file the other
    * side already has. */
-  if (up && !lastUp) syncing = converge(daemon).catch(() => ({ pushed: 0, pulled: 0, failed: 0 }));
+  if (up && !lastUp) {
+    pushed = converge(daemon, { thenPull: true }).catch(() => ({ pushed: 0, pulled: 0, failed: 0, pulling: null }));
+    syncing = pushed.then((first) => first.pulling ?? first).catch(() => ({ pushed: 0, pulled: 0, failed: 0 }));
+  }
   lastUp = up;
   return up;
 }
 
+/* The whole convergence, for anything that reads or changes the store. */
 async function settled() {
   if (!syncing) return;
   await syncing;
   syncing = null;
+  pushed = null;
+}
+
+/* Its first half, for a search or a fetch: what this side held and the daemon
+ * did not is over there now, and what was deleted here is forgotten there. */
+async function pushedUp() {
+  if (!pushed) return;
+  await pushed;
 }
 
 /** Whichever side is going to answer, plus why. */
@@ -202,7 +218,7 @@ function markIdentified(response) {
 
 export async function search(args) {
   if (await daemonUp()) {
-    await settled();
+    await pushedUp();
     try {
       return markIdentified({ served_by: "daemon", ...(await daemon.search(args)) });
     } catch (error) {
@@ -254,7 +270,7 @@ export async function fetchSubtitle(fileId, context = {}) {
   if (held) return { served_by: "extension", ...cuesResponse(held.bytes, held.meta, true) };
 
   if (await daemonUp()) {
-    await settled();
+    await pushedUp();
     try {
       const response = { served_by: "daemon", ...(await daemon.fetchSubtitle(fileId, context)) };
       /* Keep a copy. Without this, a film fetched through the daemon would be
