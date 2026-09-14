@@ -7018,6 +7018,9 @@
       hasVideo: hasPlayableVideo(),
       // Not the same question. See videoComing.
       videoComing: videoComing(),
+      /* How long the programme is, on the film's clock, or null where nothing
+       * can know yet. The worker reads it to tell a trailer from a film. */
+      seconds: filmSeconds(),
       attached: attached.length > 0,
       trackCount: attached.length,
       cueCount: lead.cues.length,

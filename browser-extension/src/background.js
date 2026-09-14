@@ -302,7 +302,7 @@ async function onProgrammeChange(sender, mark) {
    * that finds nothing now costs nothing. The window where the old lines are
    * still up is the download, which is the same window the reader would spend
    * looking at an empty picture otherwise. */
-  await autoAttach(tab, frameId, status, { replacing: Boolean(status?.attached) });
+  await autoAttach(tab, frameId, status, { replacing: Boolean(status?.attached), automatic: true });
   return { ok: true };
 }
 
@@ -759,7 +759,24 @@ async function waitForVideo(tabId, first) {
  *
  * Searching costs nothing. Downloading does, and none happens here.
  */
-async function planAutoAttach(tab, frameId) {
+/* Under this, an automatic run does not search.
+ *
+ * Prime Video plays a trailer in the hero of every detail page and of the
+ * storefront, large enough and long enough to be the page's video, and each
+ * one is a programme to the frame: on 2026-09-13, browsing between films,
+ * the reader's log shows "Looking for subtitles…" and a plan for a trailer
+ * three times in thirty seconds, two of them searched and attached from
+ * OpenSubtitles - a download each, from a day's allowance of five or ten,
+ * for ninety seconds of trailer nobody wanted subtitled - and the rest of
+ * that morning's browse said "No video playing on this page" six times to
+ * a reader who had asked nothing. OpenSubtitles indexes nothing under ten
+ * minutes long, so for a short programme the search can only find the wrong
+ * thing. What the page carries for it is still used: it is the page's own
+ * file for the picture on screen, and it costs no allowance. A reader who
+ * presses the shortcut on a short video is asking, and is searched for. */
+const SHORT_PROGRAMME_S = 600;
+
+async function planAutoAttach(tab, frameId, { short = false } = {}) {
   const languages = await preferredLanguages();
   /* Every frame contributes what it knows and the best of it is used. Prefer
    * what the page says it is over the tab title: Prime Video titles a detail
@@ -787,16 +804,24 @@ async function planAutoAttach(tab, frameId) {
     context,
     own: own.map((result) => result.file_id),
   };
+  const notSearched = "not searched for - the programme is shorter than ten minutes";
   if (ownBest) {
     const { result: ownSecond, reason } = pickSecondLanguage({
       results: own, languages, taken: ownBest.language, used: {}, resolved: true, threshold: 0, query: title,
     });
-    if (ownSecond || languages.length < 2) {
+    if (ownSecond || languages.length < 2 || short) {
       return {
         ...plan, decision: "attach", reason: "", query: title, threshold: 0,
-        found: { results: own, used: { query: title } }, best: ownBest, second: ownSecond, secondReason: reason,
+        found: { results: own, used: { query: title } }, best: ownBest, second: ownSecond,
+        secondReason: ownSecond ? reason : short ? notSearched : reason,
       };
     }
+  }
+  if (short) {
+    return {
+      ...plan, decision: "short", reason: notSearched, query: title, threshold: 0,
+      found: { results: own, used: { query: title } }, best: null, second: null, secondReason: "",
+    };
   }
 
   const searched = await planFor({ title, year, season, episode, imdbId, altTitles, languages, context });
@@ -1119,7 +1144,18 @@ async function warmNext(tabId, next, committed) {
   }
 }
 
-async function autoAttach(tab, frameId, status, { replacing = false } = {}) {
+/* "No video playing on this page" is an answer, and an automatic run was not
+ * a question. A trailer that ended while its plan was being made, a preview
+ * the page swapped out, a player torn down by a navigation: the frame said
+ * "programme" and by the time this looked there was nothing to put a subtitle
+ * on. The reader pressed nothing and is told nothing; the log gets the line.
+ * The shortcut and the toolbar keep the toast, because there somebody asked. */
+async function noVideo(tab, frameId, automatic, when) {
+  if (automatic) trace.record("autoAttach", { frameId, skipped: "no video", when });
+  else await notify(tab.id, frameId, "No video playing on this page");
+}
+
+async function autoAttach(tab, frameId, status, { replacing = false, automatic = false } = {}) {
   /* No film, and the page itself says none is on its way.
    *
    * Refused here rather than after the search, and not inside the try below:
@@ -1128,9 +1164,12 @@ async function autoAttach(tab, frameId, status, { replacing = false } = {}) {
    * came back wrong - "Something went wrong" where "No video playing on this
    * page" is the whole answer. */
   if (status && !status.hasVideo && !status.videoComing) {
-    await notify(tab.id, frameId, "No video playing on this page");
+    await noVideo(tab, frameId, automatic, "before");
     return;
   }
+  // See SHORT_PROGRAMME_S. Decided on the status the frame sent with the
+  // programme, so a trailer gets no "Looking for subtitles…" either.
+  const short = automatic && Number.isFinite(status?.seconds) && status.seconds < SHORT_PROGRAMME_S;
 
   try {
     /* The search needs the page, not the picture.
@@ -1147,12 +1186,15 @@ async function autoAttach(tab, frameId, status, { replacing = false } = {}) {
      * of it. By the time a download is back there is nearly always somewhere
      * to put it. */
     const film = waitForVideo(tab.id, status);
-    await notify(tab.id, frameId, "Looking for subtitles…");
+    if (!short) await notify(tab.id, frameId, "Looking for subtitles…");
 
-    const plan = await planAutoAttach(tab, frameId);
+    const plan = await planAutoAttach(tab, frameId, { short });
     // The whole decision, including the results it ranked, so "it picked the
     // wrong subtitle" can be answered without running the search again.
     trace.record("autoAttach", { frameId, plan });
+    // A short programme with nothing of the page's own for it: nothing was
+    // searched, and there is nothing to say - the plan line says why.
+    if (plan.decision === "short") return;
 
     /* Before any of the plan is acted on, including the branches that open the
      * panel: a page with no film is not a page to ask somebody to choose a
@@ -1160,7 +1202,7 @@ async function autoAttach(tab, frameId, status, { replacing = false } = {}) {
      * have appeared in one that had nothing in it when this started. */
     const ready = await film;
     if (!ready?.hasVideo) {
-      await notify(tab.id, ready?.frameId ?? frameId, "No video playing on this page");
+      await noVideo(tab, ready?.frameId ?? frameId, automatic, "after");
       return;
     }
     frameId = ready.frameId ?? frameId;

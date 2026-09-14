@@ -588,6 +588,21 @@ something the worker's plain GET did not send. A tabii `pageFetch` refusing
   `secondReason`, said as "Only EN: for the other language, ...". `warmNext`
   declines while a page track is attached, because the next episode's list
   cannot be had before it plays and a download warmed now would lose to it.
+- **A trailer is a programme to the frame and not to the plan.** Prime Video
+  plays one in the hero of every detail page and of the storefront, large and
+  long enough to pass `pickVideo`, so each is a programme mark and each was
+  an automatic run: read out of the log on 2026-09-13, three plans in thirty
+  seconds of browsing, two of them searched and attached from OpenSubtitles
+  (a download each, for ninety seconds of trailer), and six "No video playing
+  on this page" toasts to a reader who had pressed nothing, for trailers
+  that had ended before their plan was made. So an automatic run
+  (`automatic: true`, from `onProgrammeChange` only) under
+  `SHORT_PROGRAMME_S` uses what the page carries and searches for nothing,
+  says no "Looking for subtitles…", and a run that finds no video says so in
+  the log rather than on screen (`noVideo`). The shortcut and the toolbar are
+  questions and keep both the search and the answer. `status.seconds` is what
+  the worker decides on - `filmSeconds()`, the film's clock, null where nothing
+  can know yet, so a stream produced as it is sent is never "short".
 
 **`inject()` re-injects the ears too.** The content scripts go into every
 frame from `content_scripts[0]`; every further entry with `world: "MAIN"` goes
@@ -608,8 +623,9 @@ up. A cue with no letter or digit is dropped, by the same `READABLE` rule the
 SRT reader exports. `parseVtt` in `src/subtitles/vtt.js` is its WebVTT twin -
 blocks split on blank lines, a timing regex, `<i>`/`<b>` kept and `<c>`/`<v>`
 dropped around their text, the `X-TIMESTAMP-MAP` an HLS segment carries
-ignored because the stamps are already on the title's clock - beside the two
-HLS readers, `subtitleRenditions` and `segmentUrls`.
+ignored because the stamps are already on the title's clock - beside
+`segmentUrls`, the HLS media-playlist reader (the master playlist is read in
+the page's world by the streams ear, which cannot import).
 
 ## A subtitle being made is one subtitle, attached under its final id
 

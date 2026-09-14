@@ -433,27 +433,60 @@ t("the same episode is not handled twice",
  */
 sentToTab.length = 0;
 tabStatusReply = { ok: true, hasVideo: false, videoComing: true, attached: false };
+/* A search that can succeed, or the plan fails on the daemon's silence and
+ * the run ends in "Something went wrong" before it ever waits for the film -
+ * which is what this case did for a while, passing on the toast it was
+ * asked about while exercising none of the wait. */
+daemonAnswers = americans();
+const startedLate = Date.now();
 const late = ask({ type: "sso:programme", mark: "2400|Ep 6" }, sender);
 // The film turns up a moment later, the way a remuxed stream does.
-setTimeout(() => { tabStatusReply = { ok: true, hasVideo: true, videoComing: true, attached: false }; }, 400);
+const arrived = new Promise((resolve) => setTimeout(() => {
+  tabStatusReply = { ok: true, hasVideo: true, videoComing: true, attached: false };
+  resolve();
+}, 400));
 await late;
+await arrived;
+daemonAnswers = null;
 t("a film that starts a moment late is still searched for",
   toasts().some((m) => /Looking for subtitles/.test(m)),
   JSON.stringify(toasts()));
 t("and it is not refused for having had no video when the page said so",
   !toasts().some((m) => /No video playing/.test(m)),
   JSON.stringify(toasts()));
+t("and the attach waited for it",
+  Date.now() - startedLate >= 400 && sentToTab.some((m) => m.type === "sso:attach"),
+  `${Date.now() - startedLate}ms ${sentToTab.map((m) => m.type).join(",")}`);
 
 // 5c. ...and a page with no film coming is still refused at once, rather than
-//     after a silent wait for something that is not on its way.
+//     after a silent wait for something that is not on its way. Refused
+//     QUIETLY: nobody pressed anything, so "No video playing on this page" is
+//     an answer to nothing. Read out of the log, 2026-09-13: six of them in
+//     ten minutes of browsing Prime Video's storefront, each for a trailer
+//     that had ended by the time its plan was made.
 sentToTab.length = 0;
 tabStatusReply = { ok: true, hasVideo: false, videoComing: false, attached: false };
 const startedAt = Date.now();
 await ask({ type: "sso:programme", mark: "2400|Ep 7" }, sender);
 const waited = Date.now() - startedAt;
 t("a page with no film is refused without waiting for one",
-  toasts().some((m) => /No video playing/.test(m)) && waited < 2000,
+  !toasts().some((m) => /Looking for subtitles/.test(m)) && waited < 2000,
   `${waited}ms: ${JSON.stringify(toasts())}`);
+t("and an automatic run says nothing about it to the reader",
+  !toasts().some((m) => /No video playing/.test(m)),
+  JSON.stringify(toasts()));
+{
+  const log = await import("../src/trace.js");
+  const skipped = async () => (await log.entries()).filter((e) => e.kind === "autoAttach" && e.skipped === "no video").pop();
+  await until(async () => Boolean(await skipped()));
+  t("but the log does", Boolean(await skipped()), JSON.stringify(await skipped()));
+}
+// 5d. The shortcut is a question, and gets the answer.
+sentToTab.length = 0;
+await ask({ type: "sso:command", command: "auto-attach" }, sender);
+t("the shortcut on a page with no film is still told so",
+  toasts().some((m) => /No video playing/.test(m)),
+  JSON.stringify(toasts()));
 tabStatusReply = { ok: true, hasVideo: true, videoComing: true, attached: false };
 
 // 6. The panel can read the state back.
@@ -1639,6 +1672,46 @@ ${lines}
   t("and a track the page no longer offers is an error, not a silent nothing",
     /no longer offers/.test(stale?.error || ""), JSON.stringify(stale));
 
+  /* A trailer. Prime Video plays one in the hero of every detail page, long
+   * and large enough to be the page's video; on 2026-09-13 the log shows a
+   * plan for a trailer three times in thirty seconds of browsing, two of
+   * them searched and attached from OpenSubtitles. Under ten minutes an
+   * automatic run uses what the page carries and searches for nothing. */
+  pageSubtitlesReply = () => null;
+  searches = 0;
+  pageInfoReply = () => seriesPage;
+  daemonAnswers = counting(americans());
+  tabStatusReply = { ok: true, hasVideo: true, attached: false, seconds: 95 };
+  sentToTab.length = 0;
+  await ask({ type: "sso:programme", mark: "95|Trailer" }, sender);
+  t("a programme under ten minutes is not searched for by itself, and nothing is said",
+    searches === 0 && !sentToTab.some((m) => m.type === "sso:attach") && toasts().length === 0,
+    `${searches} searches, said ${JSON.stringify(toasts())}`);
+  {
+    const log = await import("../src/trace.js");
+    const plan = async () => (await log.entries()).filter((e) => e.kind === "autoAttach" && e.plan?.decision === "short").pop();
+    await until(async () => Boolean(await plan()));
+    t("and the plan in the log says why", /shorter than ten minutes/.test((await plan())?.plan?.reason || ""), JSON.stringify((await plan())?.plan?.reason));
+  }
+  // ...but what the page carries for it is still put up, without a search for the rest.
+  pageSubtitlesReply = () => enOnly;
+  searches = 0;
+  sentToTab.length = 0;
+  await ask({ type: "sso:programme", mark: "96|Trailer with captions" }, sender);
+  got = attaches();
+  t("a short programme's own track goes up and the other language is not searched for",
+    searches === 0 && got.length === 1 && got[0]?.fileId === "page:T1:en-us:subtitle",
+    `${searches} searches: ${JSON.stringify(got.map((a) => a.fileId))} ${JSON.stringify(toasts())}`);
+  // The shortcut on the same short programme is a question, and is searched.
+  pageSubtitlesReply = () => null;
+  searches = 0;
+  sentToTab.length = 0;
+  await ask({ type: "sso:command", command: "auto-attach" }, sender);
+  t("pressed for, a short programme is searched like any other",
+    searches === 1, `${searches} searches ${JSON.stringify(toasts())}`);
+  daemonAnswers = null;
+  pageInfoReply = () => ({ ok: true });
+
   // Nothing to warm for the next episode while the page is providing.
   tabStatusReply = { ok: true, hasVideo: true, attached: true, tracks: [{ attached: true, fileId: "page:T1:en-us:subtitle" }] };
   searches = 0;
@@ -1653,7 +1726,7 @@ ${lines}
 
   /* The other two formats an ear can name. Netflix serves WebVTT when asked
    * and TTML when not; Disney+ serves a playlist of WebVTT segments. */
-  const { parseVtt, joinSegments, subtitleRenditions, segmentUrls } = await import("../src/subtitles/vtt.js");
+  const { parseVtt, joinSegments, segmentUrls } = await import("../src/subtitles/vtt.js");
   const vtt = parseVtt(`WEBVTT
 X-TIMESTAMP-MAP=MPEGTS:900000,LOCAL:00:00:00.000
 
@@ -1698,20 +1771,6 @@ Short stamp
   ]);
   t("a cue written into both segments it spans is one cue",
     joined.map((c) => c.text).join() === "One,Across,Two", JSON.stringify(joined));
-  const master = `#EXTM3U
-#EXT-X-INDEPENDENT-SEGMENTS
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="eac-3",NAME="English",LANGUAGE="en",URI="r/a/en.m3u8"
-#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="sub-main",NAME="English [CC]",LANGUAGE="en",AUTOSELECT=YES,FORCED=NO,CHARACTERISTICS="public.accessibility.describes-music-and-sound",URI="r/s/en-cc/sub-main.m3u8"
-#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="sub-main",NAME="Türkçe",LANGUAGE="tr",FORCED=NO,URI="r/s/tr/sub-main.m3u8"
-#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="sub-main",NAME="English --Forced--",LANGUAGE="en",FORCED=YES,URI="r/s/en-forced/sub-main.m3u8"
-#EXT-X-STREAM-INF:BANDWIDTH=1000,SUBTITLES="sub-main"
-r/v/1.m3u8
-`;
-  const renditions = subtitleRenditions(master, "https://cdn.example/t/1/ctr-all/master.m3u8");
-  t("an HLS master's subtitle renditions are read, with their playlists resolved against it",
-    renditions.length === 3 && renditions[0].url === "https://cdn.example/t/1/ctr-all/r/s/en-cc/sub-main.m3u8" &&
-      renditions[0].characteristics.includes("describes-music") && renditions[2].forced === true && renditions[1].language === "tr",
-    JSON.stringify(renditions));
   t("a media playlist's segments are resolved against the playlist, comments and blanks skipped",
     segmentUrls("#EXTM3U\n#EXTINF:6.0,\nseg-1.vtt\n\n#EXTINF:6.0,\n../seg-2.vtt\n#EXT-X-ENDLIST\n", "https://cdn.example/r/s/tr/sub-main.m3u8").join() ===
       "https://cdn.example/r/s/tr/seg-1.vtt,https://cdn.example/r/s/seg-2.vtt",
