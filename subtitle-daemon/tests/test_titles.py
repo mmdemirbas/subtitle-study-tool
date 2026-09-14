@@ -74,6 +74,20 @@ def test_extracts_verbose_season_episode() -> None:
     assert (result.season, result.episode) == (2, 7)
 
 
+def test_a_trailing_season_alone_is_the_season_and_not_the_title() -> None:
+    # Prime Video's series page, where the episode is on the player only.
+    result = guess("Prime Video: Scarpetta - Season 1")
+    assert result.query == "Scarpetta"
+    assert (result.season, result.episode) == (1, None)
+    result = guess("Stranger Things Season 4")
+    assert (result.query, result.season) == ("Stranger Things", 4)
+    result = guess("Kurtlar Vadisi Sezon 2")
+    assert (result.query, result.season) == ("Kurtlar Vadisi", 2)
+    # A number that is the whole title, or a season word with nothing before it, is left alone.
+    assert guess("Season 1").query == "Season 1"
+    assert guess("Season of the Witch").query == "Season of the Witch"
+
+
 def test_cuts_release_scene_metadata() -> None:
     result = guess("Sicario.2015.1080p.BluRay.x264-SPARKS")
     assert result.query == "Sicario"

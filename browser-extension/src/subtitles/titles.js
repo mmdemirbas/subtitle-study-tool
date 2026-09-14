@@ -61,6 +61,9 @@ const EPISODE_PATTERNS = [
   /\bseason\s*(\d{1,2})\D{1,10}episode\s*(\d{1,3})\b/i,
 ];
 
+// "Season 1", "Sezon 2", at the very end, with whatever joined it to the title.
+const SEASON_ONLY = /[\s\-–—:,|·]*\b(?:season|sezon)\s*(\d{1,2})\s*$/i;
+
 const YEAR_RANGE = "(?:19[0-9]{2}|20[0-4][0-9])";
 
 /* A year is only *removed* when it is bracketed, or when the string is a scene
@@ -149,6 +152,20 @@ export function guess(raw) {
       // Everything from the marker onward is episode metadata, not title.
       text = text.slice(0, match.index);
       break;
+    }
+  }
+
+  /* A season with no episode, at the end: "Scarpetta - Season 1" is what
+   * Prime Video titles a series page, where the episode is on the player
+   * and nowhere in the text. Left in, the query scored 0.59 against
+   * "Scarpetta - S01E01 Bridge of Time" and the right episode was refused
+   * five times over (log, 2026-09-10). The number is the season; the title
+   * is what precedes it. */
+  if (season === null) {
+    const trailing = SEASON_ONLY.exec(text);
+    if (trailing && text.slice(0, trailing.index).trim()) {
+      season = Number(trailing[1]);
+      text = text.slice(0, trailing.index);
     }
   }
 

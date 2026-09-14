@@ -59,6 +59,10 @@ TITLE_CASES = [
     "1917 (2019)",
     "Dallas 2012 S02E04",
     "Ayla 2017",
+    # A series page's title, season on the page and episode on the player.
+    "Prime Video: Scarpetta - Season 1",
+    "Stranger Things Season 4",
+    "Season of the Witch",
 ]
 
 # Search resolutions, which is the level the two copies actually diverged at.

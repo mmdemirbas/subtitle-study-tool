@@ -105,6 +105,9 @@ _EPISODE_PATTERNS = (
     ),
 )
 
+# "Season 1", "Sezon 2", at the very end, with whatever joined it to the title.
+_SEASON_ONLY = re.compile(r"[\s\-–—:,|·]*\b(?:season|sezon)\s*(?P<season>\d{1,2})\s*$", re.IGNORECASE)
+
 _YEAR_RANGE = r"(?:19[0-9]{2}|20[0-4][0-9])"
 
 # A year is only *removed* from the title when it is bracketed, or when the
@@ -201,6 +204,17 @@ def guess(raw: str) -> TitleGuess:
             # Everything from the marker onward is episode metadata, not title.
             text = text[: match.start()]
             break
+
+    # A season with no episode, at the end: "Scarpetta - Season 1" is what
+    # Prime Video titles a series page, where the episode is on the player and
+    # nowhere in the text. Left in, the query scored 0.59 against "Scarpetta -
+    # S01E01 Bridge of Time" and the right episode was refused five times over
+    # (log, 2026-09-10). The number is the season; the title is what precedes it.
+    if season is None:
+        trailing = _SEASON_ONLY.search(text)
+        if trailing and text[: trailing.start()].strip():
+            season = int(trailing.group("season"))
+            text = text[: trailing.start()]
 
     year = None
 
