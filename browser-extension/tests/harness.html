@@ -5634,12 +5634,12 @@
           translations: () => ({ jobs: [], languages: { en: "English", tr: "Turkish" } }),
           pageContext: () => ({ title: "Mercy" }),
         };
-        /* Its own title each time: a list for the same title with the same
-         * number of tracks is read as the same list (onPageSubtitles keys the
-         * change on the count), and a paused harness has no tick to notice
-         * the swap on. */
-        let title = 11;
-        const own = (tracks) => window.postMessage({ source: "sso-ear", type: "tracks", titleId: `T${title++}`, shape: ["timedTextUrls"], tracks }, "*");
+        /* The same title both times, and the same number of tracks: the
+         * second list swaps the whole Turkish for a forced one. The change
+         * used to be keyed on the count, so this list was written down and
+         * never announced, and on a paused film there is no tick to notice
+         * it on - the offer stayed hidden. */
+        const own = (tracks) => window.postMessage({ source: "sso-ear", type: "tracks", titleId: "T11", shape: ["timedTextUrls"], tracks }, "*");
         try {
           // A job an earlier case finished would stand in the block instead of the offer.
           await window.__ssoApi.cancelTranslation?.().catch?.(() => {});
@@ -5656,10 +5656,22 @@
           if (!shadow.querySelector(".sso-make").hidden)
             throw new Error(`offers to make what the page carries: ${JSON.stringify(shadow.querySelector(".sso-make").textContent)}`);
 
-          own([
-            { language: "en-US", url: "https://cdn.example/en.dfxp", type: "subtitle", displayName: "English", forced: false, keys: [] },
-            { language: "tr-TR", url: "https://cdn.example/tr-forced.dfxp", type: "", displayName: "Türkçe", forced: true, keys: [] },
-          ]);
+          /* Announced, not merely written down. Asked of the status feed
+           * directly, because a stray notify from anything else - the
+           * programme settling, a case before this one - would redraw the
+           * panel anyway and hide that this list was never announced. */
+          const announced = [];
+          const unsubscribe = window.__ssoApi.subscribe((status) => announced.push((status.own?.tracks ?? []).map((track) => track.kind).join()));
+          try {
+            own([
+              { language: "en-US", url: "https://cdn.example/en.dfxp", type: "subtitle", displayName: "English", forced: false, keys: [] },
+              { language: "tr-TR", url: "https://cdn.example/tr-forced.dfxp", type: "", displayName: "Türkçe", forced: true, keys: [] },
+            ]);
+            await sleep(30);
+          } finally {
+            unsubscribe();
+          }
+          if (!announced.includes("subtitle,forced")) throw new Error(`the swapped list was not announced: ${JSON.stringify(announced)}`);
           for (let i = 0; i < 40 && shadow.querySelector(".sso-make").hidden; i++) await sleep(25);
           if (shadow.querySelector(".sso-make").hidden) throw new Error("a forced track counted as the language");
           if (!/No TR subtitle is on screen/.test(shadow.querySelector(".sso-make").textContent))

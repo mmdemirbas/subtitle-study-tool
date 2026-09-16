@@ -1386,7 +1386,16 @@
       pageSubtitles = { ...pageSubtitles, at: Date.now(), where: pageWhere() };
       return;
     }
-    const changed = pageSubtitles?.titleId !== titleId || pageSubtitles?.tracks.length !== tracks.length;
+    /* The same list is the same ids in the same order, not the same number of
+     * them. It was the number: a second answer for the title that swapped a
+     * track for another of the same count - a forced Turkish for a whole
+     * one, say - was written down but not announced, so the panel went on
+     * showing the list it had until something else moved the film. A
+     * player's signed URLs rotate between answers, and a fresh URL under the
+     * same id is not news, so the URL is left out of the comparison and
+     * kept in the list. */
+    const listing = (list) => list.map((track) => track.id).join("|");
+    const changed = pageSubtitles?.titleId !== titleId || listing(pageSubtitles.tracks) !== listing(tracks);
     pageSubtitles = { site, titleId, tracks, at: Date.now(), where: pageWhere() };
     if (!changed) return;
     let hosts = [];
