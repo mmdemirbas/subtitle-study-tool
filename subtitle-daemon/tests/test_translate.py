@@ -243,3 +243,15 @@ def test_abort_ends_the_request_in_flight_rather_than_waiting_for_it() -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_the_answer_comes_back_under_the_target_language_code() -> None:
+    """The brief's example said "tr" whatever the language, so a German
+    request was parsed for a field the model was never told about."""
+    german = translate.Translator(model="stub", target="German", target_code="de")
+    assert '{"n": 1, "de": "..."}' in german.brief and '"tr"' not in german.brief
+    assert translate._numbered({"lines": [{"n": 1, "de": "Ja."}, {"n": 2, "tr": "Evet."}]}, "de") == {1: "Ja.", 2: ""}
+    turkish = translate.Translator(model="stub")
+    assert '{"n": 1, "tr": "..."}' in turkish.brief
+    # A region tag or an upper-case code is the bare code in the field.
+    assert translate.Translator(model="stub", target_code="PT-BR").target_code == "pt"

@@ -130,10 +130,10 @@ Downloaded subtitle files are not versioned: those are raw bytes.
 | `POST` | `/gloss` | Body `{"language", "target", "film", "items": [{"term", "sentence", "before", "after"}]}`. Many words with their lines, answered before they are asked. Free. |
 | `POST` | `/cached` | Body `{"file_id", "content"}` and the metadata beside it. Takes in a subtitle the extension downloaded while the daemon was stopped, so the same `file_id` is not paid for twice. |
 | `POST` | `/log` | Appends to the extension's running log. A browser extension cannot write a file without announcing every one, and this records while you watch. Larger body ceiling than the rest. |
-| `POST` | `/translate` | Body `{"source_id", "language", "target", "cues": [...]}` and the film's `imdb_id`, `movie_name`, `season`, `episode`. Starts translating a whole subtitle in the background, or reports the job already doing so. A cached `source_id` with no `cues` is read off the disk. |
-| `GET` | `/translate` | Every translation job the daemon holds, newest first, and the model in use. |
-| `GET` | `/translate/{job}` | One job's progress: `status`, `done` of `total` lines, `eta_seconds`, `file_id` once done. `?cues=1` adds the whole file as it stands - translated where a chunk has landed, the source text where not - and `translated_indexes`. |
-| `POST` | `/translate/{job}` | Goes on with a job from its key alone, no cues needed: a stopped or failed one from its next chunk, a finished one with the lines it kept in the source language, asked for one at a time and written into the file again. A job with nothing left answers with its status. |
+| `POST` | `/translate` | Body `{"source_id", "language", "target", "cues": [...]}` and the film's `imdb_id`, `movie_name`, `season`, `episode`. Starts translating a whole subtitle in the background, or reports the job already doing so - the same episode into the same language is the same job whichever subtitle it is made from, and asking again for one still waiting its turn moves it to the front. A cached `source_id` with no `cues` is read off the disk. |
+| `GET` | `/translate` | Every translation job the daemon holds, newest first, the model in use, and the `languages` a subtitle can be made in. |
+| `GET` | `/translate/{job}` | One job's progress: `status`, `done` of `total` lines, `eta_seconds`, `file_id` once done, and `waiting_for` (the job ahead of it) while it is queued. `?cues=1` adds the whole file as it stands - translated where a chunk has landed, the source text where not - with `translated_indexes` and `pending_indexes`, the lines no chunk has been asked for yet. |
+| `POST` | `/translate/{job}` | Goes on with a job from its key alone, no cues needed: a stopped or failed one from its next chunk, a finished one with the lines it kept in the source language, asked for one at a time and written into the file again. A waiting job is moved to the front of the queue; a job with nothing left answers with its status. |
 | `DELETE` | `/translate/{job}` | Stops a job at once; the request in flight is torn down and its chunk is asked for again on the next `POST`. `?forget=1` removes its directory too. |
 | `DELETE` | `/cached/{file_id}` | Forgets one subtitle. |
 | `DELETE` | `/cached` | Forgets everything. `?searches_only=1` keeps the downloaded files and clears only the search cache, which is the one that costs nothing to rebuild. |
@@ -217,7 +217,10 @@ The translation is a job, not a request: `POST /translate` returns at once, a
 thread walks the file forty cues at a time, and every chunk is written to
 `cache/translate-jobs/<job>/chunks/` the moment it lands. A restart of the
 daemon re-queues whatever was unfinished and starts at the first chunk with no
-file; a closed tab changes nothing. `GET /translate/{job}?cues=1` is the file as
+file; a closed tab changes nothing. One thread works the jobs, the one asked
+for most recently first: a job still running when a newer one arrives steps
+aside at its next chunk boundary and goes on after it, so the episode being
+watched is never behind the one that was. `GET /translate/{job}?cues=1` is the file as
 it stands, so the extension attaches it a few seconds in and swaps in more of it
 every few seconds. The finished file goes into the ordinary cache under a
 synthetic `file_id` (above 9e13, derived from the source and the language, so

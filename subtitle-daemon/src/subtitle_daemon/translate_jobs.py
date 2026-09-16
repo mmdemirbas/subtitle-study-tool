@@ -28,6 +28,21 @@ this machine and two jobs at once would each run at half speed while the
 reader waits for the first; a hosted endpoint would take the parallelism, but
 the ordinary case is one episode at a time.
 
+The order is "the one asked for most recently first", not arrival order, and
+a running job steps aside between chunks for one asked for after it. The
+case: an episode's translation is still going when the reader starts the
+next episode - the first is forty minutes of model time, the second is what
+they are watching now - and a queue that served the first to its end left the
+second at zero for the length of it. Reported as "my second attempt doesn't
+progress, it is still literally at zero". Nothing is lost by stepping aside:
+the chunks are on disk, and the job that stepped aside goes on when the
+newer one is done. `status()` says what a queued job is waiting for.
+
+The same episode into the same language is one job, whichever subtitle it is
+made from. The reader's reload attached the page's own English where the
+download had been, and the second "make" from it made a second job for the
+same episode, queued behind the first - see start().
+
 `status()` is what the extension polls, and its `cues` are the whole file with
 the translated lines where a chunk has landed and the source text where it has
 not - so a reader can attach what exists ten seconds in and watch the Turkish
@@ -39,7 +54,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import queue
 import re
 import threading
 import time
@@ -112,6 +126,23 @@ def is_generated(file_id: int) -> bool:
     return file_id >= GENERATED_BASE
 
 
+def episode_identity(meta: dict[str, Any]) -> tuple[Any, ...] | None:
+    """What makes two jobs the same episode, whatever subtitle each is made
+    from. An IMDb id with the season and episode beside it; without an id, a
+    title with a season or episode number. A bare title is not enough - a
+    series' landing page carries the series' name and nothing else, and two
+    of its episodes must not fold into one job. None when nothing here
+    identifies an episode, and then only the source id tells jobs apart."""
+    season, episode = meta.get("season"), meta.get("episode")
+    imdb = str(meta.get("imdb_id") or "").strip().lower()
+    if imdb:
+        return (imdb, season, episode)
+    name = str(meta.get("movie_name") or "").strip().lower()
+    if name and (season is not None or episode is not None):
+        return (name, season, episode)
+    return None
+
+
 @dataclass
 class Job:
     """One translation, as its directory says it stands."""
@@ -149,7 +180,7 @@ class Job:
             except ValueError:
                 continue
             for entry in data.get("lines", []):
-                lines[int(entry["n"])] = str(entry["tr"])
+                lines[int(entry["n"])] = translate.line_text(entry)
         return lines
 
     def done_chunks(self) -> list[tuple[int, int]]:
@@ -168,9 +199,9 @@ class Job:
                 data = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 data = {}
-            lines = {int(row["n"]): str(row["tr"]) for row in data.get("lines", [])}
+            lines = {int(row["n"]): translate.line_text(row) for row in data.get("lines", [])}
             lines[number] = text
-            data["lines"] = [{"n": n, "tr": tr} for n, tr in sorted(lines.items())]
+            data["lines"] = [{"n": n, "text": said} for n, said in sorted(lines.items())]
             for name in ("missing", "unrepaired"):
                 data[name] = [n for n in data.get(name, []) if n != number]
             data["repaired"] = sorted(set(data.get("repaired", [])) | {number})
@@ -202,7 +233,12 @@ class Jobs:
         self._factory = translator_factory or self._translator
         self.root.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._queue: queue.Queue[str] = queue.Queue()
+        # The jobs waiting their turn, the most recently asked for first. A
+        # list under a condition rather than a Queue: the order is not
+        # arrival order (see _enqueue), and the running job reads the head
+        # between chunks to decide whether to step aside (see _step_aside).
+        self._waiting: list[str] = []
+        self._wake = threading.Condition(self._lock)
         self._cancel: dict[str, threading.Event] = {}
         self._running: str | None = None
         # The translator working the running job, for cancel() to abort: the
@@ -224,17 +260,24 @@ class Jobs:
     ) -> dict[str, Any]:
         """Start, or resume, the translation of `cues` into `target`.
 
-        Idempotent on (source, target): a job already done answers with its
-        file; one queued or running answers with its progress; one that failed
-        or was cancelled is picked up where it stopped, since the chunks that
-        landed are still on disk.
+        Idempotent on (source, target), and on (episode, target) where the
+        meta names the episode: a job already done answers with its file; one
+        queued or running answers with its progress, and goes to the front of
+        the queue if it was waiting, because somebody is watching for it
+        now; one that failed or was cancelled is picked up where it stopped,
+        since the chunks that landed are still on disk.
+
+        The episode match is what makes a second source the same job. The
+        same film's subtitle from OpenSubtitles and from the page itself have
+        different ids, and translating both is the same forty minutes spent
+        twice; the reader who asked twice asked for one Turkish subtitle.
         """
         target = target.lower()
         key = job_key(source_id, target)
         if not cues:
             return {"error": "nothing to translate"}
         with self._lock:
-            job = self._load(key)
+            job = self._load(key) or self._same_episode(meta, target)
             if job is None:
                 job = Job(key=key, root=self.root / key)
                 job.root.mkdir(parents=True, exist_ok=True)
@@ -250,6 +293,9 @@ class Jobs:
                     "chunk": self.chunk,
                     "created_at": time.time(),
                     "updated_at": time.time(),
+                    # When somebody last asked for this job - the start, and
+                    # every resume. The queue is ordered by it; see _enqueue.
+                    "asked_at": time.time(),
                     "status": "queued",
                     "file_id": generated_file_id(source_id, target),
                     "seconds_per_cue": None,
@@ -266,13 +312,19 @@ class Jobs:
                     },
                 }
                 self._save(job)
-            elif job.state["status"] == "done" or job.state["status"] in ("queued", "running"):
+            elif job.state["status"] == "done":
+                return self._status_of(job)
+            elif job.state["status"] in ("queued", "running"):
+                if job.state["status"] == "queued":
+                    self._update(job, asked_at=time.time())
+                    self._enqueue(job.key)
                 return self._status_of(job)
             else:
                 job.state["status"] = "queued"
                 job.state["error"] = ""
+                job.state["asked_at"] = time.time()
                 self._save(job)
-            self._enqueue(key)
+            self._enqueue(job.key)
             return self._status_of(job)
 
     def resume(self, key: str) -> dict[str, Any]:
@@ -285,13 +337,19 @@ class Jobs:
         which were left in the source language on purpose; those are asked
         for one at a time, and the file is written again when they are in. A
         done job with nothing left, and a job still going, are answered with
-        their status and not queued twice.
+        their status and not queued twice - but a job still waiting its turn
+        goes to the front of the queue, since asking for it again is what a
+        reader does when it is the one they are watching for.
         """
         with self._lock:
             job = self._load(key)
             if job is None:
                 return {"error": "no such translation"}
-            if job.state["status"] in ("queued", "running"):
+            if job.state["status"] == "queued":
+                self._update(job, asked_at=time.time())
+                self._enqueue(key)
+                return self._status_of(job)
+            if job.state["status"] == "running":
                 return self._status_of(job)
             if job.state["status"] == "done":
                 left = sorted(set(job.state.get("missing") or []) | set(job.state.get("unrepaired") or []))
@@ -301,6 +359,7 @@ class Jobs:
                 job.state["retry_total"] = len(left)
             job.state["status"] = "queued"
             job.state["error"] = ""
+            job.state["asked_at"] = time.time()
             self._save(job)
             self._enqueue(key)
             return self._status_of(job)
@@ -317,6 +376,18 @@ class Jobs:
                 merged = translate.to_cues(cues, landed, 0, len(cues))
                 answer["cues"] = subtitles.to_json(merged)
                 answer["translated_indexes"] = sorted(n - 1 for n in landed)
+                # The lines the model has not been asked about yet - every
+                # line of a chunk with no file. Distinct from the lines it was
+                # asked about and could not do, which keep their source text
+                # in the file on purpose and are counted in `missing` and
+                # `unrepaired`: the extension leaves these out of the subtitle
+                # it shows and puts those in, visibly, as the honest failure.
+                answer["pending_indexes"] = [
+                    index
+                    for first, last in job.bounds()
+                    if not job.chunk_path(first, last).exists()
+                    for index in range(first, last)
+                ]
             return answer
 
     def cancel(self, key: str, *, forget: bool = False) -> dict[str, Any]:
@@ -378,16 +449,58 @@ class Jobs:
 
     # --- the worker -----------------------------------------------------------
 
+    def _asked_at(self, key: str) -> float:
+        job = self._load(key)
+        if job is None:
+            return 0.0
+        return float(job.state.get("asked_at") or job.state.get("created_at") or 0)
+
+    def _same_episode(self, meta: dict[str, Any], target: str) -> Job | None:
+        """The job already making this episode in this language from some
+        other subtitle, if there is one. The one furthest along wins a tie:
+        running over queued over done over stopped, then the most recently
+        asked for. Called with the lock held."""
+        wanted = episode_identity(meta)
+        if wanted is None:
+            return None
+        rank = {"running": 0, "queued": 1, "done": 2}
+        twins: list[Job] = []
+        for path in sorted(self.root.glob("*/job.json")):
+            job = self._load(path.parent.name)
+            if job is None or job.state.get("target") != target:
+                continue
+            if episode_identity(job.state.get("meta") or {}) == wanted:
+                twins.append(job)
+        twins.sort(
+            key=lambda job: (
+                rank.get(str(job.state.get("status")), 3),
+                -float(job.state.get("asked_at") or job.state.get("created_at") or 0),
+            )
+        )
+        return twins[0] if twins else None
+
     def _enqueue(self, key: str) -> None:
+        """Into the waiting list at the place its `asked_at` earns: the most
+        recently asked for first. A job that steps aside goes back in by its
+        own, older, time - behind the one it stepped aside for and ahead of
+        anything older still. Called with the lock held."""
         self._cancel[key] = threading.Event()
-        self._queue.put(key)
+        if key in self._waiting:
+            self._waiting.remove(key)
+        mine = self._asked_at(key)
+        index = next((i for i, other in enumerate(self._waiting) if self._asked_at(other) < mine), len(self._waiting))
+        self._waiting.insert(index, key)
+        self._wake.notify()
         if self._worker is None or not self._worker.is_alive():
             self._worker = threading.Thread(target=self._work, name="translate", daemon=True)
             self._worker.start()
 
     def _work(self) -> None:
         while True:
-            key = self._queue.get()
+            with self._wake:
+                while not self._waiting:
+                    self._wake.wait()
+                key = self._waiting.pop(0)
             try:
                 self._run(key)
             except Exception:
@@ -398,8 +511,32 @@ class Jobs:
                         job.state["status"] = "failed"
                         job.state["error"] = "the translation crashed; see the daemon log"
                         self._save(job)
-            finally:
-                self._queue.task_done()
+                    self._running = None
+                    self._active = None
+
+    def _step_aside(self, job: Job) -> bool:
+        """Whether a job asked for after this one is waiting, in which case
+        this one goes back to the queue - behind it - and the worker takes
+        the newer one. Read between chunks, which is the one moment nothing
+        is in flight, so stepping aside costs nothing on disk."""
+        with self._lock:
+            if not self._waiting:
+                return False
+            mine = float(job.state.get("asked_at") or job.state.get("created_at") or 0)
+            if self._asked_at(self._waiting[0]) <= mine:
+                return False
+            fresh = self._load(job.key)
+            if fresh is None or fresh.state.get("status") != "running":
+                # Cancelled under us; the cancel's status stands.
+                self._running = None
+                self._active = None
+                return True
+            self._update(job, status="queued")
+            self._running = None
+            self._active = None
+            self._enqueue(job.key)
+            logger.info("translation %s: stepping aside for %s", job.key, self._waiting[0])
+            return True
 
     def _run(self, key: str) -> None:
         with self._lock:
@@ -424,6 +561,8 @@ class Jobs:
                 return
             if job.chunk_path(first, last).exists():
                 continue
+            if self._step_aside(job):
+                return
             started = time.monotonic()
             try:
                 attempt = translator.chunk_lines(cues, first, last, floor=0)
@@ -460,6 +599,8 @@ class Jobs:
         for number in [int(n) for n in job.state.get("retry") or []]:
             if cancel.is_set():
                 self._finish(job, "cancelled")
+                return
+            if self._step_aside(job):
                 return
             try:
                 said = translator.again(cues, number, floor=0)
@@ -550,6 +691,7 @@ class Jobs:
             key=self.key,
             source=language_name(source_language),
             target=language_name(target),
+            target_code=target.split("-")[0],
             chunk=self.chunk,
         )
 
@@ -596,6 +738,21 @@ class Jobs:
         rate = state.get("seconds_per_cue")
         remaining = max(0, total - done)
         eta = remaining * (float(rate) if rate else SECONDS_PER_CUE)
+        # What a waiting job is waiting for: the running one, or the head of
+        # the queue when nothing is running yet. Enough for the panel to say
+        # "waiting for S01E01" rather than showing a zero that does not move.
+        ahead = None
+        if state.get("status") == "queued":
+            before = self._running or next((k for k in self._waiting if k != job.key), None)
+            other = self._load(before) if before and before != job.key else None
+            if other is not None:
+                ahead = {
+                    "job": other.key,
+                    "target": other.state.get("target"),
+                    "meta": other.state.get("meta") or {},
+                    "total": int(other.state.get("total") or 0),
+                    "done": sum(last - first for first, last in other.done_chunks()),
+                }
         return {
             "job": job.key,
             "status": state.get("status"),
@@ -620,5 +777,7 @@ class Jobs:
             "generated_file_id": state.get("file_id"),
             "created_at": state.get("created_at"),
             "updated_at": state.get("updated_at"),
+            "asked_at": state.get("asked_at") or state.get("created_at"),
+            "waiting_for": ahead,
             "meta": state.get("meta") or {},
         }

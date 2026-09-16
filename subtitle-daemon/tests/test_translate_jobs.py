@@ -263,7 +263,7 @@ def test_a_finished_job_asked_to_go_on_retries_its_kept_lines_and_writes_the_fil
     assert cache.get_subtitle(done["file_id"]).meta["missing"] == 0  # type: ignore[union-attr]
     # The chunk file is the record: a restart sees the lines landed.
     chunk = json.loads((tmp_path / "jobs" / started["job"] / "chunks" / "0-4.json").read_text())
-    assert [row["tr"] for row in chunk["lines"]] == ["satır 1", "tekrar 2", "tekrar 3", "satır 4"]
+    assert [row["text"] for row in chunk["lines"]] == ["satır 1", "tekrar 2", "tekrar 3", "satır 4"]
     assert chunk["missing"] == [] and chunk["unrepaired"] == [] and chunk["repaired"] == [2, 3]
 
     # Nothing left: going on again is the status, not another job.
@@ -357,3 +357,140 @@ def test_language_names_for_the_brief() -> None:
     assert translate_jobs.language_name("tr") == "Turkish"
     assert translate_jobs.language_name("en-US") == "English"
     assert translate_jobs.language_name("xx") == "xx"
+
+
+# --- the same episode is one job, and the newest request goes first ----------
+
+
+def test_a_second_source_of_the_same_episode_is_the_same_job(tmp_path: Path, cache: Cache) -> None:
+    """The reload attached the page's own English where the download had
+    been, and a "make" from it started a second job for the same episode,
+    queued behind the first at zero. The episode is the identity."""
+    gate: queue.Queue = queue.Queue()
+    stub = StubTranslator(gate=gate)
+    jobs = make_jobs(tmp_path, cache, stub)
+    first = jobs.start(source_id="12606080", source_language="en", target="tr", cues=cues(8), meta=META)
+    again = jobs.start(
+        source_id="page:tt2149175:eng:subtitle", source_language="en", target="tr", cues=cues(9),
+        meta={**META, "label": "EN · the page"},
+    )
+    assert again["job"] == first["job"] and again["total"] == 8
+    assert jobs.list()[0]["job"] == first["job"] and len(jobs.list()) == 1
+    # Another language, or another episode, is another job.
+    other = jobs.start(source_id="12606080", source_language="en", target="de", cues=cues(8), meta=META)
+    next_episode = jobs.start(source_id="12606081", source_language="en", target="tr", cues=cues(8), meta={**META, "episode": 14})
+    assert len({first["job"], other["job"], next_episode["job"]}) == 3
+    for _ in range(6):
+        gate.put(1)
+    wait_for(jobs, first["job"], "done")
+    wait_for(jobs, other["job"], "done")
+    wait_for(jobs, next_episode["job"], "done")
+
+
+def test_a_bare_title_does_not_fold_two_episodes_into_one(tmp_path: Path, cache: Cache) -> None:
+    jobs = make_jobs(tmp_path, cache, StubTranslator())
+    landing = {"movie_name": "Monk", "season": None, "episode": None, "imdb_id": None}
+    one = jobs.start(source_id="page:a:en:subtitle", source_language="en", target="tr", cues=cues(4), meta=landing)
+    two = jobs.start(source_id="page:b:en:subtitle", source_language="en", target="tr", cues=cues(4), meta=landing)
+    assert one["job"] != two["job"]
+    # A title WITH an episode number is enough without an id.
+    named = {"movie_name": "The Americans S04E03", "season": 4, "episode": 3, "imdb_id": None}
+    three = jobs.start(source_id="local:1", source_language="en", target="tr", cues=cues(4), meta=named)
+    four = jobs.start(source_id="local:2", source_language="en", target="tr", cues=cues(4), meta=named)
+    assert three["job"] == four["job"]
+    for key in (one["job"], two["job"], three["job"]):
+        wait_for(jobs, key, "done")
+
+
+def test_the_job_asked_for_last_goes_first_and_the_other_steps_aside_between_chunks(tmp_path: Path, cache: Cache) -> None:
+    """Episode one is half made when the reader starts episode two. Two is
+    what they are watching: it runs next, from the chunk boundary, and one
+    goes on after it - with the chunks it had kept."""
+    gate: queue.Queue = queue.Queue()
+    stub = StubTranslator(gate=gate)
+    jobs = make_jobs(tmp_path, cache, stub)
+    one = jobs.start(source_id="1", source_language="en", target="tr", cues=cues(12), meta=META)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not stub.asked:
+        time.sleep(0.01)
+    gate.put(1)  # one's first chunk lands
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and jobs.status(one["job"])["done"] < 4:
+        time.sleep(0.01)
+    time.sleep(0.02)
+    two = jobs.start(source_id="2", source_language="en", target="tr", cues=cues(8), meta={**META, "episode": 14})
+    assert two["status"] == "queued"
+    # The running job is asked for its second chunk already (the stub is
+    # waiting at the gate for it); letting it through is when it notices.
+    gate.put(1)
+    wait_for(jobs, two["job"], "running")
+    waiting = jobs.status(one["job"])
+    assert waiting["status"] == "queued" and waiting["done"] == 8
+    assert waiting["waiting_for"]["job"] == two["job"] and waiting["waiting_for"]["meta"]["episode"] == 14
+    gate.put(1)
+    gate.put(1)
+    wait_for(jobs, two["job"], "done")
+    gate.put(1)
+    wait_for(jobs, one["job"], "done")
+    assert stub.asked == [(0, 4), (4, 8), (0, 4), (4, 8), (8, 12)]
+    assert jobs.status(one["job"])["waiting_for"] is None
+
+
+def test_asking_again_for_a_waiting_job_moves_it_to_the_front(tmp_path: Path, cache: Cache) -> None:
+    gate: queue.Queue = queue.Queue()
+    stub = StubTranslator(gate=gate)
+    jobs = make_jobs(tmp_path, cache, stub)
+    running = jobs.start(source_id="0", source_language="en", target="tr", cues=cues(4), meta=META)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not stub.asked:
+        time.sleep(0.01)
+    older = jobs.start(source_id="1", source_language="en", target="tr", cues=cues(4), meta={**META, "episode": 1})
+    time.sleep(0.02)
+    newer = jobs.start(source_id="2", source_language="en", target="tr", cues=cues(4), meta={**META, "episode": 2})
+    assert jobs.status(older["job"])["waiting_for"]["job"] == running["job"]
+    time.sleep(0.02)
+    # The reader opens the tab for the older one: resume() on a waiting job
+    # is the bump, and start() again is the same.
+    bumped = jobs.resume(older["job"])
+    assert bumped["status"] == "queued"
+    for _ in range(3):
+        gate.put(1)
+    wait_for(jobs, newer["job"], "done")
+    assert [key for key, _ in stub.asked] == [0, 0, 0] and stub.asked == [(0, 4)] * 3
+    order = sorted((jobs.status(k)["updated_at"], k) for k in (running["job"], older["job"], newer["job"]))
+    assert [k for _, k in order] == [running["job"], older["job"], newer["job"]]
+
+
+def test_the_lines_not_yet_asked_about_are_told_apart_from_the_ones_the_model_could_not_do(tmp_path: Path, cache: Cache) -> None:
+    gate: queue.Queue = queue.Queue()
+    stub = Partial(gate=gate)
+    jobs = make_jobs(tmp_path, cache, stub)
+    started = jobs.start(source_id="13", source_language="en", target="tr", cues=cues(8), meta=META)
+    gate.put(1)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and jobs.status(started["job"])["done"] < 4:
+        time.sleep(0.01)
+    partial = jobs.status(started["job"], with_cues=True)
+    # Line 2 was asked about and not answered; line 3 was answered a speaker
+    # short and kept in English. Neither is pending: the second chunk is.
+    assert partial["pending_indexes"] == [4, 5, 6, 7]
+    assert partial["translated_indexes"] == [0, 2, 3]
+    assert partial["missing"] == 1 and partial["unrepaired"] == 1
+    gate.put(1)
+    wait_for(jobs, started["job"], "done")
+    assert jobs.status(started["job"], with_cues=True)["pending_indexes"] == []
+
+
+def test_a_chunk_file_from_before_the_key_was_renamed_still_reads(tmp_path: Path, cache: Cache) -> None:
+    """The first jobs' chunk files carried the Turkish under "tr"; a job made
+    now writes "text", whatever the language. Both read."""
+    jobs = make_jobs(tmp_path, cache, StubTranslator())
+    started = jobs.start(source_id="13", source_language="en", target="tr", cues=cues(4), meta=META)
+    wait_for(jobs, started["job"], "done")
+    path = tmp_path / "jobs" / started["job"] / "chunks" / "0-4.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert data["lines"][0] == {"n": 1, "text": "satır 1"}
+    data["lines"] = [{"n": row["n"], "tr": row["text"]} for row in data["lines"]]
+    path.write_text(json.dumps(data), encoding="utf-8")
+    old = jobs.status(started["job"], with_cues=True)
+    assert [cue["text"] for cue in old["cues"]] == ["satır 1", "satır 2", "satır 3", "satır 4"]

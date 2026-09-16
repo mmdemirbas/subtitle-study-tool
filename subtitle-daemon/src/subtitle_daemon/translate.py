@@ -106,7 +106,7 @@ TRANSLATE every numbered line into {target}. Rules:
   comes back as "<i>Burada biri var mı?</i>", not without the tags.
 - Keep the register: swearing stays swearing, military terms stay military.
 
-Answer with a JSON object only: {{"lines": [{{"n": 1, "tr": "..."}}]}}\
+Answer with a JSON object only: {{"lines": [{{"n": 1, "{code}": "..."}}]}}\
 """
 
 
@@ -134,8 +134,15 @@ def render(cues: list[Cue], first: int, last: int, carry_from: int) -> str:
     return "\n".join(out)
 
 
-def _numbered(answer: object) -> dict[int, str]:
-    """The `{n: text}` an answer carries, ignoring rows that are not that shape."""
+def _numbered(answer: object, key: str) -> dict[int, str]:
+    """The `{n: text}` an answer carries, ignoring rows that are not that shape.
+
+    `key` is the field the brief asked the text to come back under - the
+    target's code, so a Turkish answer reads `{"n": 1, "tr": "..."}` and a
+    German one `{"n": 1, "de": "..."}`. It was the literal "tr" for every
+    language, which made a request for German a request the parser could not
+    read: the model answered under "de" as the brief's example would have led
+    it to, had the example not said "tr"."""
     if not isinstance(answer, dict):
         return {}
     rows = answer.get("lines")
@@ -146,7 +153,7 @@ def _numbered(answer: object) -> dict[int, str]:
         if not isinstance(row, dict):
             continue
         try:
-            got[int(row["n"])] = str(row.get("tr") or "")
+            got[int(row["n"])] = str(row.get(key) or "")
         except (KeyError, TypeError, ValueError):
             continue
     return got
@@ -181,6 +188,7 @@ class Translator:
         key: str = "",
         source: str = "English",
         target: str = "Turkish",
+        target_code: str = "tr",
         chunk: int = CHUNK,
         carry: int = CARRY,
         timeout: float = TIMEOUT_SECONDS,
@@ -190,6 +198,9 @@ class Translator:
         self.key = key
         self.source = source
         self.target = target
+        # The field the answer comes back under. Two or three letters, so the
+        # model reads it as the language and not as a word; see _numbered.
+        self.target_code = re.sub(r"[^a-z]", "", target_code.lower().split("-")[0])[:3] or "tr"
         self.chunk = max(1, chunk)
         self.carry = max(0, carry)
         self.timeout = timeout
@@ -201,7 +212,7 @@ class Translator:
 
     @property
     def brief(self) -> str:
-        return BRIEF.format(source=self.source, target=self.target)
+        return BRIEF.format(source=self.source, target=self.target, code=self.target_code)
 
     def abort(self) -> None:
         """Stop, now: the next request is never made, and the one in flight is
@@ -234,7 +245,7 @@ class Translator:
         self._open = None
         if self.cancel.is_set():
             raise Cancelled()
-        return None if answer is None else _numbered(answer)
+        return None if answer is None else _numbered(answer, self.target_code)
 
     def chunk_lines(self, cues: list[Cue], first: int, last: int, floor: int = 0) -> Attempt:
         """Translate cues `first`..`last`, checked and repaired.
@@ -353,10 +364,16 @@ def chunk_bounds(first: int, last: int, chunk: int) -> list[tuple[int, int]]:
     return [(start, min(start + chunk, last)) for start in range(first, last, chunk)]
 
 
+def line_text(row: dict[str, Any]) -> str:
+    """The translated text a chunk-file row carries. Written under "text"
+    now; the files of the first jobs, all Turkish, wrote it under "tr"."""
+    return str(row.get("text", row.get("tr", "")) or "")
+
+
 def as_json(attempt: Attempt) -> str:
     return json.dumps(
         {
-            "lines": [{"n": n, "tr": text} for n, text in sorted(attempt.lines.items())],
+            "lines": [{"n": n, "text": text} for n, text in sorted(attempt.lines.items())],
             "missing": attempt.missing,
             "repaired": attempt.repaired,
             "unrepaired": attempt.unrepaired,

@@ -38,7 +38,7 @@ from .cache import Cache
 from .config import CACHE_DIR, LOG_DIR, Config
 from .lookups import Lookups
 from .opensubtitles import Client, Feature, OpenSubtitlesError, QuotaExceededError
-from .translate_jobs import Jobs
+from .translate_jobs import LANGUAGE_NAMES, Jobs
 
 logger = logging.getLogger(__name__)
 
@@ -958,7 +958,10 @@ class Service:
         return self.jobs.status(key, with_cues=with_cues)
 
     def translate_list(self) -> dict[str, Any]:
-        return {"jobs": self.jobs.list(), "model": self.jobs.model}
+        # The languages a subtitle can be made in, by code, for the panel's
+        # picker. The brief names a language by its name and sends an unknown
+        # code as itself, so the table is what is offered rather than a limit.
+        return {"jobs": self.jobs.list(), "model": self.jobs.model, "languages": dict(LANGUAGE_NAMES)}
 
     def translate_resume(self, key: str) -> dict[str, Any]:
         resumed = self.jobs.resume(key)
