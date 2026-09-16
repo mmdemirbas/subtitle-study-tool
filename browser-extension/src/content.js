@@ -6647,10 +6647,11 @@
       return offer;
     }
     const health = (await daemonCall("health", {})) || {};
-    const model = health.translate_model || "the local model";
-    const minutes = Math.max(1, Math.round((source.cues.length * (Number(health.translate_seconds_per_cue) || 0.5)) / 60));
+    const model = makerName(health.translate_model);
+    const seconds = source.cues.length * (Number(health.translate_seconds_per_cue) || 0.5);
+    const time = seconds < 60 ? "under a minute" : `about ${Math.round(seconds / 60)} min`;
     showToast(
-      `No ${target.toUpperCase()} subtitle exists for this. Make one from the ${from} with ${model}, about ${minutes} min? The lines appear as they are made.`,
+      `No ${target.toUpperCase()} subtitle exists for this. Make one from the ${from} with ${model}, ${time}? The lines appear as they are made.`,
       {
         action: {
           label: "Make it",
@@ -6662,7 +6663,7 @@
         },
       },
     );
-    trace("translateOffer", { ...offer, offered: "make", model, minutes });
+    trace("translateOffer", { ...offer, offered: "make", model, seconds: Math.round(seconds) });
     return offer;
   }
 
@@ -6672,9 +6673,15 @@
     return typeof fileId === "number" && fileId >= 90_000_000_000_000;
   }
 
+  /* The daemon names its translator: an ollama model by its tag, Google
+   * Translate as "google-translate", which is a service and is named as one. */
+  function makerName(model) {
+    return model === "google-translate" ? "Google Translate" : model || "the local model";
+  }
+
   function translationLabel(mine) {
     const from = `made from ${mine.sourceLanguage.toUpperCase()}`;
-    if (mine.status === "done") return `${mine.target.toUpperCase()} · ${from} by ${mine.model}`;
+    if (mine.status === "done") return `${mine.target.toUpperCase()} · ${from} by ${makerName(mine.model)}`;
     const percent = mine.total ? Math.round((100 * mine.done) / mine.total) : 0;
     if (mine.status === "queued" && mine.waitingFor) {
       return `${mine.target.toUpperCase()} · ${from} · ${percent}% · waiting for ${describeWaitingFor(mine.waitingFor)}`;

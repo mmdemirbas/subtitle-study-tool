@@ -3885,7 +3885,18 @@
   }
 
   const short = (code) => String(code || "").toLowerCase().slice(0, 2);
-  const minutesFor = (lines) => Math.max(1, Math.round((lines * (makerInfo?.secondsPerCue || 0.5)) / 60));
+  /* How long the lines take, in the reader's words. Under a minute is said
+   * as that: Google Translate does an episode in seconds, and "about 1 min"
+   * for a 20-second job reads as a slow tool. */
+  const timeFor = (lines) => {
+    const seconds = lines * (makerInfo?.secondsPerCue || 0.5);
+    return seconds < 60 ? "under a minute" : `about ${Math.round(seconds / 60)} min`;
+  };
+  /* The daemon names its translator: an ollama model by its tag, Google
+   * Translate as "google-translate". The second is a service, not a model
+   * on this machine, and the block says which it is talking to. */
+  const GOOGLE = "google-translate";
+  const makerName = (model) => (model === GOOGLE ? "Google Translate" : model || "the local model");
 
   /* Which language to make, and from which subtitle. The one the reader
    * picked in the box; else the language the search said is missing; else
@@ -3980,7 +3991,7 @@
       const goOn = (what) => api.detached(api.resumeTranslation({ job: running.job, target: running.target, sourceLanguage: running.sourceLanguage, slot: running.slot }), what);
       if (running.status === "done") {
         const kept = (running.unrepaired || 0) + (running.missing || 0);
-        el.makeNote.textContent = `${target} subtitle made from ${from} by ${running.model}, ${running.total} lines${kept ? `, ${kept} kept in ${from}` : ""} - in ${into}.`;
+        el.makeNote.textContent = `${target} subtitle made from ${from} by ${makerName(running.model)}, ${running.total} lines${kept ? `, ${kept} kept in ${from}` : ""} - in ${into}.`;
         /* The kept lines are the ones the model never answered for or
          * answered a speaker short. Asked for one at a time, and usually
          * after the model was swapped for a bigger one, most of them come
@@ -3998,15 +4009,15 @@
          * length of the job ahead of it, which is the zero that does not
          * move; the daemon now serves this one next, and what it is waiting
          * for is the part worth knowing. */
-        el.makeNote.textContent = `The ${target} subtitle for this is next: the daemon is finishing ${running.waitingFor} first, then ${running.total} lines from ${from} with ${running.model}${running.done ? ` (${running.done} already made)` : ""} · in ${into}.`;
+        el.makeNote.textContent = `The ${target} subtitle for this is next: the daemon is finishing ${running.waitingFor} first, then ${running.total} lines from ${from} with ${makerName(running.model)}${running.done ? ` (${running.done} already made)` : ""} · in ${into}.`;
         el.makeRow.append(button("Stop", { onClick: () => api.detached(api.cancelTranslation(), "Stopping the translation") }));
       } else {
         const minutes = Math.round((running.etaSeconds || 0) / 60);
         const left = running.etaSeconds ? (minutes >= 1 ? `about ${minutes} min left` : "under a minute left") : "";
         const stalled = running.error ? ` The daemon is not answering (${running.error}); the job goes on when it is back.` : "";
         el.makeNote.textContent = running.retrying
-          ? `Asking ${running.model} again for the ${running.total} line${running.total === 1 ? "" : "s"} kept in ${from} · ${running.done} of ${running.total}${left ? ` · ${left}` : ""} · in ${into}.${stalled}`
-          : `Making a ${target} subtitle from ${from} with ${running.model} · ${running.done} of ${running.total} lines${left ? ` · ${left}` : ""} · in ${into}.${stalled}`;
+          ? `Asking ${makerName(running.model)} again for the ${running.total} line${running.total === 1 ? "" : "s"} kept in ${from} · ${running.done} of ${running.total}${left ? ` · ${left}` : ""} · in ${into}.${stalled}`
+          : `Making a ${target} subtitle from ${from} with ${makerName(running.model)} · ${running.done} of ${running.total} lines${left ? ` · ${left}` : ""} · in ${into}.${stalled}`;
         el.makeRow.append(button("Stop", { onClick: () => api.detached(api.cancelTranslation(), "Stopping the translation") }));
       }
       el.make.hidden = false;
@@ -4051,9 +4062,9 @@
       renderMake(api.status());
     };
     if (confirming === plan.target) {
-      const model = makerInfo?.model || "the local model";
+      const local = makerInfo?.model !== GOOGLE && makerInfo?.daemon !== false;
       const where = plan.into >= 0 ? `subtitle ${plan.into + 1}` : "the other slot, replacing what is there";
-      el.makeNote.textContent = `${plan.source.cueCount} lines of ${which} through ${model}${makerInfo?.daemon === false ? "" : " on this machine"}, about ${minutesFor(plan.source.cueCount)} min. The ${target} lines go up in ${where} as they are made, and the file is kept for next time.${busyNote}`;
+      el.makeNote.textContent = `${plan.source.cueCount} lines of ${which} through ${makerName(makerInfo?.model)}${local ? " on this machine" : ""}, ${timeFor(plan.source.cueCount)}. The ${target} lines go up in ${where} as they are made, and the file is kept for next time.${busyNote}`;
       el.makeRow.append(
         button(`Start`, { primary: true, onClick: () => {
           confirming = null;

@@ -78,9 +78,12 @@ jobs of 09-14 ran at 1.8 and 3.6 seconds a line.
 so the grader reads the line it is given. A first grading pass did not: it
 was given the English slice as one block and the candidate as another, and
 scored gemma3:4b's drifted lines - the Turkish of line 250 filed under 248 -
-as "ok" at 4 and 5, because the sentence was fluent and about the scene.
-That pass is kept as `judged-first-pass-sonnet-blocks.json` and is not used
-here; the pairs are what made the question local.
+as "ok" at 4 and 5, because the sentence was fluent and about the scene,
+while still catching the uniform shift of the control (1.42). That pass was
+`claude-sonnet-5` on blocks; this one is `claude-opus-5` on pairs, and the
+two changes were made together, so which of them is what caught the drift
+is not separated here. The first pass is kept as
+`judged-first-pass-sonnet-blocks.json` and is not used.
 
 **What "misses the point" was, in the file the reader watched.** Of the 60
 lines, 21 scored 2 or under. Line 249, "but I don't have any credibility
@@ -128,10 +131,13 @@ with the flag honoured. The daemon now speaks to ollama through `/api/chat`
 (`chat.ollama_native`), which is what puts the 35B mixture at 0.85 seconds a
 line.
 
-**A grader needs the pair, not the page.** Above. The general form: a
-per-line score asked across two blocks is matched by topic when the line is
-plausible, and the failure that matters most in this work - the right words
-under the wrong number - is exactly the plausible one.
+**A control that passes can still miss the failure that matters.** The
+shifted control - every line one down - was caught by the first grader, and
+the partial drift of a real candidate was not: a per-line score asked across
+two blocks is matched by topic when the line is plausible, and the right
+words under the wrong number are exactly the plausible failure. The control
+that would have caught it is a partially drifted copy, not a uniformly
+shifted one.
 
 ## What was not measured
 

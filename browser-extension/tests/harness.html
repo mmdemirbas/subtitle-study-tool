@@ -4912,7 +4912,7 @@
           make.click();
           await sleep(30);
           if (job.state.started) throw new Error("a press on the offer already started the job");
-          if (!/8 lines of subtitle 1 \(EN\) through gemma3:4b on this machine, about 1 min/.test(block.textContent)) throw new Error(`terms read ${JSON.stringify(block.textContent)}`);
+          if (!/8 lines of subtitle 1 \(EN\) through gemma3:4b on this machine, under a minute/.test(block.textContent)) throw new Error(`terms read ${JSON.stringify(block.textContent)}`);
           const start = [...block.querySelectorAll("button")].find((b) => b.textContent === "Start");
           if (!start) throw new Error("no Start button");
           start.click();
@@ -5092,6 +5092,42 @@
         }
       });
 
+      check("a translator that is a service is named as one, and not placed on this machine", async () => {
+        const job = makeJob(4);
+        job.ops.health = () => ({ ok: true, daemon_running: true, default_languages: ["en", "tr"], translate_model: "google-translate", translate_seconds_per_cue: 0.03 });
+        // Every answer about the job names the service as its translator.
+        for (const op of ["translate", "translateStatus", "translateResume"]) {
+          const was = job.ops[op];
+          job.ops[op] = (args) => ({ ...was(args), model: "google-translate" });
+        }
+        window.__stubDaemon = job.ops;
+        const shadow = panelShadow();
+        try {
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 4), label: "EN · Mercy", fileId: 1, language: "en", slot: 0 });
+          await sleep(60);
+          shadow.querySelector(".sso-add").click();
+          await sleep(120);
+          [...shadow.querySelectorAll("button")].find((b) => b.textContent === "Search").click();
+          for (let i = 0; i < 40 && !/No TR subtitle exists/.test(shadow.querySelector(".sso-make")?.textContent || ""); i++) await sleep(25);
+          const block = shadow.querySelector(".sso-make");
+          [...block.querySelectorAll("button")].find((b) => /^Make TR from EN/.test(b.textContent)).click();
+          await sleep(30);
+          if (!/4 lines of subtitle 1 \(EN\) through Google Translate, under a minute\./.test(block.textContent)) throw new Error(`terms read ${JSON.stringify(block.textContent)}`);
+          if (/on this machine/.test(block.textContent)) throw new Error("a service placed on this machine");
+          [...block.querySelectorAll("button")].find((b) => b.textContent === "Start").click();
+          for (let i = 0; i < 200 && window.__ssoApi.status().translation?.status !== "done"; i++) await sleep(25);
+          const finished = window.__ssoApi.status().tracks[1];
+          if (finished.label !== "TR · made from EN by Google Translate") throw new Error(`label ${JSON.stringify(finished.label)}`);
+          if (!/TR subtitle made from EN by Google Translate, 4 lines/.test(block.textContent)) throw new Error(`done reads ${JSON.stringify(block.textContent)}`);
+        } finally {
+          window.__stubDaemon = null;
+          window.__ssoApi.cancelTranslation?.().catch?.(() => {});
+          window.__ssoApi.detach(1);
+          window.__ssoApi.detach(0);
+          shadow.querySelector(".sso-panel__back")?.click();
+        }
+      });
+
       check("the language to make is a choice, proposed and not fixed", async () => {
         const job = makeJob(4);
         window.__stubDaemon = job.ops;
@@ -5187,7 +5223,7 @@
           await window.__ssoStudy.setEnabled(true);
           const toast = toastEl();
           for (let i = 0; i < 80 && !/Make it/.test(toast?.querySelector(".sso-toast__action")?.textContent || ""); i++) await sleep(25);
-          if (!/No TR subtitle exists for this. Make one from the EN with gemma3:4b, about 1 min/.test(toast?.textContent || ""))
+          if (!/No TR subtitle exists for this. Make one from the EN with gemma3:4b, under a minute/.test(toast?.textContent || ""))
             throw new Error(`toast reads ${JSON.stringify(toast?.textContent)}`);
           toast.querySelector(".sso-toast__action").click();
           for (let i = 0; i < 40 && !job.state.started; i++) await sleep(25);

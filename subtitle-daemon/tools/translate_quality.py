@@ -244,12 +244,14 @@ def run_google(cues: list, start: int, stop: int, key: str) -> dict:
 # --- the grader ---------------------------------------------------------------
 
 # Each line as a pair, the Turkish directly under its English. The first
-# grader read the English slice as one block and the candidate as another,
-# cross-referenced by number, and scored a candidate whose answers had
-# drifted three lines down as "ok" on the drifted lines - the Turkish was
-# fluent and about the same scene, and the grader matched it by topic. The
-# shifted control caught the uniform shift and not this. Pairs make the
-# question local: is THIS Turkish THIS English line.
+# grading pass (claude-sonnet-5) read the English slice as one block and the
+# candidate as another, cross-referenced by number, and scored a candidate
+# whose answers had drifted three lines down as "ok" on the drifted lines -
+# the Turkish was fluent and about the same scene, and the grader matched it
+# by topic. The shifted control caught the uniform shift and not this. The
+# second pass changed the grader (claude-opus-5) and the shape together, so
+# which of the two is what caught the drift is not separated. Pairs make the
+# question local either way: is THIS Turkish THIS English line.
 GRADER = """\
 You are grading Turkish subtitle translations of English television dialogue (a workplace comedy, spoken lines). Below, every numbered line is given as a pair: the English line, then the candidate's Turkish for that same number. The English lines are in order, so the neighbours are the scene's context.
 
