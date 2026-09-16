@@ -10,9 +10,13 @@
     "tr"
   ],
   "port": 8794,
-  "_comment_gloss": "Study mode's word meanings, best tier first. gloss_model names a model that sees the subtitle line a word was said in, which is what tells \"spare a minute\" from \"a spare tyre\"; gloss_url defaults to a model running on this machine (http://127.0.0.1:11434/v1/chat/completions for ollama) and gloss_api_key is only needed for a hosted one. google_api_key is the tier below: a sane answer for a bare word, with no idea of the line. With neither, a free archive answers and the glosses are what they were. EMPTY gloss_model means the tier is off and Google answers everything - which is the setting to keep while the machine is busy, because a local model costs its whole size in memory and the machine is not only running this. See tools/gloss_bakeoff.py for what each candidate measured.",
+  "_comment_gloss": "Study mode's word meanings, best tier first. gloss_model names a model that sees the subtitle line a word was said in, which is what tells \"spare a minute\" from \"a spare tyre\"; gloss_url defaults to a model running on this machine (http://127.0.0.1:11434/api/chat for ollama; its OpenAI-shaped /v1 URL is taken as the same thing) and gloss_api_key is only needed for a hosted one. google_api_key is the tier below: a sane answer for a bare word, with no idea of the line. With neither, a free archive answers and the glosses are what they were. EMPTY gloss_model means the tier is off and Google answers everything - which is the setting to keep while the machine is busy, because a local model costs its whole size in memory and the machine is not only running this. See tools/gloss_bakeoff.py for what each candidate measured.",
   "gloss_model": "",
   "gloss_url": "",
   "gloss_api_key": "",
-  "google_api_key": ""
+  "google_api_key": "",
+  "_comment_translate": "Making a whole subtitle in a language nobody has subtitled. Empty translate_model means Google Translate when google_api_key is set (4.5 of 5 on accuracy in the 2026-09-16 bake-off, an episode in seconds, the first 500,000 characters a month free) and gemma3:4b on this machine when it is not (3.1 of 5, an episode in the time it takes to make coffee). Name a model to choose: \"google\", or an ollama model - qwen3.6:35b-a3b scored 4.2 at 0.85 seconds a line and needs 22.6 GB while it runs. translate_url and translate_api_key point a local model at another endpoint and fall back to gloss_url and gloss_api_key.",
+  "translate_model": "",
+  "translate_url": "",
+  "translate_api_key": ""
 }

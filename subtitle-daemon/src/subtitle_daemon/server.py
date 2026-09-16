@@ -138,6 +138,7 @@ class Service:
             model=config.translate_model or "",
             url=config.translate_url or "",
             key=config.translate_api_key or "",
+            google_key=config.google_api_key or "",
         )
         self.jobs.resume_all()
         self._lock = threading.Lock()

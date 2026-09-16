@@ -52,7 +52,7 @@ said in**, which is what separates "can you spare a minute" from "one spare
 engine" - and, where the page said so, **which film it is and the lines either
 side**. A line of dialogue means different things in different programmes:
 "jump", "viper" and "the old man" are all three of them Battlestar Galactica's
-own vocabulary and none of them is what a dictionary says. `gloss_url` defaults to `http://127.0.0.1:11434/v1/chat/completions`,
+own vocabulary and none of them is what a dictionary says. `gloss_url` defaults to `http://127.0.0.1:11434/api/chat`,
 which is [ollama](https://ollama.com) on this machine: no key, no quota, and
 nothing about what you are watching leaves the house. Any endpoint speaking the
 OpenAI chat-completions shape works, with `gloss_api_key` for a hosted one.
@@ -237,14 +237,25 @@ chunk had, and usually after the model has been swapped for a bigger one; what
 comes back is checked the same way, lands in the chunk file that owns it, and
 the cached file is written again.
 
-The model is `translate_model` in `config.local.json`, at `translate_url` with
-`translate_api_key`; the URL and key fall back to `gloss_url` and
-`gloss_api_key`, and the model to `gemma3:4b`, which the bake-off chose: about
-half a second a line on this machine, so an episode in the time it takes to
-make coffee. `TRANSLATE_MODEL`, `TRANSLATE_URL` and `TRANSLATE_API_KEY`
-override the file. Any endpoint speaking the OpenAI chat-completions shape
-works; `/health` names the model in use and the seconds per line the last job
-measured, which is what the offer's estimate is made from.
+What does the translating is `translate_model` in `config.local.json`. Left
+empty, it is Google Translate when `google_api_key` is set and `gemma3:4b` on
+this machine when it is not - the same rule the gloss tier follows for the
+same key. The quality bake-off of 2026-09-16
+(`docs/reports/translate-quality-2026-09-16.md`) is why: over sixty lines of a
+workplace comedy graded for accuracy out of 5, Google Translate scored 4.5 in
+1.3 seconds, `qwen3.6:35b-a3b` 4.2 at 0.85 seconds a line and 22.6 GB of
+memory while it runs, `qwen3:14b` 3.6 at 3.2 seconds a line, and `gemma3:4b`
+3.1 - the file the reader actually watched through it was 3.3. Google's first
+500,000 characters a month are free (an episode is about 45,000) and $20 a
+million after. Naming a model - `"google"`, or an ollama model - is the choice;
+`translate_url` and `translate_api_key` point a local model elsewhere and fall
+back to `gloss_url` and `gloss_api_key`. `TRANSLATE_MODEL`, `TRANSLATE_URL` and
+`TRANSLATE_API_KEY` override the file. ollama is spoken to through its own
+`/api/chat` with reasoning switched off, which is what makes the qwen3 family
+usable at all (95 seconds for an 18-token answer through the OpenAI-shaped
+URL, measured); any other endpoint speaking the OpenAI chat-completions shape
+works. `/health` names the translator in use and the seconds per line the
+last job on it measured, which is what the offer's estimate is made from.
 
 ## Access control
 

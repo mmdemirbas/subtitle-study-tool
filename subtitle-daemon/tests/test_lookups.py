@@ -357,12 +357,13 @@ def test_a_word_with_no_translation_is_remembered_as_having_none(
 
 
 class _Answered:
-    """One canned HTTP response, in the shape an OpenAI-compatible endpoint sends."""
+    """One canned HTTP response, in the shape ollama's own API sends - which
+    is what the default URL now speaks. See chat.ollama_native."""
 
     status = 200
 
     def __init__(self, content: str) -> None:
-        self._body = json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+        self._body = json.dumps({"message": {"role": "assistant", "content": content}}).encode()
 
     def read(self) -> bytes:
         return self._body

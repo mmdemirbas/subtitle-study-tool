@@ -255,3 +255,130 @@ def test_the_answer_comes_back_under_the_target_language_code() -> None:
     assert '{"n": 1, "tr": "..."}' in turkish.brief
     # A region tag or an upper-case code is the bare code in the field.
     assert translate.Translator(model="stub", target_code="PT-BR").target_code == "pt"
+
+
+# --- ollama's own API, and Google Translate ---------------------------------------
+
+
+def _serve(handler_class):  # type: ignore[no-untyped-def]
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_class)
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    return server
+
+
+def test_ollama_is_spoken_to_through_its_own_api_with_thinking_off() -> None:
+    """The OpenAI shape cannot switch a model's reasoning off, and a qwen3 that
+    reasons took 95 seconds over an 18-token answer. Both the native URL and
+    the OpenAI-shaped one on ollama's port go to /api/chat with think: false."""
+    import json as json_module
+    from http.server import BaseHTTPRequestHandler
+
+    from subtitle_daemon import chat
+
+    seen: list[tuple[str, dict]] = []
+
+    class Ollama(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            body = json_module.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+            seen.append((self.path, body))
+            answer = json_module.dumps({"message": {"role": "assistant", "content": '{"lines": [{"n": 1, "tr": "Merhaba."}]}'}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(answer)))
+            self.end_headers()
+            self.wfile.write(answer)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = _serve(Ollama)
+    try:
+        port = server.server_address[1]
+        got = chat.ask_json(url=f"http://127.0.0.1:{port}/api/chat", model="m", key="", system="s", user="u", timeout=5)
+        assert got == {"lines": [{"n": 1, "tr": "Merhaba."}]}
+        path, body = seen[-1]
+        assert path == "/api/chat" and body["think"] is False and body["format"] == "json" and body["stream"] is False
+        assert body["options"] == {"temperature": 0} and "response_format" not in body
+    finally:
+        server.shutdown()
+        server.server_close()
+    # The OpenAI-shaped URL on ollama's port is rewritten; anywhere else it is left alone.
+    assert chat.ollama_native("http://127.0.0.1:11434/v1/chat/completions") == "http://127.0.0.1:11434/api/chat"
+    assert chat.ollama_native("http://localhost:11434/api/chat/") == "http://localhost:11434/api/chat/"
+    assert chat.ollama_native("https://api.openai.com/v1/chat/completions") is None
+    assert chat.ollama_native("http://127.0.0.1:8000/v1/chat/completions") is None
+    assert chat.DEFAULT_URL.endswith("/api/chat")
+
+
+def test_google_translates_every_line_of_a_cue_on_its_own_and_keeps_the_speakers() -> None:
+    import json as json_module
+    from http.server import BaseHTTPRequestHandler
+    from urllib.parse import parse_qs
+
+    asked: list[list[str]] = []
+    CANNED = {
+        "- Secretary Roslin.": "Sekreter Roslin.",  # the dash translated away
+        "- Yes.": "- Evet.",
+        "<i>Is anyone there?</i>": "<i>Orada biri var mı?</i>",
+        "It's about time.": "Zaman&#39;ı geldi.",  # HTML-escaped, as format=html answers
+    }
+
+    class Google(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:
+            fields = parse_qs(self.rfile.read(int(self.headers.get("Content-Length") or 0)).decode("utf-8"))
+            strings = fields.get("q", [])
+            asked.append(strings)
+            assert fields["format"] == ["html"] and fields["source"] == ["en"] and fields["target"] == ["tr"] and fields["key"] == ["k"]
+            if strings == ["short"]:
+                rows: list[dict[str, str]] = []
+            else:
+                rows = [{"translatedText": CANNED.get(text, f"tr({text})")} for text in strings]
+            answer = json_module.dumps({"data": {"translations": rows}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(answer)))
+            self.end_headers()
+            self.wfile.write(answer)
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    server = _serve(Google)
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/language/translate/v2"
+        google = translate.GoogleTranslator(key="k", source="en", target="tr", url=url)
+        cues = [
+            Cue(start_ms=0, end_ms=900, text="- Secretary Roslin.\n- Yes."),
+            Cue(start_ms=1000, end_ms=1900, text="<i>Is anyone there?</i>"),
+            Cue(start_ms=2000, end_ms=2900, text="It's about time."),
+        ]
+        got = google.chunk_lines(cues, 0, 3)
+        assert asked[-1] == ["- Secretary Roslin.", "- Yes.", "<i>Is anyone there?</i>", "It's about time."]
+        assert got.lines == {1: "-Sekreter Roslin.\n- Evet.", 2: "<i>Orada biri var mı?</i>", 3: "Zaman'ı geldi."}
+        assert got.missing == [] and got.unrepaired == [] and not got.error
+        assert translate.speakers(got.lines[1]) == 2, "both speakers, the dash put back where Google dropped it"
+        assert google.again(cues, 3) == "Zaman'ı geldi."
+        # A short answer is no answer: nothing is paired with the wrong line.
+        short = google.chunk_lines([Cue(start_ms=0, end_ms=1, text="short")], 0, 1)
+        assert short.lines == {} and short.missing == [1] and short.error
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_translator_in_use_follows_the_key_unless_a_name_is_given(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from subtitle_daemon import translate_jobs
+    from subtitle_daemon.cache import Cache
+
+    cache = Cache(tmp_path / "cache")
+    with_key = translate_jobs.Jobs(tmp_path / "a", cache, model="", url="", key="", google_key="k")
+    assert with_key.model == translate.GOOGLE_MODEL and with_key.rate() == translate.GOOGLE_SECONDS_PER_CUE
+    assert isinstance(with_key._translator("en", "tr"), translate.GoogleTranslator)  # noqa: SLF001
+    without = translate_jobs.Jobs(tmp_path / "b", cache, model="", url="", key="")
+    assert without.model == translate.DEFAULT_MODEL and without.rate() == translate_jobs.SECONDS_PER_CUE
+    named = translate_jobs.Jobs(tmp_path / "c", cache, model="qwen3.6:35b-a3b", url="", key="", google_key="k")
+    assert named.model == "qwen3.6:35b-a3b" and isinstance(named._translator("en", "tr"), translate.Translator)  # noqa: SLF001
+    assert translate_jobs.Jobs(tmp_path / "d", cache, model="google", url="", key="", google_key="k").model == translate.GOOGLE_MODEL

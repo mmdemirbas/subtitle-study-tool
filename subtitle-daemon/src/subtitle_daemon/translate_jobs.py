@@ -220,12 +220,21 @@ class Jobs:
         model: str,
         url: str,
         key: str,
+        google_key: str = "",
         chunk: int = translate.CHUNK,
         translator_factory: Any = None,
     ) -> None:
         self.root = root
         self.cache = cache
-        self.model = model or translate.DEFAULT_MODEL
+        # Which translator, when nothing names one: Google Translate if the
+        # key for it is there, the local default if not. The same rule the
+        # gloss tier follows for the same key, and the measured one - see
+        # translate.GoogleTranslator. A name in config.local.json is a
+        # choice, and "google" is a name.
+        self.google_key = google_key
+        self.model = model or (translate.GOOGLE_MODEL if google_key else translate.DEFAULT_MODEL)
+        if self.model == "google":
+            self.model = translate.GOOGLE_MODEL
         self.url = url
         self.key = key
         self.chunk = chunk
@@ -421,13 +430,13 @@ class Jobs:
             return found
 
     def rate(self) -> float:
-        """Seconds per cue on this machine, from the most recent job that
-        measured one, or the bake-off's number before any has."""
+        """Seconds per cue with the translator in use, from the most recent
+        job that measured one on it, or the bake-off's number before any has."""
         for job in self.list():
             rate = job.get("seconds_per_cue")
-            if rate:
+            if rate and job.get("model") == self.model:
                 return round(float(rate), 3)
-        return SECONDS_PER_CUE
+        return translate.GOOGLE_SECONDS_PER_CUE if self.model == translate.GOOGLE_MODEL else SECONDS_PER_CUE
 
     def resume_all(self) -> int:
         """Re-queue every job a previous process left unfinished. Called once
@@ -684,7 +693,9 @@ class Jobs:
 
     # --- disk ------------------------------------------------------------------
 
-    def _translator(self, source_language: str, target: str) -> translate.Translator:
+    def _translator(self, source_language: str, target: str) -> Any:
+        if self.model == translate.GOOGLE_MODEL:
+            return translate.GoogleTranslator(key=self.google_key, source=source_language, target=target)
         return translate.Translator(
             model=self.model,
             url=self.url,

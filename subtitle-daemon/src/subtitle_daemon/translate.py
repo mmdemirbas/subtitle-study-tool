@@ -53,10 +53,13 @@ an honest failure; a line of the wrong Turkish is not.
 
 from __future__ import annotations
 
+import html
+import http.client
 import json
 import logging
 import re
 import threading
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -82,29 +85,48 @@ CARRY = 4
 # seconds, and a cold model load is most of a minute on top.
 TIMEOUT_SECONDS = 300.0
 
-# Measured on this machine as the one that keeps the numbering at a speed that
-# finishes an episode in about nine minutes. Named rather than left empty
-# because the whole point of the local tier is that it works without being
-# configured; a hosted endpoint is the same three settings pointed elsewhere.
+# The local model when nothing names one and no Google key is configured.
+# Named rather than left empty because the whole point of the local tier is
+# that it works without being configured, and it is the one that fits any
+# machine. It is not the best on this one: the quality bake-off of 2026-09-16
+# (docs/reports/translate-quality-2026-09-16.md) graded it 3.1 of 5 on
+# accuracy against 4.2 for qwen3.6:35b-a3b, which needs 22.6 GB to run, and
+# 4.5 for Google Translate, which needs a key. The choice is the reader's,
+# in config.local.json.
 DEFAULT_MODEL = "gemma3:4b"
 
-BRIEF = """\
-You are translating a film's subtitles for someone watching it to learn {source}.
+# The brief above, and what it replaced. The first brief was rules and one
+# literal example of a two-speaker line, `"- A.\n- B."`; gemma3:4b appended
+# "- A." and "- B." to its own answers on the reader's episode (lines 261-265
+# of Not Suitable for Work S01E01), and the quality bake-off found the two
+# briefs equal on accuracy within the grader's noise on every model, with
+# this one halving the wall clock on the two larger ones because fewer chunks
+# came back misnumbered and had to be halved and asked again: 0.85 against
+# 1.58 seconds a line on qwen3.6:35b-a3b, 3.2 against 7.9 on qwen3:14b.
 
-TRANSLATE every numbered line into {target}. Rules:
-- One answer per numbered line, with the SAME number. Never merge two numbered
-  lines into one answer, and never split one line into two answers.
-- A numbered line may itself contain a line break, and often does when two
-  people speak. Keep those breaks, and keep every speaker: a line reading
-  "- A.\\n- B." must come back with both halves.
-- Translate what the line MEANS in this scene, not word by word. You can see the
-  lines around it; use them. A pronoun keeps its referent, a joke keeps its
-  setup, an order sounds like an order.
-- Keep proper nouns as they are. Keep [bracketed sound cues] bracketed and
-  translate the words inside them.
-- Keep any <i> and <b> tags, around the same words: "<i>Is anyone there?</i>"
-  comes back as "<i>Burada biri var mı?</i>", not without the tags.
-- Keep the register: swearing stays swearing, military terms stay military.
+BRIEF = """\
+You are subtitling a TV series into {target} for someone who is watching it to learn {source}. These are lines of dialogue, spoken aloud by characters, not written prose.
+
+Translate every numbered line into {target} the way a professional {target} subtitler would:
+- Everyday spoken {target}, the words people actually say to each other. Not formal, not written, not textbook language. Contractions, slang, filler and swearing stay at the same level in {target}.
+- Short. A subtitle is read in two seconds; say it the way a {target} speaker would say it, not word by word from the {source}.
+- The MEANING of the line in this scene. Idioms, sarcasm and jokes become the {target} idiom, sarcasm or joke with the same effect. A pronoun keeps its referent; an order sounds like an order; a question stays a question.
+- Address: characters who are friends, family or colleagues on first-name terms speak informally to each other; strangers, bosses and officials formally, unless the scene shows otherwise.
+
+Keep the file's shape exactly:
+- One answer per numbered line, under the SAME number. Never merge two numbered lines into one answer, never split one line into two answers, never answer for a number you were not given.
+- A numbered line may contain a line break, often because two people speak in it, each line starting with a dash. Keep the breaks, keep every speaker: two dash-led lines in, two dash-led lines out. Do not add dashes, letters or labels that are not in the line.
+- Keep proper nouns as they are. Keep [bracketed sound cues] bracketed, translating the words inside. Keep <i> and <b> tags around the same words.
+
+Examples of the register, {source} to {target}:
+- "You've got to be kidding me." -> "Şaka yapıyorsun herhalde."
+- "I'm not gonna lie, that was rough." -> "Yalan yok, zor oldu."
+- "He totally bailed on us." -> "Bizi resmen ekti."
+- "Knock it off." -> "Kes şunu."
+- "Fair enough." -> "Peki, haklısın."
+- "What's the catch?" -> "Bunun bir bityeniği ne?"
+- "I can't even." -> "Dayanamıyorum."
+- "Can you cover for me?" -> "Benim yerime bakar mısın?"
 
 Answer with a JSON object only: {{"lines": [{{"n": 1, "{code}": "..."}}]}}\
 """
@@ -341,6 +363,124 @@ class Translator:
         if not said or (said_by >= 2 and speakers(said) < said_by):
             return ""
         return said
+
+
+# --- Google Translate, as a whole-file translator --------------------------------
+
+GOOGLE_MODEL = "google-translate"
+GOOGLE_URL = "https://translation.googleapis.com/language/translate/v2"
+# Google's own limit on strings per request, from the v2 reference:
+# https://cloud.google.com/translate/docs/reference/rest/v2/translate
+GOOGLE_BATCH = 128
+GOOGLE_TIMEOUT_SECONDS = 30.0
+# Measured 2026-09-16: 60 cues in 1.3 seconds, one request. The estimate the
+# offer makes before any job has run on it.
+GOOGLE_SECONDS_PER_CUE = 0.03
+
+
+class GoogleTranslator:
+    """The same job through Google Translate v2, line by line.
+
+    Not a model that can see the scene, and it does not have to be: the
+    quality bake-off of 2026-09-16 graded it 4.5 of 5 on accuracy and 4.3 on
+    naturalness over sixty lines of a workplace comedy, against 3.3 for the
+    file the local default actually made and 4.2 for the best model on this
+    machine - and it did sixty lines in 1.3 seconds. The first 500,000
+    characters a month are free (a $10 credit; an episode is about 45,000),
+    $20 a million after: https://cloud.google.com/translate/pricing.
+
+    Every physical line of a cue goes up as its own string, so a two-speaker
+    cue keeps its two dash-led lines by construction and nothing can drift:
+    an answer is paired with its question by position in one request, never
+    by a number the model was asked to copy. `format=html` keeps the <i> and
+    <b> tags where they were; the answer is HTML-escaped and unescaped here.
+    """
+
+    def __init__(
+        self, *, key: str, source: str = "en", target: str = "tr", url: str = GOOGLE_URL, timeout: float = GOOGLE_TIMEOUT_SECONDS
+    ) -> None:
+        self.model = GOOGLE_MODEL
+        self.key = key
+        self.url = url
+        self.source = source.split("-")[0].lower()
+        self.target = target.lower()
+        self.timeout = timeout
+        self.cancel = threading.Event()
+        self._open: Any = None
+
+    def abort(self) -> None:
+        self.cancel.set()
+        held, self._open = self._open, None
+        if held is not None:
+            chat.tear_down(held)
+
+    def _translate(self, strings: list[str]) -> list[str] | None:
+        """The strings translated, in order, or None if Google did not answer."""
+        if self.cancel.is_set():
+            raise Cancelled()
+        fields = [("key", self.key), ("source", self.source), ("target", self.target), ("format", "html")]
+        fields += [("q", text) for text in strings]
+        body = urllib.parse.urlencode(fields).encode("utf-8")
+        parsed = urllib.parse.urlsplit(self.url)
+        make = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+        connection = make(parsed.hostname or "", parsed.port, timeout=self.timeout)
+        self._open = connection
+        try:
+            if self.cancel.is_set():
+                raise Cancelled()
+            connection.request(
+                "POST", parsed.path, body=body,
+                headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": chat.USER_AGENT},
+            )
+            response = connection.getresponse()
+            data = response.read()
+            if response.status >= 400:
+                logger.warning("google translate unavailable: HTTP %d %s", response.status, data[:200].decode("utf-8", "replace"))
+                return None
+            said = [html.unescape(str(row["translatedText"])) for row in json.loads(data.decode("utf-8"))["data"]["translations"]]
+        except (http.client.HTTPException, TimeoutError, ValueError, OSError, KeyError, TypeError) as error:
+            if self.cancel.is_set():
+                raise Cancelled() from error
+            logger.warning("google translate unavailable: %s", error)
+            return None
+        finally:
+            self._open = None
+            connection.close()
+        if self.cancel.is_set():
+            raise Cancelled()
+        # A short array would pair each line with the next one's answer.
+        if len(said) != len(strings):
+            logger.warning("google translate answered %d of %d strings", len(said), len(strings))
+            return None
+        return said
+
+    def chunk_lines(self, cues: list[Cue], first: int, last: int, floor: int = 0) -> Attempt:
+        # Every physical line of every cue, flattened, and where each came from.
+        strings: list[str] = []
+        owners: list[int] = []
+        for index in range(first, last):
+            for line in cues[index].text.split("\n"):
+                strings.append(line)
+                owners.append(index + 1)
+        answers: list[str] = []
+        for start in range(0, len(strings), GOOGLE_BATCH):
+            got = self._translate(strings[start : start + GOOGLE_BATCH])
+            if got is None:
+                return Attempt(missing=list(range(first + 1, last + 1)), error="Google Translate did not answer")
+            answers.extend(got)
+        lines: dict[int, list[str]] = {}
+        for number, source_line, said in zip(owners, strings, answers):
+            # The dash that marks a speaker is not a word, and Google now and
+            # then translates it away or spaces it. Put back what the source had.
+            stripped = _TAG.sub("", source_line).lstrip()
+            if stripped.startswith("-") and not _TAG.sub("", said).lstrip().startswith("-"):
+                said = f"-{said.lstrip()}"
+            lines.setdefault(number, []).append(said)
+        return Attempt(lines={number: "\n".join(parts) for number, parts in lines.items()})
+
+    def again(self, cues: list[Cue], number: int, floor: int = 0) -> str:
+        attempt = self.chunk_lines(cues, number - 1, number, floor)
+        return (attempt.lines.get(number) or "").strip()
 
 
 def to_cues(cues: list[Cue], lines: dict[int, str], first: int, last: int) -> list[Cue]:

@@ -1,4 +1,4 @@
-"""One place that speaks OpenAI chat-completions, for every tier that needs it.
+"""One place that speaks to a model, for every tier that needs it.
 
 Two things in this daemon ask a model a question and expect JSON back: the
 gloss tier, which asks what a word means in the line it was said in, and the
@@ -18,6 +18,16 @@ JSON object came back, or None. The caller owns its own contract - `{"g": [...]}
 for a gloss, `{"lines": [...]}` for a translation - because a short array means
 something different in each and the check that catches it belongs beside the
 thing that knows what a right answer looks like.
+
+One exception to the one wire, and it is measured. ollama on this machine is
+spoken to through its own `/api/chat`, not its OpenAI-shaped `/v1/...`: the
+OpenAI shape has no way to tell a model that reasons out loud not to, and
+`chat_template_kwargs` is ignored there. Measured on qwen3:4b with an
+18-token answer: 95 seconds through `/v1/chat/completions` with `think:
+false` in the body, against about two through `/api/chat` with the same
+flag honoured. The whole qwen3 family was written off as ten seconds a line
+in the first translation bake-off for this reason and no other. A hosted
+endpoint is still the OpenAI shape with a URL and a key.
 """
 
 from __future__ import annotations
@@ -40,7 +50,25 @@ logger = logging.getLogger(__name__)
 # key, so this is the belt to that pair of braces.
 THINKING = re.compile(r"<think>.*?</think>", re.DOTALL)
 
-DEFAULT_URL = "http://127.0.0.1:11434/v1/chat/completions"
+# ollama's own API. The OpenAI-shaped URL it also serves is recognised and
+# spoken to here instead - see `ollama_native` - so a config.local.json written
+# for the old default keeps working and gets the faster path.
+DEFAULT_URL = "http://127.0.0.1:11434/api/chat"
+OLLAMA_PORT = 11434
+
+
+def ollama_native(url: str) -> str | None:
+    """The `/api/chat` URL to use for `url` when it is ollama, else None.
+
+    ollama is recognised by its port: `/api/chat` on any host, and the
+    OpenAI-shaped `/v1/chat/completions` on port 11434, which is ollama's and
+    nobody else's by convention. A hosted endpoint on 443 is left alone."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.path.rstrip("/") == "/api/chat":
+        return url
+    if parsed.port == OLLAMA_PORT and parsed.path.rstrip("/").endswith("/chat/completions"):
+        return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, "/api/chat", "", ""))
+    return None
 
 
 def ask_json(
@@ -64,25 +92,43 @@ def ask_json(
     reader's side, exactly like a word with no translation and a film with no
     subtitle, so the only place it can be found is the log.
     """
-    body = json.dumps(
-        {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            # Greedy. Both callers write their answer to disk the first time it
-            # is given, so whichever sample landed first is the one kept for
-            # good - and two identical requests agreeing is what makes it
-            # possible to measure a change in the prompt rather than a change in
-            # the draw.
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-            # Honoured by the local runtimes and ignored by the hosted ones,
-            # which is why THINKING exists as well.
-            "chat_template_kwargs": {"enable_thinking": False},
-        }
-    ).encode("utf-8")
+    native = ollama_native(url)
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+    if native:
+        url = native
+        body = json.dumps(
+            {
+                "model": model,
+                "messages": messages,
+                # The one flag the OpenAI shape cannot carry: no reasoning
+                # before the answer. See the module docstring for what it
+                # costs when it is on.
+                "think": False,
+                "format": "json",
+                "stream": False,
+                "options": {"temperature": 0},
+            }
+        ).encode("utf-8")
+    else:
+        body = json.dumps(
+            {
+                "model": model,
+                "messages": messages,
+                # Greedy. Both callers write their answer to disk the first time
+                # it is given, so whichever sample landed first is the one kept
+                # for good - and two identical requests agreeing is what makes
+                # it possible to measure a change in the prompt rather than a
+                # change in the draw.
+                "temperature": 0,
+                "response_format": {"type": "json_object"},
+                # Honoured by some runtimes and ignored by the hosted ones,
+                # which is why THINKING exists as well.
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+        ).encode("utf-8")
 
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
     # A model on this machine wants no Authorization header, and sending an
@@ -115,7 +161,8 @@ def ask_json(
             logger.warning("%s unavailable from %s: HTTP %d %s", what, url, response.status, data[:200].decode("utf-8", "replace"))
             return None
         raw = json.loads(data.decode("utf-8"))
-        said = THINKING.sub("", raw["choices"][0]["message"]["content"]).strip()
+        content = raw["message"]["content"] if native else raw["choices"][0]["message"]["content"]
+        said = THINKING.sub("", content).strip()
         return json.loads(said)
     except (
         http.client.HTTPException,
