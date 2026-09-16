@@ -129,17 +129,51 @@ button.sso-add:hover:not(:disabled) {
   background: var(--sso-fill);
 }
 
-/* Where the next result lands, said as a fact. */
-/* The page's own subtitles, above the search they make unnecessary. The note
- * says whose they are; the row under it is one press per language, in the
- * same segmented shape as the language filter further down, and its bottom
- * margin is what keeps the search box from reading as part of the offer. */
-.sso-own {
-  margin-bottom: var(--sso-s3);
+/* --- the Find screen --------------------------------------------------------
+ *
+ * Where the pick lands, then a card per place it can come from. The chips
+ * are the two cards of the first screen in miniature - number, then what the
+ * subtitle is - so the reader is choosing between things they have already
+ * seen, not between "1" and "2". Equal shares of the row, and the name gives
+ * way: a release string is fifty characters and the row is 300px.
+ */
+
+.sso-into {
+  margin-bottom: var(--sso-s2);
 }
 
+button.sso-into__b {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+  text-align: left;
+}
+
+.sso-into__n {
+  flex: none;
+  font-weight: 700;
+}
+
+.sso-into__l {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Nothing there yet, said quietly: the chip is a place, not a thing. */
+button.sso-into__b[data-empty="true"] .sso-into__l {
+  color: var(--sso-ink-3);
+  font-style: italic;
+}
+
+/* The page's own subtitles, above the search they make unnecessary. The note
+ * says whose they are; the row under it is one press per language, in the
+ * same segmented shape as the language filter further down. */
 .sso-own .sso-note {
-  margin-bottom: var(--sso-s2);
+  margin: 0 0 var(--sso-s2);
 }
 
 /* Sized to their text, not shared out equally: the filter's chips are all a
@@ -151,14 +185,10 @@ button.sso-add:hover:not(:disabled) {
 }
 
 /* Making a subtitle: a note and, under it, the one or two buttons that act on
- * it. Same shape as the page's own block above it, and for the same reason -
+ * it. Same shape as the page's own card above it, and for the same reason -
  * the offer sits where the search it replaces would have been. */
-.sso-make {
-  margin-bottom: var(--sso-s3);
-}
-
 .sso-make .sso-note {
-  margin-bottom: var(--sso-s2);
+  margin: 0 0 var(--sso-s2);
 }
 
 .sso-make__row {
@@ -188,6 +218,37 @@ select.sso-make__lang:focus {
 .sso-find__for {
   margin: 0 0 var(--sso-s2);
   color: var(--sso-ink-2);
+}
+
+/* The line under the search box, and the one thing it can offer to do. The
+ * sentence gives way to the button rather than wrapping under it, so the
+ * line stays a line and nothing below it moves when an offer arrives. */
+.sso-find__note {
+  display: flex;
+  gap: var(--sso-s2);
+  align-items: center;
+}
+
+.sso-find__note > span {
+  flex: 1;
+  min-width: 0;
+}
+
+button.sso-find__do {
+  flex: none;
+  min-height: var(--sso-h-chip);
+  padding: 0 var(--sso-s2);
+  font-size: var(--sso-t-small);
+  font-weight: 600;
+  color: var(--sso-ink);
+  cursor: pointer;
+  background: var(--sso-fill);
+  border: 0;
+  border-radius: var(--sso-r-ctl);
+}
+
+button.sso-find__do:hover {
+  background: var(--sso-fill-hover);
 }
 
 /* A card each, and no folding.

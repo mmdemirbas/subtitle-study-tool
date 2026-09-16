@@ -893,6 +893,20 @@ Each of these was a reported bug. Undoing one brings the bug back.
   picture by a line boundary and there is one picture; drawn per card they were
   the same control twice and made the reader choose a card before pressing
   either. The keyed subtitle decides whose boundaries are counted.
+- **The Find screen is a target and three cards, and the target never moves
+  by itself.** The `Into` chips at the top are the two subtitles in miniature
+  (number, then what each holds); every source on the screen - the page's own
+  list, a result row, Try the best 3 - attaches to the lit one. The route in
+  (which plus, which card's name) lights the first; the chips and the "Add
+  another as subtitle 2" button on the line under the search box move it.
+  Nothing flips it after a pick: that was tried, and a second pick meant to
+  *replace* a wrong release went to the other subtitle instead, invisibly
+  until two were on screen (`picking a result does not move the target`). The
+  three cards are in cost order - the page's file is exact and free, a
+  translation is seconds, a search is a download and a guess at timing - and
+  the translation is not offered for a language the page carries as a whole
+  subtitle. `makePlan` reads `status.own` for that, so a page list arriving
+  later redraws the block through `renderMake`'s key.
 - **The panel's title bar carries two double-click gestures.** The bar folds and
   unfolds; the **name** parks the panel back under the CC button. Tests that
   park it must aim at `.sso-win__title`, or they fold it and everything after

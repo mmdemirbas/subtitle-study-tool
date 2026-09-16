@@ -406,6 +406,23 @@
         [...document.querySelectorAll("div")].find((d) => d.shadowRoot && d.shadowRoot.querySelector(".sso-root"))?.shadowRoot;
       const panelShadow = () =>
         [...document.querySelectorAll("div")].find((d) => d.shadowRoot && d.shadowRoot.querySelector(".sso-panel"))?.shadowRoot;
+      /* Which subtitle the Find screen's next pick goes into, as the screen
+       * says it: the lit chip's number, 1-based. Null with no chip lit. */
+      const findTarget = (shadow) => {
+        const lit = shadow.querySelector('.sso-into__b[data-on="true"]');
+        return lit ? Number(lit.dataset.slot) + 1 : null;
+      };
+      /* A page that carries no subtitle of its own. The ears loaded here keep
+       * answering for this page with whatever an earlier case had them
+       * overhear - the Disney+ master under tests/fixtures lists a Turkish
+       * track - and the offer to make a language stands down for a language
+       * the page carries. A case about that offer says first what the page
+       * has. Another title's empty answer is what clears a list; the same
+       * title's is kept (onPageSubtitles). */
+      const pageCarriesNothing = async () => {
+        window.postMessage({ source: "sso-ear", type: "tracks", titleId: "none", shape: [], tracks: [] }, "*");
+        await sleep(40);
+      };
 
       /* Settings and Style are windows of their own, not screens in the panel,
        * so they are looked for in the document rather than inside it - and by
@@ -4890,6 +4907,7 @@
       };
 
       check("the Find screen offers to make the missing language, and the file arrives as it is made", async () => {
+        await pageCarriesNothing();
         const job = makeJob(8);
         window.__stubDaemon = job.ops;
         const shadow = panelShadow();
@@ -5000,6 +5018,7 @@
       });
 
       check("a job for this episode is picked up whatever subtitle it was made from, and offered before a new one", async () => {
+        await pageCarriesNothing();
         /* The reload on 09-14: the job was made from the download, the page
          * came back with its own track attached, the ids did not meet, and
          * the Find screen offered "Make TR from EN…" over a job that was a
@@ -5093,6 +5112,7 @@
       });
 
       check("a translator that is a service is named as one, and not placed on this machine", async () => {
+        await pageCarriesNothing();
         const job = makeJob(4);
         job.ops.health = () => ({ ok: true, daemon_running: true, default_languages: ["en", "tr"], translate_model: "google-translate", translate_seconds_per_cue: 0.03 });
         // Every answer about the job names the service as its translator.
@@ -5129,6 +5149,7 @@
       });
 
       check("the language to make is a choice, proposed and not fixed", async () => {
+        await pageCarriesNothing();
         const job = makeJob(4);
         window.__stubDaemon = job.ops;
         const shadow = panelShadow();
@@ -5507,11 +5528,9 @@
         await sleep(120);
         if (shadow.querySelector(".sso-screen[hidden]") === null)
           throw new Error("the screens did not switch");
+        if (findTarget(shadow) !== 1) throw new Error(`the screen lights subtitle ${findTarget(shadow)}`);
         const said = shadow.querySelector(".sso-find__for").textContent;
-        if (!/subtitle 1/i.test(said)) throw new Error(`the screen says "${said}"`);
-        // No slot that does not exist. The plus passes the first free slot and
-        // there is not always one; -1 read as "becomes subtitle 0".
-        if (/subtitle 0/i.test(said)) throw new Error(`the screen says "${said}"`);
+        if (!/replaces/i.test(said)) throw new Error(`the screen says "${said}"`);
 
         const search = [...shadow.querySelectorAll("button")].find((b) => b.textContent === "Search");
         search.click();
@@ -5521,9 +5540,8 @@
         result.click();
         await sleep(200);
 
-        const after = shadow.querySelector(".sso-find__for").textContent;
-        if (!/subtitle 1/i.test(after))
-          throw new Error(`the target moved: the screen now says "${after}"`);
+        if (findTarget(shadow) !== 1)
+          throw new Error(`the target moved: the screen now lights subtitle ${findTarget(shadow)}`);
         // And the pick did land where it said it would. Nothing is detached
         // afterwards: the stubbed fetch hands back this harness's own cues, so
         // subtitle 1 is carrying what it was carrying before the test ran.
@@ -5531,6 +5549,129 @@
           throw new Error("subtitle 1 is still empty");
         panelShadow().querySelector(".sso-panel__back").click();
         await sleep(60);
+      });
+
+      check("the Find screen's chips move the target, and a pick lands on the lit one", async () => {
+        /* Asked for as "add multiple ones at a time instead of going back to
+         * the main view and clicking the add subtitle button again". The
+         * route in still picks the first target; the chips let it be changed
+         * without leaving, and each one says what its subtitle holds so the
+         * choice is between two things already seen. */
+        const shadow = panelShadow();
+        const was = window.__stubDaemon;
+        window.__stubDaemon = {
+          search: () => ({
+            used: { query: "Mercy" }, auto_attach_threshold: 0.75,
+            results: [
+              { file_id: 71, language: "en", movie_name: "Mercy", release: "Mercy.2026.WEB", match_score: 1.0 },
+              { file_id: 72, language: "tr", movie_name: "Mercy", release: "Mercy.2026.WEB.TR", match_score: 1.0 },
+            ],
+          }),
+          fetch: () => ({ cues: cuesEvery(3000, 0, 12) }),
+        };
+        try {
+          if (window.__ssoApi.status().tracks[1].attached) window.__ssoApi.detach(1);
+          await sleep(80);
+          shadow.querySelector(".sso-add").click();
+          await sleep(120);
+          if (findTarget(shadow) !== 2) throw new Error(`the plus lit subtitle ${findTarget(shadow)}`);
+          const chips = [...shadow.querySelectorAll(".sso-into__b")];
+          if (!/^1/.test(chips[0].textContent) || !/harness|Mercy/.test(chips[0].textContent))
+            throw new Error(`chip 1 reads ${JSON.stringify(chips[0].textContent)}`);
+          if (!/^2\s*empty$/.test(chips[1].textContent)) throw new Error(`chip 2 reads ${JSON.stringify(chips[1].textContent)}`);
+
+          chips[0].click();
+          await sleep(80);
+          if (findTarget(shadow) !== 1) throw new Error("the chip did not move the target");
+          if (!/replaces/.test(shadow.querySelector(".sso-find__for").textContent))
+            throw new Error(`with a full target it says ${JSON.stringify(shadow.querySelector(".sso-find__for").textContent)}`);
+
+          [...shadow.querySelectorAll("button")].find((b) => b.textContent === "Search").click();
+          await sleep(150);
+          const rows = [...shadow.querySelectorAll(".sso-result")];
+          if (rows.length !== 2) throw new Error(`${rows.length} results`);
+          rows[0].click();
+          for (let i = 0; i < 40 && window.__ssoApi.status().tracks[0].fileId !== 71; i++) await sleep(25);
+          if (window.__ssoApi.status().tracks[0].fileId !== 71) throw new Error("the pick did not replace subtitle 1");
+          if (window.__ssoApi.status().tracks[1].attached) throw new Error("the pick went to subtitle 2 as well");
+          if (!/Mercy\.2026\.WEB$/.test(chips[0].textContent)) throw new Error(`chip 1 did not follow: ${JSON.stringify(chips[0].textContent)}`);
+          if (findTarget(shadow) !== 1) throw new Error("the target moved after the pick");
+
+          // The line under the box offers the free subtitle, and the offer
+          // moves the target there; the second pick fills it.
+          const offer = shadow.querySelector(".sso-find__do");
+          if (offer.hidden || !/subtitle 2/.test(offer.textContent)) throw new Error(`the line offers ${JSON.stringify(offer.hidden ? "" : offer.textContent)}`);
+          offer.click();
+          await sleep(80);
+          if (findTarget(shadow) !== 2) throw new Error("the offer did not move the target");
+          if (!offer.hidden) throw new Error("the offer is still standing after being taken");
+          rows[1].click();
+          for (let i = 0; i < 40 && window.__ssoApi.status().tracks[1].fileId !== 72; i++) await sleep(25);
+          if (window.__ssoApi.status().tracks[1].fileId !== 72) throw new Error("the second pick did not fill subtitle 2");
+          if (window.__ssoApi.status().tracks[0].fileId !== 71) throw new Error("the second pick disturbed subtitle 1");
+          // Both full: nothing to offer.
+          if (!shadow.querySelector(".sso-find__do").hidden) throw new Error("it offers a third subtitle");
+        } finally {
+          window.__stubDaemon = was ?? null;
+          window.__ssoApi.detach(1);
+          // Subtitle 1 back the way the harness starts it, for the cases after.
+          await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1 });
+          shadow.querySelector(".sso-panel__back")?.click();
+          await sleep(80);
+        }
+      });
+
+      check("the offer to make a language stands down when the page carries it", async () => {
+        /* The page's file is exact and free and sits one card above the
+         * offer; machine-translating the English into a language the page
+         * already has is the wrong path, so it is not proposed. A forced
+         * track is a few lines and does not count. */
+        const shadow = panelShadow();
+        const was = window.__stubDaemon;
+        window.__stubDaemon = {
+          languages: () => ({ languages: ["en", "tr"] }),
+          health: () => ({ ok: true, daemon_running: true, translate_model: "gemma3:4b", translate_seconds_per_cue: 0.5 }),
+          translations: () => ({ jobs: [], languages: { en: "English", tr: "Turkish" } }),
+          pageContext: () => ({ title: "Mercy" }),
+        };
+        /* Its own title each time: a list for the same title with the same
+         * number of tracks is read as the same list (onPageSubtitles keys the
+         * change on the count), and a paused harness has no tick to notice
+         * the swap on. */
+        let title = 11;
+        const own = (tracks) => window.postMessage({ source: "sso-ear", type: "tracks", titleId: `T${title++}`, shape: ["timedTextUrls"], tracks }, "*");
+        try {
+          // A job an earlier case finished would stand in the block instead of the offer.
+          await window.__ssoApi.cancelTranslation?.().catch?.(() => {});
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 8), label: "EN · Mercy", fileId: 1, language: "en", slot: 0 });
+          if (window.__ssoApi.status().tracks[1].attached) window.__ssoApi.detach(1);
+          own([
+            { language: "en-US", url: "https://cdn.example/en.dfxp", type: "subtitle", displayName: "English", forced: false, keys: [] },
+            { language: "tr-TR", url: "https://cdn.example/tr.dfxp", type: "subtitle", displayName: "Türkçe", forced: false, keys: [] },
+          ]);
+          await sleep(80);
+          shadow.querySelector(".sso-add").click();
+          for (let i = 0; i < 40 && shadow.querySelector(".sso-own").hidden; i++) await sleep(25);
+          await sleep(150);
+          if (!shadow.querySelector(".sso-make").hidden)
+            throw new Error(`offers to make what the page carries: ${JSON.stringify(shadow.querySelector(".sso-make").textContent)}`);
+
+          own([
+            { language: "en-US", url: "https://cdn.example/en.dfxp", type: "subtitle", displayName: "English", forced: false, keys: [] },
+            { language: "tr-TR", url: "https://cdn.example/tr-forced.dfxp", type: "", displayName: "Türkçe", forced: true, keys: [] },
+          ]);
+          for (let i = 0; i < 40 && shadow.querySelector(".sso-make").hidden; i++) await sleep(25);
+          if (shadow.querySelector(".sso-make").hidden) throw new Error("a forced track counted as the language");
+          if (!/No TR subtitle is on screen/.test(shadow.querySelector(".sso-make").textContent))
+            throw new Error(`offer reads ${JSON.stringify(shadow.querySelector(".sso-make").textContent)}`);
+        } finally {
+          window.__stubDaemon = was ?? null;
+          await pageCarriesNothing();
+          // Subtitle 1 back the way the harness starts it, for the cases after.
+          await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1 });
+          shadow.querySelector(".sso-panel__back")?.click();
+          await sleep(80);
+        }
       });
 
       check("a wheel over the panel does not reach the page", async () => {
@@ -6006,8 +6147,7 @@
         if (add.hidden) throw new Error("there is room and no way to use it");
         add.click();
         await sleep(80);
-        let said = shadow.querySelector(".sso-find__for").textContent;
-        if (!/subtitle 2\b/i.test(said)) throw new Error(`with slot 2 free it says "${said}"`);
+        if (findTarget(shadow) !== 2) throw new Error(`with slot 2 free it lights subtitle ${findTarget(shadow)}`);
         shadow.querySelector(".sso-panel__back").click();
         await sleep(60);
 
@@ -6019,8 +6159,7 @@
         // than on findIndex's -1, which read as "becomes subtitle 0".
         add.click();
         await sleep(80);
-        said = shadow.querySelector(".sso-find__for").textContent;
-        if (!/subtitle [12]\b/i.test(said)) throw new Error(`with both full it says "${said}"`);
+        if (![1, 2].includes(findTarget(shadow))) throw new Error(`with both full it lights subtitle ${findTarget(shadow)}`);
         shadow.querySelector(".sso-panel__back").click();
         await sleep(60);
 
@@ -6135,8 +6274,7 @@
           throw new Error("nothing on the panel adds a subtitle while the undo is offered");
         add.click();
         await sleep(80);
-        const said = shadow.querySelector(".sso-find__for").textContent;
-        if (!/subtitle 1\b/i.test(said)) throw new Error(`the plus went to "${said}"`);
+        if (findTarget(shadow) !== 1) throw new Error(`the plus went to subtitle ${findTarget(shadow)}`);
         shadow.querySelector(".sso-panel__back").click();
         await sleep(60);
 

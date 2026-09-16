@@ -3374,6 +3374,9 @@
      * both full the sensible target is the first, and the screen says it is
      * replacing rather than filling. */
     targetSlot = slot >= 0 && slot < api.trackCount ? slot : 0;
+    // An offer to add to the other subtitle was about the last visit's
+    // target; the route in has just chosen this one.
+    if (findAction) sayFind("");
     goTo("find");
     el.query.focus();
     el.query.select();
@@ -3546,14 +3549,45 @@
   function buildSearch() {
     const wrap = document.createElement("div");
 
-    /* Where the result will land, said once, as a fact rather than a question.
+    /* Where the result will land: one chip per subtitle, the target lit, in
+     * the shape of the cards on the first screen so they read as the same two
+     * things. Every source on this screen - the page's own list, a result, the
+     * best three - attaches to the lit one.
      *
-     * There used to be an "Attach to: Subtitle 1 / Subtitle 2" control here,
-     * which asked something the reader had already answered by which plus they
-     * pressed - and which was a section away from a second, identical pair of
-     * buttons telling study which subtitle to read from. Two identical
-     * segmented controls meaning different things is a control you have to test
-     * to understand. */
+     * A control here was removed once, and the reason is worth keeping: an
+     * "Attach to: Subtitle 1 / Subtitle 2" pair sat a section away from an
+     * identical pair telling study which subtitle to read, and two identical
+     * segmented controls meaning different things is a control you have to
+     * test to understand. The study pair has since become a switch on each
+     * card, so the shape is free again - and the route in (which plus, which
+     * card's name) still chooses the first target; the chips let it be
+     * changed without leaving. What brought it back: after one pick the only
+     * way to add a second subtitle was back out, plus, search again, and the
+     * note under the box was still telling the reader to "pick Subtitle 2
+     * above" - a control that was no longer there. */
+    el.into = document.createElement("div");
+    el.into.className = "sso-seg sso-into";
+    const intoLead = document.createElement("span");
+    intoLead.className = "sso-seg__lead";
+    intoLead.textContent = "Into";
+    el.into.append(intoLead);
+    el.intoChips = Array.from({ length: api.trackCount }, (_, slot) => {
+      const chip = button("", { onClick: () => setTarget(slot), title: "Where the next pick goes" });
+      chip.className = "sso-seg__b sso-into__b";
+      chip.dataset.slot = String(slot);
+      const number = document.createElement("span");
+      number.className = "sso-into__n";
+      number.textContent = String(slot + 1);
+      const label = document.createElement("span");
+      label.className = "sso-into__l";
+      chip.append(number, label);
+      el.into.append(chip);
+      return chip;
+    });
+
+    /* What the pick does to the lit chip, in words: fills it or replaces what
+     * it holds. Always one line, so moving the target does not move the rest
+     * of the screen. */
     el.findFor = document.createElement("p");
     el.findFor.className = "sso-note sso-find__for";
 
@@ -3565,9 +3599,17 @@
      * to settle by eye - which episode, which release - so they go first, by
      * language, one press each. The list is `status().own`, overheard by the
      * content script; see onPageSubtitles there. Hidden on the pages that
-     * carry nothing, which is most of them. */
-    el.own = document.createElement("div");
-    el.own.className = "sso-own";
+     * carry nothing, which is most of them.
+     *
+     * A card each for the three places a subtitle can come from - the page,
+     * the daemon's translator, OpenSubtitles - in that order, which is the
+     * order of cost: the page's file is exact and free, a translation is
+     * seconds and no download, a search is a download and a guess at the
+     * timing. They were one run of notes and buttons before, and with the
+     * second and third source added the screen read as one long form whose
+     * parts had nothing to tell them apart. */
+    el.own = section("From the page");
+    el.own.classList.add("sso-own");
     el.own.hidden = true;
     el.ownNote = document.createElement("p");
     el.ownNote.className = "sso-note";
@@ -3584,8 +3626,8 @@
      * ten minutes for an episode - and the lines go up as they are made. This
      * block is the offer, the confirmation, and then the progress; one place,
      * because they are three moments of one act. See renderMake. */
-    el.make = document.createElement("div");
-    el.make.className = "sso-make";
+    el.make = section("Made here");
+    el.make.classList.add("sso-make");
     el.make.hidden = true;
     el.makeNote = document.createElement("p");
     el.makeNote.className = "sso-note";
@@ -3624,8 +3666,19 @@
       onClick: () => api.detached(runSearch(el.query.value.trim()), "The search"),
     }));
 
+    /* One line under the box for what the search is doing or did, and room
+     * on it for one thing to do next. The button is built once and bound to
+     * whatever offer is standing, as the status line at the foot of the
+     * window does it; see sayFind. */
     el.searchNote = document.createElement("p");
-    el.searchNote.className = "sso-note";
+    el.searchNote.className = "sso-note sso-find__note";
+    el.searchText = document.createElement("span");
+    el.searchDo = document.createElement("button");
+    el.searchDo.type = "button";
+    el.searchDo.className = "sso-find__do";
+    el.searchDo.hidden = true;
+    el.searchDo.addEventListener("click", () => findAction?.onClick());
+    el.searchNote.append(el.searchText, el.searchDo);
 
     /* Pick for me.
      *
@@ -3693,10 +3746,9 @@
     el.results = document.createElement("ul");
     el.results.className = "sso-results";
 
-    wrap.append(
-      el.findFor,
-      el.own,
-      el.make,
+    el.search = section("From OpenSubtitles");
+    el.search.classList.add("sso-find__search");
+    el.search.append(
       row,
       el.searchNote,
       el.tryNext,
@@ -3705,7 +3757,42 @@
       el.resultsHead,
       el.results,
     );
+
+    wrap.append(el.into, el.findFor, el.own, el.make, el.search);
     return wrap;
+  }
+
+  /* Say what the search is doing, and at most one thing to do about it.
+   * Replaces a dozen paired writes of className and textContent, which is
+   * how a button could not be added to the line without every one of them
+   * learning to keep it. */
+  let findAction = null;
+  function sayFind(text, { warn = false, action = null } = {}) {
+    el.searchNote.className = `sso-note sso-find__note${warn ? " sso-note--warn" : ""}`;
+    el.searchText.textContent = text;
+    findAction = text && action ? action : null;
+    el.searchDo.textContent = findAction ? findAction.label : "";
+    el.searchDo.hidden = !findAction;
+  }
+
+  /* Move the target. The chips say where it is now; the line under the box
+   * is only rewritten when it was offering the move, since that offer named
+   * the target that was. */
+  function setTarget(slot) {
+    if (slot === targetSlot) return;
+    targetSlot = slot;
+    if (findAction) sayFind(`The next pick becomes subtitle ${slot + 1}.`);
+    refresh(api.status());
+  }
+
+  /* After a pick has landed: the other subtitle, if it is free. This is the
+   * click the reader used to make by backing out and pressing the plus
+   * again, and it is offered on the line their eyes are on rather than on
+   * the chips at the top, which after thirty results have scrolled away. */
+  function addAnotherAction(slot) {
+    const other = slot === 0 ? 1 : 0;
+    if (other >= api.trackCount || api.status().tracks[other]?.attached) return null;
+    return { label: `Add another as subtitle ${other + 1}`, onClick: () => setTarget(other) };
   }
 
   let languageChoice = "";
@@ -3906,8 +3993,18 @@
     const attached = status.tracks.filter((track) => track.attached);
     if (!attached.length) return null;
     const have = new Set(attached.map((track) => short(track.language)));
-    const missing = (lastMissing || []).map(short).find((code) => code && !have.has(code));
-    const proposed = missing || (wanted || []).find((code) => code && !have.has(code));
+    /* Not proposed: a language the page carries as a whole subtitle, which
+     * sits one card above this offer, exact and free. The offer was made
+     * regardless, so a page holding Turkish was still offering to machine-
+     * translate the English into it. Forced and auto tracks do not count -
+     * one is a few lines, the other is a machine's guess already. The box
+     * still lets it be chosen. */
+    const onPage = new Set(
+      (status.own?.tracks ?? []).filter((track) => track.kind === "subtitle" || track.kind === "sdh").map((track) => short(track.language)),
+    );
+    const absent = (code) => code && !have.has(code) && !onPage.has(code);
+    const missing = (lastMissing || []).map(short).find(absent);
+    const proposed = missing || (wanted || []).find(absent);
     const target = (pickedTarget && !have.has(pickedTarget) ? pickedTarget : "") || proposed;
     if (!target) return null;
     const lead = status.tracks[status.leadSlot];
@@ -4116,10 +4213,7 @@
     if (el.tryBest) el.tryBest.hidden = true;
     if (el.tryNext) el.tryNext.hidden = true;
     nextEpisode = null;
-    if (el.searchNote) {
-      el.searchNote.className = "sso-note";
-      el.searchNote.textContent = "";
-    }
+    if (el.searchNote) sayFind("");
     // Only what this file put there, and only while there is a screen to put
     // it on - the panel is refreshed whether it is open or shut, and asking
     // the worker for a title nobody is looking at is a round trip for nothing.
@@ -4131,8 +4225,7 @@
     el.resultsHead.hidden = true;
     el.tryBest.hidden = true;
     el.tryNext.hidden = true;
-    el.searchNote.className = "sso-note";
-    el.searchNote.textContent = "Searching…";
+    sayFind("Searching…");
 
     /* From the worker, not from this frame. The panel is injected into whichever
      * frame holds the video, and on an embedded player that frame can see
@@ -4164,14 +4257,11 @@
       episode: context.episode ?? undefined,
     });
     if (!response || response.transportError) {
-      el.searchNote.className = "sso-note sso-note--warn";
-      el.searchNote.textContent =
-        response?.transportError || "Cannot reach the daemon. Is run.sh running?";
+      sayFind(response?.transportError || "Cannot reach the daemon. Is run.sh running?", { warn: true });
       return;
     }
     if (response.error) {
-      el.searchNote.className = "sso-note sso-note--warn";
-      el.searchNote.textContent = response.error;
+      sayFind(response.error, { warn: true });
       return;
     }
     if (!query && response.used?.query) el.query.value = response.used.query;
@@ -4188,21 +4278,19 @@
     offerNextEpisode(response);
     const absence = languageAbsenceNote(response);
     if (lastResults.length === 0) {
-      el.searchNote.className = "sso-note sso-note--warn";
       /* "Try a different title" was the wrong instruction for the case that
        * brought this up: the title was right and the subtitle does not exist.
        * Sending the reader back to retype a correct title is worse than saying
        * nothing, because it looks like something they can fix. */
-      el.searchNote.textContent = absence || "Nothing found. Try a different title.";
+      sayFind(absence || "Nothing found. Try a different title.", { warn: true });
       renderMake(api.status());
       return;
     }
 
-    el.searchNote.className = response.low_confidence ? "sso-note sso-note--warn" : "sso-note";
     const headline = response.low_confidence
       ? "Nothing matched well. These are guesses — check before attaching."
       : `${lastResults.length} result${lastResults.length === 1 ? "" : "s"}`;
-    el.searchNote.textContent = absence ? `${headline}. ${absence}` : headline;
+    sayFind(absence ? `${headline}. ${absence}` : headline, { warn: Boolean(response.low_confidence) });
 
     lastThreshold = response.auto_attach_threshold ?? 0.75;
     languageChoice = "";
@@ -4383,13 +4471,11 @@
      * it - a control that has permanently stopped working because one download
      * went wrong. runDiagnostic already had this shape and these two did not. */
     el.tryBest.disabled = true;
-    el.searchNote.className = "sso-note";
     const tried = [];
     const failed = [];
     try {
       for (const [index, result] of picks.entries()) {
-        el.searchNote.textContent =
-          `Trying ${index + 1} of ${picks.length} · ${result.release || result.movie_name || ""}`;
+        sayFind(`Trying ${index + 1} of ${picks.length} · ${result.release || result.movie_name || ""}`);
         const response = await api.daemon("fetch", {
           fileId: result.file_id,
           context: fetchContext(result),
@@ -4416,10 +4502,7 @@
       renderResults(lastResults, lastThreshold);
     }
     if (!tried.length) {
-      el.searchNote.className = "sso-note sso-note--warn";
-      el.searchNote.textContent = failed.length
-        ? `Could not try any of them: ${failed[0]}.`
-        : "Could not download any of them.";
+      sayFind(failed.length ? `Could not try any of them: ${failed[0]}.` : "Could not download any of them.", { warn: true });
       return;
     }
 
@@ -4464,11 +4547,12 @@
         : `None of the three clearly matches subtitle ${referenceSlot + 1}. This is the closest — check it.`
       : `Nothing attached to check against, so this is the one that covers the film best.`;
 
-    await attachResult(best.result, { cues: best.cues });
-    el.searchNote.className =
-      reference && best.confidence < (aligner?.ACCEPT ?? 3.5) ? "sso-note sso-note--warn" : "sso-note";
-    el.searchNote.textContent =
-      `${said}${tried.length > 1 ? ` The other ${tried.length - 1} are cached, so picking one below is free.` : ""}`;
+    const landed = await attachResult(best.result, { cues: best.cues });
+    if (!landed) return;
+    sayFind(
+      `${said}${tried.length > 1 ? ` The other ${tried.length - 1} are cached, so picking one below is free.` : ""}`,
+      { warn: Boolean(reference && best.confidence < (aligner?.ACCEPT ?? 3.5)), action: addAnotherAction(landed.slot) },
+    );
   }
 
   function tag(text, extra) {
@@ -4513,19 +4597,19 @@
    * file already in hand. */
   async function attachResult(result, { cues = null } = {}) {
     const slot = targetSlot;
-    el.searchNote.className = "sso-note";
-    if (!cues) el.searchNote.textContent = result.cached ? "Loading…" : "Downloading…";
+    if (!cues) sayFind(result.cached ? "Loading…" : "Downloading…");
 
     const response = cues
       ? { cues }
       : await api.daemon("fetch", { fileId: result.file_id, context: fetchContext(result) });
     if (!response || response.error || response.transportError) {
-      el.searchNote.className = "sso-note sso-note--warn";
-      el.searchNote.textContent =
+      sayFind(
         response?.quota_exceeded
           ? "Daily download limit reached. Cached subtitles still work."
-          : response?.error || response?.transportError || "Download failed.";
-      return;
+          : response?.error || response?.transportError || "Download failed.",
+        { warn: true },
+      );
+      return null;
     }
 
     await api.attach({
@@ -4545,14 +4629,12 @@
      * A guess about the next click is not worth making when getting it wrong is
      * invisible until two subtitles are on screen.
      *
-     * The convenience it was buying is a note instead, which costs one click
-     * and no surprise. */
-    el.searchNote.className = "sso-note";
-    const other = slot === 0 ? 1 : 0;
-    el.searchNote.textContent = api.status().tracks[other].attached
-      ? `Attached to subtitle ${slot + 1}.`
-      : `Attached to subtitle ${slot + 1}. Pick “Subtitle ${other + 1}” above to add a second one.`;
+     * The convenience it was buying is one button on the line instead, which
+     * costs one click and no surprise: it moves the target to the free
+     * subtitle, and the chips at the top show it moved. */
+    sayFind(`Attached as subtitle ${slot + 1}.`, { action: addAnotherAction(slot) });
     refresh(api.status());
+    return { slot };
   }
 
   async function bestPageTitle() {
@@ -5257,10 +5339,16 @@
       : `Ad time removed: ${(drift / 1000).toFixed(0)}s`;
 
     if (showing("find")) {
+      for (const [slot, chip] of el.intoChips.entries()) {
+        const track = status.tracks[slot];
+        chip.dataset.on = slot === targetSlot ? "true" : "false";
+        chip.dataset.empty = track?.attached ? "false" : "true";
+        chip.lastChild.textContent = track?.attached ? track.label || "attached" : "empty";
+      }
       const filling = status.tracks[targetSlot];
       el.findFor.textContent = filling?.attached
-        ? `Replacing subtitle ${targetSlot + 1} · ${filling.label || "attached"}`
-        : `The result you pick becomes subtitle ${targetSlot + 1}.`;
+        ? `The next pick replaces ${filling.label || "what is there"}.`
+        : `The next pick becomes subtitle ${targetSlot + 1}.`;
       renderOwn(status.own);
       renderMake(status);
     }
