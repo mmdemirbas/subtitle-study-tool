@@ -1568,6 +1568,7 @@
     root.append(tip);
 
     let buckets = null;
+    let pendingBuckets = null;
     // Lines shifted off either end of the film. Counted, never binned - see
     // rebuildDensity for what binning them cost.
     let spilled = { before: 0, after: 0 };
@@ -1655,15 +1656,28 @@
     function rebuildDensity(status) {
       const track = status.tracks[slot];
       const next = [
-        track.cueCount, track.fileId, track.offsetMs, track.rate,
+        track.cueCount, track.pendingCount, track.fileId, track.offsetMs, track.rate,
         Math.round(durationMs), width, status.adDriftMs,
       ].join("|");
       if (next === signature) return;
       signature = next;
 
       buckets = new Float32Array(width);
+      pendingBuckets = null;
       spilled = { before: 0, after: 0 };
       if (!durationMs || !track.cueCount) return;
+      /* The lines a made subtitle has not got yet, as a second histogram
+       * under the first: where dialogue is still to come, in the pending
+       * ink. One column each, whatever they say - they say nothing yet. */
+      const { pendingStarts = [] } = api.cueSpans(slot);
+      if (pendingStarts.length) {
+        pendingBuckets = new Uint8Array(width);
+        for (const fileMs of pendingStarts) {
+          const at = api.toStreamMs(slot, fileMs);
+          if (at < 0 || at > durationMs) continue;
+          pendingBuckets[Math.min(width - 1, Math.max(0, Math.round((at / durationMs) * (width - 1))))] = 1;
+        }
+      }
       let tallest = 0;
       /* Weighted by how much is said, not by how many lines say it.
        *
@@ -1702,6 +1716,14 @@
 
     function paintDensity(context) {
       if (!buckets) return;
+      if (pendingBuckets) {
+        context.fillStyle = inkOf().pending;
+        const stub = Math.max(2, Math.round(0.28 * height));
+        for (let i = 0; i < width; i++) {
+          if (pendingBuckets[i]) context.fillRect(i, height - stub, ratio(), stub);
+        }
+        context.fillStyle = inkOf().ink;
+      }
       for (let i = 0; i < width; i++) {
         const value = buckets[i];
         if (!value) continue;
@@ -1799,6 +1821,27 @@
         context.fillRect(left, height - bar, thin, bar);
       }
       context.globalAlpha = 1;
+
+      /* The lines still to come, on a subtitle being made: the same block,
+       * a stub high and in the pending ink, so the frontier between what is
+       * made and what is not is a change of colour on the strip. They have
+       * no text, so no height to give them - a stub says "a line goes here"
+       * and nothing about how much it will say. */
+      const { pendingStarts = [], pendingEnds = [] } = spans;
+      if (pendingStarts.length) {
+        context.fillStyle = inkOf().pending;
+        const stub = Math.max(thin, Math.round(0.28 * (height - 2)));
+        for (let i = 0; i < pendingStarts.length; i++) {
+          const at = api.toStreamMs(slot, pendingStarts[i]);
+          if (at > to) break;
+          const until = api.toStreamMs(slot, pendingEnds[i] ?? pendingStarts[i]);
+          if (until < from) continue;
+          const left = Math.round(xOf(at));
+          const span = Math.max(thin, Math.round(xOf(until)) - left - ratio());
+          context.fillRect(left, height - stub, span, stub);
+        }
+        context.fillStyle = inkOf().ink;
+      }
     }
 
     /* Which line is under this pointer, by the same arithmetic that drew it.
@@ -1843,9 +1886,35 @@
     const texts = new Map();
     let textsFor = null;
     let wanted = -1;
+    /* Whether the pointer is over a line still to come, by the arithmetic
+     * that drew it. Only asked when no cue is under it. */
+    function pendingUnder(cssX) {
+      const { pendingStarts = [], pendingEnds = [] } = api.cueSpans(slot);
+      if (!pendingStarts.length || !width || to <= from) return false;
+      const px = cssX * ratio();
+      const thin = Math.max(2, ratio() * 2);
+      for (let i = 0; i < pendingStarts.length; i++) {
+        const at = api.toStreamMs(slot, pendingStarts[i]);
+        if (at > to) break;
+        const left = Math.round(xOf(at));
+        const until = api.toStreamMs(slot, pendingEnds[i] ?? pendingStarts[i]);
+        const span = Math.max(thin, Math.round(xOf(until)) - left - ratio());
+        if (px >= left && px <= left + span) return true;
+      }
+      return false;
+    }
+
     async function showTip(index, cssX) {
       if (index < 0) {
         wanted = -1;
+        if (pendingUnder(cssX)) {
+          tip.textContent = "not made yet";
+          tip.hidden = false;
+          const room = plot.getBoundingClientRect().width;
+          const wide = tip.getBoundingClientRect().width;
+          tip.style.left = `${Math.round(Math.min(Math.max(0, cssX - wide / 2), Math.max(0, room - wide)))}px`;
+          return;
+        }
         tip.hidden = true;
         return;
       }
@@ -1895,6 +1964,7 @@
         head: token("--sso-map-head", "#eef0f3"),
         spill: token("--sso-map-spill", "#f0836f"),
         grid: token("--sso-map-grid", "rgba(238, 240, 243, 0.22)"),
+        pending: token("--sso-map-pending", "rgba(238, 240, 243, 0.28)"),
       };
       return inks;
     };
@@ -1978,6 +2048,18 @@
 
     function draw(status) {
       const track = status.tracks[slot];
+      /* The strip's ink says where the subtitle came from - the page's own,
+       * a download, one made here - the same ink the card's language pill
+       * wears, so the two are read as one thing. Set before anything can
+       * return early, so a strip that has no width yet is the right colour
+       * the moment it has one. The tokens are the sheet's; a change of
+       * origin is a change of ink, re-read on the next paint. */
+      const origin = originOf(track.fileId);
+      if (root.dataset.origin !== origin) {
+        root.dataset.origin = origin;
+        inks = null;
+        painted = "";
+      }
       // Nothing to draw, and nothing honest to draw it against: a film whose
       // duration the player has not reported yet has no axis.
       root.hidden = !track.attached || !Number.isFinite(status.duration) || status.duration <= 0;
@@ -2041,7 +2123,7 @@
       const shot = [
         Math.round(from / Math.max(1, perPixel)), Math.round(perPixel),
         at === null ? -1 : Math.round(Math.min(width - 1, Math.max(0, xOf(at)))),
-        track.offsetMs, track.rate, track.cueCount, track.fileId,
+        track.offsetMs, track.rate, track.cueCount, track.pendingCount, track.fileId,
         status.adDriftMs, width, spanStep,
       ].join("|");
       if (shot === painted) return;
@@ -3769,18 +3851,35 @@
   let confirming = null;
   let elsewhere = [];
   let makeShown = "";
+  // The languages a subtitle can be made in, code to name, from the daemon.
+  let makeLanguages = null;
+  // The page this tab is on, for telling the daemon's jobs for this episode
+  // from its jobs for another.
+  let makeContext = null;
+  /* The language the reader picked in the box, if they did. It was the first
+   * language of the settings not on screen and nothing else - "It looks like
+   * a hard-coded option. Can't I choose another language?" - so the plan
+   * still proposes that one and the box lets it be changed. Forgotten each
+   * time the screen is opened: the box proposes, the reader changes it and
+   * presses Make in the same breath, and a pick kept from an earlier visit
+   * would be a surprise under a button that names it. */
+  let pickedTarget = "";
 
   async function primeMake() {
-    const [languages, health, jobs] = await Promise.all([
+    const [languages, health, jobs, context] = await Promise.all([
       api.daemon("languages", {}),
       api.daemon("health", {}),
       api.daemon("translations", {}),
+      api.daemon("pageContext", {}),
     ]);
     wanted = Array.isArray(languages?.languages) ? languages.languages.map((code) => String(code).toLowerCase().slice(0, 2)) : null;
     makerInfo = health && !health.transportError
       ? { model: health.translate_model || "", secondsPerCue: Number(health.translate_seconds_per_cue) || 0.5, daemon: Boolean(health.daemon_running) }
       : null;
     elsewhere = Array.isArray(jobs?.jobs) ? jobs.jobs.filter((job) => job.status === "queued" || job.status === "running") : [];
+    makeLanguages = jobs?.languages && typeof jobs.languages === "object" ? jobs.languages : null;
+    makeContext = context && !context.transportError ? context : null;
+    pickedTarget = "";
     makeShown = "";
     renderMake(api.status());
   }
@@ -3788,16 +3887,17 @@
   const short = (code) => String(code || "").toLowerCase().slice(0, 2);
   const minutesFor = (lines) => Math.max(1, Math.round((lines * (makerInfo?.secondsPerCue || 0.5)) / 60));
 
-  /* Which language to make, and from which subtitle. The language the search
-   * said is missing wins; otherwise the first wanted one not on screen. The
-   * source is the lead if it is not itself a made file, else any attached
-   * subtitle in another language. */
+  /* Which language to make, and from which subtitle. The one the reader
+   * picked in the box; else the language the search said is missing; else
+   * the first wanted one not on screen. The source is the lead if it is not
+   * itself a made file, else any attached subtitle in another language. */
   function makePlan(status) {
     const attached = status.tracks.filter((track) => track.attached);
     if (!attached.length) return null;
     const have = new Set(attached.map((track) => short(track.language)));
     const missing = (lastMissing || []).map(short).find((code) => code && !have.has(code));
-    const target = missing || (wanted || []).find((code) => code && !have.has(code));
+    const proposed = missing || (wanted || []).find((code) => code && !have.has(code));
+    const target = (pickedTarget && !have.has(pickedTarget) ? pickedTarget : "") || proposed;
     if (!target) return null;
     const lead = status.tracks[status.leadSlot];
     const source =
@@ -3805,11 +3905,58 @@
       attached.find((track) => short(track.language) !== target && !isGenerated(track.fileId)) ||
       null;
     if (!source) return null;
-    return { target, source, into: status.tracks.findIndex((track) => !track.attached && track.slot !== source.slot) };
+    return { target, proposed, source, into: status.tracks.findIndex((track) => !track.attached && track.slot !== source.slot) };
   }
 
   function isGenerated(fileId) {
     return typeof fileId === "number" && fileId >= 90_000_000_000_000;
+  }
+
+  /* Whether a job's meta names the episode this tab is on. The rule the
+   * daemon folds two sources into one job by, and the one content.js picks a
+   * job up by after a reload (sameEpisode there): an IMDb id with the season
+   * and episode beside it, or a title with an episode number. */
+  function jobIsThisEpisode(job) {
+    const meta = job?.meta;
+    const context = makeContext;
+    if (!meta || !context) return false;
+    const same = (a, b) => (a ?? null) === (b ?? null);
+    const imdb = String(meta.imdb_id || "").trim().toLowerCase();
+    if (imdb) {
+      return imdb === String(context.imdbId || "").trim().toLowerCase() && same(meta.season, context.season) && same(meta.episode, context.episode);
+    }
+    const name = String(meta.movie_name || "").trim().toLowerCase();
+    if (!name || (meta.season == null && meta.episode == null)) return false;
+    return name === String(context.title || "").trim().toLowerCase() && same(meta.season, context.season) && same(meta.episode, context.episode);
+  }
+
+  /* The box of languages a subtitle can be made in. The wanted ones first,
+   * then the daemon's table by name, and never the source's own language,
+   * which would be a translation into itself. A <select> rather than the
+   * segmented row the rest of the panel uses for a choice: that row is for
+   * a small fixed set worth seeing at once, and forty languages are not. */
+  function languageBox(plan, onPick) {
+    const box = document.createElement("select");
+    box.className = "sso-make__lang";
+    box.title = "Which language to make";
+    const from = short(plan.source.language);
+    const named = (code) => makeLanguages?.[code] || code.toUpperCase();
+    const first = (wanted || []).filter((code) => code && code !== from);
+    const rest = Object.keys(makeLanguages || {})
+      .map(short)
+      .filter((code, index, all) => code && code !== from && !first.includes(code) && all.indexOf(code) === index)
+      .sort((a, b) => named(a).localeCompare(named(b)));
+    for (const code of [...first, ...rest, ...(first.includes(plan.target) || rest.includes(plan.target) ? [] : [plan.target])]) {
+      const option = document.createElement("option");
+      option.value = code;
+      option.textContent = `${named(code)} (${code.toUpperCase()})`;
+      box.append(option);
+    }
+    box.value = plan.target;
+    box.addEventListener("change", () => onPick(box.value));
+    // Typing into the box must not reach the nudge bindings, as with the query.
+    box.addEventListener("keydown", (event) => event.stopPropagation());
+    return box;
   }
 
   function renderMake(status) {
@@ -3817,9 +3964,9 @@
     const running = status.translation;
     const plan = running ? null : makePlan(status);
     const key = JSON.stringify([
-      running && [running.job, running.status, running.done, running.total, running.error, running.etaSeconds, running.retrying],
+      running && [running.job, running.status, running.done, running.total, running.error, running.etaSeconds, running.retrying, running.waitingFor],
       plan && [plan.target, plan.source.slot, plan.source.cueCount],
-      confirming, elsewhere.map((job) => [job.job, job.done]), makerInfo?.model,
+      confirming, elsewhere.map((job) => [job.job, job.done]), makerInfo?.model, Boolean(makeLanguages), Boolean(makeContext),
     ]);
     if (key === makeShown) return;
     makeShown = key;
@@ -3846,6 +3993,13 @@
           ? `Making the ${target} subtitle stopped: ${running.error || "the model gave up"}. ${running.done} of ${running.total} lines were made; going on starts from there.`
           : `Making the ${target} subtitle was stopped at ${running.done} of ${running.total} lines.`;
         el.makeRow.append(button("Go on", { primary: true, onClick: () => goOn("Going on with the translation") }));
+      } else if (running.status === "queued" && running.waitingFor) {
+        /* Waiting its turn, and said so. It read "0 of 992 lines" for the
+         * length of the job ahead of it, which is the zero that does not
+         * move; the daemon now serves this one next, and what it is waiting
+         * for is the part worth knowing. */
+        el.makeNote.textContent = `The ${target} subtitle for this is next: the daemon is finishing ${running.waitingFor} first, then ${running.total} lines from ${from} with ${running.model}${running.done ? ` (${running.done} already made)` : ""} · in ${into}.`;
+        el.makeRow.append(button("Stop", { onClick: () => api.detached(api.cancelTranslation(), "Stopping the translation") }));
       } else {
         const minutes = Math.round((running.etaSeconds || 0) / 60);
         const left = running.etaSeconds ? (minutes >= 1 ? `about ${minutes} min left` : "under a minute left") : "";
@@ -3859,26 +4013,47 @@
       return;
     }
 
+    /* A job of the daemon's that this tab is not following. For THIS
+     * episode, it is offered before any plan to make one - the plan would be
+     * a second job for the same file, which is what happened on 09-14 when
+     * the offer to attach sat hidden under "Make TR from EN…". For another
+     * film it is mentioned and nothing more: attaching it here would put the
+     * wrong episode's lines under this one. */
     const foreign = elsewhere.filter((job) => !status.tracks.some((track) => track.fileId === job.generated_file_id));
-    if (foreign.length && !plan) {
-      const job = foreign[0];
-      el.makeNote.textContent = `The daemon is making a ${String(job.target).toUpperCase()} subtitle${job.meta?.movie_name ? ` for ${job.meta.movie_name}` : ""}, ${job.done} of ${job.total} lines.`;
-      el.makeRow.append(button("Attach it as it arrives", { onClick: () => api.detached(api.followTranslation({ job: job.job, target: job.target, sourceLanguage: job.source_language }), "Following the translation") }));
+    const have = new Set(status.tracks.filter((track) => track.attached).map((track) => short(track.language)));
+    const mine = foreign.find((job) => jobIsThisEpisode(job) && !have.has(short(job.target)));
+    if (mine) {
+      el.makeNote.textContent = `The daemon is making a ${String(mine.target).toUpperCase()} subtitle for this, ${mine.done} of ${mine.total} lines.`;
+      el.makeRow.append(button("Attach it as it arrives", { primary: true, onClick: () => api.detached(api.followTranslation({ job: mine.job, target: mine.target, sourceLanguage: mine.source_language }), "Following the translation") }));
       el.make.hidden = false;
       return;
     }
+    const busy = foreign[0];
+    const busyNote = busy
+      ? ` The daemon is busy with a ${String(busy.target).toUpperCase()} subtitle${busy.meta?.movie_name ? ` for ${busy.meta.movie_name}` : ""} (${busy.done} of ${busy.total} lines); one started here goes first.`
+      : "";
 
     if (!plan) {
-      el.make.hidden = true;
+      if (!busy) {
+        el.make.hidden = true;
+        return;
+      }
+      el.makeNote.textContent = busyNote.trim();
+      el.make.hidden = false;
       return;
     }
     const target = plan.target.toUpperCase();
     const from = short(plan.source.language).toUpperCase();
     const which = `subtitle ${plan.source.slot + 1} (${from})`;
+    const pick = (code) => {
+      pickedTarget = short(code);
+      makeShown = "";
+      renderMake(api.status());
+    };
     if (confirming === plan.target) {
       const model = makerInfo?.model || "the local model";
       const where = plan.into >= 0 ? `subtitle ${plan.into + 1}` : "the other slot, replacing what is there";
-      el.makeNote.textContent = `${plan.source.cueCount} lines of ${which} through ${model}${makerInfo?.daemon === false ? "" : " on this machine"}, about ${minutesFor(plan.source.cueCount)} min. The ${target} lines go up in ${where} as they are made, and the file is kept for next time.`;
+      el.makeNote.textContent = `${plan.source.cueCount} lines of ${which} through ${model}${makerInfo?.daemon === false ? "" : " on this machine"}, about ${minutesFor(plan.source.cueCount)} min. The ${target} lines go up in ${where} as they are made, and the file is kept for next time.${busyNote}`;
       el.makeRow.append(
         button(`Start`, { primary: true, onClick: () => {
           confirming = null;
@@ -3888,10 +4063,13 @@
       );
     } else {
       const absent = (lastMissing || []).map(short).includes(plan.target);
-      el.makeNote.textContent = absent
+      el.makeNote.textContent = (absent
         ? `No ${target} subtitle exists for this. One can be made from ${which}.`
-        : `No ${target} subtitle is on screen. One can be made from ${which}.`;
-      el.makeRow.append(button(`Make ${target} from ${from}…`, { onClick: () => { confirming = plan.target; makeShown = ""; renderMake(api.status()); } }));
+        : `No ${target} subtitle is on screen. One can be made from ${which}.`) + busyNote;
+      el.makeRow.append(
+        button(`Make ${target} from ${from}…`, { onClick: () => { confirming = plan.target; makeShown = ""; renderMake(api.status()); } }),
+      );
+      if (makeLanguages) el.makeRow.append(languageBox(plan, pick));
     }
     el.make.hidden = false;
   }
@@ -3919,6 +4097,8 @@
     lastMissing = [];
     confirming = null;
     makeShown = "";
+    pickedTarget = "";
+    makeContext = null;
     languageChoice = "";
     el.results?.replaceChildren();
     if (el.languageFilter) el.languageFilter.hidden = true;
@@ -4286,6 +4466,24 @@
     span.textContent = text;
     return span;
   }
+
+  /* Where a subtitle came from, from its id: the page's own tracks are
+   * `page:<title>:<code>:<kind>`, the daemon files what it makes above 9e13
+   * (see translate_jobs.py), and everything else is a download. Three
+   * origins, three inks, on the card's language pill and the strip - asked
+   * for as "different colors" to "distinguish a generated subtitle, a
+   * downloaded subtitle, and a built-in subtitle". */
+  function originOf(fileId) {
+    if (typeof fileId === "string" && fileId.startsWith("page:")) return "page";
+    if (typeof fileId === "number" && fileId >= 90_000_000_000_000) return "made";
+    return "download";
+  }
+
+  const ORIGIN_WORDS = {
+    page: "the page's own subtitle",
+    made: "made here, by a model on this machine",
+    download: "downloaded from OpenSubtitles",
+  };
 
   /* Title context, so the cache can recognise this film next time and not spend
    * another download on a different upload of it. */
@@ -4888,6 +5086,10 @@
       card.labelNo.textContent = String(slot + 1);
       card.labelLang.textContent = language;
       card.labelLang.hidden = !language;
+      // The pill wears the origin's ink, the strip below it the same. See originOf.
+      const origin = originOf(track.fileId);
+      card.labelLang.dataset.origin = origin;
+      card.labelLang.title = `${language}: ${ORIGIN_WORDS[origin]}${track.pendingCount ? `, ${track.pendingCount} lines still to come` : ""}`;
       card.labelHead.textContent = head;
       card.labelTail.textContent = tail;
       // Release names are long and the controls beside them are not optional,

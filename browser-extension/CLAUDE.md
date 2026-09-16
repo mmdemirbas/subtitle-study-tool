@@ -669,17 +669,31 @@ the follower in `content.js` are load-bearing:
   place through `putTranslated` rather than attaching again. `attach()` resets
   the corrections, re-arranges the boxes and re-reads the offset; a subtitle
   that has grown by forty lines has changed none of that.
-- **The lines not yet translated are the source's**, by the daemon's
-  construction, so the box is readable from the first poll and the other
-  language arrives under the reader's eyes. `translationLabel` carries the
-  percentage while it is being made and the model's name once it is done.
+- **The lines not yet translated are left out of the track.** The daemon's
+  file carries the source's text for them, which is the right file to keep
+  and the wrong one to show: a Turkish box saying the English line again is
+  a second copy of what is on screen, and study's rail, card and lookups
+  read it as the translation. Reported as "show only the completed
+  sentences, not the copies of the English one". `putTranslated` drops the
+  `pending_indexes` the daemon names and keeps their spans on
+  `track.pending`, which the map draws in the pending ink; a cue with
+  nothing to read is not a cue (see the section of that name). The lines
+  the model was asked for and could not do are not pending - they stay, in
+  the source language, as the honest failure the counts describe.
+  `translationLabel` carries the percentage while it is being made, what a
+  queued job is waiting for, and the model's name once it is done.
 - **The poll is the extension's only claim on the job.** `TRANSLATE_POLL_MS`
   without the cues, then once more with them only when `done` moved. A daemon
   that stops answering slows the poll and keeps it; the job survives the
-  restart, so the follower must too. It does not survive a reload of the
-  page: the Find screen then lists the daemon's running jobs from
-  `GET /translate` and offers to attach one as it arrives, through
-  `followTranslation`.
+  restart, so the follower must too. A reload of the page loses the thread,
+  and `pickUpTranslation` finds it again on the next attach: by the source's
+  id, or by the episode - the daemon keeps the page context in the job's
+  meta, and `sameEpisode` reads it back against this tab's. The 09-14 reload
+  swapped the source (the download for the page's own track), so the ids
+  did not meet and the reader made a second job for the same episode; the
+  daemon now folds those into one, and the Find screen offers this
+  episode's job before offering to make one. A job that is followed while
+  queued is asked for again on the way in, which moves it to the front.
 - **Nothing runs until the reader has said so, and the search is asked first.**
   Three triggers, one confirmation each: the Find screen's block (`renderMake`
   in `panel.js`) turns the offer into the terms on the first press and starts
@@ -688,7 +702,14 @@ the follower in `content.js` are load-bearing:
   search whether the language exists before offering to make it - a
   translation of a film somebody has already subtitled is the poorer file,
   slower. `isGeneratedFile` keeps a made file from being the source of
-  another.
+  another. The language is proposed, not fixed: the block carries a box of
+  the daemon's languages (`GET /translate` names them) with the proposal
+  selected, and the pick is forgotten each time the screen opens.
+- **Origin is an ink.** `originOf` in `panel.js` reads it off the file id -
+  `page:` strings are the page's own, numbers above 9e13 are made here, the
+  rest are downloads - and the card's language pill and the strip under it
+  wear the same one (`--sso-origin-*` in `panel.css`). Asked for as
+  "different colors" for the three kinds.
 
 `status().translation` is the whole of what the panel reads, and `renderMake`
 is rebuilt only when what it would say changes, because `refresh` runs on

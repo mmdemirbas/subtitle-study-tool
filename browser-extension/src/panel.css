@@ -31,6 +31,16 @@
   --sso-accent: #4c8bf5;
   --sso-accent-ink: #93b9fb;
 
+  /* Where a subtitle came from, as one ink each, worn by the card's language
+   * pill and by the strip under it. Three because there are three kinds and
+   * they are worth telling apart at a glance: the page's own track is the
+   * blue the strip has always been, a download is teal, one made here by a
+   * model is violet - none of them the amber that means "weak" or the red
+   * that means "off the film", which are warnings, not kinds. */
+  --sso-origin-page: #93b9fb;
+  --sso-origin-download: #7fd1c4;
+  --sso-origin-made: #d3a8f2;
+
   /* There is no measure cap on a row, and the one that was here was a mistake
    * worth recording.
    *
@@ -153,6 +163,26 @@ button.sso-add:hover:not(:disabled) {
 
 .sso-make__row {
   flex-wrap: wrap;
+}
+
+/* The language to make, beside the button that makes it. Styled as the text
+ * field above it is, so it reads as an input on a row of buttons and not as
+ * a fourth button. */
+select.sso-make__lang {
+  flex: none;
+  max-width: 180px;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: var(--sso-t-small);
+  color: var(--sso-ink);
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--sso-line);
+  border-radius: var(--sso-r-ctl);
+}
+
+select.sso-make__lang:focus {
+  outline: none;
+  border-color: var(--sso-accent);
 }
 
 .sso-find__for {
@@ -592,6 +622,23 @@ button.sso-quick__move[data-on="true"] {
   box-shadow: inset 0 0 0 1px var(--sso-line);
 }
 
+/* And in the origin's ink, hairline and letters both, so the pill and the
+ * strip below it are read as one thing. The tooltip carries the words. */
+.sso-track__lang[data-origin="page"] {
+  color: var(--sso-origin-page);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sso-origin-page) 55%, transparent);
+}
+
+.sso-track__lang[data-origin="download"] {
+  color: var(--sso-origin-download);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sso-origin-download) 55%, transparent);
+}
+
+.sso-track__lang[data-origin="made"] {
+  color: var(--sso-origin-made);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sso-origin-made) 55%, transparent);
+}
+
 /* One subtitle is not a choice, so the name stops offering one - without
  * dimming, because it is still the name and still has to be read. */
 /* The name gives way first, but never all the way to nothing.
@@ -756,8 +803,12 @@ button.sso-quick__move[data-on="true"] {
 }
 
 .sso-map {
-  --sso-map-ink: #93b9fb;
+  --sso-map-ink: var(--sso-origin-page, #93b9fb);
   --sso-map-head: #eef0f3;
+  /* Lines of a subtitle being made that the model has not reached: a stub in
+   * a grey that is nobody's ink, so the frontier between made and not is a
+   * change of colour and not a change of height. */
+  --sso-map-pending: rgba(238, 240, 243, 0.28);
   /* The clock behind the dialogue. Faint on purpose: it is what the bars are
    * measured against, not something to read on its own, and a grid as loud as
    * the data turns the strip into graph paper. */
@@ -790,6 +841,14 @@ button.sso-quick__move[data-on="true"] {
  * showing no dialogue in this minute, the eye landed first on an empty black
  * box and read it as something broken. It is a reading, not a control panel;
  * it should recede until it has bars in it. */
+.sso-map[data-origin="download"] {
+  --sso-map-ink: var(--sso-origin-download);
+}
+
+.sso-map[data-origin="made"] {
+  --sso-map-ink: var(--sso-origin-made);
+}
+
 .sso-map__plot {
   position: relative;
   flex: 1;

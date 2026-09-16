@@ -4848,7 +4848,7 @@
           ops: {
             languages: () => ({ languages: ["en", "tr"] }),
             health: () => ({ ok: true, daemon_running: true, default_languages: ["en", "tr"], translate_model: "gemma3:4b", translate_seconds_per_cue: 0.5 }),
-            translations: () => ({ jobs: [] }),
+            translations: () => ({ jobs: [], languages: { en: "English", tr: "Turkish", de: "German", fr: "French" } }),
             pageContext: () => ({ title: "Mercy", imdbId: "31050594" }),
             search: () => ({
               used: { query: "Mercy", languages: ["en", "tr"] }, auto_attach_threshold: 0.75,
@@ -4869,7 +4869,12 @@
                 if (state.done >= total) state.status = "done";
               }
               const out = status();
-              if (args.cues) { out.cues = cuesNow(); out.translated_indexes = Array.from({ length: state.done }, (_, i) => i); }
+              if (args.cues) {
+                out.cues = cuesNow();
+                out.translated_indexes = Array.from({ length: state.done }, (_, i) => i);
+                // The lines no chunk has reached, as the daemon reports them.
+                out.pending_indexes = state.status === "done" ? [] : Array.from({ length: total - state.done }, (_, i) => state.done + i);
+              }
               return out;
             },
             translateResume: (args) => {
@@ -4924,17 +4929,34 @@
           const partial = window.__ssoApi.status().tracks[1];
           if (partial.fileId !== GENERATED) throw new Error(`slot 1 holds ${partial.fileId}`);
           if (partial.language !== "tr" || !/^TR · made from EN · \d+%$/.test(partial.label)) throw new Error(`label ${JSON.stringify(partial.label)}`);
-          if (!/Making a TR subtitle from EN with gemma3:4b · \d+ of 8 lines/.test(block.textContent)) throw new Error(`progress reads ${JSON.stringify(block.textContent)}`);
+          /* Only the lines that are made are on screen. The daemon's file
+           * carries the English for the rest, and a TR box saying the EN
+           * line again was reported as exactly that: "show only the completed
+           * sentences from that subtitle, not the copies of the English one". */
+          if (partial.cueCount + partial.pendingCount !== 8 || partial.pendingCount === 0) throw new Error(`partial holds ${partial.cueCount} cues and ${partial.pendingCount} pending`);
+          if (window.__ssoApi.cueTexts(1).some((text) => /^line /.test(text))) throw new Error(`the English is on the TR track: ${JSON.stringify(window.__ssoApi.cueTexts(1))}`);
+          const spans = window.__ssoApi.cueSpans(1);
+          if (spans.pendingStarts.length !== partial.pendingCount || spans.starts.length !== partial.cueCount) throw new Error(`spans ${JSON.stringify([spans.starts.length, spans.pendingStarts.length])}`);
+          if (!/Making a TR subtitle from EN with gemma3:4b · \d+ of 8 lines/.test(block.textContent)) throw new Error(`progress reads ${JSON.stringify(block.textContent)} with ${JSON.stringify(window.__ssoApi.status().translation)}`);
           if (![...block.querySelectorAll("button")].some((b) => b.textContent === "Stop")) throw new Error("no Stop while making");
 
           // ...and finishes, in place, with the same id and the model's name.
           for (let i = 0; i < 200 && window.__ssoApi.status().translation?.status !== "done"; i++) await sleep(25);
           const finished = window.__ssoApi.status().tracks[1];
           if (finished.fileId !== GENERATED || finished.label !== "TR · made from EN by gemma3:4b") throw new Error(`finished as ${JSON.stringify([finished.fileId, finished.label])}`);
-          if (finished.cueCount !== 8) throw new Error(`${finished.cueCount} cues`);
+          if (finished.cueCount !== 8 || finished.pendingCount !== 0) throw new Error(`${finished.cueCount} cues, ${finished.pendingCount} pending`);
           if (!/TR subtitle made from EN by gemma3:4b, 8 lines/.test(block.textContent)) throw new Error(`done reads ${JSON.stringify(block.textContent)}`);
           const toast = toastEl();
           if (!/TR subtitle finished: 8 lines/.test(toast?.textContent || "")) throw new Error(`toast reads ${JSON.stringify(toast?.textContent)}`);
+
+          // On the cards, each pill wears its origin's ink: the download, the made file.
+          shadow.querySelector(".sso-panel__back")?.click();
+          await sleep(120);
+          const pills = [...shadow.querySelectorAll(".sso-track__lang")].map((pill) => [pill.textContent, pill.dataset.origin]);
+          if (JSON.stringify(pills) !== JSON.stringify([["EN", "download"], ["TR", "made"]])) throw new Error(`pills ${JSON.stringify(pills)}`);
+          if (!/made here/.test(shadow.querySelectorAll(".sso-track__lang")[1].title)) throw new Error("the made pill does not say so");
+          const strips = [...shadow.querySelectorAll(".sso-map")].map((map) => map.dataset.origin);
+          if (JSON.stringify(strips) !== JSON.stringify(["download", "made"])) throw new Error(`strips ${JSON.stringify(strips)}`);
         } finally {
           window.__stubDaemon = null;
           window.__ssoApi.cancelTranslation?.().catch?.(() => {});
@@ -4974,6 +4996,138 @@
           window.__ssoApi.cancelTranslation?.().catch?.(() => {});
           window.__ssoApi.detach(1);
           window.__ssoApi.detach(0);
+        }
+      });
+
+      check("a job for this episode is picked up whatever subtitle it was made from, and offered before a new one", async () => {
+        /* The reload on 09-14: the job was made from the download, the page
+         * came back with its own track attached, the ids did not meet, and
+         * the Find screen offered "Make TR from EN…" over a job that was a
+         * third done. The episode is what the reader means. */
+        const job = makeJob(16);
+        job.state.done = 4;
+        job.ops.translations = () => ({ jobs: [{ ...job.status(), source_id: "12606080", meta: { movie_name: "Mercy", imdb_id: "31050594", season: null, episode: null } }] });
+        const shadow = panelShadow();
+        window.__stubDaemon = job.ops;
+        try {
+          // Another film's job, by id, is nobody's to pick up here.
+          job.ops.pageContext = () => ({ title: "Other", imdbId: "99" });
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 8), label: "EN · the page", fileId: "page:x:en:subtitle", language: "en", slot: 0 });
+          await sleep(150);
+          if (window.__ssoApi.status().translation) throw new Error("another film's job was picked up");
+          shadow.querySelector(".sso-add").click();
+          await sleep(150);
+          const block = shadow.querySelector(".sso-make");
+          if (![...block.querySelectorAll("button")].some((b) => /^Make TR from EN/.test(b.textContent))) throw new Error(`no Make with another film's job running: ${JSON.stringify(block.textContent)}`);
+          if (!/The daemon is busy with a TR subtitle for Mercy \(4 of 16 lines\); one started here goes first/.test(block.textContent)) throw new Error(`busy reads ${JSON.stringify(block.textContent)}`);
+          if ([...block.querySelectorAll("button")].some((b) => b.textContent === "Attach it as it arrives")) throw new Error("another film's job was offered for attaching");
+          shadow.querySelector(".sso-panel__back")?.click();
+          window.__ssoApi.detach(0);
+          await sleep(60);
+
+          // This episode's job, from a source this tab never had.
+          job.ops.pageContext = () => ({ title: "Mercy", imdbId: "31050594" });
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 8), label: "EN · the page", fileId: "page:x:en:subtitle", language: "en", slot: 0 });
+          for (let i = 0; i < 80 && window.__ssoApi.status().translation?.job !== "13-abc-tr"; i++) await sleep(25);
+          const following = window.__ssoApi.status().translation;
+          if (following?.job !== "13-abc-tr" || following.slot !== 1) throw new Error(`following ${JSON.stringify(following)}`);
+          for (let i = 0; i < 80 && window.__ssoApi.status().tracks[1].fileId !== GENERATED; i++) await sleep(25);
+          if (window.__ssoApi.status().tracks[1].fileId !== GENERATED) throw new Error("the job's file did not land in the other slot");
+          for (let i = 0; i < 240 && window.__ssoApi.status().translation?.status !== "done"; i++) await sleep(25);
+          if (window.__ssoApi.status().translation?.status !== "done") throw new Error("did not finish");
+          window.__ssoApi.cancelTranslation?.().catch?.(() => {});
+          window.__ssoApi.detach(1);
+          await sleep(60);
+
+          // And on the Find screen, with the tab not following it, the offer
+          // is to attach it - before, not under, the offer to make one.
+          job.state.done = 4; job.state.status = "running";
+          shadow.querySelector(".sso-add").click();
+          for (let i = 0; i < 40 && !/Attach it as it arrives/.test(shadow.querySelector(".sso-make")?.textContent || ""); i++) await sleep(25);
+          const offer = shadow.querySelector(".sso-make");
+          if (!/The daemon is making a TR subtitle for this, 4 of 16 lines/.test(offer.textContent)) throw new Error(`offer reads ${JSON.stringify(offer.textContent)}`);
+          if ([...offer.querySelectorAll("button")].some((b) => /^Make TR/.test(b.textContent))) throw new Error("Make offered over this episode's own job");
+        } finally {
+          window.__stubDaemon = null;
+          window.__ssoApi.cancelTranslation?.().catch?.(() => {});
+          window.__ssoApi.detach(1);
+          window.__ssoApi.detach(0);
+          shadow.querySelector(".sso-panel__back")?.click();
+        }
+      });
+
+      check("a job waiting its turn says what it is waiting for, and is asked for again on the way in", async () => {
+        const job = makeJob(8);
+        job.state.status = "queued";
+        const ahead = { job: "other-de", target: "tr", meta: { movie_name: "Not Suitable for Work", season: 1, episode: 1 }, done: 300, total: 992 };
+        const statusWas = job.ops.translateStatus;
+        const resumeWas = job.ops.translateResume;
+        const waiting = () => ({ ...job.status(), done: 0, waiting_for: ahead });
+        job.ops.translateStatus = (args) => (job.state.status === "queued" ? waiting() : statusWas(args));
+        // Asked for again while waiting, a job moves up the queue and stays queued.
+        job.ops.translateResume = (args) => { if (job.state.status !== "queued") return resumeWas(args); job.state.resumed += 1; return waiting(); };
+        window.__stubDaemon = job.ops;
+        const shadow = panelShadow();
+        try {
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 8), label: "EN · Mercy", fileId: 1, language: "en", slot: 0 });
+          await sleep(60);
+          await window.__ssoApi.followTranslation({ job: "13-abc-tr", target: "tr", sourceLanguage: "en", slot: 1 });
+          if (job.state.resumed !== 1) throw new Error("following a waiting job did not ask for it again");
+          await sleep(30);
+          shadow.querySelector(".sso-add").click();
+          for (let i = 0; i < 40 && !/finishing/.test(shadow.querySelector(".sso-make")?.textContent || ""); i++) await sleep(25);
+          const block = shadow.querySelector(".sso-make");
+          if (!/The TR subtitle for this is next: the daemon is finishing Not Suitable for Work S01E01 first, then 8 lines from EN with gemma3:4b/.test(block.textContent)) throw new Error(`waiting reads ${JSON.stringify(block.textContent)}`);
+          if (window.__ssoApi.status().tracks[1].attached) throw new Error("nothing is made and something is attached");
+          // Its turn comes. Two polls apart at the follower's own interval.
+          job.state.status = "running";
+          for (let i = 0; i < 600 && window.__ssoApi.status().translation?.status !== "done"; i++) await sleep(25);
+          if (window.__ssoApi.status().tracks[1].cueCount !== 8) throw new Error(`did not finish: ${JSON.stringify(window.__ssoApi.status().translation)}`);
+        } finally {
+          window.__stubDaemon = null;
+          window.__ssoApi.cancelTranslation?.().catch?.(() => {});
+          window.__ssoApi.detach(1);
+          window.__ssoApi.detach(0);
+          shadow.querySelector(".sso-panel__back")?.click();
+        }
+      });
+
+      check("the language to make is a choice, proposed and not fixed", async () => {
+        const job = makeJob(4);
+        window.__stubDaemon = job.ops;
+        const shadow = panelShadow();
+        try {
+          await window.__ssoApi.attach({ cues: cuesEvery(1000, 0, 4), label: "EN · Mercy", fileId: 1, language: "en", slot: 0 });
+          await sleep(60);
+          shadow.querySelector(".sso-add").click();
+          await sleep(120);
+          [...shadow.querySelectorAll("button")].find((b) => b.textContent === "Search").click();
+          for (let i = 0; i < 40 && !/No TR subtitle exists/.test(shadow.querySelector(".sso-make")?.textContent || ""); i++) await sleep(25);
+          const block = shadow.querySelector(".sso-make");
+          const box = block.querySelector("select.sso-make__lang");
+          if (!box) throw new Error("no language box beside the offer");
+          if (box.value !== "tr") throw new Error(`proposes ${box.value}`);
+          const codes = [...box.options].map((o) => o.value);
+          if (codes.includes("en")) throw new Error("offers to translate English into English");
+          if (codes[0] !== "tr" || !codes.includes("de") || !codes.includes("fr")) throw new Error(`offers ${JSON.stringify(codes)}`);
+          if (![...box.options].some((o) => o.textContent === "German (DE)")) throw new Error("the languages are not named");
+          box.value = "de";
+          box.dispatchEvent(new Event("change", { bubbles: true }));
+          await sleep(30);
+          const make = [...block.querySelectorAll("button")].find((b) => /^Make DE from EN/.test(b.textContent));
+          if (!make) throw new Error(`no Make DE: ${JSON.stringify([...block.querySelectorAll("button")].map((b) => b.textContent))}`);
+          if (!/No DE subtitle is on screen. One can be made from subtitle 1 \(EN\)/.test(block.textContent)) throw new Error(`offer reads ${JSON.stringify(block.textContent)}`);
+          make.click();
+          await sleep(30);
+          [...block.querySelectorAll("button")].find((b) => b.textContent === "Start").click();
+          for (let i = 0; i < 40 && !job.state.started; i++) await sleep(25);
+          if (job.state.started?.target !== "de") throw new Error(`asked for ${JSON.stringify(job.state.started?.target)}`);
+        } finally {
+          window.__stubDaemon = null;
+          window.__ssoApi.cancelTranslation?.().catch?.(() => {});
+          window.__ssoApi.detach(1);
+          window.__ssoApi.detach(0);
+          shadow.querySelector(".sso-panel__back")?.click();
         }
       });
 
@@ -11434,6 +11588,14 @@
        * one, so the case that "proved" the name could be double-clicked
        * passed for a year while a real double-click did nothing. */
       const manual = new URLSearchParams(location.search).has("manual");
+      /* Opened with ?only=<phrase|phrase>, only the cases whose name carries
+       * one of the phrases run. The whole suite is twenty minutes on a busy
+       * machine, and a case being written is run twenty times before it
+       * passes. A case that leans on the one before it - the panel left
+       * open, a subtitle left attached - fails alone; that is the case's
+       * shape, not a finding. */
+      const only = (new URLSearchParams(location.search).get("only") || "").split("|").map((s) => s.trim()).filter(Boolean);
+      const chosen = only.length ? cases.filter((c) => only.some((phrase) => c.name.includes(phrase))) : cases;
 
       (async () => {
         await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1 });
@@ -11443,9 +11605,18 @@
           return;
         }
 
+        /* The panel is built the first time it is shown, and the cases take
+         * it as built and open: run on their own they would find no panel,
+         * and a hidden one does not refresh its screens. Shown, and left so,
+         * which is where the full run has it by the time most cases start. */
+        if (only.length && window.__ssoPanel?.show) {
+          window.__ssoPanel.show();
+          await sleep(200);
+        }
+
         const out = document.getElementById("results");
         let passed = 0;
-        for (const { name, fn } of cases) {
+        for (const { name, fn } of chosen) {
           window.__running = name;
           const row = document.createElement("div");
           row.className = "case";
@@ -11475,7 +11646,7 @@
           out.append(row);
         }
 
-        const total = cases.length + new Set(loose).size;
+        const total = chosen.length + new Set(loose).size;
         const summary = document.getElementById("summary");
         summary.textContent = `${passed}/${total} passed`;
         summary.style.color = passed === total ? "#59c27f" : "#e8705f";

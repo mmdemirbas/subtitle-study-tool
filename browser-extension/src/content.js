@@ -519,6 +519,12 @@
     fileId: null,
     language: "",
     visible: true,
+    /* The lines of a subtitle being made that the model has not reached yet,
+     * as starts and ends only. They are not cues - there is nothing to read
+     * in them - so they are not in `cues`; the map draws them in the pending
+     * ink so the reader can see the frontier move. null on any file that is
+     * whole. See putTranslated. */
+    pending: null,
   });
 
   const state = {
@@ -6371,8 +6377,24 @@
 
   function translationSummary() {
     if (!translating) return null;
-    const { job, slot, sourceSlot, sourceLanguage, target, done, total, status, etaSeconds, model, error, unrepaired, missing, retrying } = translating;
-    return { job, slot, sourceSlot, sourceLanguage, target, done, total, status, etaSeconds, model, error, unrepaired, missing, retrying };
+    const { job, slot, sourceSlot, sourceLanguage, target, done, total, status, etaSeconds, model, error, unrepaired, missing, retrying, waitingFor } = translating;
+    return {
+      job, slot, sourceSlot, sourceLanguage, target, done, total, status, etaSeconds, model, error, unrepaired, missing, retrying,
+      // In words, for the panel's note: what a queued job is waiting for.
+      waitingFor: status === "queued" ? describeWaitingFor(waitingFor) : "",
+    };
+  }
+
+  /* What a queued job is waiting for, in the words the panel and the label
+   * use: the other job's episode if it has one, else its language. */
+  function describeWaitingFor(ahead) {
+    if (!ahead) return "";
+    const meta = ahead.meta || {};
+    const episode = meta.season != null && meta.episode != null
+      ? `S${String(meta.season).padStart(2, "0")}E${String(meta.episode).padStart(2, "0")}`
+      : "";
+    const name = [meta.movie_name, episode].filter(Boolean).join(" ");
+    return name || `the ${String(ahead.target || "").toUpperCase()} subtitle being made`;
   }
 
   /* The slot a made subtitle goes in: the one that is not the source, empty
@@ -6444,12 +6466,17 @@
       model: started.model,
       unrepaired: started.unrepaired,
       missing: started.missing,
+      waitingFor: started.waiting_for || null,
       error: "",
       shown: -1,
     };
     trace("translate", {
       job: started.job, target, sourceSlot, slot: into, sourceFileId: source.fileId,
       cueCount: source.cues.length, model: started.model, status: started.status, etaSeconds: started.eta_seconds,
+      /* The daemon answers with the job for this episode whatever subtitle
+       * it was asked from, so the job may be older than this press and
+       * further along than zero. */
+      total: started.total, done: started.done,
     });
     notify();
     scheduleTranslationPoll(0);
@@ -6457,11 +6484,20 @@
   }
 
   /* A job started elsewhere - another tab, an earlier visit - attached to this
-   * one as it arrives. The panel lists the daemon's jobs and offers this. */
+   * one as it arrives. The panel lists the daemon's jobs and offers this.
+   *
+   * A job still waiting its turn is asked for again on the way in, which
+   * the daemon takes as "somebody is watching for this" and moves it to the
+   * front - the tab that follows a job is the tab the reader is looking at,
+   * and the job ahead of it is usually the episode they finished. */
   async function followTranslation({ job, target, sourceLanguage = "", slot = null } = {}) {
-    const status = await daemonCall("translateStatus", { job, cues: false });
+    let status = await daemonCall("translateStatus", { job, cues: false });
     if (!status || status.transportError || status.error) {
       return { error: status?.transportError || status?.error || "no such translation" };
+    }
+    if (status.status === "queued") {
+      const bumped = await daemonCall("translateResume", { job });
+      if (bumped && !bumped.transportError && !bumped.error) status = bumped;
     }
     translating = {
       job,
@@ -6472,6 +6508,7 @@
       fileId: status.generated_file_id,
       done: status.done, total: status.total, status: status.status, etaSeconds: status.eta_seconds,
       model: status.model, unrepaired: status.unrepaired, missing: status.missing, retrying: Boolean(status.retrying),
+      waitingFor: status.waiting_for || null,
       error: "", shown: -1,
     };
     notify();
@@ -6494,8 +6531,13 @@
 
   async function cancelTranslation() {
     if (!translating) return { error: "nothing is being made" };
-    const answer = await daemonCall("translateCancel", { job: translating.job });
-    trace("translate", { job: translating.job, cancelled: true, done: translating.done, total: translating.total });
+    const mine = translating;
+    const answer = await daemonCall("translateCancel", { job: mine.job });
+    trace("translate", { job: mine.job, cancelled: true, done: mine.done, total: mine.total });
+    /* Only the job this press was about. A Stop followed at once by a Make
+     * had the stop's answer arrive after the new job was set up, and clear
+     * it: the new job went on in the daemon with nothing following it. */
+    if (translating !== mine) return answer?.error ? { error: answer.error } : { ok: true };
     clearTimeout(translateTimer);
     translateTimer = null;
     translating = null;
@@ -6531,13 +6573,14 @@
     }
     Object.assign(mine, {
       done: status.done, total: status.total, status: status.status, etaSeconds: status.eta_seconds,
-      model: status.model, unrepaired: status.unrepaired, missing: status.missing, retrying: Boolean(status.retrying), error: "",
+      model: status.model, unrepaired: status.unrepaired, missing: status.missing, retrying: Boolean(status.retrying),
+      waitingFor: status.waiting_for || null, error: "",
     });
     if (status.done > mine.shown || (status.status === "done" && mine.shown < status.total)) {
       const full = await daemonCall("translateStatus", { job: mine.job, cues: true });
       if (translating !== mine) return;
       if (Array.isArray(full?.cues) && full.cues.length) {
-        await putTranslated(mine, full.cues);
+        await putTranslated(mine, full.cues, full.pending_indexes);
         mine.shown = status.done;
       }
     }
@@ -6633,13 +6676,60 @@
     const from = `made from ${mine.sourceLanguage.toUpperCase()}`;
     if (mine.status === "done") return `${mine.target.toUpperCase()} · ${from} by ${mine.model}`;
     const percent = mine.total ? Math.round((100 * mine.done) / mine.total) : 0;
+    if (mine.status === "queued" && mine.waitingFor) {
+      return `${mine.target.toUpperCase()} · ${from} · ${percent}% · waiting for ${describeWaitingFor(mine.waitingFor)}`;
+    }
     return `${mine.target.toUpperCase()} · ${from} · ${percent}%`;
   }
 
-  async function putTranslated(mine, cues) {
+  /* The made subtitle as it stands, on screen.
+   *
+   * The daemon's file is whole from the first poll: the source's text stands
+   * in for every line the model has not reached. That is the right file to
+   * keep on disk and the wrong one to show - the reader asked for Turkish
+   * under the English, and a Turkish box that says the English line again
+   * is a second copy of what is already on screen, and every consumer of the
+   * track (the study rail, the card's quoted line, the lookups) reads the
+   * English as if it were the translation. Reported as "we should show only
+   * the completed sentences from that subtitle, not the copies of the
+   * English one".
+   *
+   * So the lines the daemon says are pending are left out of the track, and
+   * their spans kept beside it for the map. Left out rather than emptied,
+   * because a cue with nothing to read is not a cue - see parseSrt, which
+   * drops those at the door. The lines the model was asked for and could not
+   * do are not pending; they stay, in the source language, as the honest
+   * failure the daemon's counts describe. */
+  function withoutPending(cues, pendingIndexes) {
+    const pending = new Set(Array.isArray(pendingIndexes) ? pendingIndexes : []);
+    if (!pending.size) return { cues, spans: null };
+    const kept = [];
+    const starts = [];
+    const ends = [];
+    cues.forEach((cue, index) => {
+      if (pending.has(index)) {
+        starts.push(cue.start);
+        ends.push(cue.end);
+      } else {
+        kept.push(cue);
+      }
+    });
+    return { cues: kept, spans: { starts, ends } };
+  }
+
+  async function putTranslated(mine, allCues, pendingIndexes) {
     const track = state.tracks[mine.slot];
+    const { cues, spans } = withoutPending(allCues, pendingIndexes);
     if (track.fileId !== mine.fileId || track.cues.length === 0) {
+      // Nothing made yet: nothing to put on screen. The next poll will.
+      if (!cues.length) return;
       await attach({ cues, label: translationLabel(mine), fileId: mine.fileId, language: mine.target, slot: mine.slot });
+      /* After the attach, which clears it, and told again: the attach's own
+       * notify went out with the strip's spans already cached without the
+       * pending lines, and the map would draw the frontier a poll late. */
+      track.pending = spans;
+      spansCache.delete(mine.slot);
+      notify();
       /* Said after the attach, whose own toast would otherwise cover it: a
        * second subtitle appearing on its own after a reload wants a reason. */
       if (mine.pickedUp) {
@@ -6651,6 +6741,7 @@
     /* In place: the same file, more of it translated. See attach for what a
      * fresh attach would reset, none of which has changed. */
     track.cues = cues;
+    track.pending = spans;
     track.label = translationLabel(mine);
     track.activeIndexes = NEEDS_REDRAW;
     lastStepMs = null;
@@ -6670,6 +6761,7 @@
     }
 
     track.cues = Array.isArray(cues) ? cues : [];
+    track.pending = null;
     /* A different file means the mark the last press aimed at is not this
      * file's mark. See stepLine, which reads it to tell a second press of the
      * pair from a first. */
@@ -6863,7 +6955,19 @@
     if (!jobs.length) return null;
     const attached = attachedTracks();
     const ids = new Set(attached.map((track) => String(track.fileId)));
-    const job = jobs.find((job) => ids.has(String(job.source_id)));
+    /* By the source's id first, then by the episode. The reload that lost
+     * the thread on 09-14 also swapped the source: the job had been started
+     * from the downloaded English and the page came back with its own
+     * English track attached, so the ids did not meet and the job went on
+     * with nothing on screen to receive it. The episode is what the reader
+     * means; the daemon keeps it in the job's meta from the same page
+     * context this tab has. */
+    const context = (await daemonCall("pageContext", {})) || {};
+    const short = (code) => String(code || "").toLowerCase().slice(0, 2);
+    const have = new Set(attached.map((track) => short(track.language)));
+    const job =
+      jobs.find((job) => ids.has(String(job.source_id))) ||
+      jobs.find((job) => sameEpisode(job.meta, context) && !have.has(short(job.target)));
     if (!job) return null;
     const sourceSlot = state.tracks.findIndex((track) => String(track.fileId) === String(job.source_id));
     const summary = await followTranslation({
@@ -6871,8 +6975,25 @@
     });
     if (summary?.error) return summary;
     if (translating?.job === job.job) translating.pickedUp = true;
-    trace("translate", { job: job.job, pickedUp: true, fileId, done: job.done, total: job.total });
+    trace("translate", { job: job.job, pickedUp: true, fileId, bySource: ids.has(String(job.source_id)), done: job.done, total: job.total });
     return summary;
+  }
+
+  /* Whether a job's meta names the episode this page is on. The same rule
+   * the daemon folds two sources into one job by (episode_identity in
+   * translate_jobs.py): an IMDb id with the season and episode beside it, or
+   * a title with an episode number. A bare title is not enough - a series'
+   * landing page carries the series' name for every episode. */
+  function sameEpisode(meta, context) {
+    if (!meta || !context) return false;
+    const same = (a, b) => (a ?? null) === (b ?? null);
+    const imdb = String(meta.imdb_id || "").trim().toLowerCase();
+    if (imdb) {
+      return imdb === String(context.imdbId || "").trim().toLowerCase() && same(meta.season, context.season) && same(meta.episode, context.episode);
+    }
+    const name = String(meta.movie_name || "").trim().toLowerCase();
+    if (!name || (meta.season == null && meta.episode == null)) return false;
+    return name === String(context.title || "").trim().toLowerCase() && same(meta.season, context.season) && same(meta.episode, context.episode);
   }
 
   /* The last subtitle taken off, so it can be put back.
@@ -7230,6 +7351,8 @@
         fileId: track.fileId,
         language: track.language,
         visible: track.visible,
+        // Lines still to come, on a subtitle being made. See putTranslated.
+        pendingCount: track.pending ? track.pending.starts.length : 0,
         /* What this file's own corrections say about its speed, for the control
          * that offers to fix it. A single toast, offered once and half an hour
          * into the film, was the only way to reach the one correction that
@@ -7355,12 +7478,18 @@
       if (until > furthest) furthest = until;
       reach[i] = furthest;
     }
-    const spans = { starts, ends, chars, reach };
+    const pending = state.tracks[slot]?.pending;
+    const spans = {
+      starts, ends, chars, reach,
+      // Lines of a subtitle being made that are not made yet, for the map.
+      pendingStarts: pending ? pending.starts : [],
+      pendingEnds: pending ? pending.ends : [],
+    };
     spansCache.set(slot, { cues, spans });
     return spans;
   }
 
-  const NO_SPANS = { starts: [], ends: [], chars: [], reach: [] };
+  const NO_SPANS = { starts: [], ends: [], chars: [], reach: [], pendingStarts: [], pendingEnds: [] };
 
   /* The same lines with only their text, cached the same way and for the same
    * reason.
