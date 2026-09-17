@@ -176,11 +176,14 @@ button.sso-into__b[data-empty="true"] .sso-into__l {
   margin: 0 0 var(--sso-s2);
 }
 
-/* Sized to their text, not shared out equally: the filter's chips are all a
- * code and a count, but one of these can be "FR (foreign parts)" beside "EN",
- * and equal shares put the long one on three lines and stretched the row to
- * 49px for all four. Measured at the 340px the panel opens at. */
-.sso-own .sso-seg__b {
+/* Sized to their text, not shared out equally. One of these can be "FR
+ * (foreign parts)" beside "EN", and equal shares put the long one on three
+ * lines and stretched the row to 49px for all four, measured at the 340px
+ * the panel opens at. The language filter under the search went the same
+ * way once the flags arrived: "PT-BR 2" with a flag in a fifth of the row
+ * broke after the hyphen. */
+.sso-own .sso-seg__b,
+.sso-find__langs .sso-seg__b {
   flex: 0 1 auto;
 }
 
@@ -2037,7 +2040,11 @@ input.sso-swatch::-webkit-color-swatch {
 .sso-results__head,
 .sso-result {
   display: grid;
-  grid-template-columns: 2.6ch minmax(0, 1fr) 4ch 4.6ch 5ch;
+  /* The first track holds a flag and a two-letter code. Fixed, not auto:
+   * every row is a grid of its own, so an auto track is sized per row and
+   * the names went ragged (measured 1095px, 1114px and 1133px on four rows).
+   * 5.4ch is the 13px flag, its 4px gap and "EN" at 9.5px bold with room. */
+  grid-template-columns: 5.4ch minmax(0, 1fr) 4ch 4.6ch 5ch;
   column-gap: 6px;
   align-items: baseline;
   width: 100%;
@@ -2072,6 +2079,19 @@ input.sso-swatch::-webkit-color-swatch {
   font-weight: 700;
   letter-spacing: 0.05em;
   color: var(--sso-accent-ink);
+}
+
+/* The flag beside a code, wherever a language is chosen from a list: the
+ * result rows, the filter, the page's own list, the Into chips. Set above the
+ * code's size and without its tracking, because it is there to be seen from
+ * across a list of forty, not read. See flagOf in panel.js for what it is
+ * and is not. */
+.sso-flag {
+  margin-right: 4px;
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 1;
 }
 
 .sso-result__name {

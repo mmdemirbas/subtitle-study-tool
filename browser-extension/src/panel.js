@@ -3726,7 +3726,7 @@
      * whatever the search actually returned rather than from a fixed list, so
      * it never offers a language with nothing behind it. */
     el.languageFilter = document.createElement("div");
-    el.languageFilter.className = "sso-seg sso-seg--wrap";
+    el.languageFilter.className = "sso-seg sso-seg--wrap sso-find__langs";
     el.languageFilter.hidden = true;
 
     /* Column labels, on the same grid as the rows under them. Without them the
@@ -3835,7 +3835,7 @@
     const available = response.available_languages || [];
     if (!missing.length || !available.length) return "";
     const asked = missing.map((code) => code.toUpperCase()).join(", ");
-    const head = available.slice(0, 6).map((code) => code.toUpperCase()).join(", ");
+    const head = available.slice(0, 6).map((code) => flagged(code, code.toUpperCase())).join(", ");
     const rest = available.length > 6 ? `, and ${available.length - 6} more` : "";
     return `No ${asked} subtitle for this title. OpenSubtitles has ${head}${rest}.`;
   }
@@ -3857,7 +3857,7 @@
     const options = [["", `All ${results.length}`], ...[...counts].map(([lang, count]) => [lang, `${lang.toUpperCase()} ${count}`])];
     el.languageFilter.replaceChildren(
       ...options.map(([value, text]) => {
-        const b = button(text, {
+        const b = button("", {
           onClick: () => {
             languageChoice = value;
             renderLanguageFilter(results);
@@ -3866,6 +3866,7 @@
         });
         b.className = "sso-seg__b";
         b.dataset.on = value === languageChoice ? "true" : "false";
+        withFlag(b, value, text);
         return b;
       }),
     );
@@ -3894,7 +3895,7 @@
     el.ownList.replaceChildren(
       ...tracks.map((track) => {
         const suffix = track.kind === "sdh" ? " [CC]" : track.kind === "forced" ? " (foreign parts)" : track.kind === "auto" ? " (auto)" : "";
-        const b = button(`${track.language.toUpperCase()}${suffix}`, {
+        const b = button("", {
           onClick: () =>
             api.detached(
               attachResult({
@@ -3912,6 +3913,7 @@
           title: track.displayName ? `${track.displayName} · ${track.code}` : track.code,
         });
         b.className = "sso-seg__b";
+        withFlag(b, track.code || track.language, `${track.language.toUpperCase()}${suffix}`);
         return b;
       }),
     );
@@ -3972,6 +3974,54 @@
   }
 
   const short = (code) => String(code || "").toLowerCase().slice(0, 2);
+
+  /* --- a flag beside a language ---------------------------------------------
+   *
+   * Reported as "using only language tags makes it extremely hard to find
+   * what I'm looking for". Prime lists its twenty-odd languages as two-letter
+   * codes, and a code is READ where a flag is SEEN: the eye finds the red
+   * crescent in a row of chips without reading a single one. The code stays
+   * beside the flag, because a flag is not a language - this table is a
+   * convention, EN under the Union Jack and ES under Spain's, and the Indian
+   * languages share one. A code naming a variant the sources tell apart
+   * (OpenSubtitles keeps pt-BR from pt-PT and zh-CN from zh-TW) gets the
+   * variant's flag; any other region is dropped, so en-US on the page and
+   * "en" from the search wear the same flag and are found the same way. A
+   * language the table does not know shows its code alone. */
+  const FLAG_OF_VARIANT = { "pt-br": "BR", pob: "BR", "pt-pt": "PT", "zh-cn": "CN", ze: "CN", "zh-tw": "TW", "zh-hk": "HK", "es-mx": "MX", "es-419": "MX", ea: "MX" };
+  const FLAG_OF_LANGUAGE = {
+    en: "GB", tr: "TR", de: "DE", fr: "FR", es: "ES", it: "IT", pt: "PT", ru: "RU", ja: "JP", ko: "KR", zh: "CN",
+    ar: "SA", nl: "NL", pl: "PL", sv: "SE", da: "DK", nb: "NO", nn: "NO", no: "NO", fi: "FI", el: "GR", he: "IL",
+    cs: "CZ", sk: "SK", sl: "SI", hu: "HU", ro: "RO", bg: "BG", uk: "UA", be: "BY", hr: "HR", sr: "RS", bs: "BA",
+    mk: "MK", sq: "AL", me: "ME", et: "EE", lv: "LV", lt: "LT", is: "IS", ga: "IE", fa: "IR", ka: "GE", hy: "AM",
+    az: "AZ", kk: "KZ", uz: "UZ", mn: "MN", hi: "IN", bn: "BD", ur: "PK", ta: "IN", te: "IN", kn: "IN", ml: "IN",
+    mr: "IN", pa: "IN", gu: "IN", ne: "NP", si: "LK", th: "TH", vi: "VN", id: "ID", ms: "MY", tl: "PH", km: "KH",
+    my: "MM", sw: "KE", af: "ZA", am: "ET",
+  };
+  function flagOf(code) {
+    const lower = String(code || "").toLowerCase();
+    const country = FLAG_OF_VARIANT[lower] || FLAG_OF_LANGUAGE[lower.split(/[-_]/)[0]];
+    // Two regional indicator letters, which is what a flag emoji is.
+    return country ? String.fromCodePoint(...[...country].map((letter) => 0x1f1e6 + letter.charCodeAt(0) - 65)) : "";
+  }
+
+  /* A flag and the text after it, into a node. The flag sits in a span of its
+   * own so it can be drawn at a size the eye can find, above the 9.5px the
+   * code beside it is set in. */
+  function withFlag(node, code, text) {
+    node.replaceChildren();
+    const flag = flagOf(code);
+    if (flag) {
+      const mark = document.createElement("span");
+      mark.className = "sso-flag";
+      mark.textContent = flag;
+      node.append(mark);
+    }
+    node.append(document.createTextNode(text));
+    return node;
+  }
+  // The same, as a string, for a sentence or an <option>.
+  const flagged = (code, text) => `${flagOf(code)} ${text}`.trim();
   /* How long the lines take, in the reader's words. Under a minute is said
    * as that: Google Translate does an episode in seconds, and "about 1 min"
    * for a 20-second job reads as a slow tool. */
@@ -4057,7 +4107,7 @@
     for (const code of [...first, ...rest, ...(first.includes(plan.target) || rest.includes(plan.target) ? [] : [plan.target])]) {
       const option = document.createElement("option");
       option.value = code;
-      option.textContent = `${named(code)} (${code.toUpperCase()})`;
+      option.textContent = flagged(code, `${named(code)} (${code.toUpperCase()})`);
       box.append(option);
     }
     box.value = plan.target;
@@ -4354,7 +4404,10 @@
 
         const name = result.release || result.movie_name || "Untitled";
         b.append(
-          resultCell("sso-result__lang", (result.language || "??").toUpperCase()),
+          /* The language alone as the code, the flag carrying the variant:
+           * the column is one fixed track across every row, and "PT-BR"
+           * beside a flag does not fit it. The whole code is the tooltip. */
+          withFlag(resultCell("sso-result__lang", "", result.language || ""), result.language, short(result.language || "??").toUpperCase() || "??"),
           resultCell(
             "sso-result__name",
             name,
@@ -5177,6 +5230,10 @@
       }
       const [head, tail] = splitName(name);
       card.labelNo.textContent = String(slot + 1);
+      // No flag on the pill: two cards are not a list to find a language in,
+      // and the 16px it takes come off the name, which is the part that
+      // identifies the file. The flags are on the Find screen, where the
+      // finding is done.
       card.labelLang.textContent = language;
       card.labelLang.hidden = !language;
       // The pill wears the origin's ink, the strip below it the same. See originOf.
@@ -5343,7 +5400,7 @@
         const track = status.tracks[slot];
         chip.dataset.on = slot === targetSlot ? "true" : "false";
         chip.dataset.empty = track?.attached ? "false" : "true";
-        chip.lastChild.textContent = track?.attached ? track.label || "attached" : "empty";
+        withFlag(chip.lastChild, track?.attached ? track.language : "", track?.attached ? track.label || "attached" : "empty");
       }
       const filling = status.tracks[targetSlot];
       el.findFor.textContent = filling?.attached

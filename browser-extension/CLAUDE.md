@@ -907,6 +907,16 @@ Each of these was a reported bug. Undoing one brings the bug back.
   the translation is not offered for a language the page carries as a whole
   subtitle. `makePlan` reads `status.own` for that, so a page list arriving
   later redraws the block through `renderMake`'s key.
+- **A language is chosen by its flag, and the code stays beside it.**
+  Reported as "using only language tags makes it extremely hard to find what
+  I'm looking for" - Prime lists twenty-odd languages as two-letter codes.
+  `flagOf` is a convention (EN under the Union Jack), region-blind except for
+  the variants OpenSubtitles keeps apart (pt-BR, zh-TW), and a code it does
+  not know shows no flag rather than a wrong one. On a result row the code is
+  the language alone and the flag carries the variant, because the language
+  column is one fixed track across rows that are each a grid of their own -
+  an `auto` track went ragged by row. Not on the cards: two cards are not a
+  list to find a language in, and the flag's 16px come off the name.
 - **The panel's title bar carries two double-click gestures.** The bar folds and
   unfolds; the **name** parks the panel back under the CC button. Tests that
   park it must aim at `.sso-win__title`, or they fold it and everything after

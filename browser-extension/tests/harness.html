@@ -5167,7 +5167,7 @@
           const codes = [...box.options].map((o) => o.value);
           if (codes.includes("en")) throw new Error("offers to translate English into English");
           if (codes[0] !== "tr" || !codes.includes("de") || !codes.includes("fr")) throw new Error(`offers ${JSON.stringify(codes)}`);
-          if (![...box.options].some((o) => o.textContent === "German (DE)")) throw new Error("the languages are not named");
+          if (![...box.options].some((o) => /German \(DE\)$/.test(o.textContent))) throw new Error("the languages are not named");
           box.value = "de";
           box.dispatchEvent(new Event("change", { bubbles: true }));
           await sleep(30);
@@ -5346,11 +5346,13 @@
           await sleep(80);
           const block = shadow.querySelector(".sso-own");
           if (!block || block.hidden) throw new Error("the Find screen does not offer them");
-          const labels = [...block.querySelectorAll("button")].map((b) => b.textContent);
+          // The words after the flag; the flag itself has a case of its own.
+          const wordsOf = (b) => [...b.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join("");
+          const labels = [...block.querySelectorAll("button")].map(wordsOf);
           if (labels.join("|") !== "EN|EN [CC]|TR|FR (foreign parts)") throw new Error(`offered ${labels.join(" / ")}`);
           if (!/carries 4 subtitles of its own/.test(block.textContent)) throw new Error(`note reads ${JSON.stringify(block.querySelector(".sso-note")?.textContent)}`);
 
-          [...block.querySelectorAll("button")].find((b) => b.textContent === "TR").click();
+          [...block.querySelectorAll("button")].find((b) => wordsOf(b) === "TR").click();
           for (let i = 0; i < 40 && !window.__ssoApi.status().tracks.some((t) => t.fileId === "page:T9:tr-tr:subtitle"); i++) await sleep(25);
           if (fetched.join() !== "page:T9:tr-tr:subtitle") throw new Error(`the worker was asked for ${JSON.stringify(fetched)}`);
           const track = window.__ssoApi.status().tracks.find((t) => t.fileId === "page:T9:tr-tr:subtitle");
@@ -5367,6 +5369,65 @@
           window.__ssoApi.detach(1);
           window.__ssoApi.detach(0);
           shadow.querySelector(".sso-panel__back")?.click();
+        }
+      });
+
+      check("a language wears its flag beside its code, wherever one is chosen from a list", async () => {
+        /* Reported as "using only language tags makes it extremely hard to
+         * find what I'm looking for": Prime lists twenty-odd languages as
+         * two-letter codes. A flag is found without being read. The code
+         * stays, a variant the sources keep apart (pt-BR) gets its own flag,
+         * a region they do not (en-US) gets the language's, and a code the
+         * table does not know shows no flag rather than a wrong one. */
+        const shadow = panelShadow();
+        const was = window.__stubDaemon;
+        const flag = (node) => node.querySelector(".sso-flag")?.textContent ?? "";
+        const TR = "\u{1F1F9}\u{1F1F7}", GB = "\u{1F1EC}\u{1F1E7}", BR = "\u{1F1E7}\u{1F1F7}";
+        window.__stubDaemon = {
+          search: () => ({
+            used: { query: "Mercy" }, auto_attach_threshold: 0.75,
+            results: [
+              { file_id: 81, language: "en", movie_name: "Mercy", release: "Mercy.EN", match_score: 1.0 },
+              { file_id: 82, language: "tr", movie_name: "Mercy", release: "Mercy.TR", match_score: 1.0 },
+              { file_id: 83, language: "pt-br", movie_name: "Mercy", release: "Mercy.PT-BR", match_score: 1.0 },
+              { file_id: 84, language: "xx", movie_name: "Mercy", release: "Mercy.XX", match_score: 1.0 },
+            ],
+            missing_languages: [], available_languages: ["en", "tr", "pt-br"],
+          }),
+        };
+        try {
+          window.postMessage({ source: "sso-ear", type: "tracks", titleId: "T20", shape: ["timedTextUrls"], tracks: [
+            { language: "en-US", url: "https://cdn.example/en.dfxp", type: "subtitle", displayName: "English", forced: false, keys: [] },
+            { language: "tr-TR", url: "https://cdn.example/tr.dfxp", type: "subtitle", displayName: "Türkçe", forced: false, keys: [] },
+          ] }, "*");
+          await sleep(60);
+          shadow.querySelector(".sso-add").click();
+          for (let i = 0; i < 40 && shadow.querySelector(".sso-own").hidden; i++) await sleep(25);
+          const own = [...shadow.querySelectorAll(".sso-own button")].map(flag);
+          if (own.join() !== [GB, TR].join()) throw new Error(`the page's list wears ${JSON.stringify(own)}`);
+
+          [...shadow.querySelectorAll("button")].find((b) => b.textContent === "Search").click();
+          await sleep(150);
+          /* On a row the code is the language alone and the flag carries the
+           * variant - the column is one fixed track across every row, and
+           * "PT-BR" beside a flag does not fit in it. The whole code is on
+           * the cell's tooltip and on the filter chip. */
+          const rows = [...shadow.querySelectorAll(".sso-result__lang")].map((cell) => [flag(cell), cell.textContent.replace(flag(cell), ""), cell.title]);
+          const want = [[GB, "EN", "en"], [TR, "TR", "tr"], [BR, "PT", "pt-br"], ["", "XX", "xx"]];
+          if (JSON.stringify(rows) !== JSON.stringify(want)) throw new Error(`the rows wear ${JSON.stringify(rows)}`);
+          for (const cell of shadow.querySelectorAll(".sso-result__lang")) {
+            if (cell.scrollWidth > cell.clientWidth + 1) throw new Error(`the flag and the code do not fit the column: ${cell.scrollWidth}px in ${cell.clientWidth}px`);
+          }
+          const chips = [...shadow.querySelectorAll(".sso-find__langs button")].map(flag);
+          if (chips.join() !== ["", GB, TR, BR, ""].join()) throw new Error(`the filter wears ${JSON.stringify(chips)}`);
+          // The rows are still one column: every name starts at the same x.
+          const names = [...shadow.querySelectorAll(".sso-result__name")].map((n) => Math.round(n.getBoundingClientRect().left));
+          if (new Set(names).size !== 1) throw new Error(`names start at ${names.join(", ")}`);
+        } finally {
+          window.__stubDaemon = was ?? null;
+          await pageCarriesNothing();
+          shadow.querySelector(".sso-panel__back")?.click();
+          await sleep(80);
         }
       });
 
