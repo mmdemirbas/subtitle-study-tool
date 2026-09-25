@@ -17,6 +17,9 @@ const posted = [];
 let downloadsFail = false;
 let daemonUp = true;
 let foreignOnPort = false;
+// Every POST the log tried, landed or not: a refused one costs the worker a read
+// and a stringify all the same.
+let logAttempts = 0;
 /* What the subtitle daemon answers, for the cases that need a search to come
  * back with something. null is "nothing is listening", which is what every
  * other case here wants and what the fetch below produces by rejecting. */
@@ -27,6 +30,7 @@ let daemonAnswers = null;
  * that rejects - which is exactly what this does. */
 globalThis.fetch = async (url, options) => {
   if (String(url).includes("/log")) {
+    logAttempts += 1;
     if (!daemonUp) throw new TypeError("Failed to fetch");
     /* Something that is not the daemon, holding 8791 - the same case the
      * health probe has to handle. It answers, so the POST succeeds and the log
@@ -154,7 +158,10 @@ globalThis.chrome = {
         return Object.fromEntries(keys.filter((k) => k in store).map((k) => [k, store[k]]));
       },
       async set(obj) { Object.assign(store, obj); },
-      async remove(key) { delete store[key]; },
+      /* A key or a list of them, as Chrome takes. It took one key only, so
+       * trace.clear()'s list removed nothing, and the log's cases started
+       * empty only because the flush before each clear had already sent it. */
+      async remove(key) { for (const k of [key].flat()) delete store[k]; },
     },
   },
   tabs: {
@@ -871,6 +878,66 @@ t(
   await trace.enabled(),
   "defaulted off, which would lose the record on every existing install",
 );
+
+/* What one more line costs, however much is already held.
+ *
+ * Found on 2026-09-26 with the daemon down for ten days: 3,151 entries, 4.8MB,
+ * and every new line read the whole array, added itself and wrote the whole
+ * array back - then, being past sixty, started a flush that read it again and
+ * stringified it for a POST that could not land. Brave's storage log showed a
+ * fresh 1.1MB table every 3 to 13 seconds while a video played. The log is
+ * seeded here the way it was held then, one array under one key, which is also
+ * how every installation from before the change has it. */
+await resetTrace();
+const seeded = Array.from({ length: 3000 }, (_, i) => ({
+  at: new Date(Date.UTC(2026, 8, 16, 14, 0, 0) + i).toISOString(), kind: "survey", i, pad: "x".repeat(600),
+}));
+store["sso:trace"] = seeded;
+daemonUp = false;
+await trace.flush();
+await trace.record("perf", { first: true });
+{
+  const { get, set } = chrome.storage.local;
+  let wrote = 0;
+  let read = 0;
+  chrome.storage.local.set = async (obj) => { wrote += JSON.stringify(obj).length; return set(obj); };
+  chrome.storage.local.get = async (key) => { const got = await get(key); read += JSON.stringify(got).length; return got; };
+  await trace.record("perf", { second: true });
+  chrome.storage.local.set = set;
+  chrome.storage.local.get = get;
+  // One piece of the log is the most a line may touch: 256KB, against 2MB held.
+  t("one more line does not read or rewrite what is already held",
+    wrote < 300 * 1024 && read < 300 * 1024,
+    `${wrote} bytes written and ${read} read for one line, with ${JSON.stringify(seeded).length} held`);
+}
+
+/* A daemon that refused the last POST is not asked again on the next line.
+ * Past sixty held entries every record started a flush, so a film watched with
+ * the daemon down knocked on a closed port once per line, reading the whole log
+ * each time to do it. */
+logAttempts = 0;
+for (let i = 0; i < 30; i++) await trace.record("perf", { i });
+t("with the daemon gone, thirty lines knock on its door at most once",
+  logAttempts <= 1, `${logAttempts} POSTs attempted`);
+
+/* And when it is back, what it missed goes in pieces, oldest first. One POST
+ * of everything was a body the size of the absence, and the daemon refuses a
+ * log body over 64MB while the browser holds up to 400MB - past that line the
+ * log could never have reached it. */
+daemonUp = true;
+posted.length = 0;
+const caughtUp = await trace.flush();
+const delivered = posted.flatMap((p) => p.entries);
+t("the old array and the new lines all reach the daemon, in order",
+  caughtUp.ok && delivered.length === 3032 && delivered[0].i === 0 && delivered[2999].i === 2999 &&
+    delivered[3000].first && delivered[3001].second && delivered[3031].i === 29,
+  `${delivered.length} delivered: ${JSON.stringify(delivered.slice(2999, 3003).map((e) => e.i ?? e.kind))}`);
+t("in POSTs of a bounded size, not one the size of the absence",
+  posted.length > 1 && posted.every((p) => JSON.stringify(p).length < 300 * 1024),
+  `${posted.length} POSTs, largest ${Math.max(...posted.map((p) => JSON.stringify(p).length))} bytes`);
+t("and nothing is left behind, the old key included",
+  (await trace.entries()).length === 0 && !("sso:trace" in store),
+  `${(await trace.entries()).length} held, old key ${"sso:trace" in store ? "still there" : "gone"}`);
 
 /* Cue times are stored as gaps to keep more of them; a pack that does not
  * reconstruct exactly is worse than no pack, because the file it produces

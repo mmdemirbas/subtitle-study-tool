@@ -14,13 +14,13 @@
  * `setUiOptions` is supposed to silence it and did not.
  *
  * So the log goes to the daemon, which is a program with a filesystem and is
- * already part of this project: one POST per flush, one line of JSON per entry
- * appended to subtitle-daemon/logs/<date>.jsonl. No files, no popups, no
+ * already part of this project: one POST per piece of the log, one line of JSON
+ * per entry appended to subtitle-daemon/logs/<date>.jsonl. No files, no popups, no
  * ceiling but the disk.
  *
  * When the daemon is not running the log simply stays in the browser, which is
  * why `unlimitedStorage` is asked for. It keeps accumulating - hundreds of
- * megabytes if it comes to that - and goes out in one piece the moment the
+ * megabytes if it comes to that - and goes out, piece by piece, once the
  * daemon appears. Downloading is the last resort and only happens when the
  * buffer is genuinely enormous or somebody asks for it on the report page.
  *
@@ -29,7 +29,11 @@
 
 import { DAEMON_ORIGIN } from "./daemon.js";
 
+// The whole log as one array, which is how it was held until 2026-09-26. Read
+// once, on the first touch after that, and moved into pieces.
 const KEY = "sso:trace";
+const INDEX_KEY = "sso:traceIndex";
+const PIECE_KEY = "sso:trace:";
 const STATE_KEY = "sso:traceState";
 const SETTINGS_KEY = "sso:settings";
 export const FOLDER = "subtitle-overlay-log";
@@ -55,12 +59,44 @@ const FLUSH_AT_ENTRIES = 60;
 const HOLD_ENTRIES = 20000;
 const HOLD_BYTES = 400_000_000;
 
+/* Held in pieces, and a new line touches only the last one.
+ *
+ * The log was one array under one key, and every line read the whole array,
+ * added itself and wrote the whole array back. With the daemon down for ten
+ * days (found 2026-09-26) that was 3,151 entries and 4.8MB for every line - two
+ * full reads, one full write and a stringify, at 15ms a parse and 29ms a clone
+ * in V8 before the browser process made its own copy and wrote it to disk -
+ * and Brave's storage log showed a fresh 1.1MB table every 3 to 13 seconds
+ * while a video played. What a line cost grew with how long the daemon had
+ * been gone, which is the one thing nobody watching a film can see.
+ *
+ * So the log is pieces of at most PIECE_ENTRIES entries or PIECE_BYTES, and a
+ * small index says which pieces exist and how much each holds. A line reads
+ * the index and the last piece and writes both back; last week is not touched.
+ * The pieces also go out one POST each, so a long absence is many small sends
+ * rather than one body the size of it - the daemon refuses a log body over
+ * 64MB, and HOLD_BYTES is far past that. */
+const PIECE_ENTRIES = 200;
+const PIECE_BYTES = 256 * 1024;
+
+/* How long a daemon that refused the last POST is left before being asked
+ * again.
+ *
+ * Past FLUSH_AT_ENTRIES every line used to start a flush, and with the daemon
+ * down each of those read and stringified the whole log for a POST that could
+ * not land - once per line, of a port that had refused the line before. A
+ * minute is soon enough for a daemon somebody has just started, and a worker
+ * that restarts asks on its first busy line regardless. */
+const RETRY_MS = 60_000;
+
 let queue = Promise.resolve();
 let flushTimer = null;
+let flushDue = Infinity;
 /* Whether the daemon answered last time. Not a health check: the POST itself
  * is the check, and this only stops the timer firing at a socket that was not
  * there a moment ago. */
 let daemonSeen = true;
+let retryAt = 0;
 
 function inTurn(work) {
   const done = queue.then(work, work);
@@ -71,13 +107,73 @@ function inTurn(work) {
   return done;
 }
 
-export async function entries() {
-  try {
-    const stored = await chrome.storage.local.get(KEY);
-    return Array.isArray(stored[KEY]) ? stored[KEY] : [];
-  } catch {
-    return [];
+const pieceKey = (n) => `${PIECE_KEY}${n}`;
+const sizeOf = (entry) => JSON.stringify(entry).length;
+const fits = (piece, size) => Boolean(piece) && piece.count < PIECE_ENTRIES && piece.bytes + size <= PIECE_BYTES;
+
+/* Which pieces exist. Only ever called inside a turn, because on an
+ * installation from before the pieces the first call moves the old array. */
+async function readIndex() {
+  const index = (await chrome.storage.local.get(INDEX_KEY))[INDEX_KEY];
+  if (index && Array.isArray(index.pieces)) return index;
+  return movePastOneArray();
+}
+
+/* The one-array log, split once. The pieces and the index go down in one set,
+ * so an interruption leaves the old layout or the new one and never half of
+ * each; the old key goes only after that. */
+async function movePastOneArray() {
+  const old = (await chrome.storage.local.get(KEY))[KEY];
+  const index = { next: 0, pieces: [] };
+  const pieces = {};
+  for (const entry of Array.isArray(old) ? old : []) {
+    const size = sizeOf(entry);
+    let last = index.pieces.at(-1);
+    if (!fits(last, size)) {
+      last = { n: index.next++, count: 0, bytes: 0 };
+      index.pieces.push(last);
+      pieces[pieceKey(last.n)] = [];
+    }
+    pieces[pieceKey(last.n)].push(entry);
+    last.count += 1;
+    last.bytes += size;
   }
+  await chrome.storage.local.set({ ...pieces, [INDEX_KEY]: index });
+  if (old !== undefined) await chrome.storage.local.remove(KEY);
+  return index;
+}
+
+async function readPiece(n) {
+  const stored = await chrome.storage.local.get(pieceKey(n));
+  return Array.isArray(stored[pieceKey(n)]) ? stored[pieceKey(n)] : [];
+}
+
+async function readAll(index) {
+  const keys = index.pieces.map((about) => pieceKey(about.n));
+  if (!keys.length) return [];
+  const stored = await chrome.storage.local.get(keys);
+  return keys.flatMap((key) => (Array.isArray(stored[key]) ? stored[key] : []));
+}
+
+function held(index) {
+  let count = 0;
+  let bytes = 0;
+  for (const about of index.pieces) {
+    count += about.count;
+    bytes += about.bytes;
+  }
+  return { count, bytes };
+}
+
+/** Everything held, oldest first. In turn, so it never reads a half-written line. */
+export function entries() {
+  return inTurn(async () => {
+    try {
+      return await readAll(await readIndex());
+    } catch {
+      return [];
+    }
+  });
 }
 
 /** Counts and destinations, so the report page can say what exists. */
@@ -113,7 +209,15 @@ export async function enabled() {
 }
 
 export function clear() {
-  return inTurn(() => chrome.storage.local.remove([KEY, STATE_KEY]).catch(() => {}));
+  return inTurn(async () => {
+    try {
+      const index = (await chrome.storage.local.get(INDEX_KEY))[INDEX_KEY];
+      const pieces = Array.isArray(index?.pieces) ? index.pieces.map((about) => pieceKey(about.n)) : [];
+      await chrome.storage.local.remove([KEY, INDEX_KEY, STATE_KEY, ...pieces]);
+    } catch {
+      // Nothing to clear is not a failure.
+    }
+  });
 }
 
 /**
@@ -124,37 +228,44 @@ export function record(kind, detail) {
   return inTurn(async () => {
     try {
       if (!(await enabled())) return;
-      const log = await entries();
-      log.push({ at: new Date().toISOString(), kind, ...detail });
-      await chrome.storage.local.set({ [KEY]: log });
-      schedule(log);
+      const entry = { at: new Date().toISOString(), kind, ...detail };
+      const size = sizeOf(entry);
+      const index = await readIndex();
+      let last = index.pieces.at(-1);
+      let piece = [];
+      if (fits(last, size)) {
+        piece = await readPiece(last.n);
+      } else {
+        last = { n: index.next++, count: 0, bytes: 0 };
+        index.pieces.push(last);
+      }
+      piece.push(entry);
+      last.count = piece.length;
+      last.bytes += size;
+      await chrome.storage.local.set({ [pieceKey(last.n)]: piece, [INDEX_KEY]: index });
+      schedule(index);
     } catch {
       // A record that cannot be written must never break what it was recording.
     }
   });
 }
 
-function schedule(log) {
-  if (log.length >= FLUSH_AT_ENTRIES || (!daemonSeen && overflowing(log))) {
-    flush();
-    return;
-  }
+/* One timer, moved earlier when something more urgent arrives and never
+ * later: a timer restarted by every line is one a steady stream of lines never
+ * lets fire. */
+function schedule(index) {
+  const due = daemonSeen ? held(index).count >= FLUSH_AT_ENTRIES : overflowing(index);
+  const wait = due ? 0 : daemonSeen ? FLUSH_AFTER_MS : RETRY_MS;
+  const at = Math.max(Date.now() + wait, retryAt);
+  if (flushTimer && flushDue <= at) return;
   clearTimeout(flushTimer);
-  flushTimer = setTimeout(flush, FLUSH_AFTER_MS);
+  flushDue = at;
+  flushTimer = setTimeout(flush, at - Date.now());
 }
 
-function overflowing(log) {
-  return log.length >= HOLD_ENTRIES || roughBytes(log) >= HOLD_BYTES;
-}
-
-/* Measured on the last few entries and multiplied out, rather than by
- * stringifying the whole buffer on every single record. An alignment entry is
- * tens of kilobytes and this runs on a path that must not become the expensive
- * part of pressing a button. */
-function roughBytes(log) {
-  const sample = log.slice(-3);
-  if (!sample.length) return 0;
-  return (JSON.stringify(sample).length / sample.length) * log.length;
+function overflowing(index) {
+  const { count, bytes } = held(index);
+  return count >= HOLD_ENTRIES || bytes >= HOLD_BYTES;
 }
 
 /**
@@ -167,33 +278,66 @@ function roughBytes(log) {
 export function flush({ force = false } = {}) {
   clearTimeout(flushTimer);
   flushTimer = null;
-  return inTurn(async () => {
-    const log = await entries();
-    if (!log.length) return { ok: true, empty: true };
+  flushDue = Infinity;
+  /* Never rejects: the timer and schedule() call this without waiting, and a
+   * storage that cannot be read is an answer for the report page, not an
+   * unhandled rejection for the worker to record - into the same storage. */
+  return inTurn(() => sendOut(force).catch((error) => ({ ok: false, reason: String(error?.message || error) })));
+}
 
-    const sent = await toDaemon(log);
-    daemonSeen = sent.ok;
-    if (sent.ok) {
-      await settle(log, { destination: "daemon", bytes: sent.bytes, daemon: true });
-      return { ok: true, destination: "daemon", entries: log.length, file: sent.file };
-    }
+async function sendOut(force) {
+  const index = await readIndex();
+  if (!index.pieces.length) return { ok: true, empty: true };
 
-    if (!force && !overflowing(log)) {
-      /* Held on purpose. Nothing has been lost and nothing has interrupted:
-       * the entries stay where they are until the daemon comes up or until
-       * there are too many to keep. */
-      await note({ lastError: sent.reason, lastDestination: "held in the browser" });
-      return { ok: true, held: log.length, reason: sent.reason };
+  /* Oldest piece first, each one let go the moment the daemon has it, so a
+   * refusal halfway leaves exactly what did not arrive. The piece is removed
+   * before the index stops naming it: an interruption between the two leaves
+   * the index naming a piece that is not there, which reads as empty, rather
+   * than a piece nothing names, which would never be sent or cleared. */
+  let sent = { ok: true };
+  let posts = 0;
+  let sentEntries = 0;
+  let sentBytes = 0;
+  let file = null;
+  while (index.pieces.length) {
+    const { n } = index.pieces[0];
+    const piece = await readPiece(n);
+    if (piece.length) {
+      sent = await toDaemon(piece);
+      if (!sent.ok) break;
+      posts += 1;
+      sentEntries += piece.length;
+      sentBytes += sent.bytes;
+      file = sent.file;
     }
+    await chrome.storage.local.remove(pieceKey(n));
+    index.pieces.shift();
+    await chrome.storage.local.set({ [INDEX_KEY]: index });
+  }
+  daemonSeen = sent.ok;
+  retryAt = sent.ok ? 0 : Date.now() + RETRY_MS;
+  if (posts) await tally({ posts, entries: sentEntries, bytes: sentBytes, destination: "daemon" });
+  if (sent.ok) return { ok: true, destination: "daemon", entries: sentEntries, file };
 
-    const written = await toFile(log);
-    if (!written.ok) {
-      await note({ lastError: written.reason });
-      return { ok: false, reason: written.reason };
-    }
-    await settle(log, { destination: written.file, bytes: written.bytes, daemon: false });
-    return { ok: true, destination: "file", entries: log.length, file: written.file };
-  });
+  if (!force && !overflowing(index)) {
+    /* Held on purpose. Nothing has been lost and nothing has interrupted:
+     * the entries stay where they are until the daemon comes up or until
+     * there are too many to keep. */
+    await note({ lastError: sent.reason, lastDestination: "held in the browser" });
+    return { ok: true, held: held(index).count, reason: sent.reason };
+  }
+
+  const log = await readAll(index);
+  const written = await toFile(log);
+  if (!written.ok) {
+    await note({ lastError: written.reason });
+    return { ok: false, reason: written.reason };
+  }
+  await chrome.storage.local.remove(index.pieces.map((about) => pieceKey(about.n)));
+  index.pieces = [];
+  await chrome.storage.local.set({ [INDEX_KEY]: index });
+  await tally({ files: 1, entries: log.length, bytes: written.bytes, destination: written.file });
+  return { ok: true, destination: "file", entries: log.length, file: written.file };
 }
 
 async function toDaemon(log) {
@@ -238,17 +382,18 @@ async function toFile(log) {
   }
 }
 
-/* Emptied only after it is somewhere else. A buffer cleared on a write that
- * failed is the one outcome that leaves nothing at all to look at. */
-async function settle(log, { destination, bytes, daemon }) {
+/* What went out, for the report page. The pieces themselves are removed by
+ * flush as each one lands - emptied only after it is somewhere else, because a
+ * buffer cleared on a write that failed is the one outcome that leaves nothing
+ * at all to look at. */
+async function tally({ posts = 0, files = 0, entries, bytes, destination }) {
   const was = await state();
   await chrome.storage.local.set({
-    [KEY]: [],
     [STATE_KEY]: {
       ...was,
-      sentToDaemon: was.sentToDaemon + (daemon ? 1 : 0),
-      filesWritten: was.filesWritten + (daemon ? 0 : 1),
-      entriesSent: was.entriesSent + log.length,
+      sentToDaemon: was.sentToDaemon + posts,
+      filesWritten: was.filesWritten + files,
+      entriesSent: was.entriesSent + entries,
       bytesOut: was.bytesOut + bytes,
       lastDestination: destination,
       lastError: null,

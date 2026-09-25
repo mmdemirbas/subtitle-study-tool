@@ -197,11 +197,24 @@ popups, no ceiling but the disk. **Read that directory instead of asking anyone
 to reproduce anything.**
 
 With the daemon down it simply **holds** — up to 20000 entries or 400MB, which
-is what `unlimitedStorage` is for — and sends the lot in one piece the moment
-the daemon appears. A file is downloaded only if even that fills, or if asked
+is what `unlimitedStorage` is for — and sends it, oldest piece first, once the
+daemon appears. A file is downloaded only if even that fills, or if asked
 for on the report page. The buffer is emptied **only after** the entries are
 somewhere else; a destination that refuses them keeps them and records
 `lastError`.
+
+**The held log is pieces, and a line touches only the last one.** It was one
+array under `sso:trace`, and every line read it whole, added itself and wrote
+it whole back - then, past 60 entries, started a flush that read and
+stringified it again for a POST that could not land. The daemon was down from
+2026-09-16 to 09-26: 4.8MB held, and Brave's storage log for the extension
+showed a fresh 1.1MB table every 3 to 13 seconds while a video played. Now
+`sso:traceIndex` names pieces `sso:trace:<n>` of at most 200 entries or 256KB;
+a line reads and writes one piece, a flush sends one POST per piece, and a
+refused POST is not retried for a minute. The first touch on an older
+installation splits the old array once. `tests/worker.mjs` pins all three —
+the bytes one line reads and writes with 2MB held, the POSTs thirty lines try
+with the daemon gone, and the size of each POST when it comes back.
 
 **The switch is `settings.diagnostics`**, on by default, in the panel's *If
 this page is not working* section. `trace.js` reads it, so one flag covers the
