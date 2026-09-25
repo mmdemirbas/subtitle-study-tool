@@ -194,7 +194,9 @@ ones are worth knowing so they are not tried again:
 So `flush()` POSTs to `http://127.0.0.1:8794/log` and the daemon appends one
 line of JSON per entry to `subtitle-daemon/logs/<date>.jsonl`. No files, no
 popups, no ceiling but the disk. **Read that directory instead of asking anyone
-to reproduce anything.**
+to reproduce anything.** When its newest file is days old, the daemon was down
+and the rest is still in the browser: `python3 tools/read-storage.py` reads it
+off the profile (`--dump <file>` for the entries themselves).
 
 With the daemon down it simply **holds** — up to 20000 entries or 400MB, which
 is what `unlimitedStorage` is for — and sends it, oldest piece first, once the
