@@ -78,6 +78,18 @@ main {
   color: var(--text);
 }
 
+.note--warn {
+  color: var(--bad);
+}
+
+.daemon-note {
+  margin: 0 0 12px;
+}
+
+.daemon-note .note {
+  margin-bottom: 6px;
+}
+
 .note--dim {
   margin: 12px 0 0;
   font-size: 11.5px;

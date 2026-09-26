@@ -17,6 +17,10 @@ const posted = [];
 let downloadsFail = false;
 let daemonUp = true;
 let foreignOnPort = false;
+// The toolbar icon and the alarms, as the worker last left them.
+const badge = { text: "", title: "", tabs: new Map() };
+const shownOn = (tabId) => (badge.tabs.has(tabId) ? badge.tabs.get(tabId) : badge.text);
+const alarmsSet = new Map();
 // Every POST the log tried, landed or not: a refused one costs the worker a read
 // and a stringify all the same.
 let logAttempts = 0;
@@ -95,6 +99,8 @@ let pageFiles = {};
 // Whether the tab has a content script that answers. False is a tab left open
 // across an extension update, which is the case the self-heal exists for.
 let pingAlive = false;
+// A tab whose panel cannot be reached, which is when the worker flags the icon.
+let panelRefused = false;
 
 globalThis.indexedDB = {
   open: () => {
@@ -126,6 +132,7 @@ globalThis.chrome = {
     }),
     getURL: (p) => `chrome-extension://test/${p}`,
     onInstalled: { addListener() {} },
+    onStartup: { addListener() {} },
     onMessage: { addListener: (fn) => listeners.message.push(fn) },
     lastError: null,
   },
@@ -181,6 +188,7 @@ globalThis.chrome = {
         if (!pingAlive) throw new Error("Could not establish connection.");
         return { ok: true, version: chrome.runtime.getManifest().version };
       }
+      if (message.type === "sso:togglePanel" && panelRefused) return { ok: false };
       return { ok: true };
     },
   },
@@ -212,10 +220,29 @@ globalThis.chrome = {
     },
   },
   webNavigation: { async getAllFrames() { return frameList; } },
-  action: { async setBadgeText() {}, async setBadgeBackgroundColor() {} },
+  /* The badge as Chrome keeps it: one global text, and per-tab texts that
+   * outrank it. A tab's "" is a text like any other and hides the global one;
+   * only null hands the tab back. A stub that let "" fall through would pass
+   * the flag's reset that hid the daemon's badge on every flagged tab.
+   * https://developer.chrome.com/docs/extensions/reference/api/action#method-setBadgeText */
+  action: {
+    async setBadgeText({ tabId, text }) {
+      if (tabId === undefined) badge.text = text;
+      else if (text === null) badge.tabs.delete(tabId);
+      else badge.tabs.set(tabId, text);
+    },
+    async setBadgeBackgroundColor() {},
+    async setTitle({ title }) { badge.title = title; },
+  },
+  alarms: {
+    async create(name, info) { alarmsSet.set(name, info); },
+    async clear(name) { return alarmsSet.delete(name); },
+    onAlarm: { addListener: (fn) => { listeners.alarm = fn; } },
+  },
 };
 
 await import("../src/background.js");
+
 
 const ask = (message, sender) =>
   new Promise((resolve) => {
@@ -250,6 +277,26 @@ const until = async (ready, ms = 2000) => {
     await new Promise((r) => setTimeout(r, 5));
   }
 };
+
+/* First, before any case below makes the daemon answer: an installation that
+ * has never seen it is not told it is missing. The daemon is optional, and a
+ * red mark on the icon of every reader who never started one is a warning
+ * nobody can act on. */
+{
+  /* Through the log's POST, not the provider's probe: the probe caches its
+   * answer for five seconds, and a "no" cached here sends the search cases
+   * below down the path that does the work without the daemon. */
+  const log = await import("../src/trace.js");
+  daemonUp = false;
+  await log.record("panel", { open: true });
+  await log.flush();
+  t("a daemon this installation has never seen is not a mark on the icon",
+    badge.text === "" && alarmsSet.size === 0 && store["sso:daemonPresence"]?.seen === false,
+    `badge "${badge.text}", ${alarmsSet.size} alarms, ${JSON.stringify(store["sso:daemonPresence"])}`);
+  daemonUp = true;
+  await log.flush();
+  posted.length = 0;
+}
 
 // 1. A site nobody has decided about turns itself on at the first attach, once.
 await ask({ type: "sso:attached" }, sender);
@@ -938,6 +985,70 @@ t("in POSTs of a bounded size, not one the size of the absence",
 t("and nothing is left behind, the old key included",
   (await trace.entries()).length === 0 && !("sso:trace" in store),
   `${(await trace.entries()).length} held, old key ${"sso:trace" in store ? "still there" : "gone"}`);
+
+/* --- whether the daemon is there, on the icon --------------------------------
+ *
+ * The daemon stopped on 2026-09-16 and nothing said so for ten days; the log
+ * piled up in the browser meanwhile. Asked for as "a badge ... on the
+ * subtitle extension icon when daemon is connected vs not connected". */
+{
+  const { daemonUp: probeDaemon } = await import("../src/provider.js");
+  const daemonIsUp = (url) => (url.includes("/health") ? { default_languages: ["en"] } : null);
+  daemonAnswers = daemonIsUp;
+  await probeDaemon({ force: true });
+  t("once it has answered, the icon says connected and carries no badge",
+    badge.text === "" && /daemon connected/.test(badge.title) && !alarmsSet.has("sso:daemonCheck"),
+    `badge "${badge.text}", title "${badge.title}"`);
+
+  daemonAnswers = null;
+  await probeDaemon({ force: true });
+  t("when it stops answering the icon carries a badge, and the tooltip says what to start",
+    badge.text === "!" && /not running.*run\.sh/.test(badge.title),
+    `badge "${badge.text}", title "${badge.title}"`);
+  t("and it is looked for again every minute while it is gone",
+    alarmsSet.get("sso:daemonCheck")?.periodInMinutes === 1, JSON.stringify([...alarmsSet]));
+  t("the popup and the panel can read the same answer",
+    store["sso:daemonPresence"]?.up === false && store["sso:daemonPresence"]?.seen === true,
+    JSON.stringify(store["sso:daemonPresence"]));
+
+  daemonAnswers = daemonIsUp;
+  listeners.alarm?.({ name: "sso:daemonCheck" });
+  await until(() => badge.text === "");
+  t("started again, the next minute's look takes the badge off and stops looking",
+    badge.text === "" && !alarmsSet.has("sso:daemonCheck"), `badge "${badge.text}", ${alarmsSet.size} alarms`);
+
+  /* The log's POST is enough on its own. What ran for ten days was pages that
+   * carry their own subtitles, where nothing searches and the probe is never
+   * asked - only the log was knocking. */
+  daemonAnswers = null;
+  await resetTrace();
+  daemonUp = false;
+  await trace.record("perf", { i: 0 });
+  await trace.flush();
+  t("a log POST that finds nobody puts the badge up without any search",
+    badge.text === "!", `badge "${badge.text}"`);
+  daemonUp = true;
+  await trace.flush();
+  t("and one that lands takes it off", badge.text === "", `badge "${badge.text}"`);
+
+  /* A tab the worker flagged goes back to the icon's own badge. The flag's
+   * reset wrote "", which Chrome keeps as that tab's text over the global one,
+   * so a tab flagged once showed no daemon badge until it was closed. */
+  daemonAnswers = null;
+  await probeDaemon({ force: true });
+  panelRefused = true;
+  pingAlive = true;
+  await listeners.command("toggle-panel");
+  const flagged = shownOn(1);
+  await new Promise((r) => setTimeout(r, 4200));
+  t("a tab flagged for a moment shows the daemon's badge again afterwards",
+    flagged === "!" && shownOn(1) === "!", `during "${flagged}", after "${shownOn(1)}"`);
+  panelRefused = false;
+  pingAlive = false;
+  daemonAnswers = daemonIsUp;
+  await probeDaemon({ force: true });
+  daemonAnswers = null;
+}
 
 /* Cue times are stored as gaps to keep more of them; a pack that does not
  * reconstruct exactly is worse than no pack, because the file it produces

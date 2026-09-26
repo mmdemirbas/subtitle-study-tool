@@ -17,6 +17,7 @@
 
 import * as daemon from "./daemon.js";
 import { DaemonDownError } from "./daemon.js";
+import { noteDaemon } from "./daemon-watch.js";
 import { cuesResponse, LocalService } from "./subtitles/local.js";
 import * as cache from "./subtitles/cache.js";
 import { converge } from "./subtitles/sync.js";
@@ -102,6 +103,7 @@ export async function daemonUp({ force = false } = {}) {
     why = error instanceof DaemonDownError && error.foreign ? error.message : "";
   }
   probe = { at: Date.now(), up, why };
+  await noteDaemon(up, why);
 
   /* Coming back up is the moment to converge the two caches, and it has to
    * finish before anything searches: a search that ran first would rank against

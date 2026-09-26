@@ -18,7 +18,8 @@
     "tabs",
     "webNavigation",
     "downloads",
-    "downloads.ui"
+    "downloads.ui",
+    "alarms"
   ],
   "host_permissions": [
     "<all_urls>",

@@ -17,6 +17,10 @@ import { tabStatus } from "./daemon.js";
 
 const ui = {
   daemonState: document.getElementById("daemon-state"),
+  daemonNote: document.getElementById("daemon-note"),
+  daemonNoteHead: document.getElementById("daemon-note-head"),
+  daemonNoteText: document.getElementById("daemon-note-text"),
+  daemonNoteHint: document.getElementById("daemon-note-hint"),
   blocker: document.getElementById("blocker"),
   blockerMessage: document.getElementById("blocker-message"),
   blockerHint: document.getElementById("blocker-hint"),
@@ -31,6 +35,9 @@ const ui = {
   shortcuts: document.getElementById("shortcuts"),
   editShortcuts: document.getElementById("edit-shortcuts"),
 };
+
+// Written by the worker's daemon-watch.js; read by showDaemon below.
+const PRESENCE_KEY = "sso:daemonPresence";
 
 const session = { tab: null, frameId: 0 };
 
@@ -72,6 +79,8 @@ async function init() {
    * can be FOUND on either side. The advice differs by side, since the daemon
    * reads a file and the extension reads its own options. */
   const config = await chrome.runtime.sendMessage({ type: "sso:daemon", op: "health" });
+  // That call looked at the daemon, so what is stored is the answer as of now.
+  showDaemon((await chrome.storage.local.get(PRESENCE_KEY).catch(() => ({})))[PRESENCE_KEY]);
   if (!config || config.transportError) {
     return block(config?.transportError || "Could not reach the extension's service worker.", "");
   }
@@ -204,6 +213,25 @@ async function renderShortcuts() {
         return row;
       }),
   );
+}
+
+/* The badge on the icon, explained where a click on it lands.
+ *
+ * The daemon stopped on 2026-09-16 and nothing said so for ten days; the
+ * worker now keeps the answer (daemon-watch.js) and badges the icon, and this
+ * is the sentence behind the badge. Only for an installation that has seen the
+ * daemon answer, like the badge itself: for a reader who never started one,
+ * nothing listening is the ordinary state. And run.sh is advice only for
+ * nothing listening - on a port something else holds it fails, so the worker's
+ * own words stand alone there. */
+function showDaemon(record) {
+  const gone = Boolean(record?.seen) && record.up === false;
+  ui.daemonNote.hidden = !gone;
+  if (!gone) return;
+  ui.daemonNoteHead.textContent = record.why ? "The subtitle daemon cannot be reached." : "The subtitle daemon is not running.";
+  ui.daemonNoteText.textContent =
+    record.why || "The extension does the work itself meanwhile, and its log waits in the browser until the daemon is back. Start it with:";
+  ui.daemonNoteHint.hidden = Boolean(record.why);
 }
 
 function setPill(text, className) {

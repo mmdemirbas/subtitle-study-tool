@@ -218,6 +218,22 @@ installation splits the old array once. `tests/worker.mjs` pins all three —
 the bytes one line reads and writes with 2MB held, the POSTs thirty lines try
 with the daemon gone, and the size of each POST when it comes back.
 
+**Whether the daemon is there is shown, not only recorded.** It stopped on
+2026-09-16 and nothing said so for ten days. `daemon-watch.js` keeps one
+answer in `sso:daemonPresence`, fed by every look at the daemon -
+`provider.daemonUp()`'s probe and the log's POST, the latest look winning -
+and draws it on the toolbar icon: a red `!` badge and a tooltip while it is
+gone, no badge and "daemon connected" in the tooltip while it answers. An
+alarm looks again every minute while it is gone and is cleared when it
+answers. The popup explains the badge, and the panel's status line carries
+it as a standing message with *Check again* (op `daemonCheck`), giving way to
+any passing message and coming back after. **Only an installation that has
+seen the daemon answer is warned** - for a reader who never started one,
+nothing listening is the ordinary state. Two details that bite: a per-tab
+badge outranks the global one, so a tab's badge is reset with `null`, never
+`""`; and only a panel that has been built listens to storage, because
+`panel.js` runs in every frame and an `onChanged` listener hears every write.
+
 **The switch is `settings.diagnostics`**, on by default, in the panel's *If
 this page is not working* section. `trace.js` reads it, so one flag covers the
 frames and the worker; `content.js` checks it too, so switching it off stops

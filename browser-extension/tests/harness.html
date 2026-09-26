@@ -3907,6 +3907,54 @@
         await sleep(150);
       });
 
+      check("a stopped daemon stands on the status line, gives way to a message and comes back", async () => {
+        /* The daemon stopped on 2026-09-16 and nothing said so for ten days.
+         * Asked for as a warning "in a proper place in the extension pane ...
+         * so I can notice while using it". The proper place is the line the
+         * panel already keeps for everything it says, so nothing moves when
+         * the warning arrives; and it has to survive the ordinary messages
+         * that pass over it, or it is gone after the first nudge. */
+        const presence = (value) => chrome.storage.local.set({ "sso:daemonPresence": value });
+        await window.__ssoPanel.show();
+        await sleep(150);
+        /* From a clear line. The case before leaves an answer standing with an
+         * offer on it, and an offer keeps the line until it is answered - the
+         * warning waits behind it by design, which is not what this measures. */
+        window.__ssoPanel.sayInPanel(null, "");
+        const status = panelShadow().querySelector(".sso-panel__status");
+        const text = () => status.querySelector(".sso-panel__status-text").textContent;
+        const offer = status.querySelector(".sso-panel__status-do");
+        const height = () => Math.round(status.getBoundingClientRect().height);
+        const before = height();
+
+        await presence({ up: false, seen: true, why: "", since: Date.now() });
+        await sleep(100);
+        if (!/daemon not running/i.test(text())) throw new Error(`the stopped daemon was not said: "${text()}"`);
+        if (offer.hidden || !/check again/i.test(offer.textContent))
+          throw new Error(`the warning offers nothing to do about it: "${offer.textContent}"`);
+        if (height() !== before) throw new Error(`the line changed height for it: ${before}px then ${height()}px`);
+
+        window.__ssoPanel.sayInPanel(0, "Moved subtitle 1 by 0.5s");
+        await sleep(50);
+        if (!/0\.5s/.test(text())) throw new Error(`a message did not take the line: "${text()}"`);
+        await sleep(6300);
+        if (!/daemon not running/i.test(text()))
+          throw new Error(`the warning did not come back when the message went: "${text()}"`);
+
+        // An installation that never saw the daemon is not told it is missing.
+        await presence({ up: false, seen: false, why: "", since: Date.now() });
+        await sleep(100);
+        if (text()) throw new Error(`a daemon never seen is still warned about: "${text()}"`);
+
+        await presence({ up: false, seen: true, why: "", since: Date.now() });
+        await sleep(100);
+        await presence({ up: true, seen: true, why: "", since: Date.now() });
+        await sleep(100);
+        if (text() || !offer.hidden) throw new Error(`the line kept the warning after the daemon answered: "${text()}"`);
+        await chrome.storage.local.remove("sso:daemonPresence");
+        await sleep(50);
+      });
+
       check("the learn chip and the clear keep their place in both states", async () => {
         /* Reported as "buttons shouldn't drift as well; learn/learning change
          * drifts the sync amount input box and backspace symbol". They share a

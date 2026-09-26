@@ -359,6 +359,11 @@
 
     panel.append(head, body, el.status, ...buildResizeGrips(body));
     shadow.append(panel);
+    chrome.storage.onChanged.addListener(onStorageChanged);
+    chrome.storage.local
+      .get(PRESENCE_KEY)
+      .then((stored) => onPresence(stored[PRESENCE_KEY]))
+      .catch(() => {});
 
     /* Into the document here, not on the first reparent.
      *
@@ -3035,11 +3040,16 @@
     el.statusSlot.textContent = text && Number.isInteger(slot) && !named ? String(slot + 1) : "";
     el.statusSlot.hidden = !el.statusSlot.textContent;
     el.statusText.textContent = text || "";
+    el.statusText.title = "";
     el.statusDo.hidden = !text || !action;
     el.statusDo.replaceChildren();
     saidAction = text && action ? action : null;
     if (saidAction) el.statusDo.textContent = saidAction.label;
-    if (!text) return true;
+    standingShown = false;
+    if (!text) {
+      showStanding();
+      return true;
+    }
     if (!action) saidTimer = setTimeout(() => clearSaid(slot), SAID_MS);
     return true;
   }
@@ -3062,9 +3072,75 @@
     el.statusSlot.textContent = "";
     el.statusSlot.hidden = true;
     el.statusText.textContent = "";
+    el.statusText.title = "";
     el.statusDo.hidden = true;
     el.statusDo.replaceChildren();
     el.status.dataset.warn = "false";
+    standingShown = false;
+    showStanding();
+  }
+
+  /* The daemon, while it is gone: the one thing this line says unasked.
+   *
+   * Everything else here answers something just done and goes after SAID_MS.
+   * This is a standing condition - the daemon stopped on 2026-09-16 and nothing
+   * said so for ten days - so it stands while it is true, gives way to any
+   * message while that one is up, and comes back when it goes. It carries an
+   * offer, which is what lets a message stand on this line at all (see
+   * SAID_MS). It is not a banner: this line already costs its height, always,
+   * and a line that appears pushes down the map and the field being aimed at.
+   *
+   * The worker keeps the answer in storage (daemon-watch.js); only a panel
+   * that has been built listens for it. panel.js runs in every frame, and a
+   * storage listener hears every write the extension makes. */
+  const PRESENCE_KEY = "sso:daemonPresence";
+  let standing = null;
+  let standingShown = false;
+
+  function onPresence(record) {
+    const gone = Boolean(record?.seen) && record.up === false;
+    standing = gone
+      ? {
+          text: "Subtitle daemon not running",
+          title: record.why || "Start it with subtitle-daemon/run.sh. Until then the extension does the work itself, and its log waits in the browser.",
+          action: { label: "Check again", onClick: checkDaemon },
+        }
+      : null;
+    // A message is up: the standing line comes back when it goes.
+    if (saidTimer || (saidAction && !standingShown)) return;
+    showStanding();
+  }
+
+  function onStorageChanged(changes, area) {
+    if (area === "local" && changes[PRESENCE_KEY]) onPresence(changes[PRESENCE_KEY].newValue);
+  }
+
+  function showStanding() {
+    if (!el.status) return;
+    if (!standing) {
+      if (!standingShown) return;
+      standingShown = false;
+      clearSaid();
+      return;
+    }
+    standingShown = true;
+    el.status.dataset.warn = "true";
+    // The toolbar badge's mark, so the two read as one warning.
+    el.statusSlot.textContent = "!";
+    el.statusSlot.hidden = false;
+    el.statusText.textContent = standing.text;
+    el.statusText.title = standing.title;
+    el.statusDo.hidden = false;
+    el.statusDo.textContent = standing.action.label;
+    saidAction = standing.action;
+  }
+
+  /* Asked now rather than from the probe's cache, and the answer said: a line
+   * that stays the same after a press reads as a button that did nothing. */
+  async function checkDaemon() {
+    const now = await api.daemon("daemonCheck", {});
+    const said = now?.transportError || (now?.up ? "The daemon is back" : "Still nothing answering on 127.0.0.1:8794");
+    if (!sayInPanel(null, said, { warn: !now?.up })) api.showToast(said);
   }
 
   /* --- how one subtitle looks -------------------------------------------------
@@ -5682,6 +5758,7 @@
     styleWindow?.destroy();
     styleWindow = null;
     window.removeEventListener("resize", clampIntoView);
+    chrome.storage.onChanged.removeListener(onStorageChanged);
     unsubscribe?.();
     unsubscribe = null;
     host?.remove();

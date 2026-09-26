@@ -1507,12 +1507,16 @@ button.sso-sync__align:hover:not(:disabled) {
  * appears and disappears moves whatever is next to it, and what was next to it
  * was the map and the timing field - the two things being aimed at when the
  * message arrives. */
+/* The height it has with an offer in it, always. It was 24px, and a line
+ * carrying a button - a 22px chip, the 2px padding and the 1px rule - is 27,
+ * so every offer moved the window's foot 3px and back. Measured when the
+ * stopped daemon's warning began standing here with "Check again" on it. */
 .sso-panel__status {
   display: flex;
   flex: none;
   gap: var(--sso-s2);
   align-items: center;
-  min-height: 24px;
+  min-height: calc(var(--sso-h-chip) + 5px);
   padding: 2px var(--sso-s3);
   font-size: var(--sso-t-small);
   line-height: 1.35;

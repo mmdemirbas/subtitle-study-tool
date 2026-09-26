@@ -32,6 +32,7 @@ import {
   cacheClear,
   cacheDelete,
   cacheEntries,
+  daemonUp,
   fetchSubtitle,
   preferredLanguages,
   search,
@@ -39,6 +40,7 @@ import {
   syncNow,
   updateSettings,
 } from "./provider.js";
+import { CHECK_ALARM, presence, restore } from "./daemon-watch.js";
 /* Study mode lives in the worker for two reasons: the rarity tables are large
  * enough that one copy per frame would be wasteful, and the dictionary is a
  * cross-origin call, which an MV3 content script cannot make with extension
@@ -95,6 +97,22 @@ globalThis.addEventListener("unhandledrejection", (event) => {
 chrome.runtime.onInstalled.addListener(async () => {
   const injectable = await chrome.tabs.query({ url: ["http://*/*", "https://*/*"] });
   await Promise.all(injectable.map((tab) => inject(tab.id)));
+});
+
+/* The icon says whether the daemon is there; see daemon-watch.js. A browser
+ * start and a reload of the extension both hand back the plain icon, so the
+ * stored answer is drawn again first and then checked, and while the daemon is
+ * gone an alarm asks again every minute. Registered here, at the top, because
+ * a worker woken by an event only hears it through a listener added before
+ * its first await. */
+async function lookAtDaemon() {
+  await restore();
+  await daemonUp({ force: true }).catch(() => {});
+}
+chrome.runtime.onStartup.addListener(lookAtDaemon);
+chrome.runtime.onInstalled.addListener(lookAtDaemon);
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === CHECK_ALARM) daemonUp({ force: true }).catch(() => {});
 });
 
 /* Put the current content scripts into one tab, every frame of it.
@@ -471,6 +489,10 @@ async function handleDaemonCall(op, args, sender) {
   switch (op) {
     case "health":
       return providerStatus();
+    // "Check again", from the panel's status line: now, not from the probe's cache.
+    case "daemonCheck":
+      await daemonUp({ force: true });
+      return presence();
     case "search": {
       const languages = args.languages?.length ? args.languages : await preferredLanguages();
       return search({ ...args, languages });
@@ -1350,7 +1372,11 @@ async function flagBadge(tabId, text) {
   try {
     await chrome.action.setBadgeText({ tabId, text });
     await chrome.action.setBadgeBackgroundColor({ tabId, color: "#c2503f" });
-    setTimeout(() => chrome.action.setBadgeText({ tabId, text: "" }).catch(() => {}), 4000);
+    /* null, not "": a tab's own text outranks the global badge, and only null
+     * hands the tab back to it. With "" a tab that had ever been flagged went
+     * on showing an empty badge over the daemon's "!" until it was closed.
+     * https://developer.chrome.com/docs/extensions/reference/api/action#method-setBadgeText */
+    setTimeout(() => chrome.action.setBadgeText({ tabId, text: null }).catch(() => {}), 4000);
   } catch {
     // Tab closed.
   }

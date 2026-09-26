@@ -28,6 +28,7 @@
  */
 
 import { DAEMON_ORIGIN } from "./daemon.js";
+import { noteDaemon } from "./daemon-watch.js";
 
 // The whole log as one array, which is how it was held until 2026-09-26. Read
 // once, on the first touch after that, and moved into pieces.
@@ -357,10 +358,17 @@ async function toDaemon(log) {
      * dropped, so the entries are gone and they went to a stranger's process.
      * The daemon says where it wrote them, and nothing else does. */
     if (said.ok !== true || typeof said.file !== "string") {
-      return { ok: false, reason: `something other than the daemon answered on ${DAEMON_ORIGIN}` };
+      const reason = `something other than the daemon answered on ${DAEMON_ORIGIN}`;
+      await noteDaemon(false, reason);
+      return { ok: false, reason };
     }
+    /* The look at the daemon that happens most while a film plays: nothing
+     * else asks for it on a page that carries its own subtitles. An HTTP error
+     * above is not reported either way - something is listening there. */
+    await noteDaemon(true);
     return { ok: true, bytes: text.length, file: said.file };
   } catch (error) {
+    await noteDaemon(false);
     return { ok: false, reason: `daemon not running (${error?.message || error})` };
   }
 }
