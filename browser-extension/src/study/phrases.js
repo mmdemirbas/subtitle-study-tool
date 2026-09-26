@@ -20,6 +20,8 @@
  * order describes nothing.
  */
 
+import { letGo } from "../http.js";
+
 /* The closed set of particles, and the two entries NOT in it.
  *
  * `to` is missing on purpose. Wiktionary files "have to", "go to", "need to",
@@ -283,7 +285,10 @@ async function table() {
 async function load() {
   const url = chrome.runtime.getURL("src/study/phrases-en.generated.txt");
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`phrase table: HTTP ${response.status}`);
+  if (!response.ok) {
+    letGo(response);
+    throw new Error(`phrase table: HTTP ${response.status}`);
+  }
   const phrases = (await response.text()).split("\n");
   if (phrases[phrases.length - 1] === "") phrases.pop();
   if (phrases.length === 0) throw new Error("the phrase table is empty");

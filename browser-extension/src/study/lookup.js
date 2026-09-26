@@ -20,6 +20,7 @@
 
 import * as daemon from "./../daemon.js";
 import { daemonUp } from "./../provider.js";
+import { letGo } from "./../http.js";
 
 const DICTIONARY_ORIGIN = "https://api.dictionaryapi.dev";
 const DICTIONARY_URL = (word) =>
@@ -360,9 +361,13 @@ async function resolveDefinition(term, language) {
   try {
     const response = await fetch(DICTIONARY_URL(term));
     if (response.status === 404) {
+      letGo(response);
       return { query: term, definitions: [], unavailable: "No dictionary entry for that word." };
     }
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      letGo(response);
+      throw new Error(`HTTP ${response.status}`);
+    }
     return { query: term, ...condense(await response.json()), source: "dictionaryapi.dev" };
   } catch (error) {
     return {
@@ -381,7 +386,10 @@ async function resolveTranslation(term, language, target) {
 
   try {
     const response = await fetch(TRANSLATOR_URL(term, from, to));
-    if (!response.ok) return "";
+    if (!response.ok) {
+      letGo(response);
+      return "";
+    }
     return pickTranslation(await response.json(), term);
   } catch {
     // The definition is still worth showing, and a learner does not need to be

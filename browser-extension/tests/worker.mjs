@@ -24,6 +24,10 @@ const alarmsSet = new Map();
 // Every POST the log tried, landed or not: a refused one costs the worker a read
 // and a stringify all the same.
 let logAttempts = 0;
+// The daemon's port answering with an error status, and every error body let go.
+let logRefused = 0;
+let released = 0;
+const refusal = (status) => ({ ok: false, status, body: { cancel: async () => { released += 1; } } });
 /* What the subtitle daemon answers, for the cases that need a search to come
  * back with something. null is "nothing is listening", which is what every
  * other case here wants and what the fetch below produces by rejecting. */
@@ -36,6 +40,7 @@ globalThis.fetch = async (url, options) => {
   if (String(url).includes("/log")) {
     logAttempts += 1;
     if (!daemonUp) throw new TypeError("Failed to fetch");
+    if (logRefused) return refusal(logRefused);
     /* Something that is not the daemon, holding 8791 - the same case the
      * health probe has to handle. It answers, so the POST succeeds and the log
      * would be dropped from the browser having gone to a stranger. */
@@ -49,6 +54,7 @@ globalThis.fetch = async (url, options) => {
   }
   if (Object.hasOwn(pageFiles, String(url))) {
     const body = pageFiles[String(url)];
+    if (typeof body === "number") return refusal(body);
     return {
       ok: true, status: 200,
       text: async () => (typeof body === "string" ? body : new TextDecoder().decode(body)),
@@ -1048,6 +1054,31 @@ t("and nothing is left behind, the old key included",
   daemonAnswers = daemonIsUp;
   await probeDaemon({ force: true });
   daemonAnswers = null;
+}
+
+/* An answer with an error status is let go, not left open.
+ *
+ * A body nobody reads keeps its request open until the Response is collected,
+ * and a host's connections are few: a playlist of subtitle segments with a few
+ * refused ones could hold up the rest. Found in the log's POST, then at every
+ * path that decides from the status alone. */
+{
+  released = 0;
+  await resetTrace();
+  logRefused = 500;
+  await trace.record("perf", { i: 0 });
+  const refused = await trace.flush();
+  logRefused = 0;
+  t("a log POST the daemon refuses is let go, and the entries are kept",
+    released === 1 && refused.held === 1, `${released} released, ${JSON.stringify(refused)}`);
+
+  const { readPageTrack } = await import("../src/subtitles/page.js");
+  released = 0;
+  pageFiles["https://cdn.example/refused.vtt"] = 403;
+  const failed = await readPageTrack({ url: "https://cdn.example/refused.vtt", format: "vtt" }).catch((error) => error);
+  delete pageFiles["https://cdn.example/refused.vtt"];
+  t("a page's subtitle the CDN refuses is let go, and says why",
+    released === 1 && /403/.test(String(failed?.message)), `${released} released, ${failed?.message}`);
 }
 
 /* Cue times are stored as gaps to keep more of them; a pack that does not

@@ -11,6 +11,8 @@
  * OpenSubtitles corpus is the right one to rank against.
  */
 
+import { letGo } from "../http.js";
+
 /* Loaded on first use, not at worker startup: most sessions never turn study
  * mode on, and paying a quarter of a megabyte of parse for them would slow down
  * the thing everybody does use - attaching a subtitle. */
@@ -69,7 +71,10 @@ async function table(language) {
 async function load(lang) {
   const url = chrome.runtime.getURL(`src/study/frequency-${lang}.generated.txt`);
   const response = await fetch(url);
-  if (!response.ok) throw new Error(`frequency table for ${lang}: HTTP ${response.status}`);
+  if (!response.ok) {
+    letGo(response);
+    throw new Error(`frequency table for ${lang}: HTTP ${response.status}`);
+  }
   const ranks = new Map();
   // Rank is the line number, so the split has to keep every line but the
   // trailing empty one the file ends with.

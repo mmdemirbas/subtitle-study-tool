@@ -29,6 +29,7 @@ import { textRepresentations, ttmlDocumentsIn } from "./dash.js";
 import { parseSrt } from "./srt.js";
 import { parseTtml } from "./ttml.js";
 import { joinSegments, parseVtt, segmentUrls } from "./vtt.js";
+import { letGo } from "../http.js";
 
 const AT_A_TIME = 6;
 
@@ -41,7 +42,10 @@ async function fetchAll(urls, read) {
       const index = next++;
       try {
         const response = await fetch(urls[index]);
-        if (!response.ok) throw new Error(String(response.status));
+        if (!response.ok) {
+          letGo(response);
+          throw new Error(String(response.status));
+        }
         parts[index] = await read(response);
       } catch {
         failed += 1;
@@ -106,7 +110,10 @@ async function readTrack(track) {
 
   if (format === "hls-vtt" || format === "dash") {
     const response = await fetch(track.url);
-    if (!response.ok) throw new Error(`The page's own subtitle could not be fetched (${response.status})`);
+    if (!response.ok) {
+      letGo(response);
+      throw new Error(`The page's own subtitle could not be fetched (${response.status})`);
+    }
     const manifest = await response.text();
     note.bytes = manifest.length;
 
@@ -125,7 +132,10 @@ async function readTrack(track) {
       if (kind === "wvtt") throw new Error("The page's subtitles are WebVTT inside MP4 samples, which this cannot read yet");
       if (representation.file) {
         const one = await fetch(representation.file);
-        if (!one.ok) throw new Error(`The page's own subtitle could not be fetched (${one.status})`);
+        if (!one.ok) {
+          letGo(one);
+          throw new Error(`The page's own subtitle could not be fetched (${one.status})`);
+        }
         const cues = kind === "stpp"
           ? joinSegments(ttmlDocumentsIn(new Uint8Array(await one.arrayBuffer())).map(parseTtml))
           : readText(await one.text(), kind);
@@ -144,7 +154,10 @@ async function readTrack(track) {
   }
 
   const response = await fetch(track.url);
-  if (!response.ok) throw new Error(`The page's own subtitle could not be fetched (${response.status})`);
+  if (!response.ok) {
+    letGo(response);
+    throw new Error(`The page's own subtitle could not be fetched (${response.status})`);
+  }
   const text = await response.text();
   note.bytes = text.length;
   if (!text.trim()) {

@@ -29,6 +29,7 @@
 
 import { DAEMON_ORIGIN } from "./daemon.js";
 import { noteDaemon } from "./daemon-watch.js";
+import { letGo } from "./http.js";
 
 // The whole log as one array, which is how it was held until 2026-09-26. Read
 // once, on the first touch after that, and moved into pieces.
@@ -349,7 +350,10 @@ async function toDaemon(log) {
       headers: { "Content-Type": "application/json" },
       body: text,
     });
-    if (!answer.ok) return { ok: false, reason: `daemon answered ${answer.status}` };
+    if (!answer.ok) {
+      letGo(answer);
+      return { ok: false, reason: `daemon answered ${answer.status}` };
+    }
     const said = await answer.json().catch(() => ({}));
     /* A POST that succeeded is not proof the daemon took it.
      *
