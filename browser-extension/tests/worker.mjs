@@ -1081,6 +1081,28 @@ t("and nothing is left behind, the old key included",
     released === 1 && /403/.test(String(failed?.message)), `${released} released, ${failed?.message}`);
 }
 
+/* Lining two subtitles up is the worker's job now, not the page's.
+ *
+ * Attaching a second subtitle ran align.js on the page's thread: 76-117ms of
+ * one task on a film-length pair (tools/measure-attach.mjs, 2026-09-26). The
+ * worker has to give the same answer the page would have, and nothing but
+ * the two operations, on nothing but numbers. */
+{
+  let at = 0;
+  const reference = Array.from({ length: 400 }, (_, i) => (at += 1500 + ((i * 7919) % 2300)));
+  const target = reference.filter((_, i) => i % 4 !== 3).map((ms) => ms + 2500);
+  const answer = await ask({ type: "sso:align", op: "alignSteps", a: reference, b: target }, sender);
+  const direct = globalThis.__ssoAlign?.alignSteps(reference, target);
+  t("the worker lines two subtitles up, with the answer align.js gives",
+    answer?.ok === true && answer.shiftMs === 2500 && JSON.stringify(answer) === JSON.stringify(direct),
+    `shift ${answer?.shiftMs}, same as direct: ${JSON.stringify(answer) === JSON.stringify(direct)}`);
+  const refused = [
+    await ask({ type: "sso:align", op: "snapNear", a: reference, b: target }, sender),
+    await ask({ type: "sso:align", op: "align", a: ["1"], b: target }, sender),
+  ];
+  t("and answers nothing else it is asked", refused.every((r) => r === null), JSON.stringify(refused));
+}
+
 /* Cue times are stored as gaps to keep more of them; a pack that does not
  * reconstruct exactly is worse than no pack, because the file it produces
  * looks usable and is not. */

@@ -4635,23 +4635,29 @@
       return;
     }
 
-    const aligner = globalThis.__ssoAlign;
+    /* Every comparison below is a full alignment - about 75ms each on a
+     * film-length pair, and with nothing to check against it is every pair of
+     * candidates, ten for five. On the page's thread that was most of a second
+     * of frozen film after pressing the button, so they are asked of the worker
+     * (api.align; see alignElsewhere in content.js). The threshold is a
+     * constant and is read here. */
+    const accept = globalThis.__ssoAlign?.ACCEPT ?? 3.5;
     for (const candidate of tried) {
       candidate.starts = candidate.cues.map((cue) => cue.start);
       candidate.fit = spanFit(candidate.cues, durationMs);
       candidate.agree = 0;
-      if (reference && aligner) {
-        const answer = aligner.align(reference, candidate.starts);
+      if (reference) {
+        const answer = await api.align(reference, candidate.starts);
         candidate.confidence = answer.ok ? answer.confidence : 0;
       }
     }
 
     /* Which candidates share a timing. Only worth computing with nothing to
      * check against, where it is the only thing said about timing at all. */
-    if (!reference && aligner) {
+    if (!reference) {
       for (let i = 0; i < tried.length; i++) {
         for (let j = i + 1; j < tried.length; j++) {
-          const answer = aligner.align(tried[i].starts, tried[j].starts);
+          const answer = await api.align(tried[i].starts, tried[j].starts);
           if (answer.ok && Math.abs(answer.shiftMs) < 1000) {
             tried[i].agree += 1;
             tried[j].agree += 1;
@@ -4671,7 +4677,7 @@
     }, tried[0]);
 
     const said = reference
-      ? best.confidence >= (aligner?.ACCEPT ?? 3.5)
+      ? best.confidence >= accept
         ? `Checked against subtitle ${referenceSlot + 1}: this one matches.`
         : `None of the three clearly matches subtitle ${referenceSlot + 1}. This is the closest — check it.`
       : `Nothing attached to check against, so this is the one that covers the film best.`;
@@ -4680,7 +4686,7 @@
     if (!landed) return;
     sayFind(
       `${said}${tried.length > 1 ? ` The other ${tried.length - 1} are cached, so picking one below is free.` : ""}`,
-      { warn: Boolean(reference && best.confidence < (aligner?.ACCEPT ?? 3.5)), action: addAnotherAction(landed.slot) },
+      { warn: Boolean(reference && best.confidence < accept), action: addAnotherAction(landed.slot) },
     );
   }
 

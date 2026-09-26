@@ -133,6 +133,10 @@
               window.__sent.push({ ...msg, at: performance.now() });
               return { ok: true };
             }
+            /* The worker's aligner, when a case hands one in; otherwise
+             * nothing, and the page lines up on its own, as it does when the
+             * worker cannot be asked. */
+            if (msg?.type === "sso:align") return window.__workerAligner?.[msg.op]?.(msg.a, msg.b) ?? {};
             if (msg?.type !== "sso:daemon") return {};
             /* An override, so a test that needs several results and a different
              * file behind each of them can say so without every other test
@@ -3905,6 +3909,50 @@
         window.__ssoApi.setOffset(0, { slot: 0, quiet: true });
         await window.__ssoPanel.show();
         await sleep(150);
+      });
+
+      check("a second subtitle is lined up by the worker, and by the page only when the worker cannot answer", async () => {
+        /* Attaching a second subtitle ran align.js on the page's thread:
+         * 76-117ms of one task on a film-length pair, all but a few
+         * milliseconds of the attach (tools/measure-attach.mjs, 2026-09-26),
+         * and the evening's perf lines put every long task at an attach. */
+        const aligner = globalThis.__ssoAlign;
+        const original = aligner.alignSteps;
+        let onPage = 0;
+        let at = 0;
+        const english = Array.from({ length: 300 }, (_, i) => {
+          at += 1500 + ((i * 7919) % 2300);
+          return { start: at, end: at + 1200, text: `line ${i}` };
+        });
+        const turkish = english.filter((_, i) => i % 4 !== 3).map((cue) => ({ ...cue, start: cue.start + 2500, end: cue.end + 2500, text: `satır ${cue.text}` }));
+        const pair = async (id) => {
+          await window.__ssoApi.attach({ cues: english, label: "EN · align", fileId: id, language: "en", slot: 0 });
+          await window.__ssoApi.attach({ cues: turkish, label: "TR · align", fileId: id + 1, language: "tr", slot: 1 });
+          return window.__ssoApi.status().tracks[1].offsetMs;
+        };
+        window.__workerAligner = { alignSteps: original, align: aligner.align };
+        aligner.alignSteps = (...args) => {
+          onPage += 1;
+          return original(...args);
+        };
+        try {
+          const lined = await pair(93001);
+          if (onPage) throw new Error(`the page ran the aligner ${onPage} time(s) with the worker there`);
+          if (lined !== -2500) throw new Error(`the worker's answer was not applied: offset ${lined}ms`);
+
+          // From one subtitle again: an English put in beside the Turkish is
+          // itself lined up against it, which would be a second run.
+          window.__ssoApi.detach(1);
+          window.__workerAligner = null;
+          const alone = await pair(93011);
+          if (onPage !== 1) throw new Error(`with no worker, the page ran the aligner ${onPage} time(s)`);
+          if (alone !== -2500) throw new Error(`with no worker, the pair was not lined up: offset ${alone}ms`);
+        } finally {
+          aligner.alignSteps = original;
+          window.__workerAligner = null;
+          window.__ssoApi.detach(1);
+          await window.__ssoApi.attach({ cues: CUES, label: "EN · harness", fileId: 1 });
+        }
       });
 
       check("a stopped daemon stands on the status line, gives way to a message and comes back", async () => {

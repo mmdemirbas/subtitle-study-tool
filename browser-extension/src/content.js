@@ -6885,7 +6885,7 @@
      * Only when the reader has not already timed this file by hand. A saved
      * offset is an answer they gave, and overwriting it would be this deciding
      * it knows better. */
-    const aligned = track.offsetMs === 0 && track.rate === 1 ? autoAlign(index) : null;
+    const aligned = track.offsetMs === 0 && track.rate === 1 ? await autoAlign(index) : null;
 
     /* Nothing measured and nothing saved, so fall back to what this release
      * needed last time.
@@ -7081,7 +7081,28 @@
    *
    * So the middle band stays one click, in the panel, where the reader can see
    * the number before taking it. */
-  function autoAlign(slot, { against = null } = {}) {
+  /* The aligner, run in the worker rather than on the page's thread.
+   *
+   * Attaching a second subtitle ran align.js here, in the page: 76-117ms of
+   * one task on a 1154 against 864 cue pair, all but a few milliseconds of the
+   * attach (tools/measure-attach.mjs, 2026-09-26), and the evening's perf lines
+   * had put every long task at an attach. The worker loads the same align.js,
+   * so the answer is the same; the page only waits for it. When the worker
+   * cannot be asked - a context orphaned by a reload, a worker that answers
+   * nothing - it is done here as before: a late answer is better than none. */
+  async function alignElsewhere(op, a, b) {
+    if (alive()) {
+      try {
+        const answer = await chrome.runtime.sendMessage({ type: "sso:align", op, a, b });
+        if (answer && typeof answer.ok === "boolean") return answer;
+      } catch {
+        // Asked here instead.
+      }
+    }
+    return globalThis.__ssoAlign[op](a, b);
+  }
+
+  async function autoAlign(slot, { against = null } = {}) {
     const aligner = globalThis.__ssoAlign;
     if (!aligner) return null;
     const target = state.tracks[slot];
@@ -7099,13 +7120,25 @@
 
     const referenceTimes = reference.cues.map((cue) => cue.start);
     const targetTimes = target.cues.map((cue) => cue.start);
+    const referenceCues = reference.cues;
+    const targetCues = target.cues;
     /* `alignSteps` rather than `align`, which is the same answer plus where
      * each ACT of the target lands. Two releases of one broadcast episode keep
      * different amounts of black around the advertising breaks, so they agree
      * within an act and jump between them, and one shift cannot fit both sides
      * of a jump. It returns a one-entry list whenever one shift is right, which
      * over 91 such pairs in bench/align it did every time. */
-    const answer = aligner.alignSteps(referenceTimes, targetTimes);
+    const answer = await alignElsewhere("alignSteps", referenceTimes, targetTimes);
+    /* The answer is about these two files, and the reader had a moment while
+     * it was worked out. A subtitle detached, replaced or timed by hand in that
+     * moment is not the one this answer was for. */
+    if (
+      state.tracks[slot] !== target || target.cues !== targetCues ||
+      state.tracks[referenceSlot] !== reference || reference.cues !== referenceCues ||
+      target.offsetMs !== 0 || target.rate !== 1
+    ) {
+      return null;
+    }
 
     /* The attempt, whichever way it went, with the two things that decided it.
      *
@@ -8339,6 +8372,11 @@
      * three go through the api, where the forwarding already is. */
     studySettings() {
       return (role === "chrome" ? mirror?.study : window.__ssoStudy?.settings?.()) || null;
+    },
+    /* Two lists of cue times lined up, for the panel's choosing between
+     * candidates - in the worker, like the attach's own (see alignElsewhere). */
+    align(a, b) {
+      return alignElsewhere("align", a, b);
     },
     setStudyEnabled(on) {
       return window.__ssoStudy?.setEnabled?.(Boolean(on));

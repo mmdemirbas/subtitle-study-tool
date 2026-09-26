@@ -41,6 +41,8 @@ import {
   updateSettings,
 } from "./provider.js";
 import { CHECK_ALARM, presence, restore } from "./daemon-watch.js";
+// The aligner, for the pages: see "sso:align" below.
+import "./align.js";
 /* Study mode lives in the worker for two reasons: the rarity tables are large
  * enough that one copy per frame would be wasteful, and the dictionary is a
  * cross-origin call, which an MV3 content script cannot make with extension
@@ -417,6 +419,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     // "nobody is listening" and carries on alone.
     relay(message, sender).then(sendResponse, () => sendResponse(null));
     return true;
+  }
+
+  /* Lining two subtitles up, done here instead of on the page's thread.
+   *
+   * Attaching a second subtitle ran align.js in the page: 76-117ms of one
+   * task, measured 2026-09-26 with tools/measure-attach.mjs on a 1154 against
+   * 864 cue pair, all but a few milliseconds of the attach - and the evening's
+   * perf lines had put every long task at an attach. The same file answers
+   * here, so the answer is the same; the page only waits for it. Two
+   * operations, and plain arrays of numbers, since the page is not trusted to
+   * name anything else. */
+  if (message?.type === "sso:align") {
+    const numbers = (list) => Array.isArray(list) && list.every((n) => typeof n === "number");
+    const run = globalThis.__ssoAlign?.[message.op];
+    if ((message.op !== "align" && message.op !== "alignSteps") || !run || !numbers(message.a) || !numbers(message.b)) {
+      sendResponse(null);
+      return false;
+    }
+    sendResponse(run(message.a, message.b));
+    return false;
   }
 
   if (message?.type === "sso:daemon") {

@@ -1360,6 +1360,18 @@ the measurement.
 
 Adding work to either path is how this comes back.
 
+**The aligner runs in the worker, not on the page.** Attaching a second
+subtitle ran `align.js` on the page's thread - 86 to 96ms of one task on a
+film-length pair, all but a few milliseconds of the attach - and the
+evening's perf lines put every long task at an attach. `autoAlign` and the
+panel's candidate comparisons now ask the worker (`sso:align`, which loads the
+same `align.js`); the page's timer waits 1 to 14ms instead. The page aligns
+locally only when the worker cannot answer. `tools/measure-attach.mjs` is the
+measurement: it replays a real pair and profiles the page, and its caller
+chains are how a regression here gets found. `snapNear` and `proposeAnchors`
+still run on the page, and may: on the same pair in V8 they take 0.03 and
+0.04ms at the median (0.17 and 0.38 at most) against 105ms for `alignSteps`.
+
 **The map drag is not one of them, and that was checked rather than assumed.**
 Reported alongside the drag "fighting back" as "performance problems". Over the
 46 logged ten-second windows that contain a map drag: 0.2 to 0.4ms of script per
