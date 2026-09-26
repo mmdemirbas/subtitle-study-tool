@@ -1517,7 +1517,10 @@ button.sso-sync__align:hover:not(:disabled) {
   gap: var(--sso-s2);
   align-items: center;
   min-height: calc(var(--sso-h-chip) + 5px);
-  padding: 2px var(--sso-s3);
+  /* Right padding clears the SE grip, as the title bar's clears the NE one:
+   * an offer's button sat under the grip's corner, and a press there started a
+   * resize. The left is a chip nobody presses, so it may share the SW corner. */
+  padding: 2px calc(var(--sso-grip) + 2px) 2px var(--sso-s3);
   font-size: var(--sso-t-small);
   line-height: 1.35;
   color: var(--sso-ink-3);
