@@ -3933,6 +3933,12 @@
         if (offer.hidden || !/check again/i.test(offer.textContent))
           throw new Error(`the warning offers nothing to do about it: "${offer.textContent}"`);
         if (height() !== before) throw new Error(`the line changed height for it: ${before}px then ${height()}px`);
+        /* Clear of the resize grip in the corner, which drew over the button's
+         * right edge and took a press there as the start of a resize. */
+        const grip = panelShadow().querySelector(".sso-grip--se").getBoundingClientRect();
+        const pressable = offer.getBoundingClientRect();
+        if (pressable.right > grip.left)
+          throw new Error(`"Check again" runs ${Math.round(pressable.right - grip.left)}px under the corner grip`);
 
         window.__ssoPanel.sayInPanel(0, "Moved subtitle 1 by 0.5s");
         await sleep(50);
@@ -5783,8 +5789,14 @@
           if (!announced.includes("subtitle,forced")) throw new Error(`the swapped list was not announced: ${JSON.stringify(announced)}`);
           for (let i = 0; i < 40 && shadow.querySelector(".sso-make").hidden; i++) await sleep(25);
           if (shadow.querySelector(".sso-make").hidden) throw new Error("a forced track counted as the language");
-          if (!/No TR subtitle is on screen/.test(shadow.querySelector(".sso-make").textContent))
-            throw new Error(`offer reads ${JSON.stringify(shadow.querySelector(".sso-make").textContent)}`);
+          /* The offer is for Turkish, from the English. Not its first words:
+           * "is on screen" or "exists for this" is chosen by what the last
+           * search found missing, which this case never asked - it read "is on
+           * screen" in a full run and "exists" when run alone, after the
+           * offer cases before it had searched. */
+          const offerText = shadow.querySelector(".sso-make").textContent;
+          if (!/No TR subtitle/.test(offerText) || !/Make TR from EN/.test(offerText))
+            throw new Error(`offer reads ${JSON.stringify(offerText)}`);
         } finally {
           window.__stubDaemon = was ?? null;
           await pageCarriesNothing();
