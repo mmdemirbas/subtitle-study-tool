@@ -4,6 +4,11 @@ Workspace for everything subtitle-related: getting subtitles onto the screen
 for something that has none, and studying a foreign-language film once they
 are there.
 
+![A night scene with an English and a Turkish subtitle along the bottom; the rare word "ephemeral" is underlined, and a study box gives its pronunciation, the Turkish "geçici" and two senses](docs/images/study.png)
+
+Website: <https://mmdemirbas.github.io/subtitle-study-tool/> · Project page:
+<https://mdemirbas.com/en/projects/subtitle-study-tool/>
+
 ## The two problems
 
 **Watching.** A film is playing and has no subtitles. Two ways to fix that,

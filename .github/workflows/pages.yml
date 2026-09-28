@@ -1,0 +1,44 @@
+name: pages
+
+# Publishes site/ — a static landing page, no build step — to GitHub Pages.
+# The page is generated from a spec by a landing-page generator kept outside
+# this repo and committed here; it is plain HTML, so edit it by hand if needed.
+
+on:
+  push:
+    branches: [main]
+    paths: ['site/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment-retry.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      # The deploy action first exchanges the job's OIDC token, and that request
+      # times out on the runner every so often while the artifact is fine.
+      # Nothing is published before the token, so a second attempt is safe.
+      - id: deployment
+        uses: actions/deploy-pages@v4
+        continue-on-error: true
+      - id: deployment-retry
+        if: steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v4

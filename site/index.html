@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subtitle Study Tool — two languages over a film, on the player&#x27;s own clock</title>
+<meta name="description" content="A browser extension for learning a language from films: it finds a subtitle for whatever is playing, syncs it to the page&#x27;s playback clock, shows two languages side by side and marks the words that are rare in film dialogue with their meanings.">
+<meta property="og:title" content="Subtitle Study Tool — two languages over a film, on the player&#x27;s own clock">
+<meta property="og:description" content="A browser extension for learning a language from films: it finds a subtitle for whatever is playing, syncs it to the page&#x27;s playback clock, shows two languages side by side and marks the words that are rare in film dialogue with their meanings.">
+<meta property="og:image" content="https://mmdemirbas.github.io/subtitle-study-tool/assets/study.png">
+<link rel="canonical" href="https://mmdemirbas.github.io/subtitle-study-tool/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23e0a458'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&display=swap">
+<link rel="stylesheet" href="style.css">
+<style>
+:root { --accent: #e0a458; --accent-2: #4a7ab0; --accent-on: #14171c; --accent-ink-on-paper: #8a5a14; }
+@media (prefers-color-scheme: dark) { :root { --accent-ink-on-paper: #f0c080; } }
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <a class="brand" href="#"><span class="mark" aria-hidden="true"></span>Subtitle Study Tool</a>
+  <nav><a href="#how" class="">How it works</a><a href="#install" class="">Install</a><a href="#privacy" class="hide-sm">What leaves the browser</a><a class="gh" href="https://github.com/mmdemirbas/subtitle-study-tool" rel="noopener"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a></nav>
+</div></header>
+
+<main>
+<section class="hero"><div class="wrap">
+  <p class="eyebrow">Browser extension · Chromium · plain JavaScript, no build step · MIT</p>
+  <h1>Two languages, on the film's own clock.</h1>
+  <p class="lead">Find a subtitle for whatever is playing in the tab, draw it over the video in step with the player, and put the language you are learning beside the one you already know. With study mode on, the words that are rare in film dialogue are underlined and their meanings appear at the side as the film runs.</p>
+  <div class="cta"><a class="btn btn-solid" href="#install">Install</a><a class="btn btn-quiet" href="https://github.com/mmdemirbas/subtitle-study-tool" rel=noopener><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>Source on GitHub</a></div>
+  <div class="stats"><div><b>2</b><span>subtitles at once, on one clock</span></div><div><b>30,000</b><span>words per language, ranked for film dialogue</span></div><div><b>623</b><span>tests and checks that need no browser</span></div></div>
+  <div class="visual"><figure class="hero-fig frame window"><div class="bar"><i></i><i></i><i></i></div><img src="assets/study.png" alt="A night scene with an English and a Turkish subtitle along the bottom; the rare word &quot;ephemeral&quot; is underlined in the English line, and a study box at the top left gives its pronunciation, the Turkish &quot;geçici&quot; and two senses" loading="eager" width="1280" height="720"></figure></div>
+</div></section>
+
+<section id="why"><div class="wrap">
+  <p class="pitch">Syncing a subtitle file to a video usually means estimating the offset between them. In a browser tab there is nothing to estimate: the <code>&lt;video&gt;</code> element reports where it is, so the overlay reads <code>currentTime</code> every frame, and seeking, pausing and buffering stay in step on their own. The offset left is the one baked into a file timed against another release, and the second subtitle measures that against the first.</p>
+  <div class="features" style="margin-top: clamp(1.5rem, 4vw, 2.5rem)"><div class="feature"><div class="glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></div><h3>On the player&#x27;s clock</h3><p>Positions come from the page's own video element, every frame. Nudge keys correct a file timed against a different release; ad breaks are shared between both subtitles, offsets are not.</p></div><div class="feature"><div class="glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 10 5-10 5L2 7l10-5z"/><path d="m2 12 10 5 10-5"/><path d="m2 17 10 5 10-5"/></svg></div><h3>Two subtitles at once</h3><p>Side by side or stacked, each box dragged and resized on its own. Dragging one card onto the other swaps them, with their offsets and languages.</p></div><div class="feature"><div class="glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></div><h3>Rare words, marked</h3><p>Each word is ranked against a frequency list counted over film subtitles, because a word can be common in print and rare in speech. The threshold is a slider.</p></div><div class="feature"><div class="glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/></svg></div><h3>Kept with the sentence</h3><p>One key saves a word with the line it was said in, the same moment in the other subtitle, the film and the timestamp. The deck exports as TSV for Anki, or JSON.</p></div><div class="feature"><div class="glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5V8z"/><path d="M3 8l9 5 9-5"/><path d="M12 13v8"/></svg></div><h3>An optional local daemon</h3><p>A small Python service on 127.0.0.1 that keeps a download cache on disk, signs in to OpenSubtitles for a larger daily allowance, and serves word meanings.</p></div><div class="feature"><div class="glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6z"/><path d="M14 2v6h6"/></svg></div><h3>A viewer, a translator, a transcriber</h3><p>The same study surface for a subtitle file without a video, a batch <code>.srt</code> translator, and Whisper transcription for a film nobody has subtitled.</p></div></div>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <div class="section-head"><h2>How a subtitle gets onto the video</h2><p>Four steps, all in the extension; when the daemon is running, it answers the search and the download instead.</p></div>
+  <div class="how wide"><div></div><ol class="steps"><li><div><b>What is playing</b><p>The title, season and episode are read from the page: its title and metadata with the site's branding stripped from either end.</p></div></li><li><div><b>Search</b><p>OpenSubtitles is asked, and each result is scored against what the page said. A result that matches badly scores below the line where it would be attached without asking.</p></div></li><li><div><b>Attach</b><p>The overlay is drawn in the page, in a shadow root so the site's styles cannot reach it, and follows the video's position from then on.</p></div></li><li><div><b>Line up the second</b><p>The gap between two subtitles of the same film is the number that recurs in the differences between their cue times. It is applied alone only when the two look like the same film; otherwise it is offered.</p></div></li></ol></div>
+  
+</div></section>
+<section id="install"><div class="wrap">
+  <div class="section-head"><h2>Install</h2><p>Not in a store: load it unpacked. No build step.</p></div>
+  <div class="install two"><div><h3>Load the extension</h3><pre class="code"><code>git clone \
+  https://github.com/mmdemirbas/subtitle-study-tool
+
+chrome://extensions   (or brave://, edge://)
+  Developer mode: on
+  Load unpacked: subtitle-study-tool/browser-extension</code></pre><p class=note>Then open the extension's options and paste an OpenSubtitles API key: opensubtitles.com, your account, Consumers, new consumer. It is free.</p></div><div><h3>Optional: the daemon</h3><pre class="code"><code>cd subtitle-study-tool/subtitle-daemon
+cp config.example.json config.local.json
+<span class="c"># put your OpenSubtitles API key in it</span>
+./run.sh</code></pre><p class=note>Needs <a href="https://docs.astral.sh/uv/">uv</a>. <code>uv run pytest</code> runs the tests.</p></div></div>
+</div></section>
+<section id="shots"><div class="wrap">
+  <div class="section-head"><h2>What it looks like</h2><p>Taken from the extension itself over an original scene and a sample pair written for the repository; <code>node browser-extension/tools/screenshots.mjs</code> takes them again.</p></div>
+  <div class="gallery"><figure class="fig frame window"><div class="bar"><i></i><i></i><i></i></div><img src="assets/two-subtitles.png" alt="The same night scene with an English line on the left and its Turkish translation on the right, along the bottom" loading="lazy" width="1280" height="720"><figcaption>English and Turkish on the same clock, left and right.</figcaption></figure><figure class="fig frame window"><div class="bar"><i></i><i></i><i></i></div><img src="assets/panel.png" alt="The control panel open at the top right: arrangement buttons, and a card for each subtitle with its offset, a timeline of its cues and buttons to line it up" loading="lazy" width="1280" height="720"><figcaption>The panel: a card per subtitle, with its offset and where its lines fall.</figcaption></figure><figure class="fig frame window"><div class="bar"><i></i><i></i><i></i></div><img src="assets/viewer.png" alt="The viewer page: a playback bar and rows of timed English lines beside their Turkish translations" loading="lazy" width="1280" height="720"><figcaption>The viewer: the same pair as a file, with its own playback clock and no video.</figcaption></figure></div>
+</div></section><section id="privacy"><div class="wrap">
+  <div class="section-head"><h2>What leaves the browser</h2></div>
+  <ul class="plain"><li><b>Search and download go to OpenSubtitles</b>, with your API key, or through the daemon on 127.0.0.1 when it is running.</li><li><b>Word meanings come from the daemon</b>; without it, from dictionaryapi.dev and MyMemory only after you allow them on the options page. Marking rare words needs no network.</li><li><b>The deck stays in the browser</b> until you export it. The extension has no analytics and no account of its own.</li></ul>
+</div></section>
+
+<section id="more"><div class="wrap">
+  <div class="section-head"><h2>Go deeper</h2></div>
+  <div class="links"><a class="link-card" href="https://github.com/mmdemirbas/subtitle-study-tool#readme" rel=noopener><b>README</b><span>The two problems it answers, what each directory is, and the test data.</span><small>GitHub</small></a><a class="link-card" href="https://github.com/mmdemirbas/subtitle-study-tool/tree/main/browser-extension#readme" rel=noopener><b>The extension</b><span>Using it, two subtitles at once, study mode, and how it works out what is playing.</span><small>browser-extension/</small></a><a class="link-card" href="https://github.com/mmdemirbas/subtitle-study-tool/tree/main/subtitle-daemon#readme" rel=noopener><b>The daemon</b><span>Setup, quota, endpoints, and how a search resolves.</span><small>subtitle-daemon/</small></a></div>
+</div></section>
+</main>
+
+<footer><div class="wrap">
+  <span>Subtitle Study Tool</span>
+  <span class="spacer"></span>
+  <a href="https://github.com/mmdemirbas/subtitle-study-tool" rel="noopener">GitHub</a>
+  <a href="https://mdemirbas.com/en/projects/subtitle-study-tool/" rel="noopener">Muhammed Demirbaş</a>
+  <a href="https://mdemirbas.com/" rel="noopener">Other projects</a>
+</div></footer>
+</body>
+</html>
