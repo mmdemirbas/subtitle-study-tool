@@ -1,8 +1,7 @@
 # subtitle-daemon
 
 A loopback HTTP service that finds a subtitle for whatever is playing,
-downloads it once, and serves it as cues to the browser extension and the
-study viewer.
+downloads it once, and serves it as cues to the browser extension.
 
 It exists as a separate process rather than as extension code for three
 reasons: the OpenSubtitles API key stays out of any web page, the download

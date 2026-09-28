@@ -16,9 +16,10 @@ and they fail in opposite situations, so the tools cover both:
 
 - *Fetch* an existing human-made subtitle and sync it to the playing video.
   Perfect quality, instant, but only works for titles somebody has subtitled.
-- *Transcribe* the audio locally with Whisper, live. Works for literally
-  anything that makes sound, but runs behind the audio and reads worse than a
-  human subtitle.
+- *Transcribe* the audio locally with Whisper. Works for anything that makes
+  sound, but reads worse than a human subtitle. Today this runs over a file you
+  already have (`subgen/`); live transcription of a playing stream is not
+  built.
 
 **Studying.** Two subtitle tracks side by side, aligned by timecode, with
 lookup, translation and a personal dictionary.
@@ -38,7 +39,7 @@ video.
 | Directory | What it is | State |
 |---|---|---|
 | `browser-extension/` | MV3 extension. Overlays subtitles on any `<video>` in a page, driven by the page's own playback clock. One click to find and attach a subtitle — two languages side by side, with word lookup and a personal deck. | see its README |
-| `subtitle-daemon/` | Local HTTP service. Searches and downloads from OpenSubtitles, caches aggressively, converts to WebVTT. **Optional** - the extension does the whole pipeline itself now. What the daemon still adds is a signed-in account (10 downloads a day instead of 5), the cache on disk, the API key outside the browser, and word lookup without a permission prompt. | see its README |
+| `subtitle-daemon/` | Local HTTP service. Searches and downloads from OpenSubtitles, caches aggressively, converts to WebVTT. **Optional** - the extension does the whole pipeline itself now. What the daemon still adds is a signed-in account (10 downloads a day instead of 5), the cache on disk, the API key outside the browser, word lookup without a permission prompt, meanings that take the line into account, and making a subtitle in a language nobody has uploaded. | see its README |
 | `srt-viewer/` | Single-file browser app, "SRT Study Tool v7". Dual-subtitle study surface with its own virtual playback clock, for studying without a video. `samples/` holds the English/Turkish pair the tests run on. | see its README |
 | `srt-translator/` | Python CLI. Batch-translates a whole `.srt` via OpenAI / DeepL / Google / Azure / LibreTranslate, with a SQLite dedup cache. | working |
 | `subgen/` | Local Whisper transcription, for a film nobody has subtitled. Batch today, over a file you already have; realtime is still an idea. | see its README |
@@ -73,7 +74,7 @@ Both paths are gitignored.
 For a film streaming in a browser tab, the hard part of subtitle sync is
 normally guessing the offset between the subtitle file and the playing video.
 That guess is unnecessary here: the `<video>` element exposes `currentTime`,
-so the overlay reads the actual playback position every frame. Seeking,
+so the overlay reads the actual playback position 20 times a second. Seeking,
 pausing and buffering all stay in sync for free. The only offset left to
 correct is the one baked into the subtitle file itself, from being timed
 against a different release — hence the nudge keys.

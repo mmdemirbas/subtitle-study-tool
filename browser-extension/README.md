@@ -21,20 +21,24 @@ download, decode, annotate, cache — and only defers to the daemon when the
 daemon happens to be running.
 
 Start the daemon (`cd ../subtitle-daemon && ./run.sh`) when you want one of
-these four. They are the whole of what it still buys you:
+these. They are the whole of what it still buys you:
 
 - **Twice the downloads.** OpenSubtitles allows 5 a day anonymously and 10 on a
   signed-in free account. The daemon holds a username and password and signs
   in; the extension has no login at all, so on its own it is on the lower
   number. This is the one that bites, because 5 is two dual-language films.
-- **The cache on disk**, shared with the SRT viewer and surviving a browser
-  profile reset. The two caches converge whenever the daemon is up, so nothing
+- **The cache on disk**, surviving a browser profile reset. The two caches
+  converge whenever the daemon is up, so nothing
   either side has downloaded is ever downloaded twice.
 - **The API key out of the browser**, in `config.local.json` instead of
   extension storage.
 - **Word lookup with no permission prompt.** Definitions and translations are
   cross-origin calls. The daemon just makes them; the extension has to ask for
   an optional host permission on the options page first.
+- **Meanings that know the line.** With `gloss_model` set, the daemon's model
+  sees the sentence and the film, not only the bare word.
+- **Making a subtitle nobody has uploaded**, translated on this machine or
+  through Google; see below.
 
 When it is running it answers everything and the extension's own key is unused.
 
@@ -358,16 +362,17 @@ ordinary watching changes when it is off — including the cost of rendering eve
 line of every film.
 
 **Where definitions come from.** The daemon when it is running. Without it the
-extension can ask `api.dictionaryapi.dev` itself, but only after you allow it on
-the options page — the extension declares one host permission today and that
-stays true for anyone who never turns lookup on. Marking rare words and saving
+extension can ask `api.dictionaryapi.dev` for what a word means and
+`api.mymemory.translated.net` for what it is in the other subtitle's language,
+but only after you allow them on the options page. Marking rare words and saving
 them with their line need no network at all, so they work either way; the
 definition is enrichment and its absence is reported as such.
 
-There is no translation. That would mean either a hosted API with a key and a
-cost per call or a local model that has to be resident, and neither decision has
-been made. It matters less than it sounds: with two subtitles up, the sentence
-is already translated by a human in the other one, and the card shows that line.
+Each card leads with the word's translation into the other subtitle's
+language. It comes from the daemon when it is running, and from
+`api.mymemory.translated.net` otherwise. A whole missing subtitle can be made by
+the daemon; see "Making the subtitle nobody has uploaded". With two subtitles
+up, the card also shows the other one's line, translated by a human.
 
 ## When a page does not work
 
@@ -640,8 +645,8 @@ Two consequences worth knowing before editing:
   outranks them, and page rules outrank `:host` for normal declarations anyway.
 - Events crossing a shadow boundary are **retargeted to the host**, so
   `event.target` at document level reports a plain div. The key handler reads
-  `event.composedPath()[0]` instead; otherwise typing `[` or `]` into the
-  panel's own search box would nudge the subtitle timing.
+  `event.composedPath()[0]` instead; otherwise typing a nudge key such as `g`
+  or `h` into the panel's own search box would nudge the subtitle timing.
 
 Styles load as a constructable stylesheet via `adoptedStyleSheets` rather than
 a `<style>` element, because adopted sheets are not subject to the page's
@@ -672,12 +677,18 @@ the host permission.
 
 ## Boundaries
 
-- The extension talks only to `http://127.0.0.1:8794`. It has no other host
-  permission, so the OpenSubtitles API key never enters a web page. The
-  dictionary origin is declared as *optional* and requested on the options page,
-  so it is granted only by someone who wants lookup without the daemon.
-- The deck is stored in the browser and goes nowhere. Nothing about what you
-  watched or saved leaves the machine unless you export it.
+- The extension holds host permission for every site, so it can re-inject its
+  content script into tabs already open when it is installed and fetch a page's
+  own `<track>` files. It also holds permission for OpenSubtitles and for the
+  daemon at `http://127.0.0.1:8794`. The OpenSubtitles API key never enters a
+  web page. The dictionary and translation origins (`api.dictionaryapi.dev`,
+  `api.mymemory.translated.net`) are *optional* and requested on the options
+  page, so only someone who wants lookup without the daemon grants them.
+- The deck is stored in the browser and goes nowhere unless you export it.
+  What does leave the machine: the title searched for, to OpenSubtitles; a
+  looked-up word, to the dictionary and translation sites once they are
+  allowed; and, when the daemon has a `google_api_key`, looked-up words and the
+  lines of any subtitle it is asked to make, to Google.
 - **DRM-protected video** (Netflix, Prime Video, Disney+) works for the
   overlay: the DOM overlay draws over protected video, and `currentTime` is
   readable. What will not work is future audio capture for live transcription,
@@ -687,7 +698,8 @@ the host permission.
 
 ## Not done yet
 
-- No icon assets.
-- Only tested against Chromium. The manifest is plain MV3 and `moz-extension://`
-  is already in the daemon's origin allowlist, but Firefox is untested.
+- Only tested against Chromium. The manifest is written for Chrome (a
+  `service_worker` background, the `downloads.ui` permission,
+  `minimum_chrome_version` 114) and has not been tried on Firefox;
+  `moz-extension://` is already in the daemon's origin allowlist.
 - Live transcription fallback is not wired in — see the repo README.

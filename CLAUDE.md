@@ -15,7 +15,7 @@ The other directories are largely stable:
 | Directory | Touch it when |
 |---|---|
 | `browser-extension/` | the overlay, the panel, the study surfaces, subtitle fetch/sync |
-| `subtitle-daemon/` | OpenSubtitles access, the on-disk cache, local transcription |
+| `subtitle-daemon/` | OpenSubtitles access, the on-disk cache, word lookups and glosses, making a subtitle by translation |
 | `srt-viewer/` | the standalone dual-subtitle study page (no video) |
 | `srt-translator/` | batch `.srt` translation CLI |
 | `subgen/` | Whisper transcription |
@@ -63,6 +63,6 @@ copy them into a tracked directory:
 The history was rewritten once to remove these; anything re-added is public
 the moment it is pushed.
 
-## Nothing is pushed
+## Pushing
 
-The whole local history is unpushed by design. Pushing is the user's step.
+The repository is public on GitHub. Pushing is the user's step.

@@ -1,7 +1,8 @@
 # Extension tests
 
-Two pages and one script. All three run themselves and print PASS/FAIL. No
-install, no test runner, no dependencies.
+Three pages and three scripts. The pages and `worker.mjs` need no install and
+print PASS/FAIL; `frames/run.mjs` and `realinput.mjs` drive a real Chrome
+through Playwright (see `../CLAUDE.md`, Tests).
 
 ```bash
 node tests/worker.mjs    # the service worker, with Chrome stubbed
@@ -73,17 +74,17 @@ survives Prime Video.
 
 ## The cases
 
-Two hundred and sixty-seven, which is what the page prints at the top when it
-finishes - trust that number rather than this one, since this file is written by
-hand and the suite grows most weeks. What follows is what the groups cover, not
+The page prints the count at the top when it finishes; this file does not
+repeat it, since it is written by hand and the suite grows most weeks. What
+follows is what the groups cover, not
 a census: the earlier ones are the single-subtitle overlay, the later ones two
 subtitles at once, study mode, the windows and the diagnostic report.
 
 Thirty-seven, covering: shadow-root isolation, cue colour, italics, speaker
 colour, non-speech dimming, sound symbols, handle visibility under a
 pointer-event-swallowing player, handle size under a button reset, stacking
-against later chrome, the handle opening the panel, Turkish-Q bracket keys
-nudging the offset, typing in the panel *not* nudging, and re-injection
+against later chrome, the handle opening the panel, a key binding being the key the
+layout types rather than the key under it, typing in the panel *not* nudging, and re-injection
 leaving exactly one overlay. Four more cover mid-roll ads: the break being
 measured, the cue surviving it unchanged, subtitles hidden while the ad runs,
 and a flickering marker not being mistaken for a break.
@@ -136,7 +137,7 @@ That path has three parts the parity test does not reach — the rule for which
 side answers, the IndexedDB cache, and the convergence with the daemon's cache —
 so they are checked here against a stubbed OpenSubtitles and a stubbed daemon.
 
-Thirty cases. The ones that matter are about quota, and they assert it
+Thirty-five cases. The ones that matter are about quota, and they assert it
 directly: the stub counts calls to the download endpoint, so "this did not spend
 a download" is a number, not an inference from a cache flag. Covered: the
 extension answering alone, the title being cleaned before it is searched for,

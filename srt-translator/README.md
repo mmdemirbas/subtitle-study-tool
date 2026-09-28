@@ -1,11 +1,11 @@
-# str-translator
+# srt-translator
 
 A simple command-line tool to translate SRT subtitle files using various translation providers like
 OpenAI, DeepL, Google Cloud, Azure, and LibreTranslate.
 
 <!-- TOC -->
 
-* [str-translator](#str-translator)
+* [srt-translator](#srt-translator)
     * [Quick Start](#quick-start)
         * [Common Flags](#common-flags)
     * [Providers](#providers)

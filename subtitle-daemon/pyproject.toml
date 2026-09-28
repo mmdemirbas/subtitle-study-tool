@@ -4,8 +4,8 @@ version = "0.1.0"
 description = "Local service that finds, downloads and caches subtitles for whatever is currently playing"
 requires-python = ">=3.11"
 
-# No runtime dependencies, deliberately. The daemon serves three endpoints and
-# makes two kinds of outbound request; http.server and urllib cover both. That
+# No runtime dependencies, deliberately. Every route the daemon serves and every
+# request it makes fits http.server and urllib. That
 # keeps `subtitle-daemon` startable with nothing installed, which is what makes
 # the extension's one-click path actually one click.
 dependencies = []

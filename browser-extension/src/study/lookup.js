@@ -9,8 +9,8 @@
  *
  * Doing it here needs a host permission for the dictionary, and that permission
  * is optional and requested on the options page rather than declared in the
- * manifest. The extension asks for exactly one origin today - the daemon - and
- * that is worth keeping true for anyone who never turns lookup on.
+ * manifest. The dictionary and translation origins are the only optional
+ * ones, and that is worth keeping true for anyone who never turns lookup on.
  *
  * A lookup that cannot happen is not an error. Rarity marking and saving a word
  * with the line it appeared in are the parts that make the feature worth having

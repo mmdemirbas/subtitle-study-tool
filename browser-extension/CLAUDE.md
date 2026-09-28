@@ -11,15 +11,17 @@ isolated `window` — never through the DOM, and never reachable from the page.
 
 | File | Lines | Owns | Exposes |
 |---|---|---|---|
-| `align.js` | 980 | matching a subtitle's timing to the playing release | — |
-| `content.js` | 7.5k | the video, the playback clock, the cue overlay, the CC handle, settings, keys, the frame roles, frame/fullscreen plumbing | `window.__ssoApi`, `__ssoTeardown` |
-| `panel.js` | 4.8k | the control panel window (search, attach, sync, settings) | `window.__ssoPanel`, `__ssoPanelTeardown` |
-| `study.js` | 3.2k | the word strips, the focus box, the deck, the lookup popup | `window.__ssoStudy`, `__ssoStudyTeardown` |
+| `align.js` | 1,051 | matching a subtitle's timing to the playing release | — |
+| `content.js` | 8.9k | the video, the playback clock, the cue overlay, the CC handle, settings, keys, the frame roles, frame/fullscreen plumbing | `window.__ssoApi`, `__ssoTeardown` |
+| `panel.js` | 5.8k | the control panel window (search, attach, sync, settings) | `window.__ssoPanel`, `__ssoPanelTeardown` |
+| `study.js` | 3.3k | the word strips, the focus box, the deck, the lookup popup | `window.__ssoStudy`, `__ssoStudyTeardown` |
 
-One more runs in the **page's** world, not the extension's: `sites/primevideo.js`,
-declared as its own `content_scripts` entry with `"world": "MAIN"` on Prime
-Video's hosts only. It overhears the player's playback answer and posts the
-subtitle list on the window; `content.js` listens. See *The subtitles a page
+Four more entries run in the **page's** world, not the extension's, each
+declared as its own `content_scripts` entry with `"world": "MAIN"` on its
+site's hosts only: `sites/primevideo.js` (Prime Video and Amazon),
+`sites/netflix.js`, `sites/survey.js` with `sites/streams.js` (Disney+,
+tabii) and `sites/youtube.js`. They overhear the player's own answers and post
+the subtitle list on the window; `content.js` listens. See *The subtitles a page
 carries for itself* below before touching either end.
 
 `content.js` is the only one that touches the `<video>`. `panel.js` and
