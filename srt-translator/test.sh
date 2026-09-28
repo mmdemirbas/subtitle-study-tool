@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 
-# Beside the viewer, in this repo. The path this used to hold was the one the
-# file had before the subtitle tools were gathered here, so the script asked to
-# spend money on a file that had not existed for some time.
+# The sample beside the viewer unless a file is named. The path this used to
+# hold was the one the file had before the subtitle tools were gathered here,
+# so the script asked to spend money on a file that had not existed for some time.
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-file="$here/../srt-viewer/subtitles/Battlestar.Galactica.Miniseries.S00E02.2003.1080p.BluRay-EN.srt"
+file="${1:-$here/../srt-viewer/samples/night-ferry-EN.srt}"
 
 source .venv/bin/activate # activate virtual environment
 source .env               # load OPENAI_API_KEY, which srt_translate.py reads

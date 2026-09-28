@@ -1,14 +1,14 @@
 /* What attaching two subtitles costs the page's own thread, and where it goes.
  *
  *   PLAYWRIGHT_PATH=/opt/homebrew/lib/node_modules/@playwright/mcp/node_modules \
- *     node tools/measure-attach.mjs [reps=3]
+ *     [PAIR_EN=a.srt PAIR_TR=b.srt] node tools/measure-attach.mjs [reps=3]
  *
  * The extension's perf lines put every long task of the last evening at the
  * moment subtitles attached - 263, 141 and 262ms - and the sampler times
  * none of what an attach does in the page: the aligner, the cue index, the
- * map, study mode's marks. This replays an attach of a real pair (the
- * repo's Battlestar Galactica EN and TR, the Turkish shifted 2.5s with every
- * fourth line dropped, so the two read as different releases) in the
+ * map, study mode's marks. This replays an attach of a pair (PAIR_EN and
+ * PAIR_TR, the Turkish shifted 2.5s with every fourth line dropped, so the two
+ * read as different releases) in the
  * extension's own world on tests/frames/player.html, with study mode on, and
  * reports the page's main-thread time, the longest its timer waited, and the
  * functions the time went to, from a CPU profile of that page.
@@ -16,7 +16,9 @@
  * Headless Chromium. A long-task observer is blind there (see
  * measure-storage-echo.mjs), so the time comes from the protocol.
  *
- * Measured 2026-09-26, M1 Max, 1154 EN against 856 TR cues, three runs:
+ * Measured 2026-09-26, M1 Max, on a feature film from the local corpus, 1154
+ * EN against 856 TR cues, three runs. The default pair is the 84-cue sample in
+ * srt-viewer/samples/, enough to run this but not to reproduce these figures:
  *
  *                                       align.js on the page   in the worker
  *   the page's timer, longest wait            86-96ms              1-14ms
@@ -39,15 +41,16 @@ const EXT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT = path.resolve(EXT, "..");
 const REPS = Number(process.argv[2] || 3);
 const PORT = 9691;
-const FILM = "srt-viewer/subtitles/Battlestar.Galactica.Miniseries.S00E01.2003.1080p.BluRay";
+const PAIR_EN = process.env.PAIR_EN || path.join(ROOT, "srt-viewer/samples/night-ferry-EN.srt");
+const PAIR_TR = process.env.PAIR_TR || path.join(ROOT, "srt-viewer/samples/night-ferry-TR.srt");
 
 /* Read with the extension's own parser, so the cues are the ones it would
  * attach. A hand-rolled one turned the Turkish file's eleven "00:41:23,***"
  * stamps into NaN, which the worker rightly refused, and the page aligned
  * locally - a profile of the tool's bug rather than the extension. */
 const readSrt = (file) => parseSrt(readFileSync(file, "utf8")).map((cue) => ({ start: cue.startMs, end: cue.endMs, text: cue.text }));
-const english = readSrt(path.join(ROOT, `${FILM}-EN.srt`));
-const turkish = readSrt(path.join(ROOT, `${FILM}-TR-gpt5-thinking-web.srt`))
+const english = readSrt(PAIR_EN);
+const turkish = readSrt(PAIR_TR)
   .filter((_, i) => i % 4 !== 3)
   .map((cue) => ({ ...cue, start: cue.start + 2500, end: cue.end + 2500 }));
 

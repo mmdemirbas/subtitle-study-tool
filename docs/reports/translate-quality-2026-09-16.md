@@ -46,7 +46,8 @@ uv run python tools/translate_quality.py \
   say, 1-5) with the worst thing wrong tagged. $2.68 for the ten calls of
   this pass; a first pass through `claude-sonnet-5` cost about $1.50 more and
   is kept beside it, for the reason under the control below.
-- **Artifacts**, all under `translate-quality-2026-09-16/`: `answers.json`
+- **Artifacts**, kept locally and not in the repository because they quote
+  the film's subtitles line by line, all under `translate-quality-2026-09-16/`: `answers.json`
   (every candidate's every line, with timings and repair counts),
   `judged.json` (every score), `transcript.md` (the 60 lines side by side
   with the scores, for reading by eye), and

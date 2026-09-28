@@ -23,7 +23,8 @@ subtitle-daemon/tools/pretranslate.py \
   the words, phrases and idioms in those lines worth studying, each with what it
   means *there* and a note where it is an idiom or a false friend.
 
-Artifacts, both committed beside this file:
+Artifacts, both beside this file in the author's copy and not in the
+repository, because they reproduce 120 lines of the film's subtitles:
 
 - `llm-pretranslate-trial-2026-09-08/slice-300-419-tr.srt`
 - `llm-pretranslate-trial-2026-09-08/slice-300-419-vocab.json`

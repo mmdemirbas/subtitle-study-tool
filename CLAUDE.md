@@ -48,16 +48,20 @@ it is what stops the next session undoing it.
 `HANDOFF.md`, `TASK.md`, `SPEC.md`, `REVIEW.md`, `code-review.md`, `notes/`.
 These are session artifacts.
 
-**Three `.srt` files under `srt-viewer/subtitles/` have been dirty in the
-working tree for many sessions.** They are whitespace/line-ending churn, not
-anyone's work. Do not stage them, do not "clean them up", do not mention them
-as a finding:
+**The repository is public; some data beside it is not.** These paths are
+gitignored and must stay out of version control - never force-add them, never
+copy them into a tracked directory:
 
-```
-srt-viewer/subtitles/Battlestar.Galactica.Miniseries.S00E01.2003.1080p.BluRay-EN.srt
-srt-viewer/subtitles/Battlestar.Galactica.Miniseries.S00E01.2003.1080p.BluRay-TR-gpt5-thinking-web.srt
-srt-viewer/subtitles/Battlestar.Galactica.Miniseries.S00E02.2003.1080p.BluRay-EN.srt
-```
+- `srt-viewer/subtitles/` - copyrighted film subtitles, the local corpus the
+  aligner tests and the bench read when present. Committed test data goes in
+  `srt-viewer/samples/`, which is original.
+- The directories under `docs/engine-bakeoff/` - transcripts of private
+  recordings. Only its README is tracked.
+- Report artifacts that quote a film's subtitles line by line (listed in
+  `.gitignore`).
+
+The history was rewritten once to remove these; anything re-added is public
+the moment it is pushed.
 
 ## Nothing is pushed
 

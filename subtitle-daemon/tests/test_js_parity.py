@@ -241,7 +241,11 @@ def _fixture_files(tmp: Path) -> list[Path]:
 
 
 def _srt_files() -> list[Path]:
-    return sorted(REPO.glob("srt-viewer/subtitles/*.srt"))
+    # The samples are in the repository; subtitles/ is the local corpus of film
+    # subtitles, which is not, and is read as well when it is there.
+    files = sorted(REPO.glob("srt-viewer/samples/*.srt")) + sorted(REPO.glob("srt-viewer/subtitles/*.srt"))
+    assert files, "srt-viewer/samples/ is empty"
+    return files
 
 
 # What a cached search is filed under, on both sides. The awkward ones are the

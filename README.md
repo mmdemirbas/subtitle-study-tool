@@ -34,8 +34,8 @@ video.
 |---|---|---|
 | `browser-extension/` | MV3 extension. Overlays subtitles on any `<video>` in a page, driven by the page's own playback clock. One click to find and attach a subtitle — two languages side by side, with word lookup and a personal deck. | see its README |
 | `subtitle-daemon/` | Local HTTP service. Searches and downloads from OpenSubtitles, caches aggressively, converts to WebVTT. **Optional** - the extension does the whole pipeline itself now. What the daemon still adds is a signed-in account (10 downloads a day instead of 5), the cache on disk, the API key outside the browser, and word lookup without a permission prompt. | see its README |
-| `srt-viewer/` | Single-file browser app, "SRT Study Tool v7". Dual-subtitle study surface with its own virtual playback clock, for studying without a video. Also where the subtitle corpus the aligner is tested against lives. | see its README |
-| `srt-translator/` | Python CLI. Batch-translates a whole `.srt` via OpenAI / DeepL / Google / Azure / LibreTranslate, with a SQLite dedup cache. Made the Turkish files in `srt-viewer/subtitles/`. | working |
+| `srt-viewer/` | Single-file browser app, "SRT Study Tool v7". Dual-subtitle study surface with its own virtual playback clock, for studying without a video. `samples/` holds the English/Turkish pair the tests run on. | see its README |
+| `srt-translator/` | Python CLI. Batch-translates a whole `.srt` via OpenAI / DeepL / Google / Azure / LibreTranslate, with a SQLite dedup cache. | working |
 | `subgen/` | Local Whisper transcription, for a film nobody has subtitled. Batch today, over a file you already have; realtime is still an idea. | see its README |
 | `bench/align/` | The alignment bench. Builds a ground truth from cue text rather than from clocks, then measures every aligner against it - including the one the extension ships. Run it before changing an alignment constant. | see its README |
 | `scripts/` | `setup-whisper.sh` builds whisper.cpp and fetches models. | working |
@@ -44,6 +44,24 @@ video.
 Multi-gigabyte things — the whisper.cpp checkout and the model weights — live
 in `vendor/` and `models/`, both gitignored and both restored by
 `scripts/setup-whisper.sh`.
+
+## Getting started
+
+- **The extension:** load `browser-extension/` unpacked in any Chromium
+  browser and paste an OpenSubtitles API key into its options; the steps are
+  in [its README](browser-extension/README.md#install).
+- **The viewer:** open `srt-viewer/srt-viewer.html` in a browser and give it
+  the two files in `srt-viewer/samples/`.
+- **The tests:** `uv run pytest` in `subtitle-daemon/`.
+
+## Test data
+
+`srt-viewer/samples/` is an original scene written for this repository, in
+English and Turkish on the same timings. The aligner was developed against
+real film subtitles, which are copyrighted and stay out of version control:
+the tests and the bench that measure alignment read `srt-viewer/subtitles/`
+and the daemon's download cache when they are there, and skip without them.
+Both paths are gitignored.
 
 ## Why the extension reads the page clock
 
@@ -58,8 +76,8 @@ against a different release — hence the nudge keys.
 ## Provenance
 
 `subgen/`, `docs/engine-bakeoff/` and `docs/subgen-spec-*` were migrated here
-from `~/dev/incubation/speech-to-text`, which was a scratch directory and never
-under version control. What came across:
+from a scratch directory that was never under version control. What came
+across:
 
 - `subgen/src/` — the only implementation that actually ran, previously
   `subtitle-gen/chatgpt-agent`. faster-whisper based, with VAD, a glossary
@@ -68,8 +86,16 @@ under version control. What came across:
   bake-off was run from.
 - `docs/subgen-spec-claude-*.md` — a detailed spec for the same tool that was
   never implemented. Kept for the design decisions in it, not as a plan.
-- `docs/engine-bakeoff/` — whisper.cpp vs faster-whisper transcripts.
+- `docs/engine-bakeoff/` — what a whisper.cpp against faster-whisper run
+  showed. The transcripts themselves are of private recordings and were not
+  kept.
 
 Left behind deliberately: the `whisper.cpp` clone (upstream source, 3 GB with
 weights — rebuilt by the setup script), the sample `.wav`/`.mp3` audio, and an
 empty `subtitle-gen/gemini/` directory.
+
+## License
+
+MIT, see [LICENSE](LICENSE). The word-frequency and phrase lists under
+`browser-extension/src/study/` are derived from CC BY-SA 4.0 sources and keep
+that license; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

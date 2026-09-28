@@ -23,6 +23,11 @@ export const REPO = path.resolve(HERE, "../..");
 const CACHE = path.join(REPO, "subtitle-daemon/cache/subtitles");
 const VIEWER = path.join(REPO, "srt-viewer/subtitles");
 
+/* Both directories are local: the cache is filled by use, and the viewer's
+ * corpus is copyrighted film subtitles kept out of the repository. A fresh
+ * clone has neither, and gets an empty corpus rather than a crash. */
+const srts = (dir) => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith(".srt")).sort() : []);
+
 /* Identities the bench recorded for itself.
  *
  * A subtitle fetched straight from the daemon comes back with `movie_name`
@@ -83,7 +88,7 @@ export function load() {
   const files = new Map();
   const noted = recorded();
 
-  for (const name of fs.readdirSync(CACHE).filter((f) => f.endsWith(".srt")).sort()) {
+  for (const name of srts(CACHE)) {
     const id = name.slice(0, -4);
     const { spans, cues, language } = read(path.join(CACHE, name));
     if (spans.length < MIN_CUES) continue;
@@ -106,7 +111,7 @@ export function load() {
     });
   }
 
-  for (const name of fs.readdirSync(VIEWER).filter((f) => f.endsWith(".srt")).sort()) {
+  for (const name of srts(VIEWER)) {
     const { spans, cues } = read(path.join(VIEWER, name));
     if (spans.length < MIN_CUES) continue;
     const episode = name.includes("S00E01") ? "S00E01" : "S00E02";
@@ -116,6 +121,10 @@ export function load() {
     files.set(id, { id, spans, cues, film: `bsg ${episode.toLowerCase()}`, language, release: name, from: "viewer" });
   }
 
+  if (files.size < 2) {
+    console.error(`nothing to compare: ${files.size} subtitle(s) in ${path.relative(REPO, CACHE)}/ and ${path.relative(REPO, VIEWER)}/, both local - see bench/align/README.md`);
+    process.exit(1);
+  }
   return files;
 }
 

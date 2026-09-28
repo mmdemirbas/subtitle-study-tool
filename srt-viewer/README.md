@@ -26,17 +26,14 @@ ahead, or you are working through a scene without a player in the way.
 | Path | What |
 |---|---|
 | `srt-viewer.html` | the whole application, one file, no build step |
-| `subtitles/` | the working corpus: Battlestar Galactica, English and two machine-translated Turkish files |
+| `samples/` | an English/Turkish pair on the same timings, an original scene written for this repository |
 | `old-versions/` | v1 to v6, kept because each one is a different answer to the pairing problem |
 | `TODO.md` | the original feature list this was built against |
 
-The `subtitles/` files are also the corpus `subtitle-daemon/tests/test_align.py`
-runs the aligner over, which is why they are in version control. Three of them
-have a whitespace diff that has been in the working tree for a long time —
-leave it alone, see the root `CLAUDE.md`.
-
-The Turkish files were produced by `../srt-translator/`, which is where the
-names come from (`-TR-gpt5-thinking-web`, `-TR-gpt5-nano-0.27dollars`).
+`subtitles/` is gitignored: put film subtitles there and
+`subtitle-daemon/tests/test_align.py` and `../bench/align/` run the aligner
+over them. Film subtitles are copyrighted, so the repository has only the
+samples.
 
 ## State
 

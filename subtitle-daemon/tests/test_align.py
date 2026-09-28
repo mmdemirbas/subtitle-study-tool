@@ -721,7 +721,7 @@ def _run_steps(pairs: list[tuple[str, list[int], list[int]]]) -> dict[str, dict]
 
 def _longest(corpus) -> list[int]:
     files = corpus[0]
-    return max(files.values(), key=len)
+    return max(files.values(), key=len, default=[])
 
 
 def test_a_staircase_is_walked_up_one_act_at_a_time(corpus) -> None:

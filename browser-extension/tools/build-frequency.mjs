@@ -2,8 +2,9 @@
  *
  *     node tools/build-frequency.mjs [lang...]
  *
- * Source: hermitdave/FrequencyWords (MIT), whose lists are counted over the
- * OpenSubtitles corpus. That corpus is the reason to use this one rather than a
+ * Source: hermitdave/FrequencyWords, whose lists are counted over the
+ * OpenSubtitles corpus; the lists are CC BY-SA 4.0 (THIRD_PARTY_NOTICES.md).
+ * That corpus is the reason to use this one rather than a
  * general web or book frequency list: the question being asked is "is this word
  * rare *in film dialogue*", and a word can be common in print and vanishingly
  * rare in speech, or the reverse. A list built from anything else answers a

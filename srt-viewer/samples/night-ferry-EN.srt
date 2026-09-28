@@ -1,0 +1,342 @@
+1
+00:00:04,200 --> 00:00:09,360
+<i>The last ferry of the night leaves at a quarter to twelve.</i>
+
+2
+00:00:09,710 --> 00:00:11,830
+Is this seat taken?
+
+3
+00:00:12,180 --> 00:00:16,580
+Only by the wind. Sit, if you can stand it.
+
+4
+00:00:16,930 --> 00:00:20,190
+I thought the cabin would be warmer.
+
+5
+00:00:20,540 --> 00:00:25,320
+It is. But you can't see the lights from in there.
+
+6
+00:00:27,220 --> 00:00:28,620
+Which lights?
+
+7
+00:00:28,970 --> 00:00:34,890
+The buoys. The harbour. And if you're patient,
+the old lighthouse on the point.
+
+8
+00:00:35,240 --> 00:00:38,120
+I didn't know it still worked.
+
+9
+00:00:38,470 --> 00:00:42,490
+It doesn't. Not since they automated the new one.
+
+10
+00:00:42,840 --> 00:00:45,720
+Then what are we waiting for?
+
+11
+00:00:47,620 --> 00:00:52,400
+A reflection. On a clear night the moon catches the lens.
+
+12
+00:00:52,750 --> 00:00:57,530
+For a moment it looks as if someone lit it again.
+
+13
+00:00:57,880 --> 00:01:01,140
+You sound like you knew it well.
+
+14
+00:01:01,490 --> 00:01:04,370
+I kept it for twenty-two years.
+
+15
+00:01:04,720 --> 00:01:08,740
+A lighthouse keeper. I thought that job had disappeared.
+
+16
+00:01:10,640 --> 00:01:15,040
+It has. I was the last one on this coast.
+
+17
+00:01:15,390 --> 00:01:19,790
+What do you do, when there's nothing left to keep?
+
+18
+00:01:20,140 --> 00:01:25,300
+I take the ferry. Back and forth. It's cheaper than a psychiatrist.
+
+19
+00:01:25,650 --> 00:01:29,670
+And you? Nobody crosses at this hour for fun.
+
+20
+00:01:30,020 --> 00:01:34,800
+I'm a cartographer. I'm surveying the shoals for a new chart.
+
+21
+00:01:36,700 --> 00:01:38,100
+At night?
+
+22
+00:01:38,450 --> 00:01:44,950
+The instruments don't care about the dark. And the ferry is free
+if you know the captain.
+
+23
+00:01:45,300 --> 00:01:50,080
+Everyone knows the captain. That's never made it free for me.
+
+24
+00:01:50,430 --> 00:01:54,830
+You have to bring him coffee. Not tea. He's particular.
+
+25
+00:01:55,180 --> 00:01:58,060
+Twenty-two years and nobody told me.
+
+26
+00:01:59,960 --> 00:02:06,260
+What are the shoals like? From the tower they looked
+like they moved every winter.
+
+27
+00:02:06,610 --> 00:02:12,910
+They do. The sandbank off the point has shifted forty metres since the last survey.
+
+28
+00:02:13,260 --> 00:02:17,280
+Forty metres. Enough to run a fishing boat aground.
+
+29
+00:02:17,630 --> 00:02:22,030
+That's why they want the new chart before the storms.
+
+30
+00:02:22,380 --> 00:02:24,880
+The storms don't read charts.
+
+31
+00:02:26,780 --> 00:02:29,280
+No. But the insurers do.
+
+32
+00:02:29,630 --> 00:02:33,270
+Ha. Now that is a reason I believe.
+
+33
+00:02:33,620 --> 00:02:36,500
+Look. There, past the second buoy.
+
+34
+00:02:36,850 --> 00:02:38,970
+I don't see anything.
+
+35
+00:02:39,320 --> 00:02:42,580
+Wait for the swell to lift us.
+
+36
+00:02:44,480 --> 00:02:46,600
+Oh. It's... It's green.
+
+37
+00:02:46,950 --> 00:02:52,490
+Phosphorescence. Tiny creatures in the water.
+They glow when the hull disturbs them.
+
+38
+00:02:52,840 --> 00:02:56,480
+I've crossed a hundred times and never noticed.
+
+39
+00:02:56,830 --> 00:02:59,710
+You were looking at your instruments.
+
+40
+00:03:00,060 --> 00:03:01,460
+That's fair.
+
+41
+00:03:03,360 --> 00:03:07,760
+In the tower we used to call them the ghosts.
+
+42
+00:03:08,110 --> 00:03:14,410
+On calm nights the whole bay would light up
+when a boat came in late.
+
+43
+00:03:14,760 --> 00:03:18,780
+It's ephemeral. Gone before you can point at it.
+
+44
+00:03:19,130 --> 00:03:22,010
+Like most of what's worth seeing.
+
+45
+00:03:22,360 --> 00:03:25,240
+Do you miss it? The tower?
+
+46
+00:03:27,140 --> 00:03:32,680
+I miss the reckoning. Every night I had to account for every ship.
+
+47
+00:03:33,030 --> 00:03:36,670
+Now nobody asks me to account for anything.
+
+48
+00:03:37,020 --> 00:03:38,760
+That sounds restful.
+
+49
+00:03:39,110 --> 00:03:42,370
+It sounds restful for about a week.
+
+50
+00:03:42,720 --> 00:03:46,740
+Then you start counting the buoys from the ferry.
+
+51
+00:03:48,640 --> 00:03:50,760
+How many are there?
+
+52
+00:03:51,110 --> 00:03:55,130
+Eleven. There were twelve until the squall in March.
+
+53
+00:03:55,480 --> 00:03:58,360
+The red one near the breakwater?
+
+54
+00:03:58,710 --> 00:04:00,450
+You noticed that.
+
+55
+00:04:00,800 --> 00:04:07,100
+It's on my chart as missing. I had to put it down
+as a hazard.
+
+56
+00:04:09,000 --> 00:04:13,780
+It is a hazard. The chain is still down there, rusting.
+
+57
+00:04:14,130 --> 00:04:17,010
+You could tell the harbour office.
+
+58
+00:04:17,360 --> 00:04:20,620
+I did. In April. And in June.
+
+59
+00:04:20,970 --> 00:04:22,370
+And?
+
+60
+00:04:22,720 --> 00:04:27,880
+They thanked me for my diligence and put me off until autumn.
+
+61
+00:04:29,780 --> 00:04:36,080
+Then I'll put it on the chart in red ink. They'll have to read that.
+
+62
+00:04:36,430 --> 00:04:38,170
+You'd do that?
+
+63
+00:04:38,520 --> 00:04:42,160
+It's my job to draw what's actually there.
+
+64
+00:04:42,510 --> 00:04:45,770
+Not what the office wishes were there.
+
+65
+00:04:46,120 --> 00:04:49,000
+You'd have made a decent keeper.
+
+66
+00:04:50,900 --> 00:04:54,540
+I get seasick in anything smaller than this.
+
+67
+00:04:54,890 --> 00:04:58,530
+So did I. For the first three years.
+
+68
+00:04:58,880 --> 00:05:00,280
+And then?
+
+69
+00:05:00,630 --> 00:05:03,890
+Then I stopped noticing. You make do.
+
+70
+00:05:04,240 --> 00:05:08,640
+Hold on to the rail. We're turning into the wind.
+
+71
+00:05:10,540 --> 00:05:12,280
+Is that normal?
+
+72
+00:05:12,630 --> 00:05:16,270
+He always swings wide here. The ballast shifts.
+
+73
+00:05:16,620 --> 00:05:20,260
+You know this boat better than the captain.
+
+74
+00:05:20,610 --> 00:05:25,390
+I've watched it from the tower since before he was born.
+
+75
+00:05:25,740 --> 00:05:29,000
+There. The lighthouse. Look at the lens.
+
+76
+00:05:30,900 --> 00:05:32,640
+It's... it's lit.
+
+77
+00:05:32,990 --> 00:05:35,870
+It's the moon. Just the moon.
+
+78
+00:05:36,220 --> 00:05:39,100
+For three seconds it doesn't matter.
+
+79
+00:05:39,450 --> 00:05:42,710
+Three seconds every clear night. I've counted.
+
+80
+00:05:43,060 --> 00:05:46,320
+Will you put it on your chart?
+
+81
+00:05:48,220 --> 00:05:50,720
+Lights that don't work? No.
+
+82
+00:05:51,070 --> 00:05:56,990
+But I'll put a small mark beside it.
+Nobody will know what it means.
+
+83
+00:05:57,340 --> 00:05:58,740
+I will.
+
+84
+00:05:59,090 --> 00:06:03,870
+<i>The ferry reached the far pier at six minutes past midnight.</i>

@@ -65,3 +65,12 @@ tmp/
 
 # The bake-off writes this; it is derived from the corpus and the code.
 bench/align/results.json
+
+# Local only, never committed: copyrighted film subtitles, transcripts of
+# private recordings, and report artifacts that quote a film's subtitles line
+# by line. The history was rewritten to remove them; see CLAUDE.md.
+srt-viewer/subtitles/
+docs/engine-bakeoff/*/
+docs/reports/llm-pretranslate-trial-2026-09-08/
+docs/reports/translate-bakeoff-2026-09-10/
+docs/reports/translate-quality-2026-09-16/

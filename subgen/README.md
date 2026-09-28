@@ -41,8 +41,8 @@ Never read or search them.
 
 ## Where it came from
 
-Migrated from `~/dev/incubation/speech-to-text`, which was never under version
-control. `docs/engine-bakeoff/` has the whisper.cpp against faster-whisper
-transcripts that decided which engine this uses; `docs/subgen-spec-claude-*.md`
+Migrated from a scratch directory that was never under version control.
+`docs/engine-bakeoff/` records the whisper.cpp against faster-whisper run that
+decided which engine this uses; `docs/subgen-spec-claude-*.md`
 is a detailed spec for a tool that was never built, kept for the decisions in
 it rather than as a plan.

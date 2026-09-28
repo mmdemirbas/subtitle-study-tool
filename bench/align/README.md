@@ -12,7 +12,8 @@ node bench/align/regress.mjs    # does the candidate make any pair worse?
 ```
 
 No dependencies, no network. It reads `subtitle-daemon/cache/subtitles/` and
-`srt-viewer/subtitles/` directly. `expand.mjs` is the one exception - it fetches
+`srt-viewer/subtitles/` directly; both are local and gitignored, so a fresh
+clone has an empty corpus until the daemon has downloaded something. `expand.mjs` is the one exception - it fetches
 through the daemon, on a budget, and stops before the reader's quota runs out.
 
 The full account of what all this measured is in

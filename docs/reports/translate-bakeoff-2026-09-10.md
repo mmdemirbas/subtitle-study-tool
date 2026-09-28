@@ -23,7 +23,8 @@ uv run python tools/translate_bakeoff.py \
   vocabulary half of the pre-translate brief was left out, because a 2B
   translation model will not do it and asking would have measured
   prompt-following instead of translation.
-- **Transcript:** `translate-bakeoff-2026-09-10/transcript-300-339.json`, every
+- **Transcript:** `translate-bakeoff-2026-09-10/transcript-300-339.json` (kept locally, not in
+  the repository: it quotes the film's subtitles), every
   answer from every model, for reading by eye.
 
 ## What is measured, and what is not

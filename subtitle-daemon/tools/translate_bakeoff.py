@@ -215,10 +215,10 @@ def main() -> int:
     parser.add_argument(
         "--srt",
         type=Path,
-        default=Path(__file__).resolve().parents[2]
-        / "srt-viewer/subtitles/Battlestar.Galactica.Miniseries.S00E01.2003.1080p.BluRay-EN.srt",
+        default=Path(__file__).resolve().parents[2] / "srt-viewer/samples/night-ferry-EN.srt",
+        help="the file to translate; the report's runs used cues 300-339 of a film from the local corpus",
     )
-    parser.add_argument("--start", type=int, default=300, help="first cue, 0-based; the trial's slice")
+    parser.add_argument("--start", type=int, default=0, help="first cue, 0-based")
     parser.add_argument("--limit", type=int, default=40)
     parser.add_argument("--chunk", type=int, default=40)
     parser.add_argument("--carry", type=int, default=4)

@@ -3,7 +3,6 @@
 # These terms will be appended to the Whisper initial prompt to improve
 # transcription accuracy for domain‑specific words.
 
-Contoso
 Apache Spark
 Kubernetes
 DAG
