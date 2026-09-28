@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Night ferry</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  video { width: 100%; height: 100%; display: block; object-fit: cover; }
+</style>
+</head>
+<body>
+  <!-- The stage tools/screenshots.mjs films the extension on: a still of an
+       original scene (night-ferry.svg), seven minutes long so it clears
+       MIN_VIDEO_SECONDS and covers the sample subtitles in srt-viewer/samples/.
+       Rebuild with:
+
+         rsvg-convert -w 1280 -h 720 night-ferry.svg -o night-ferry.png
+         ffmpeg -loop 1 -framerate 1 -i night-ferry.png -t 420 -c:v libx264 \
+                -tune stillimage -pix_fmt yuv420p -r 1 -movflags +faststart \
+                night-ferry.mp4 -->
+  <video muted playsinline></video>
+  <script>
+    /* As a blob, because tests/serve.py answers no range requests and a video
+     * streamed without them cannot seek: currentTime snaps back to 0. */
+    fetch("night-ferry.mp4")
+      .then((response) => response.blob())
+      .then((blob) => { document.querySelector("video").src = URL.createObjectURL(blob); });
+  </script>
+</body>
+</html>
