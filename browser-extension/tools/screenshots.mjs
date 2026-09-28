@@ -9,6 +9,9 @@
  * study mode see the tracks the way they would after a real attach. The viewer
  * shot loads the same pair into srt-viewer.html.
  *
+ * SHOTS_SCALE=2 takes them at twice the pixels and SHOTS_OUT=<dir> writes them
+ * somewhere else, for a page that wants sharper copies than docs/images/.
+ *
  * Study mode's meanings come from the daemon when it is running on this
  * machine; without it the focus box says no dictionary is available, and the
  * study shots are not worth keeping.
@@ -23,7 +26,7 @@ import { parseSrt } from "../src/subtitles/srt.js";
 
 const EXT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT = path.resolve(EXT, "..");
-const OUT = path.join(ROOT, "docs/images");
+const OUT = path.resolve(process.env.SHOTS_OUT || path.join(ROOT, "docs/images"));
 const SAMPLES = path.join(ROOT, "srt-viewer/samples");
 const PORT = 9731;
 const SIZE = { width: 1280, height: 720 };
@@ -44,6 +47,7 @@ const ctx = await chromium.launchPersistentContext(profile, {
   channel: "chromium",
   headless: true,
   viewport: SIZE,
+  deviceScaleFactor: Number(process.env.SHOTS_SCALE || 1),
   args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--autoplay-policy=no-user-gesture-required"],
 });
 
@@ -54,7 +58,7 @@ const shot = async (page, name) => {
     .waitForFunction(() => ![...document.querySelectorAll("div")].some((d) => d.shadowRoot?.querySelector(".sso-toast")?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })), null, { timeout: 15000 })
     .catch(() => console.warn(`${name}: a toast was still up`));
   await page.screenshot({ path: path.join(OUT, `${name}.png`) });
-  console.log("wrote", `docs/images/${name}.png`);
+  console.log("wrote", path.join(OUT, `${name}.png`));
 };
 /* The overlay lives in a shadow root on a host div; the panel and the focus
  * box in their own. */
