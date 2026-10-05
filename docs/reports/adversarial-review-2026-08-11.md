@@ -216,7 +216,7 @@ flowchart TD
     C -->|throws immediately| D["catch"]
     D --> E["ensureInjected returns false<br/>onInstalled moves to the next tab"]
     C -.->|"never reached"| F["executeScript — the line<br/>that would actually repair the tab"]
-    style C fill:#7a2e2e,stroke:#b45,color:#fff
+    style C fill:var(--danger-soft),stroke:var(--danger),color:var(--text)
     style F stroke-dasharray: 5 5
 ```
 

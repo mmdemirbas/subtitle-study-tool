@@ -165,8 +165,8 @@ flowchart TD
   One --> Two["2. FFT the search<br/>same answer, O(n log n)"]
   One --> Three["3. Per-cue offsets<br/>for re-cut releases"]
   Three --> Four["4. Fit the rate<br/>instead of picking from 7"]
-  style One fill:#2d6a4f,color:#fff
-  style Now fill:#7f1d1d,color:#fff
+  style One fill:var(--success-soft),stroke:var(--success),color:var(--text)
+  style Now fill:var(--danger-soft),stroke:var(--danger),color:var(--text)
 ```
 
 **1 — Score on intervals, keep everything else.** The largest measured win and the smallest conceptual change. Cue ends are already stored, already mirrored across the frame gap, and already unused. The decision framework, the coverage gate and the three verdicts stay exactly as they are; only the evidence they consume changes. The binomial needs re-deriving for overlap rather than counts, which is the real work.

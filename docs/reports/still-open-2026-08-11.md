@@ -40,8 +40,8 @@ flowchart TD
     T --> A --> V
     T -.->|"appended to &lt;html&gt;"| O
     O -.->|"first from elementsFromPoint<br/>at every point tested"| C(("a click aimed at<br/>the panel's button"))
-    style V fill:#1f4f3a,stroke:#3a7,color:#fff
-    style O fill:#7a2e2e,stroke:#b45,color:#fff
+    style V fill:var(--success-soft),stroke:var(--success),color:var(--text)
+    style O fill:var(--danger-soft),stroke:var(--danger),color:var(--text)
 ```
 
 The extension builds its UI in whichever frame owns the `<video>`
