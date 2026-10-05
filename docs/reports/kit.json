@@ -1,0 +1,4 @@
+{
+  "$schema": "https://raw.githubusercontent.com/mmdemirbas/oku/main/kit/schema/project-kit.schema.json",
+  "skip_gitignored": true
+}
