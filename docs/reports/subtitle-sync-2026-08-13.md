@@ -204,7 +204,7 @@ Stated plainly, because a report that hides these is worse than no report.
 ```
 
 ```oku-info-tip
-{"summary": "How would I re-run these measurements?", "content": ["The experiment is `spans2.mjs` in this session's scratchpad; it reads the download cache and `srt-viewer/subtitles` directly and writes every pair's score to `/tmp/spanpairs2.json`. The incumbent's numbers come from driving `align.js` over the same pairs, which is what `subtitle-daemon/tests/test_align.py` now does — its fixtures derive the ground truth from each file's sidecar, so both halves of the comparison share one definition of 'the same film'."]}
+{"summary": "How would I re-run these measurements?", "content": ["The experiment is `spans2.mjs` in this session's scratchpad; it reads the download cache and `srt-viewer/subtitles` directly and writes every pair's score to `/tmp/spanpairs2.json`. The incumbent's numbers come from driving `align.js` over the same pairs, which is what [`subtitle-daemon/tests/test_align.py`](#f/subtitle-daemon/tests/test_align.py) now does — its fixtures derive the ground truth from each file's sidecar, so both halves of the comparison share one definition of 'the same film'."]}
 ```
 
 ## Sources {#sources}

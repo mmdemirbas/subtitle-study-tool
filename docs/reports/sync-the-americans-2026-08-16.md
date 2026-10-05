@@ -13,7 +13,7 @@ summary: Why the sync on The Americans S02E09 had to be fixed several times, mea
 
 This is a teaching document, not a reference: it follows the question a viewer
 would ask, in the order they would ask it. The numbers behind every claim come
-from `bench/align/piecewise.mjs`, which is in the repository and re-runnable.
+from [`bench/align/piecewise.mjs`](#f/bench/align/piecewise.mjs), which is in the repository and re-runnable.
 
 ## Why did one episode need correcting several times? {#question}
 
