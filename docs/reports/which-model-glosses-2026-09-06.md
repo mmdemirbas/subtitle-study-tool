@@ -156,11 +156,13 @@ cases**, including returning nothing at all for the proper noun `Paige` - a
 perfect score on the half of the problem that does not need the line. All five
 of its misses are contextual, and they are the same five a reader would notice:
 
-      domestic   "foreign and domestic"        yerel        (local, as in a local shop)
-      shotgun    shouted at a car              av tüfeği    (the gun)
-      spare      "one spare engine"            kıyamamak    (to not have the heart to)
-      spare      "can you spare a minute"      kıyamamak    (the same answer, again)
-      draft      a draft notice                taslak       (a rough version)
+```text
+domestic   "foreign and domestic"        yerel        (local, as in a local shop)
+shotgun    shouted at a car              av tüfeği    (the gun)
+spare      "one spare engine"            kıyamamak    (to not have the heart to)
+spare      "can you spare a minute"      kıyamamak    (the same answer, again)
+draft      a draft notice                taslak       (a rough version)
+```
 
 The two `spare` lines returning the identical string is the mechanism in one
 line: Google is asked the word, so it answers the word, so it cannot answer two
@@ -292,8 +294,10 @@ answered: "I don't have privacy concerns here."
 **One step is not mine to take.** The key already in `config.local.json` is
 valid, but the Gemini API is not enabled on its project:
 
-    403 Gemini API has not been used in project 515973764373 before or it is
-    disabled.
+```text
+403 Gemini API has not been used in project 515973764373 before or it is
+disabled.
+```
 
 Enabling it is a click in that project's console. Until then this is measured as
 far as it can be measured from here: the transport is right, the key is right,
