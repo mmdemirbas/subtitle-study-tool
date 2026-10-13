@@ -174,6 +174,56 @@ def _identity(stem: str, sidecar: dict | None, noted: dict[str, str], series_imd
     return _same(name) or noted.get(stem)
 
 
+def _episode_key(sidecar: dict) -> tuple[str | None, int | None, int | None]:
+    """The imdb id, season and episode a sidecar names, fields first, then its name.
+
+    The id is digits only: the cache holds it as "470752", "tt6268280" and
+    "tt0420223", and those spellings must not make one film two.
+    """
+    imdb = re.sub(r"\D", "", str(sidecar.get("imdb_id") or "")).lstrip("0") or None
+    season, episode = sidecar.get("season"), sidecar.get("episode")
+    parsed = EPISODE.match(sidecar.get("movie_name") or "")
+    if season is None and parsed:
+        season, episode = int(parsed["season"]), int(parsed["episode"])
+    return imdb, season, episode
+
+
+def _translated_from(
+    sidecar: dict, sidecars: dict[str, dict | None], films: dict[str, str | None]
+) -> str | None:
+    """What film a subtitle the daemon translated is of: its source's.
+
+    A translation keeps its source's cue times, so the aligner lines the two up
+    at a shift of zero and a confidence above 600, which is the right answer.
+    But its `movie_name` is the title the translation request carried, not the
+    name a download arrived with: "Not Suitable for Work" beside "Not Suitable
+    for Work - S01E01 ... Welcome to Murray Hill", "Assassination Classroom:
+    The Graduation" beside "...: Graduation". Read as a name, it turned four
+    correct alignments into "a different film was shifted without asking" the
+    day the first translations landed in the cache, with align.js unchanged.
+
+    So the file it names as its source decides. A source that is not a file
+    here - a subtitle read off a page - leaves the imdb id, season and episode
+    the sidecar states, which decide when the downloads naming the same three
+    agree on one film. When none do, the translation is the only copy of its
+    film here and a different film from everything else; when they disagree,
+    it gets no opinion.
+    """
+    source = str(sidecar.get("source_id") or "")
+    if source in films and not (sidecars.get(source) or {}).get("generated"):
+        return films[source]
+    key = _episode_key(sidecar)
+    agreed = {
+        films[stem]
+        for stem, other in sidecars.items()
+        if other and not other.get("generated") and _episode_key(other) == key
+    }
+    if not agreed:
+        imdb, season, episode = key
+        return f"translated:{imdb}:{season}:{episode}"
+    return agreed.pop() if len(agreed) == 1 else NO_OPINION
+
+
 def _corpus() -> tuple[dict[str, list[int]], dict[str, str | None]]:
     """Cue starts and, beside them, which film each file belongs to."""
     starts: dict[str, list[int]] = {}
@@ -203,6 +253,9 @@ def _corpus() -> tuple[dict[str, list[int]], dict[str, str | None]]:
             series_imdb.setdefault(_same(parsed["series"]) or "", str(sidecar["imdb_id"]))  # type: ignore[index]
     for stem, sidecar in sidecars.items():
         films[stem] = _identity(stem, sidecar, noted, series_imdb)
+    for stem, sidecar in sidecars.items():
+        if sidecar and sidecar.get("generated"):
+            films[stem] = _translated_from(sidecar, sidecars, films)
     for path in sorted(VIEWER.glob("*.srt")):
         times = _starts(path)
         if len(times) < 12:
@@ -329,6 +382,13 @@ def test_every_file_says_what_it_is(films: dict[str, str | None]) -> None:
     Failing here instead names the file and says what to do about it, which is
     one line in NO_METADATA.
     """
+    if not films:
+        # Both directories are gitignored, so a fresh clone has neither, and
+        # "every file says what it is" over no files would pass having checked
+        # nothing.
+        pytest.skip(
+            "no subtitle corpus: subtitle-daemon/cache/subtitles and srt-viewer/subtitles are absent"
+        )
     nameless = sorted(name for name, film in films.items() if not film)
     assert not nameless, (
         f"no identity for {nameless} - add each to NO_METADATA with the film "
