@@ -12,9 +12,9 @@ port = 8794
 health = { path = "/health" }
 
 [operations."dev viewer"]
-summary = "Serve srt-viewer/ on 127.0.0.1:8080, so the viewer can read the subtitles beside it"
+summary = "Serve srt-viewer/ on 127.0.0.1:8795, so the viewer can read the subtitles beside it"
 lifecycle = "service"
-port = 8080
+port = 8795
 health = { path = "/srt-viewer.html" }
 
 [operations.status]

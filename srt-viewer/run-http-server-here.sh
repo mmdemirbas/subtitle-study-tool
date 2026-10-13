@@ -7,4 +7,4 @@
 # listens on every address the machine has and publishes this directory, and
 # the subtitle corpus with it, to anything on the network. Reach it from
 # another device through a tunnel rather than by widening this.
-python3 -m http.server 8080 --bind 127.0.0.1
+python3 -m http.server 8795 --bind 127.0.0.1
