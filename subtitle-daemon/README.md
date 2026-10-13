@@ -10,6 +10,9 @@ the realtime transcriber later.
 
 ## Setup
 
+From the repository root, `./ctl setup daemon` makes the file and never
+overwrites one. By hand:
+
 ```bash
 cd subtitle-daemon
 cp config.example.json config.local.json   # gitignored
@@ -67,6 +70,10 @@ answers to "what does this word usually translate as", which is a different
 question from the one the reader asked.
 
 ## Running
+
+From the repository root, `./ctl dev` starts it and passes these flags through
+(`./ctl dev --replace`); `./ctl status` prints what `/health` says. In this
+directory, the script it runs:
 
 ```bash
 ./run.sh              # or: uv run subtitle-daemon
@@ -309,7 +316,7 @@ the request.
 ## Tests
 
 ```bash
-uv run pytest
+uv run pytest          # or, from the repository root: ./ctl test daemon
 ```
 
 Covers encoding detection, SRT parsing, title guessing, match scoring, title

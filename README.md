@@ -53,12 +53,20 @@ in `vendor/` and `models/`, both gitignored and both restored by
 
 ## Getting started
 
+`./ctl` at the root runs everything below. On its own it lists what it can do;
+`./ctl test --list` and `./ctl setup --list` list the parts.
+
 - **The extension:** load `browser-extension/` unpacked in any Chromium
   browser and paste an OpenSubtitles API key into its options; the steps are
   in [its README](browser-extension/README.md#install).
+- **The daemon** (optional, see the table above): `./ctl setup daemon` once,
+  put the API key in `subtitle-daemon/config.local.json`, then `./ctl dev`. It
+  listens on `127.0.0.1:8794`, and `./ctl status` asks it how it is.
 - **The viewer:** open `srt-viewer/srt-viewer.html` in a browser and give it
-  the two files in `srt-viewer/samples/`.
-- **The tests:** `uv run pytest` in `subtitle-daemon/`.
+  the two files in `srt-viewer/samples/`, or `./ctl dev viewer` to serve it
+  with the subtitles beside it.
+- **The tests:** `./ctl test daemon` (`uv run pytest` in `subtitle-daemon/`),
+  `./ctl test extension`, and `./ctl test pages` for the pages a browser runs.
 
 ## Test data
 

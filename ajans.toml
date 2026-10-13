@@ -1,0 +1,56 @@
+#:schema ../ajans/schema/project-2.schema.json
+contract = 2
+
+[verbs]
+test = "Run one of the test suites"
+setup = "Install what one part needs"
+
+[operations.dev]
+summary = "The subtitle daemon on 127.0.0.1:8794 (--replace takes over from a forgotten one)"
+lifecycle = "service"
+port = 8794
+health = { path = "/health" }
+
+[operations."dev viewer"]
+summary = "Serve srt-viewer/ on 127.0.0.1:8080, so the viewer can read the subtitles beside it"
+lifecycle = "service"
+port = 8080
+health = { path = "/srt-viewer.html" }
+
+[operations.status]
+summary = "What the running daemon says on /health: config, credentials, translator"
+
+[operations.logs]
+summary = "Follow the newest day of the extension's log, which the daemon writes"
+
+[operations.check]
+summary = "ruff over the daemon"
+
+[operations."test daemon"]
+summary = "The daemon suite, parity with the extension included (-m 'not corpus' is the quick run)"
+
+[operations."test extension"]
+summary = "The extension's service worker under node, with Chrome stubbed"
+
+[operations."test browser"]
+summary = "The unpacked extension in a real Chrome: nested frames, then a real mouse and keyboard"
+
+[operations."test pages"]
+summary = "Serve the overlay, fallback and options test pages on 127.0.0.1:8997"
+lifecycle = "service"
+port = 8997
+health = { path = "/tests/harness.html" }
+
+[operations.transcribe]
+summary = "Transcribe a film file or directory with Whisper (subgen)"
+
+[operations."setup daemon"]
+summary = "config.local.json from the example, for the OpenSubtitles key"
+
+[operations."setup whisper"]
+summary = "Build whisper.cpp into vendor/ and fetch the models (Homebrew, several GB)"
+needs = ["network"]
+
+[operations."setup subgen"]
+summary = "subgen's virtual environment and requirements (needs ffmpeg)"
+needs = ["network"]
