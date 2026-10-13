@@ -98,11 +98,35 @@ op_setup_whisper() { scripts/setup-whisper.sh "$@"; }
 
 op_setup_subgen() { subgen/setup.sh "$@"; }
 
-# >>> ajans runtime 1 >>>
+# >>> ajans runtime 2 >>>
 # Written by `ajans contract sync`; edits here are overwritten. The operations
 # are declared in ajans.toml and implemented above as op_<verb>[_<target>].
 
-_ajans_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Where this file is. A relative path was relative to where ctl was started,
+# and the driver may have changed directory since - usually into its own, with
+# `cd "$(dirname "$0")"` - so it is tried against here, then against where the
+# last cd came from, and failing both the directory the driver changed into.
+# A function rather than inline: bash 3.2 cannot parse a `case` inside `$(...)`.
+_ajans_where() {
+	local src="${BASH_SOURCE[0]}" base
+	case "$src" in
+		/*) ;;
+		*)
+			for base in "$PWD" "${OLDPWD:-}"; do
+				if [[ -n "$base" && -f "$base/$src" ]]; then
+					src="$base/$src"
+					break
+				fi
+			done
+			;;
+	esac
+	case "$src" in
+		/*) ;;
+		*) src="$PWD/${src##*/}" ;;
+	esac
+	(cd "$(dirname "$src")" && pwd)
+}
+_ajans_root="$(_ajans_where)"
 
 _ajans_fn() {
 	local name="op_$*"
