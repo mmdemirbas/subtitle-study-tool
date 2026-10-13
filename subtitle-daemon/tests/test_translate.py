@@ -15,8 +15,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from subtitle_daemon import translate  # noqa: E402
-from subtitle_daemon.subtitles import Cue  # noqa: E402
+from subtitle_daemon import translate
+from subtitle_daemon.subtitles import Cue
 
 
 def cue(text: str, start: int = 0) -> Cue:
@@ -376,9 +376,9 @@ def test_the_translator_in_use_follows_the_key_unless_a_name_is_given(tmp_path) 
     cache = Cache(tmp_path / "cache")
     with_key = translate_jobs.Jobs(tmp_path / "a", cache, model="", url="", key="", google_key="k")
     assert with_key.model == translate.GOOGLE_MODEL and with_key.rate() == translate.GOOGLE_SECONDS_PER_CUE
-    assert isinstance(with_key._translator("en", "tr"), translate.GoogleTranslator)  # noqa: SLF001
+    assert isinstance(with_key._translator("en", "tr"), translate.GoogleTranslator)
     without = translate_jobs.Jobs(tmp_path / "b", cache, model="", url="", key="")
     assert without.model == translate.DEFAULT_MODEL and without.rate() == translate_jobs.SECONDS_PER_CUE
     named = translate_jobs.Jobs(tmp_path / "c", cache, model="qwen3.6:35b-a3b", url="", key="", google_key="k")
-    assert named.model == "qwen3.6:35b-a3b" and isinstance(named._translator("en", "tr"), translate.Translator)  # noqa: SLF001
+    assert named.model == "qwen3.6:35b-a3b" and isinstance(named._translator("en", "tr"), translate.Translator)
     assert translate_jobs.Jobs(tmp_path / "d", cache, model="google", url="", key="", google_key="k").model == translate.GOOGLE_MODEL

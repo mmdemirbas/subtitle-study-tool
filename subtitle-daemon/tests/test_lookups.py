@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 
 import pytest
 
@@ -755,7 +755,7 @@ class _Raw:
     def read(self) -> bytes:
         return self._body
 
-    def __enter__(self) -> _Raw:
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *args: object) -> bool:

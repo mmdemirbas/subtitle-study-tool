@@ -39,7 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from subtitle_daemon import subtitles  # noqa: E402
+from subtitle_daemon import subtitles
 
 # How many cues go in one request.
 #
@@ -147,6 +147,7 @@ def ask(prompt, model, budget):
             "--max-budget-usd", str(budget),
         ],
         input=prompt,
+        check=False,
         capture_output=True,
         text=True,
     )

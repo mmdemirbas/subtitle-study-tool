@@ -18,7 +18,6 @@ import threading
 import urllib.error
 import urllib.request
 from collections.abc import Iterator
-from dataclasses import replace
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any

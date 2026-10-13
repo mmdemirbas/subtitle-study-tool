@@ -31,9 +31,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from subtitle_daemon import config as daemon_config  # noqa: E402
-from subtitle_daemon.lookups import Lookups  # noqa: E402
-from subtitle_daemon.subtitles import parse_srt  # noqa: E402
+from subtitle_daemon import config as daemon_config
+from subtitle_daemon.lookups import Lookups
+from subtitle_daemon.subtitles import parse_srt
 
 WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 NOT_SPOKEN = re.compile(r"\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|<[^>]*>")

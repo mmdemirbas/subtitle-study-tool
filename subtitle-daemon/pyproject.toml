@@ -31,5 +31,10 @@ markers = [
 ]
 
 [tool.ruff]
+# No rule list is pinned, so the rules are the running ruff's defaults, and
+# 0.16 widened them: the code was cleaned against 0.16 and 0.17. An older ruff
+# would check a different set (E402 among them) and fail on code that is fine,
+# so it stops here with the version it needs instead.
+required-version = ">=0.16"
 line-length = 100
 src = ["src"]

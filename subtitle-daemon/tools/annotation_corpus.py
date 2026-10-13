@@ -26,8 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from subtitle_daemon import annotations, config, subtitles  # noqa: E402
-from subtitle_daemon.opensubtitles import Client  # noqa: E402
+from subtitle_daemon import annotations, config, subtitles
+from subtitle_daemon.opensubtitles import Client
 
 CORPUS = Path(__file__).resolve().parents[1] / "tests" / "data" / "annotation-corpus.json"
 

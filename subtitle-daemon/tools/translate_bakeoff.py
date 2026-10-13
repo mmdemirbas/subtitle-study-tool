@@ -53,7 +53,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from subtitle_daemon import subtitles  # noqa: E402
+from subtitle_daemon import subtitles
 
 OLLAMA = "http://127.0.0.1:11434/v1/chat/completions"
 
@@ -98,7 +98,7 @@ def unload(model: str) -> None:
     )
     try:
         urllib.request.urlopen(request, timeout=30).read()
-    except Exception:  # noqa: BLE001 - unloading is a courtesy, never a failure
+    except Exception:  # noqa: BLE001, S110 - unloading is a courtesy, never a failure
         pass
 
 

@@ -28,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from subtitle_daemon import annotations, cache, markup, matching, subtitles  # noqa: E402
+from subtitle_daemon import annotations, cache, markup, matching, subtitles
 
 OUTPUT = (
     Path(__file__).resolve().parents[2]

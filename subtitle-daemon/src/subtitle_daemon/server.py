@@ -27,7 +27,7 @@ import json
 import logging
 import re
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -191,7 +191,7 @@ class Service:
             return {"error": "entries must be a list"}
 
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        day = datetime.now(UTC).strftime("%Y-%m-%d")
         path = LOG_DIR / f"{day}.jsonl"
         written = 0
         with self._lock, path.open("a", encoding="utf-8") as handle:
@@ -1053,7 +1053,7 @@ class _Handler(BaseHTTPRequestHandler):
     service: Service
     server_version = "subtitle-daemon/0.1"
 
-    def do_OPTIONS(self) -> None:  # noqa: N802 - name fixed by BaseHTTPRequestHandler
+    def do_OPTIONS(self) -> None:  # name fixed by BaseHTTPRequestHandler
         origin = self.headers.get("Origin")
         if origin and not _ALLOWED_ORIGIN.match(origin):
             self._send(HTTPStatus.FORBIDDEN, {"error": "origin not allowed"})
@@ -1065,7 +1065,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Max-Age", "600")
         self.end_headers()
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         if not self._origin_ok():
             return
         parsed = urlparse(self.path)
@@ -1096,7 +1096,7 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._send(HTTPStatus.NOT_FOUND, {"error": "no such endpoint"})
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         if not self._origin_ok():
             return
         parsed = urlparse(self.path)
@@ -1145,7 +1145,7 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._send(HTTPStatus.OK, self.service.fetch(body))
 
-    def do_DELETE(self) -> None:  # noqa: N802
+    def do_DELETE(self) -> None:
         if not self._origin_ok():
             return
         parsed = urlparse(self.path)

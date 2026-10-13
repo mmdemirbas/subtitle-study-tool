@@ -254,8 +254,9 @@ def clean_translation(text: Any) -> str:
 
     def entity(match: re.Match[str]) -> str:
         name = match.group(1)
-        if name.startswith("#x") or name.startswith("#X"):
-            return chr(int(name[2:], 16))
+        if name.startswith(("#x", "#X")):
+            # The prefix is "#x", not "0x", so int(name, 0) would refuse it.
+            return chr(int(name[2:], 16))  # noqa: FURB166
         if name.startswith("#"):
             return chr(int(name[1:]))
         return NAMED_ENTITIES.get(name.lower(), match.group(0))
@@ -582,7 +583,7 @@ class Lookups:
         answers: list[str],
         asked: list[tuple[str, str]],
         wanted: dict[tuple[str, str], list[int]],
-        context: dict[tuple[str, str], "Ask"],
+        context: dict[tuple[str, str], Ask],
         lang: str,
         into: str,
         film: str,

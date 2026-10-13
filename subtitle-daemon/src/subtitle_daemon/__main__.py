@@ -131,7 +131,8 @@ def _pids_on_port(port: int) -> list[int]:
     """PIDs listening on a TCP port, via lsof. Empty if lsof is unavailable."""
     try:
         result = subprocess.run(
-            ["lsof", "-nP", "-tiTCP:%d" % port, "-sTCP:LISTEN"],
+            ["lsof", "-nP", f"-tiTCP:{port:d}", "-sTCP:LISTEN"],
+            check=False,
             capture_output=True,
             text=True,
             timeout=5,

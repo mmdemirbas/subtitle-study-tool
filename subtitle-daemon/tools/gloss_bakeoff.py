@@ -38,7 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from subtitle_daemon.lookups import Ask, Lookups  # noqa: E402
+from subtitle_daemon.lookups import Ask, Lookups
 
 OLLAMA = "http://127.0.0.1:11434"
 
@@ -188,7 +188,7 @@ def plainly(model: str, ask: Ask, timeout: float) -> str:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             raw = json.loads(response.read().decode("utf-8"))
         said = raw["choices"][0]["message"]["content"]
-    except Exception:
+    except Exception:  # noqa: BLE001 - a failed or malformed answer scores as none, not a crash
         return ""
     # The same shortening the daemon applies, so the two modes are comparable.
     from subtitle_daemon.chat import THINKING
@@ -281,7 +281,7 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
-import tempfile  # noqa: E402
+import tempfile
 
 tempdir = tempfile.mkdtemp()
 

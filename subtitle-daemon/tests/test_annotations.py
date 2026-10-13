@@ -14,11 +14,10 @@ from subtitle_daemon.annotations import (
     MUSIC,
     MUSIC_COLOR,
     SOUND,
-    SPEAKER,
     SOUND_COLOR,
+    SPEAKER,
     SPEAKER_PALETTE,
     classify,
-    find_annotations,
     speaker_color,
     symbol_for,
 )

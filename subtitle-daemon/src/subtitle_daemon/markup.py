@@ -54,13 +54,22 @@ _TAG_NAMES = {
 # strictly rather than passed through. Hex, or a name from the CSS list.
 _HEX_COLOR = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 _NAMED_COLORS = frozenset(
-    """aqua aquamarine azure beige black blue brown chartreuse chocolate coral crimson cyan
-    darkblue darkcyan darkgray darkgreen darkgrey darkmagenta darkorange darkred darkviolet
-    deeppink dodgerblue firebrick fuchsia gold goldenrod gray green grey hotpink indigo ivory
-    khaki lavender lightblue lightcyan lightgray lightgreen lightgrey lightpink lightyellow
-    lime limegreen magenta maroon navy olive orange orangered orchid pink plum purple red
-    salmon sandybrown seagreen sienna silver skyblue slateblue snow springgreen steelblue tan
-    teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen""".split()
+    [
+        "aqua", "aquamarine", "azure", "beige", "black", "blue", "brown", "chartreuse", "chocolate",
+        "coral", "crimson", "cyan",
+        "darkblue", "darkcyan", "darkgray", "darkgreen", "darkgrey", "darkmagenta", "darkorange",
+        "darkred", "darkviolet",
+        "deeppink", "dodgerblue", "firebrick", "fuchsia", "gold", "goldenrod", "gray", "green",
+        "grey", "hotpink", "indigo", "ivory",
+        "khaki", "lavender", "lightblue", "lightcyan", "lightgray", "lightgreen", "lightgrey",
+        "lightpink", "lightyellow",
+        "lime", "limegreen", "magenta", "maroon", "navy", "olive", "orange", "orangered", "orchid",
+        "pink", "plum", "purple", "red",
+        "salmon", "sandybrown", "seagreen", "sienna", "silver", "skyblue", "slateblue", "snow",
+        "springgreen", "steelblue", "tan",
+        "teal", "thistle", "tomato", "turquoise", "violet", "wheat", "white", "whitesmoke",
+        "yellow", "yellowgreen",
+    ]
 )
 
 # SubStation \anN alignment. Only the vertical band matters to a renderer that

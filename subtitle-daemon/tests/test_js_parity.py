@@ -20,7 +20,6 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -291,6 +290,7 @@ def js_results(tmp_path_factory: pytest.TempPathFactory) -> dict:
 
     result = subprocess.run(
         ["node", str(HARNESS), str(input_path)],
+        check=False,
         capture_output=True,
         text=True,
         cwd=EXTENSION,

@@ -65,7 +65,7 @@ _STEM_SYMBOLS: dict[str, str] = {
     "scream": "😱", "shriek": "😱", "yell": "🗯️", "shout": "🗯️", "holler": "🗯️",
     "whisper": "🤫", "hush": "🤫",
     "cough": "😷", "sneez": "🤧", "snor": "😴", "wheez": "😷", "spit": "😖",
-    "scoff": "😒", "grumbl": "😒", "huff": "😒", "sigh": "😮‍💨", "tut": "😒",
+    "scoff": "😒", "grumbl": "😒", "huff": "😒", "tut": "😒",
     "stammer": "😬", "stutter": "😬", "sputter": "😬",
     "growl": "😾", "snarl": "😾", "roar": "🦁", "hiss": "🐍",
     # speech present but not transcribed
@@ -98,14 +98,16 @@ _STEM_SYMBOLS: dict[str, str] = {
     # violence
     "gunshot": "🔫", "gunfire": "🔫", "gun": "🔫", "shot": "🔫", "shoot": "🔫",
     "explo": "💥", "blast": "💥", "boom": "💥", "bang": "💥", "crash": "💥",
-    "thud": "💥", "thump": "💥", "clatter": "💥", "impact": "💥",
+    # clatter: dishes, not a blow. It was listed here as 💥 and again further down
+    # as 🍽️; Python kept the second value at this position, and so does this one.
+    "thud": "💥", "thump": "💥", "clatter": "🍽️", "impact": "💥",
     "punch": "👊", "hit": "👊", "kick": "🦵", "struggl": "😣", "fight": "🥊",
-    "grunt": "😣", "stab": "🔪", "knife": "🔪",
+    "stab": "🔪", "knife": "🔪",
     # weather and nature
     "thunder": "⛈️", "storm": "⛈️", "lightning": "⚡", "rain": "🌧️", "drizzl": "🌧️",
     "wind": "💨", "whoosh": "💨", "breeze": "💨", "wave": "🌊", "water": "💧",
     "splash": "💦", "drip": "💧", "fire": "🔥", "flame": "🔥", "burn": "🔥",
-    "bird": "🐦", "chirp": "🐦", "dog": "🐕", "bark": "🐕", "growl": "😾",
+    "bird": "🐦", "chirp": "🐦", "dog": "🐕", "bark": "🐕",
     "cat": "🐈", "meow": "🐈", "horse": "🐴", "whinn": "🐴", "insect": "🦟",
     # music
     "music": "🎵", "song": "🎵", "melody": "🎵", "tune": "🎵", "theme": "🎵",
@@ -125,7 +127,7 @@ _STEM_SYMBOLS: dict[str, str] = {
     "riff": "🎸", "strum": "🎸", "cymbal": "🥁", "trumpet": "🎺", "sax": "🎷",
     "applaud": "👏", "knuckle": "👊", "crack": "💥",
     "revv": "🚗", "rev": "🚗", "accelerat": "🚗",
-    "zipper": "🤐", "clatter": "🍽️", "sizzl": "🍳", "boil": "🍳",
+    "zipper": "🤐", "sizzl": "🍳", "boil": "🍳",
     "gunfight": "🔫", "reload": "🔫", "cock": "🔫",
     "wail": "😭", "howl": "🐺", "squeal": "🐷", "buzzer": "🔔",
     "band": "🎵", "stereo": "🔊", "speaker": "🔊", "headphone": "🎧",
@@ -145,12 +147,16 @@ _MUSIC_UPBEAT = {"upbeat", "cheerful", "lively", "playful", "jaunty", "triumphan
 # Measured: the corpus carried [girl] x6, [man] x5, [boy] x2, [woman] x2,
 # [all] x2, [lawyer] x2, none of which is a sound.
 _GENERIC_SPEAKERS = frozenset(
-    """man woman boy girl child kid guy lady gentleman
-    all both together everyone
-    narrator announcer reporter anchor host interviewer interpreter translator
-    operator dispatcher officer doctor nurse teacher lawyer judge waiter driver
-    pilot soldier guard clerk cashier receptionist agent
-    computer automated recording""".split()
+    [
+        "man", "woman", "boy", "girl", "child", "kid", "guy", "lady", "gentleman",
+        "all", "both", "together", "everyone",
+        "narrator", "announcer", "reporter", "anchor", "host", "interviewer", "interpreter",
+        "translator",
+        "operator", "dispatcher", "officer", "doctor", "nurse", "teacher", "lawyer", "judge",
+        "waiter", "driver",
+        "pilot", "soldier", "guard", "clerk", "cashier", "receptionist", "agent",
+        "computer", "automated", "recording",
+    ]
 )
 
 # Words that mark an annotation as a description of sound rather than a name,
@@ -258,12 +264,19 @@ def classify(text: str, *, followed_by_speech: bool) -> str:
 # Dropping them is what lets one stem cover "exhales", "exhales deeply" and
 # "exhales sharply" without listing each.
 _MODIFIERS = frozenset(
-    """deeply sharply heavily softly loudly quietly slowly quickly gently harshly
-    faintly slightly briefly again still continuing continues continue continued
-    fading fades fade stopping stops stopped starting starts playing plays play
-    distant distantly nearby muffled echoing faint low high soft loud
-    indistinctly quietly repeatedly rapidly suddenly gradually
-    the a an of in on at to and or over via through from with""".split()
+    [
+        "deeply", "sharply", "heavily", "softly", "loudly", "quietly", "slowly", "quickly",
+        "gently", "harshly",
+        "faintly", "slightly", "briefly", "again", "still", "continuing", "continues", "continue",
+        "continued",
+        "fading", "fades", "fade", "stopping", "stops", "stopped", "starting", "starts", "playing",
+        "plays", "play",
+        "distant", "distantly", "nearby", "muffled", "echoing", "faint", "low", "high", "soft",
+        "loud",
+        "indistinctly", "quietly", "repeatedly", "rapidly", "suddenly", "gradually",
+        "the", "a", "an", "of", "in", "on", "at", "to", "and", "or", "over", "via", "through",
+        "from", "with",
+    ]
 )
 
 # What may follow a stem for the token to count as an inflection of it. Without
@@ -282,15 +295,22 @@ _NOUN_INFLECTION = re.compile(r"^(?:s|es|'s)?$")
 # Entries that name a thing rather than an action. Everything else in the table
 # is a verb and inflects freely.
 _NOUN_STEMS = frozenset(
-    """train car truck boat ship jet plane airplane helicopter chopper tire brake
-    engine motor machin key keyboard page paper screen televis radio static camera
-    phone cell telephon notification message text clock bell alarm siren alert
-    door glass elevator toilet faucet lock
-    cat dog bird horse insect baby infant child kid crowd audience voice dialogue
-    conversation footstep footfall heartbeat pulse
-    music song melody tune theme guitar piano drum orchestra violin
-    water wind rain storm lightning fire flame wave
-    gun gunshot gunfire knife""".split()
+    [
+        "train", "car", "truck", "boat", "ship", "jet", "plane", "airplane", "helicopter",
+        "chopper", "tire", "brake",
+        "engine", "motor", "machin", "key", "keyboard", "page", "paper", "screen", "televis",
+        "radio", "static", "camera",
+        "phone", "cell", "telephon", "notification", "message", "text", "clock", "bell", "alarm",
+        "siren", "alert",
+        "door", "glass", "elevator", "toilet", "faucet", "lock",
+        "cat", "dog", "bird", "horse", "insect", "baby", "infant", "child", "kid", "crowd",
+        "audience", "voice", "dialogue",
+        "conversation", "footstep", "footfall", "heartbeat", "pulse",
+        "music", "song", "melody", "tune", "theme", "guitar", "piano", "drum", "orchestra",
+        "violin",
+        "water", "wind", "rain", "storm", "lightning", "fire", "flame", "wave",
+        "gun", "gunshot", "gunfire", "knife",
+    ]
 )
 
 

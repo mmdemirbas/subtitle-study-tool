@@ -13,7 +13,7 @@ from pathlib import Path
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
 
-import export_tables  # noqa: E402
+import export_tables
 
 
 def test_generated_tables_are_current() -> None:
@@ -26,13 +26,14 @@ def test_generated_tables_are_current() -> None:
 
 
 def test_duplicate_keys_resolve_the_way_python_reads_them() -> None:
-    """The Python source lists some stems twice; the later entry is the live one.
+    """The source listed some stems twice, and the later entry was the live one.
 
-    Exporting from the imported module gets this right for free. A hand copy has
-    to notice, which is the argument for generating the file.
+    Each is listed once now, with the value Python read. Exporting from the
+    imported module got this right for free; a hand copy had to notice, which
+    is the argument for generating the file.
     """
     from subtitle_daemon import annotations
 
-    # `clatter` appears under 💥 and again under 🍽️ further down the table.
+    # `clatter` was listed as 💥 and again as 🍽️ further down; 🍽️ was in effect.
     assert annotations._STEM_SYMBOLS["clatter"] == "🍽️"
     assert annotations.symbol_for("clattering") == "🍽️"
