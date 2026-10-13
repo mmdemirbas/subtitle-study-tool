@@ -519,14 +519,25 @@ def test_the_gap_is_still_a_gap(
     The gap is measured at the boundary where the extension acts on its own,
     which is not the same boundary this once used. Comparing the worst same-film
     pair against the best different-film pair says the two halves overlap, and
-    over the whole cache they genuinely do: the worst genuine pair scores -1.81
-    and the best wrong one 3.87. Both of those are in the band where the reader
-    is asked, so the overlap costs a question, not a broken film.
+    over the whole cache they genuinely do. Measured on 2026-10-13 over 367
+    files and 67,161 pairs: the worst genuine pair scores -2.03 and is refused,
+    the best wrong one 12.13 and is only offered. The overlap costs a question,
+    not a broken film.
 
-    What must not overlap is the band where nobody is asked. Measured: the
-    least confident pair the aligner applies by itself scores 23.17, and the
-    best a wrong pair manages anywhere in the corpus is 3.87. A factor of six,
+    What must not overlap is the band where nobody is asked. Same date: the
+    least confident pair the aligner applies by itself scores 15.14, and the
+    best a wrong pair manages anywhere in the corpus is 12.13. A factor of 1.25,
+    where it was six (23.17 against 3.87) when this was written on 2026-08-13,
     and it is that margin every constant here is really guarding.
+
+    The 12.13 is 1235801|414314, Overboard against Legally Blonde 2, and it is
+    above AUTO; only AUTO_MIN_COVERAGE keeps it an offer (coverage 0.255
+    against 0.28). 414314's cue starts sit on a 1001ms grid - 67% of its gaps
+    are whole multiples of it, against a corpus median of 4% - and its matches
+    against an unrelated file rise and fall with that period, from 82 to
+    268, so the shift search lands on a crest that the binomial chance level in
+    align.js does not allow for. 414314 is in 20 of the 101 wrong offers. Without
+    it the best wrong pair is 6.20.
     """
     applied, different = [], []
     for name, answer in verdicts.items():
