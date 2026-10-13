@@ -9,10 +9,17 @@ film" and "these are not".
 
 Synthetic cue lists are too easy. Two invented films score around zero, so any
 threshold at all separates them and the test passes whatever the constant is.
-Real subtitle files do not: the worst genuine pair in this repository scores
-3.55 and the worst *wrong* pair scores 3.11, which is four hundredths of a
-decade of margin. A gate tested only against invented data would sail past
-that and start silently shifting subtitles by twenty seconds.
+Real subtitle files do not. On the seventeen files this was first written
+against (2026-08-05), the lowest-scoring genuine pair scored 3.55 and the
+highest-scoring *wrong* pair 3.11, four hundredths of a decade of margin.
+Measured on 2026-10-13 over 367 files, the two halves overlap outright: the
+lowest-scoring genuine pair, two files of The Americans S01E01
+(3635798|8036186), scores -2.03, and the highest-scoring wrong pair, Overboard
+against Legally Blonde 2 (1235801|414314), scores 12.13. No single threshold
+separates them, which is why the gate that matters is the one where a shift
+is applied without asking - see test_the_gap_is_still_a_gap. A gate tested
+only against invented data would sail past all of that and start silently
+shifting subtitles by twenty seconds.
 
 So this runs the real thing over the real corpus - every subtitle file in the
 repository, every pair - and asserts the gap is still a gap.
@@ -425,14 +432,23 @@ APPLIED_SHARE_FLOOR = 0.5
 # quoting, and a bound set at the point estimate of it fails the first time the
 # corpus is big enough to measure anything.
 #
-# The corpus is now 178 files and 15470 different-film pairs, and 16 of them are
-# offered: 0.00103, with the algorithm unchanged. That is compatible with the
-# old measurement rather than worse than it. Sixteen events have a 95 per cent
-# upper bound near 26, so the ceiling is 26 of 15470, and a genuine regression
-# would have to nearly double the rate to trip it.
+# When the ceiling was set (2026-08-16) the corpus was 178 files and 15470
+# different-film pairs, and 16 of them were offered: 0.00103. Sixteen events
+# have a 95 per cent upper bound near 26, so the ceiling was 26 of 15470, and a
+# genuine regression would have had to nearly double the rate to trip it.
 #
-# Every one of the 16 is an OFFER at confidence 3.6 to 5.0, which the reader
-# accepts or ignores. Nothing is applied; the assertion above holds that
+# Measured on 2026-10-13, with align.js unchanged since 2026-09-06: 367 files,
+# 60,638 different-film pairs, 101 of them offered, 0.00167. The ceiling is 109
+# of those pairs, so the test passes, but the headroom above is gone: 101
+# events have a 95 per cent interval of about 82 to 123, a rate of 0.00136 to
+# 0.00202, which contains the ceiling. Treated as Poisson, as the figures
+# above are, a count at the measured rate exceeds 109 about one time in five
+# with nothing changed. One file carries a fifth of the count: 414314, Legally
+# Blonde 2, whose cues sit on a 1001ms grid (see test_the_gap_is_still_a_gap),
+# is in 20 of the 101. The other 81 are 0.00134 of the 60,289 pairs without it.
+#
+# Every one of the 101 is an OFFER at confidence 3.50 to 12.13, which the
+# reader accepts or ignores. Nothing is applied; the assertion above holds that
 # separately and exhaustively, and it is the one with no headroom in it.
 #
 # Lower it when the algorithm improves. Raising it needs the same thing this
