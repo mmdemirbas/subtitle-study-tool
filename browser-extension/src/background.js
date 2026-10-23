@@ -25,6 +25,7 @@ import {
   translateStatus,
 } from "./daemon.js";
 import { readPageTrack } from "./subtitles/page.js";
+import { videoRelease } from "./subtitles/release.js";
 import { measure, toJson } from "./subtitles/srt.js";
 /* Every call that used to go straight to the daemon goes through the provider,
  * which prefers the daemon and does the work here when it is not running. */
@@ -883,6 +884,7 @@ async function planAutoAttach(tab, frameId, { short = false } = {}) {
     results: searched.found.results, languages, taken: ownBest.language,
     used: searched.found.used, resolved: Boolean(searched.found.resolved?.imdb_id),
     threshold: searched.threshold, query: searched.query,
+    video: searched.video, first: ownBest,
   });
   return { ...plan, ...searched, decision: "attach", reason: "", best: ownBest, second, secondReason };
 }
@@ -971,8 +973,13 @@ async function planFor({
    * nothing left after the filter the old behaviour stands: rank everything,
    * and let the score below decide. */
   const forThis = forEpisode(found.results, found.used);
-  const best = pickBest(forThis.length ? forThis : found.results, languages);
-  Object.assign(plan, { query, threshold, best });
+  /* What the page says about the picture, so the right cut wins among the
+   * files that are this programme. In the plan as well, because "it picked the
+   * theatrical cut for a director's-cut video" is only answerable from the log
+   * if the log says what the video was. */
+  const video = videoRelease(context, { host: context?.host });
+  const best = pickBest(forThis.length ? forThis : found.results, languages, { video, threshold });
+  Object.assign(plan, { query, threshold, best, video });
 
   if (!best) {
     return { ...plan, decision: "nothing-found", reason: `No subtitles found for "${query}"` };
@@ -1083,6 +1090,8 @@ async function planFor({
     resolved: Boolean(found.resolved?.imdb_id),
     threshold,
     query,
+    video,
+    first: best,
   });
 
   return { ...plan, second, secondReason, decision: "attach", reason: "" };

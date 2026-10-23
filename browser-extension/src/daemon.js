@@ -7,6 +7,8 @@
  * one place that decides which side answers.
  */
 
+import { describeRelease, releaseAffinity } from "./subtitles/release.js";
+
 /* Where the daemon listens, named once for the whole extension.
  *
  * It was 8791 and moved, because 8791 collided: a static file server from
@@ -522,8 +524,14 @@ export async function pageContextForTab(tab, videoFrameId = null) {
     reports.find((report) => report.frameId === videoFrameId && report.info.statedImdb)?.info
       .statedImdb ?? reports.find((report) => report.info.statedImdb)?.info.statedImdb ?? null;
 
+  /* Where the stream comes from, for the release a page never names: a stream
+   * on a service is that service's WEB-DL (platformOfHost). */
+  let host = "";
+  try { host = new URL(tab.url || "").hostname; } catch { /* no url, no host */ }
+
   if (announced) {
     return {
+      host,
       title: announced.title,
       altTitles: [...new Set([...(announced.altTitles || []), ...altTitles])].slice(0, 6),
       titleSource: "the page's now-playing announcement",
@@ -543,6 +551,7 @@ export async function pageContextForTab(tab, videoFrameId = null) {
   const episode = pickEpisode(reports, videoFrameId);
 
   return {
+    host,
     // The tab title is the last resort and a worse signal than any of the
     // above, so it is worth knowing in the report when it was what got used.
     title: best?.text || tab.title || "",
@@ -673,17 +682,42 @@ export function pageResult(own, track) {
   };
 }
 
-export function pickBest(results, languages) {
+/**
+ * The subtitle to attach, from a list of results.
+ *
+ * `video` is what the page says about the picture (videoRelease in
+ * subtitles/release.js) and `threshold` the score at which a result counts as
+ * this programme. Among the results that are this programme - identified, or
+ * scoring at the bar - the one whose release agrees with the video's wins
+ * before the score is consulted at all, because past the bar the score stops
+ * measuring which film it is and starts measuring how the uploader named the
+ * file. On Zodiac that put "Zodiac (2007)", 1.0, ahead of a director's-cut
+ * file at 0.81 for a director's-cut video, and the subtitle was right for 45
+ * minutes and then two minutes out by the end. Without either option this is
+ * the ranking it always was.
+ */
+export function pickBest(results, languages, { video = null, threshold = null } = {}) {
   if (!results?.length) return null;
 
   const languageRank = (result) => {
     const index = languages.indexOf(result.language);
     return index === -1 ? languages.length : index;
   };
+  const isThis = (result) => threshold == null || result.identified || (result.match_score ?? 0) >= threshold;
+  const affinity = new Map(results.map((result) => [result, video
+    ? releaseAffinity(video, describeRelease(result.release, { title: result.movie_name }))
+    : 0]));
 
   return [...results].sort((a, b) => {
     const byLanguage = languageRank(a) - languageRank(b);
     if (byLanguage !== 0) return byLanguage;
+
+    const byThis = Number(isThis(b)) - Number(isThis(a));
+    if (byThis !== 0) return byThis;
+    if (isThis(a)) {
+      const byRelease = affinity.get(b) - affinity.get(a);
+      if (byRelease !== 0) return byRelease;
+    }
 
     // Bucket the score so near-equal matches fall through to the daemon's
     // trust-and-popularity ordering rather than splitting hairs.
@@ -692,6 +726,22 @@ export function pickBest(results, languages) {
 
     return Number(Boolean(b.cached)) - Number(Boolean(a.cached));
   })[0];
+}
+
+/* The release the second subtitle should agree with: the video's, with
+ * whatever it leaves unsaid filled in from the first subtitle, which was chosen
+ * against it - or, on a page track, is timed to this very picture. */
+function pairRelease(video, first) {
+  if (!first?.release) return video;
+  const told = describeRelease(first.release, { title: first.movie_name });
+  if (!video) return told;
+  return {
+    ...video,
+    edition: video.edition ?? told.edition,
+    platform: video.platform ?? told.platform,
+    source: video.source ?? told.source,
+    group: video.group ?? told.group,
+  };
 }
 
 /**
@@ -750,7 +800,8 @@ export function forEpisode(results, used) {
   });
 }
 
-export function pickSecondLanguage({ results, languages, taken, used, resolved, threshold, query }) {
+export function pickSecondLanguage({ results, languages, taken, used, resolved, threshold, query, video = null, first = null }) {
+  const against = pairRelease(video, first);
   const others = (languages || []).filter((language) => language !== taken);
   if (!others.length) return { result: null, reason: "" };
 
@@ -763,7 +814,7 @@ export function pickSecondLanguage({ results, languages, taken, used, resolved, 
       reason = `every ${language.toUpperCase()} subtitle found is for another episode`;
       continue;
     }
-    const pick = pickBest(usable, [language]);
+    const pick = pickBest(usable, [language], { video: against, threshold: resolved ? null : threshold });
     if (!pick) continue;
     if (resolved || (pick.match_score ?? 0) >= threshold) return { result: pick, reason: "" };
     reason = `no ${language.toUpperCase()} subtitle matched ${JSON.stringify(query)} well enough`;

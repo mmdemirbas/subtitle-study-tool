@@ -587,6 +587,50 @@ got = pickSecondLanguage({ results: [EN], languages: ["en"], taken: "en", used: 
 t("one configured language is not a missing pair", got.result === null && got.reason === "",
   JSON.stringify(got));
 
+// 7b. The cut the video is. Zodiac's player frame was titled for the director's
+//     cut, OpenSubtitles had files named for it in both languages, and the two
+//     attached were "Zodiac (2007)" - 1.0 on the title against 0.81 for a name
+//     that said what it was - so the Turkish ran up to 123 seconds out.
+{
+  const { pickBest } = await import("../src/daemon.js");
+  const { videoRelease, describeRelease, releaseAffinity } = await import("../src/subtitles/release.js");
+  const row = (language, release, match_score, download_count = 1000) =>
+    ({ language, release, match_score, download_count, movie_name: "Zodiac", identified: false });
+  const PLAIN_EN = row("en", "Zodiac (2007)", 1.0, 32745);
+  const DC_EN = row("en", "DC.BluRay.1080p.x264.DTS.dxva-xander", 0.81, 342807);
+  const PLAIN_TR = row("tr", "Zodiac (2007)", 1.0, 281);
+  const DC_TR = row("tr", "Zodiac.Director's.Cut.2007.720p.BluRay.x264-WiKi", 0.81, 1464);
+  const OTHER_FILM = row("en", "The.Zodiac.2005.DC.DVDRip.XviD", 0.4);
+  const results = [PLAIN_EN, PLAIN_TR, OTHER_FILM, DC_EN, DC_TR];
+  const context = { title: "Zodiac", candidates: [
+    { text: "Zodiac 2007" }, { text: "Zodiac.2007.DC.1080p.BluRay.x265-RARBG.mp4" },
+  ] };
+  const video = videoRelease(context, { host: "abyssplayer.com" });
+  t("the player frame's file name says director's cut, BluRay, RARBG",
+    video.edition === "dc" && video.source === "bluray" && video.group === "rarbg", JSON.stringify(video));
+
+  let pick = pickBest(results, ["en", "tr"], { video, threshold: 0.75 });
+  t("a director's-cut video gets the director's-cut subtitle over the title-shaped one",
+    pick === DC_EN, JSON.stringify(pick));
+  t("and a film that only shares the tag is not this programme",
+    pickBest([OTHER_FILM, PLAIN_EN], ["en"], { video, threshold: 0.75 }) === PLAIN_EN);
+  pick = pickSecondLanguage({ results, languages: ["en", "tr"], taken: "en", used: {},
+    threshold: 0.75, query: "Zodiac", resolved: false, video, first: DC_EN });
+  t("the second language agrees with the same cut", pick.result === DC_TR, JSON.stringify(pick));
+
+  t("without a video to agree with, the ranking is what it was",
+    pickBest(results, ["en", "tr"]) === PLAIN_EN);
+  t("a title containing a tag is not read as the tag",
+    describeRelease("DC.League.of.Super-Pets.2022.1080p.WEB-DL", { title: "DC League of Super-Pets" }).edition === null);
+  const prime = videoRelease({ title: "Crime 101", candidates: [{ text: "Crime 101" }] }, { host: "www.primevideo.com" });
+  t("a stream on a service is that service's WEB-DL",
+    releaseAffinity(prime, describeRelease("Crime.101.2026.1080p.AMZN.WEB-DL.DDP5.1.H.264-FLUX"))
+      > releaseAffinity(prime, describeRelease("Crime.101.2026.1080p.BluRay.x264-GROUP")));
+  t("a video that names no cut prefers a subtitle that names none either",
+    releaseAffinity(prime, describeRelease("Crime.101.2026.EXTENDED.1080p.WEB-DL"))
+      < releaseAffinity(prime, describeRelease("Crime.101.2026.1080p.WEB-DL")));
+}
+
 // 8. A tab left open across an update is repaired, and the repair really runs.
 //
 // Reloading an extension does not update tabs that are already open: they keep
