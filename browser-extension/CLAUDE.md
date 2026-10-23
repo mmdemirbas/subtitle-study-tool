@@ -311,18 +311,44 @@ act plans in the running log, 20 have at least one join of this shape: 51 joins,
 206 seconds of film between them, the largest single one 16.1 seconds of
 subtitle played twice.
 
-The clock HOLDS at the join instead, so the mapping is monotone and no line can
-be drawn twice. Two things about it:
+The first fix HELD the clock at the join, and that was a second bug: whatever
+line spanned the join stayed up for the whole insert, and a line starting
+exactly on it was drawn through the insert, early. Reported on Zodiac as a
+Turkish line staying on screen "for seconds, even minutes" - a theatrical-cut
+file against the director's cut, five acts, inserts of 30, 16, 35 and 43
+seconds, and a 3.0s line up for 46.0s. Over the 46 act plans in the running
+log whose file is in the cache, 42 lines in 18 plans were held past their own
+end, the worst by 43.0s. The harness check written for the first fix could not
+see it: early and continuous is still one stretch on screen.
 
-- **The hold is tested against the PREVIOUS act's stream boundary**
-  (`plain - previous >= step.fromMs`), not against the file boundary. A join has
-  two stream times - where the earlier act runs out and where the later one
-  begins - and testing the file one holds the clock while the earlier act is
-  still running, which on a three-act plan is a second bug wearing the first
-  one's clothes.
+**A line belongs to the act it STARTS in, and only that act's clock draws it.**
+`filmClock` returns the active act's clock and the bounds of the starts it may
+draw; `linesOnScreen` applies them. Through an insert the earlier act's clock
+runs on, so the line across the join ends when it would have, nothing of the
+later act appears until that act begins, and once it has, a line across the
+join is still judged by the earlier clock (`beforeMs`) - never by the later
+one, which is what would draw it twice. Replayed over the same 46 plans: no
+line held past its end, none drawn twice, and exactly the same 28 lines never
+drawn and 11 shortened as before - 26 of them at cut joins, which this does not
+touch, and the rest a minute or more from any join.
+
 - **Only that direction.** Where the release CUT material the two acts overlap
   in stream time, something has to be dropped, and the later act winning is the
-  right drop: the picture on screen belongs to it.
+  right drop: the picture on screen belongs to it. Its clock goes on drawing the
+  tail of a line it took over, as it always did. A version that bounded the
+  starts on cut joins too dropped 18 more lines and shortened 15 more.
+- **The file clock is no longer monotone**, and nothing needs it to be: at the
+  end of an insert it steps back from the earlier act's clock to the later
+  one's. `pauseAtLineEnd` works in stream time for that reason; held to the one
+  file clock it stopped once instead of twice across a join, ten seconds after
+  the line had left the screen.
+- **The forward direction has the same rule.** `lineStreamSpan` ends a line at
+  the earlier of its end converted by its own act and by the act it ends in -
+  the clock that gets there first. Converting the two ends one at a time made a
+  2.5s line across a 30s insert 32.5s long wherever a line's place in the
+  stream is used: the subtitle map, the study pairing, and the line keys' search
+  for silences. The panel passes the start to `api.toStreamMs(slot, end, start)`
+  for the same reason.
 
 **The property that let it ship is that it makes no pair worse**, and the first
 version did not have it - it invented a second act on four pairs `align()`

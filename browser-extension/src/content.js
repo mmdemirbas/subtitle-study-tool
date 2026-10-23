@@ -4076,7 +4076,7 @@
         return;
       }
 
-      const indexes = findCueIndexes(track.cues, filmTimeMs(track));
+      const indexes = linesOnScreen(track);
       if (sameIndexes(indexes, track.activeIndexes)) return;
       track.activeIndexes = indexes;
       renderCues(
@@ -4101,51 +4101,70 @@
    *
    * Rate defaults to 1, where this is exactly the expression it replaced. */
   function filmTimeMs(track) {
+    return filmClock(track).fileMs;
+  }
+
+  /* The same, with the act it belongs to - which a file with acts cannot do
+   * without, because one number does not say which lines may be drawn.
+   *
+   * The two releases disagree at every join about whether a stretch of film
+   * exists at all, and the disagreement has a direction. Where the later act
+   * sits FURTHER ON in the stream than the earlier one, the release inserted
+   * material - a recap, a longer scene - and for the length of that insert
+   * there is no moment of this subtitle file on screen at all.
+   *
+   * Two answers to that have shipped and both were wrong. Answering with the
+   * later act's clock drew its opening lines while the insert played and again
+   * when it began, reported as "Turkish subtitle sometimes shown earlier and
+   * then shown just in time once again". HOLDING the clock at the join kept
+   * whatever line spanned that instant on screen for the whole insert,
+   * reported on Zodiac as a line staying up "for seconds, even minutes": the
+   * Turkish file is timed to the theatrical cut, the film is the director's
+   * cut, and a line 88 minutes in is 3.0s in the file and was up for 46.0s.
+   * Over the 46 act plans in the running log whose file is in the cache, 42
+   * lines in 18 plans were held past their own end, the worst by 43.0s.
+   *
+   * So a line belongs to the act it STARTS in, and only that act's clock draws
+   * it. Through an insert the earlier act's clock simply runs on: the line
+   * across the join ends when it would have, nothing of the later act is drawn
+   * until that act begins, and a line drawn once is never drawn again by the
+   * other clock. Over the same 46 plans that holds no line past its end and
+   * draws none twice, and drops and shortens exactly the lines the hold did.
+   *
+   * `fromMs` and `toMs` bound the starts this clock may draw. `beforeMs` is
+   * the earlier act's clock once the later one has begun after an insert, for
+   * a line across the join that is longer than the insert was.
+   *
+   * The other direction is left alone. Where the release CUT material the two
+   * acts overlap, something has to be dropped, and the later act winning is
+   * the right drop: the picture on screen belongs to it. Its clock goes on
+   * drawing the tail of a line it took over, as it always did. */
+  function filmClock(track) {
     const stream = streamNowMs() - state.adDriftMs - track.offsetMs;
     const plain = track.rate && track.rate !== 1 ? stream / track.rate : stream;
-    if (!track.steps?.length) return plain;
-    /* Inverted by trying each act's own offset and keeping the one whose answer
-     * actually falls inside that act.
-     *
-     * The two releases disagree at every join about whether a stretch of film
-     * exists at all, and the disagreement has a direction. Where the later act
-     * sits FURTHER ON in the stream than the earlier one, the release inserted
-     * material - a recap, a longer scene - and for the length of that insert
-     * there is no moment of this subtitle file on screen at all.
-     *
-     * Answering `plain` there, which is what this did, hands back a file time
-     * from inside the next act: its opening lines are drawn while the inserted
-     * material plays, and then drawn AGAIN when the clock catches up and the
-     * act properly begins. Reported as "Turkish subtitle sometimes shown
-     * earlier and then shown just in time once again". Measured over the 26
-     * distinct act plans in the running log, 20 of them have at least one join
-     * of this shape: 51 joins and 206 seconds of film across them, the largest
-     * single one 16.1 seconds of subtitle played twice.
-     *
-     * So the clock HOLDS at the join instead. Whatever line spans that instant
-     * stays up, nothing new arrives while the insert plays, and the file
-     * resumes exactly where it stopped - which makes the whole mapping
-     * monotone, and a line can no longer be shown twice.
-     *
-     * The other direction is left alone. Where the release CUT material the two
-     * acts overlap, something has to be dropped, and the later act winning is
-     * the right drop: the picture on screen belongs to it. */
-    let best = plain;
-    /* The act BEFORE this join, because the join has two stream times and they
-     * are what the gap is. The earlier act runs out at `fromMs` plus its own
-     * offset; the later one begins at `fromMs` plus its own. Testing the hold
-     * against the file boundary instead would hold the clock while the earlier
-     * act was still running, which on a three-act plan is a second bug wearing
-     * the first one's clothes. */
-    let previous = 0;
-    for (const step of track.steps) {
-      const offset = step.offsetMs / (track.rate || 1);
-      const shifted = plain - offset;
-      if (shifted >= step.fromMs) best = shifted;
-      else if (plain - previous >= step.fromMs) best = step.fromMs;
-      previous = offset;
+    const steps = track.steps;
+    if (!steps?.length) return { fileMs: plain, fromMs: -Infinity, toMs: Infinity, beforeMs: null };
+    const inAct = (k) => plain - steps[k].offsetMs / (track.rate || 1);
+    // The latest act to have begun. Where two overlap, that is the later act.
+    let act = 0;
+    for (let k = 1; k < steps.length; k++) if (inAct(k) >= steps[k].fromMs) act = k;
+    const clock = { fileMs: inAct(act), fromMs: -Infinity, toMs: steps[act + 1]?.fromMs ?? Infinity, beforeMs: null };
+    if (act > 0 && steps[act].offsetMs > steps[act - 1].offsetMs) {
+      clock.fromMs = steps[act].fromMs;
+      clock.beforeMs = inAct(act - 1);
     }
-    return best;
+    return clock;
+  }
+
+  /* Which lines of this file are on screen, each judged by its own act's
+   * clock. See filmClock. In document order, as findCueIndexes returns them. */
+  function linesOnScreen(track, clock = filmClock(track)) {
+    const cues = track.cues;
+    const lines = findCueIndexes(cues, clock.fileMs)
+      .filter((index) => cues[index].start >= clock.fromMs && cues[index].start < clock.toMs);
+    if (clock.beforeMs == null) return lines;
+    const across = findCueIndexes(cues, clock.beforeMs).filter((index) => cues[index].start < clock.fromMs);
+    return across.length ? [...across, ...lines] : lines;
   }
 
   /** The act offset that applies at a moment of this file. */
@@ -4176,9 +4195,14 @@
   /* Where the playhead was, and which line it was in, when this last looked.
    *
    * The stop cannot be a test on the current moment alone, and that is the
-   * whole of what playback rate breaks. See the note in the body. */
+   * whole of what playback rate breaks. See the note in the body.
+   *
+   * In the stream's clock, not the file's. A file with acts has a clock per
+   * act (see filmClock), and a line across an insert join ends on the earlier
+   * act's while the later one is already running - so "has the playhead
+   * reached this line's end" is only one question in the clock they share. */
   let insideCue = null;
-  let lastFilmMs = null;
+  let lastStreamMs = null;
 
   /* A jump no amount of playing accounts for, so it was a seek - the line keys,
    * the scrubber, a chapter skip. Two seconds of film between two ticks is
@@ -4195,19 +4219,19 @@
       : attachedTracks()[0];
     if (!track) {
       insideCue = null;
-      lastFilmMs = null;
+      lastStreamMs = null;
       return;
     }
 
-    const now = filmTimeMs(track);
-    const was = lastFilmMs;
-    lastFilmMs = now;
+    const now = streamNowMs();
+    const was = lastStreamMs;
+    lastStreamMs = now;
     if (state.video.paused) return;
 
     /* The last line to have started, where several overlap. Stopping at the end
      * of a sign held over the dialogue would stop in the middle of the sentence
      * being spoken, which is the opposite of what this is for. */
-    const indexes = findCueIndexes(track.cues, now);
+    const indexes = linesOnScreen(track);
     const cue = indexes.length ? track.cues[indexes[indexes.length - 1]] : null;
     const before = insideCue;
     insideCue = cue;
@@ -4219,7 +4243,7 @@
      * Deliberately NOT "the playhead is no longer inside it": the gap after a
      * line is still that line's, or pressing play would stop the film again a
      * tick later without having moved. */
-    if (pausedAtCue && ((cue && cue !== pausedAtCue) || now < pausedAtCue.start)) {
+    if (pausedAtCue && ((cue && cue !== pausedAtCue) || now < lineStreamSpan(track, pausedAtCue)[0])) {
       pausedAtCue = null;
     }
 
@@ -4245,10 +4269,11 @@
      * `step` rather than the tick interval, so this holds at any rate the
      * player offers without anything having to read playbackRate. */
     const reach = Math.max(step, TICK_MS);
+    const endOf = (line) => lineStreamSpan(track, line)[1];
     const target =
-      cue && now >= cue.end - reach
+      cue && now >= endOf(cue) - reach
         ? cue
-        : before && before !== cue && now >= before.end
+        : before && before !== cue && now >= endOf(before)
           ? before
           : null;
 
@@ -4263,8 +4288,8 @@
      * a stopped film with no subtitle on it, which is the opposite of what
      * this mode is for. Put it back just inside. The move is one step at most,
      * which is 200ms of film even at 4x. */
-    if (now > target.end) {
-      seekFilm(streamTimeMs(track, target.end - LINE_END_MARGIN_MS), { how: "stop" });
+    if (now > endOf(target)) {
+      seekFilm(endOf(target) - LINE_END_MARGIN_MS, { how: "stop" });
     }
   }
 
@@ -4275,6 +4300,23 @@
   function streamTimeMs(track, fileMs, driftMs = state.adDriftMs) {
     const scaled = track.rate && track.rate !== 1 ? fileMs * track.rate : fileMs;
     return scaled + track.offsetMs + stepOffsetMs(track, fileMs) + driftMs;
+  }
+
+  /* Where a whole line is in the stream, which is not its two ends converted
+   * one at a time.
+   *
+   * Across an act join the two ends fall in different acts, and converting
+   * each by its own put the end of a line across an insert as far on as the
+   * insert is long: on Zodiac a 2.5-second Turkish line came out 32.5 seconds
+   * long, and every English line of the inserted scene was paired with it as
+   * its translation. The end is reached on whichever clock gets there first,
+   * which is the rule filmClock draws by - the earlier act's running on
+   * through an insert, the later act's where material was cut - so both are
+   * worked out and the earlier one is the end. */
+  function lineStreamSpan(track, cue, driftMs = state.adDriftMs) {
+    const start = streamTimeMs(track, cue.start, driftMs);
+    const length = (cue.end - cue.start) * (track.rate || 1);
+    return [start, Math.min(streamTimeMs(track, cue.end, driftMs), start + length)];
   }
 
   // --- moving by line ---------------------------------------------------------
@@ -4338,7 +4380,7 @@
     const keyed = state.tracks[slot]?.cues.length > 0 ? state.tracks[slot] : attached[0];
 
     const spans = keyed.cues
-      .map((cue) => [streamTimeMs(keyed, cue.start), streamTimeMs(keyed, cue.end)])
+      .map((cue) => lineStreamSpan(keyed, cue))
       .sort((a, b) => a[0] - b[0]);
     const marks = spans.map(([start]) => ({ at: start, keyed: true }));
     if (attached.length < 2 || spans.length === 0) return marks.map((mark) => mark.at);
@@ -5883,8 +5925,7 @@
     const found = [];
     let nearest = null;
     for (let index = first; index < cues.length && cues[index].start <= plainTo; index++) {
-      const start = streamTimeMs(track, cues[index].start);
-      const end = streamTimeMs(track, cues[index].end);
+      const [start, end] = lineStreamSpan(track, cues[index]);
       const overlap = Math.min(toStreamMs, end) - Math.max(fromStreamMs, start);
       if (overlap > 0) {
         found.push({ cue: cues[index], overlapMs: Math.round(overlap) });
@@ -8455,8 +8496,7 @@
       if (role === "chrome" || !cue) return [];
       const own = state.tracks[slot];
       if (!own) return [];
-      const from = streamTimeMs(own, cue.start);
-      const to = streamTimeMs(own, cue.end);
+      const [from, to] = lineStreamSpan(own, cue);
       const out = [];
       for (let other = 0; other < state.tracks.length; other++) {
         if (other === slot) continue;
@@ -8525,12 +8565,19 @@
      *
      * The strip is drawn against the video's own timeline so every track shares
      * one axis; without this each caller would re-derive `t * rate + offset +
-     * adDrift` and one of them would forget the ad drift. */
-    toStreamMs(slot, fileMs) {
+     * adDrift` and one of them would forget the ad drift.
+     *
+     * `startMs` says `fileMs` is the END of the line that starts there, which
+     * across an act join is a different conversion - see lineStreamSpan. A
+     * line across an insert was drawn on the map as long as the insert. */
+    toStreamMs(slot, fileMs, startMs = null) {
       const mirrored = role === "chrome";
       const track = (mirrored ? mirror?.status?.tracks : state.tracks)?.[slot];
       if (!track) return fileMs;
-      return streamTimeMs(track, fileMs, mirrored ? mirror?.status?.adDriftMs || 0 : state.adDriftMs);
+      const driftMs = mirrored ? mirror?.status?.adDriftMs || 0 : state.adDriftMs;
+      return startMs == null
+        ? streamTimeMs(track, fileMs, driftMs)
+        : lineStreamSpan(track, { start: startMs, end: fileMs }, driftMs)[1];
     },
     filmTimeMs() {
       if (role === "chrome") {

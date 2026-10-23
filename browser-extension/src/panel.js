@@ -1459,7 +1459,7 @@
         for (let i = first; i < starts.length; i++) {
           const at = api.toStreamMs(each.slot, starts[i]);
           if (at > to) break;
-          const until = api.toStreamMs(each.slot, ends[i] ?? starts[i]);
+          const until = api.toStreamMs(each.slot, ends[i] ?? starts[i], starts[i]);
           const left = Math.round(((at - from) / (to - from)) * (width - 1));
           const span = Math.max(dpr, Math.round(((until - at) / (to - from)) * (width - 1)));
           context.fillRect(left, top, span, tall);
@@ -1802,7 +1802,7 @@
       for (let i = first; i < starts.length; i++) {
         const at = api.toStreamMs(slot, starts[i]);
         if (at > to) break;
-        const until = api.toStreamMs(slot, ends[i] ?? starts[i]);
+        const until = api.toStreamMs(slot, ends[i] ?? starts[i], starts[i]);
         const left = Math.round(xOf(at));
         /* Never thinner than the tick it replaces, and never touching its
          * neighbour.
@@ -1839,7 +1839,7 @@
         for (let i = 0; i < pendingStarts.length; i++) {
           const at = api.toStreamMs(slot, pendingStarts[i]);
           if (at > to) break;
-          const until = api.toStreamMs(slot, pendingEnds[i] ?? pendingStarts[i]);
+          const until = api.toStreamMs(slot, pendingEnds[i] ?? pendingStarts[i], pendingStarts[i]);
           if (until < from) continue;
           const left = Math.round(xOf(at));
           const span = Math.max(thin, Math.round(xOf(until)) - left - ratio());
@@ -1869,7 +1869,7 @@
         const at = api.toStreamMs(slot, starts[i]);
         if (at > to) break;
         const left = Math.round(xOf(at));
-        const until = api.toStreamMs(slot, ends[i] ?? starts[i]);
+        const until = api.toStreamMs(slot, ends[i] ?? starts[i], starts[i]);
         const span = Math.max(thin, Math.round(xOf(until)) - left - ratio());
         if (px >= left && px <= left + span) return i;
       }
@@ -1902,7 +1902,7 @@
         const at = api.toStreamMs(slot, pendingStarts[i]);
         if (at > to) break;
         const left = Math.round(xOf(at));
-        const until = api.toStreamMs(slot, pendingEnds[i] ?? pendingStarts[i]);
+        const until = api.toStreamMs(slot, pendingEnds[i] ?? pendingStarts[i], pendingStarts[i]);
         const span = Math.max(thin, Math.round(xOf(until)) - left - ratio());
         if (px >= left && px <= left + span) return true;
       }

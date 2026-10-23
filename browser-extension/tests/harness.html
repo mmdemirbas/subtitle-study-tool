@@ -2918,6 +2918,66 @@
         }
       });
 
+      check("a line across an act join stays up for its own length, not for the insert", async () => {
+        /* Reported on Zodiac as a Turkish line "staying on screen for seconds,
+         * even minutes". The Turkish file is timed to the theatrical cut and
+         * the film playing is the director's cut, so the aligner gave it five
+         * acts and four inserts of 30, 16, 35 and 43 seconds.
+         *
+         * The clock used to HOLD at each join, and whatever line spanned that
+         * instant stayed up for the whole insert: a line 88 minutes in is 3.0s
+         * in the file and was on screen for 46.0s. A line
+         * starting exactly at the join was drawn through the insert too, early
+         * by its whole length - which is what the check above cannot see,
+         * because early and continuous is still one stretch.
+         *
+         * Two lines, one either side of the join, walked across a 30-second
+         * insert. Each may be up for its own length and no longer, and the
+         * second not before the later act begins. */
+        const wasTime = video.currentTime;
+        const JOIN = 600000;
+        const INSERT = 30000;
+        const STEP = 250;
+        try {
+          await window.__ssoApi.attach({
+            cues: [
+              { start: JOIN - 1000, end: JOIN + 1500, text: "Across the join." },
+              { start: JOIN, end: JOIN + 2000, text: "After the insert." },
+            ],
+            label: "TR · acts", fileId: 7402, language: "tr", slot: 1,
+          });
+          window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+          window.__ssoApi.setSteps(
+            [{ fromMs: 0, offsetMs: 0 }, { fromMs: JOIN, offsetMs: INSERT }],
+            { slot: 1 },
+          );
+
+          const boxOf = () => shadowOf().querySelectorAll(".sso-cue")[1];
+          const seen = { "Across the join.": [], "After the insert.": [] };
+          for (let ms = JOIN - 2000; ms <= JOIN + INSERT + 3000; ms += STEP) {
+            video.currentTime = ms / 1000;
+            await sleep(40);
+            const text = boxOf()?.textContent || "";
+            for (const line of Object.keys(seen)) if (text.includes(line)) seen[line].push(ms);
+          }
+
+          const across = seen["Across the join."];
+          const after = seen["After the insert."];
+          if (!across.length) throw new Error("the line across the join was never drawn");
+          if (!after.length) throw new Error("the first line of the later act was never drawn");
+          const upFor = (times) => times.length * STEP;
+          if (upFor(across) > 2500 + 2 * STEP)
+            throw new Error(`a 2.5s line was on screen for ${upFor(across) / 1000}s across a ${INSERT / 1000}s insert`);
+          if (after[0] < JOIN + INSERT)
+            throw new Error(`the later act's first line was drawn ${(JOIN + INSERT - after[0]) / 1000}s before that act began`);
+        } finally {
+          window.__ssoApi.setSteps([], { slot: 1 });
+          window.__ssoApi.detach(1);
+          video.currentTime = wasTime;
+          await sleep(150);
+        }
+      });
+
       check("a line's length and how much it says are both in the picture", async () => {
         /* Asked for directly: the strip "shows where a subtitle starts, but it
          * doesn't show where it ends or how many chars/words it have - this
@@ -10680,6 +10740,90 @@
           }
         } finally {
           api.updateSettings({ pauseAtLineEnd: false });
+          video.pause = realPause;
+          video.play = realPlay;
+          if (hadPaused) Object.defineProperty(video, "paused", hadPaused);
+          if (hadCurrent) Object.defineProperty(video, "currentTime", hadCurrent);
+          video.currentTime = wasTime;
+          if (wasAttached[0]) {
+            await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+          } else {
+            api.detach(0);
+          }
+          await sleep(150);
+        }
+      });
+
+      /* The same stop across an act join, where the file has a clock per act.
+       *
+       * A line across an insert ends on the earlier act's clock, while the
+       * insert plays - that is where the overlay takes it down. The stop used
+       * to read the one file clock, which held at the join. Against that code
+       * this stopped once instead of twice, at 611.21s: ten seconds after the
+       * line across the join had left the screen at 601s. */
+      check("stops at the end of a line across an act join, where it ended", async () => {
+        const api = window.__ssoApi;
+        const video = document.getElementById("v");
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasTime = video.currentTime;
+        const hadPaused = Object.getOwnPropertyDescriptor(video, "paused");
+        const hadCurrent = Object.getOwnPropertyDescriptor(video, "currentTime");
+        const realPause = video.pause;
+        const realPlay = video.play;
+
+        let at = 0;
+        let since = 0;
+        let paused = true;
+        const RATE = 4;
+        const read = () => (paused ? at : at + ((performance.now() - since) / 1000) * RATE);
+        Object.defineProperty(video, "currentTime", {
+          get: read,
+          set: (x) => { at = x; since = performance.now(); },
+          configurable: true,
+        });
+        Object.defineProperty(video, "paused", { get: () => paused, configurable: true });
+        video.pause = () => { at = read(); paused = true; };
+        video.play = () => { since = performance.now(); paused = false; };
+
+        const JOIN = 600000;
+        const INSERT = 10000;
+        const cues = [
+          { start: JOIN - 1000, end: JOIN + 1000, text: "across the join" },
+          { start: JOIN + 500, end: JOIN + 1500, text: "after the insert" },
+        ];
+        // Where each line ends in the stream: the first on the earlier act's
+        // clock, inside the insert; the second on the later act's.
+        const ends = [(JOIN + 1000) / 1000, (JOIN + INSERT + 1500) / 1000];
+
+        try {
+          await api.attach({ cues, label: "EN · acts", fileId: 8301, language: "en", slot: 0 });
+          api.setOffset(0, { slot: 0, quiet: true });
+          api.setSteps([{ fromMs: 0, offsetMs: 0 }, { fromMs: JOIN, offsetMs: INSERT }], { slot: 0 });
+          api.setKeyTrack(0);
+          api.updateSettings({ pauseAtLineEnd: true });
+          await sleep(250);
+
+          const stops = [];
+          video.currentTime = (JOIN - 1500) / 1000;
+          video.play();
+          const deadline = performance.now() + 2000 + (INSERT + 3000) / RATE;
+          while (stops.length < ends.length && performance.now() < deadline) {
+            await sleep(20);
+            if (paused) {
+              stops.push(Number(read().toFixed(2)));
+              video.play();
+            }
+          }
+          video.pause();
+          if (stops.length < ends.length)
+            throw new Error(`it stopped ${stops.length} of ${ends.length} times (at ${stops})`);
+          stops.forEach((stop, n) => {
+            if (stop > ends[n] + 0.05 || stop < ends[n] - 0.3)
+              throw new Error(`"${cues[n].text}" ends at ${ends[n]}s in the stream and it stopped at ${stop}s`);
+          });
+        } finally {
+          api.updateSettings({ pauseAtLineEnd: false });
+          api.setSteps([], { slot: 0 });
           video.pause = realPause;
           video.play = realPlay;
           if (hadPaused) Object.defineProperty(video, "paused", hadPaused);
