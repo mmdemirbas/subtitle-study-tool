@@ -2978,6 +2978,73 @@
         }
       });
 
+      check("the study pair at an act join is the other language's own stretch", async () => {
+        /* The same Zodiac plan from the other side. Two ways the pairing went
+         * wrong there, both because a line's place in the stream was worked
+         * out without its act:
+         *
+         * A line across an insert join was mapped start by the earlier act and
+         * end by the later one, so it was 2.5 seconds long in the file and 32.5
+         * in the stream - and every English line in the inserted scene was
+         * given it as its translation.
+         *
+         * And the search for the other language's lines looked within 45
+         * seconds of the plain inverse, which ignores the acts. By the fifth
+         * act the Turkish file sits 123.5 seconds further on, so an English
+         * line there found no Turkish beside it at all. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasGeometry = api.status().settings.tracks.map((t) => ({ ...t }));
+        const JOIN = 600000;
+        const INSERT = 120000;
+        const english = [
+          { start: JOIN - 1000, end: JOIN + 1500, text: "said before the insert" },
+          { start: JOIN + 10000, end: JOIN + 12000, text: "said inside the insert" },
+          { start: JOIN + INSERT + 1000, end: JOIN + INSERT + 3000, text: "said after the insert" },
+        ];
+        const turkish = [
+          { start: JOIN - 1000, end: JOIN + 1500, text: "ekleme öncesi" },
+          { start: JOIN + 1000, end: JOIN + 3000, text: "ekleme sonrası" },
+        ];
+
+        api.clearAdDrift();
+        try {
+          await api.attach({ cues: english, label: "EN · cut", fileId: 7403, language: "en", slot: 0 });
+          await api.attach({ cues: turkish, label: "TR · acts", fileId: 7404, language: "tr", slot: 1 });
+          api.setOffset(0, { slot: 0, quiet: true });
+          api.setOffset(0, { slot: 1, quiet: true });
+          api.setSteps([{ fromMs: 0, offsetMs: 0 }, { fromMs: JOIN, offsetMs: INSERT }], { slot: 1 });
+          await sleep(120);
+
+          const pairText = (slot, cue) =>
+            api.pairedCues(slot, cue).filter((each) => each.overlapMs > 0).map((each) => each.text).join(" | ");
+
+          const inside = pairText(0, english[1]);
+          if (inside.includes("ekleme öncesi"))
+            throw new Error(`a line of the inserted scene was paired with the Turkish line before it: "${inside}"`);
+          const across = pairText(1, turkish[0]);
+          if (across.includes("inside the insert"))
+            throw new Error(`the Turkish line across the join was paired with the inserted scene: "${across}"`);
+          const later = pairText(0, english[2]);
+          if (!later.includes("ekleme sonrası"))
+            throw new Error(`an English line ${INSERT / 1000}s into the later act found no Turkish beside it: "${later}"`);
+        } finally {
+          api.setSteps([], { slot: 1 });
+          for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({
+                cues: CUES, label: slot ? "second" : "first", fileId: slot + 1,
+                language: slot ? "tr" : "en", slot,
+              });
+            } else {
+              api.detach(slot);
+            }
+          }
+          api.updateSettings({ tracks: wasGeometry });
+          await sleep(150);
+        }
+      });
+
       check("a line's length and how much it says are both in the picture", async () => {
         /* Asked for directly: the strip "shows where a subtitle starts, but it
          * doesn't show where it ends or how many chars/words it have - this

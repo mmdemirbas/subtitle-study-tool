@@ -5884,11 +5884,10 @@
    * one. It is returned with `overlapMs: 0` so the caller can say so; quoting
    * it as confidently as a real overlap is the defect this is fixing. */
   const PAIR_NEAR_MS = 1500;
-  /* The file-clock window to search before converting anything. Offsets and
-   * acts move a track by seconds, so a generous slack around the plain inverse
-   * covers them, and it keeps this a scan of a few cues rather than of the
-   * file. It is slack, not a guarantee: what stops a line being missed is the
-   * reach bisection below, not this number. */
+  /* The file-clock window to search before converting anything: a generous
+   * slack around the plain inverse, which keeps this a scan of a few cues
+   * rather than of the file. It is slack, not a guarantee: what stops a line
+   * being missed is the reach bisection below, not this number. */
   const PAIR_SLACK_MS = 45000;
 
   function cuesOverlappingStream(track, slot, fromStreamMs, toStreamMs) {
@@ -5896,8 +5895,16 @@
     if (!cues.length) return [];
 
     const rate = track.rate || 1;
-    const plainFrom = (fromStreamMs - track.offsetMs - state.adDriftMs) / rate - PAIR_SLACK_MS;
-    const plainTo = (toStreamMs - track.offsetMs - state.adDriftMs) / rate + PAIR_SLACK_MS;
+    /* The acts widen the window by as far as they move the file, not by the
+     * slack. It was assumed they moved it by seconds, and on Zodiac the fifth
+     * act sits 123.5 seconds further on: an English line there was searched
+     * for in a stretch of the Turkish file nearly two minutes from its own,
+     * and the study card showed no Turkish beside it. Of the 56 act plans the
+     * aligner applied in the running log only Zodiac's two move an act further
+     * than 45 seconds, which is why the slack looked like enough. */
+    const actMs = (track.steps || []).map((step) => step.offsetMs / rate);
+    const plainFrom = (fromStreamMs - track.offsetMs - state.adDriftMs) / rate - Math.max(0, ...actMs) - PAIR_SLACK_MS;
+    const plainTo = (toStreamMs - track.offsetMs - state.adDriftMs) / rate - Math.min(0, ...actMs) + PAIR_SLACK_MS;
 
     /* First line that could still be on screen, over how far the file has
      * REACHED rather than over the ends themselves. The ends are not sorted -
