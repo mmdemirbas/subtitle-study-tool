@@ -2989,6 +2989,44 @@
         }
       });
 
+      check("a line too short to read is held into the gap after it, never over the next", async () => {
+        /* Reported as lines that "disappear before they can be read". 41% of
+         * the 384,493 lines in the download cache are up for less than 15
+         * characters a second and one second allow; for 47 thousand of them
+         * the gap after the line has room for all of it.
+         *
+         * Two lines: one of 34 characters given 400ms with room after it, and
+         * one given 400ms with the next line 200ms behind. */
+        const wasTime = video.currentTime;
+        try {
+          await window.__ssoApi.attach({
+            cues: [
+              { start: 700000, end: 700400, text: "Thirty-four characters, give or ta" },
+              { start: 710000, end: 710400, text: "Close behind" },
+              { start: 710600, end: 712000, text: "The next line" },
+            ],
+            label: "TR · fast", fileId: 7405, language: "tr", slot: 1,
+          });
+          window.__ssoApi.setOffset(0, { slot: 1, quiet: true });
+          const textAt = async (ms) => {
+            video.currentTime = ms / 1000;
+            await sleep(80);
+            return shadowOf().querySelectorAll(".sso-cue")[1]?.textContent || "";
+          };
+          if (!(await textAt(701500)).includes("Thirty-four"))
+            throw new Error("a 34-character line given 400ms was gone 1.5s in, with nothing after it");
+          if ((await textAt(702400)).includes("Thirty-four"))
+            throw new Error("the line was held past its reading time of 2.27s");
+          const next = await textAt(710700);
+          if (next.includes("Close behind") || !next.includes("The next line"))
+            throw new Error(`a held line covered the next one: "${next}"`);
+        } finally {
+          window.__ssoApi.detach(1);
+          video.currentTime = wasTime;
+          await sleep(150);
+        }
+      });
+
       check("the study pair at an act join is the other language's own stretch", async () => {
         /* The same Zodiac plan from the other side. Two ways the pairing went
          * wrong there, both because a line's place in the stream was worked

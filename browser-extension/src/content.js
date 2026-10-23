@@ -3961,7 +3961,7 @@
    *
    * None of this changes the answer for a file without overlaps, which is
    * nearly all of them - the walk finds one line and the list has one entry. */
-  function findCueIndexes(cues, timeMs) {
+  function findCueIndexes(cues, timeMs, ends = null) {
     let low = 0;
     let high = cues.length - 1;
     let latest = -1;
@@ -3980,9 +3980,45 @@
     // Ascending, so the list reads in document order and its last entry is the
     // line that started most recently.
     for (let index = floor; index <= latest; index++) {
-      if (timeMs <= cues[index].end) found.push(index);
+      if (timeMs <= (ends ? ends[index] : cues[index].end)) found.push(index);
     }
     return found;
+  }
+
+  /* How long a line stays on screen when its file gives it less time than it
+   * takes to read.
+   *
+   * Reported as lines that "disappear before they can be read". Over the 428
+   * files in the download cache, 15% of 384,493 lines are up for less than a
+   * fast reader needs (20 characters a second, 833ms at least) and 41% for
+   * less than 15 a second and one second - which is the reader this is for,
+   * reading a language they are learning. Most of that is the file itself:
+   * fast dialogue puts the next line straight after, and nothing can be done
+   * there without covering the line being spoken. But 47 thousand of those
+   * lines have a gap after them long enough to give them all the time they
+   * need, and another 101 thousand part of it.
+   *
+   * So a line is held into the gap after it, up to its reading time and never
+   * past the next line's start. Only what is drawn changes. The line's end in
+   * its file is still where the voice stops, so stopping at a line's end, the
+   * pairing and the map all keep using it. */
+  const READ_CPS = 15;
+  const READ_MIN_MS = 1000;
+  const heldEndsCache = new WeakMap();
+
+  function heldEnds(cues) {
+    let ends = heldEndsCache.get(cues);
+    if (ends) return ends;
+    ends = new Float64Array(cues.length);
+    for (let i = 0; i < cues.length; i++) {
+      const cue = cues[i];
+      const chars = String(cue.text || "").replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim().length;
+      const need = Math.max(READ_MIN_MS, (chars / READ_CPS) * 1000);
+      const next = i + 1 < cues.length ? cues[i + 1].start : Infinity;
+      ends[i] = Math.max(cue.end, Math.min(cue.start + need, next));
+    }
+    heldEndsCache.set(cues, ends);
+    return ends;
   }
 
   /** The line a single-line caller should follow: the last one to have started. */
@@ -4160,10 +4196,11 @@
    * clock. See filmClock. In document order, as findCueIndexes returns them. */
   function linesOnScreen(track, clock = filmClock(track)) {
     const cues = track.cues;
-    const lines = findCueIndexes(cues, clock.fileMs)
+    const ends = heldEnds(cues);
+    const lines = findCueIndexes(cues, clock.fileMs, ends)
       .filter((index) => cues[index].start >= clock.fromMs && cues[index].start < clock.toMs);
     if (clock.beforeMs == null) return lines;
-    const across = findCueIndexes(cues, clock.beforeMs).filter((index) => cues[index].start < clock.fromMs);
+    const across = findCueIndexes(cues, clock.beforeMs, ends).filter((index) => cues[index].start < clock.fromMs);
     return across.length ? [...across, ...lines] : lines;
   }
 
