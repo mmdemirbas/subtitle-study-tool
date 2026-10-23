@@ -6335,6 +6335,7 @@
     stopped: new Set(), // lead files the reader took a heard correction back on
     last: null, // the last correction applied, for Undo and for being overruled
     decision: null,
+    decidedFor: null, // the lead file the heard blocks were last put to
   };
   const LISTEN_RETRY_MS = 5000;
   /* A hand moving the lead back by half or more of a heard correction, this
@@ -6359,18 +6360,26 @@
   }
 
   /* Once per tick, in the frame that has the film. Cheap when there is nothing
-   * to do; while it hears, two analyser reads and a sum over 140 bins. */
+   * to do; while it hears, two analyser reads, one FFT for the pitch and the
+   * model - about 0.1ms a tick in V8. */
   function listenTick() {
     const L = globalThis.__ssoListen;
-    const slot = listenSlot();
-    if (!L || state.settings.listen === false || slot == null || !state.video) {
+    if (!L || state.settings.listen === false || !state.video) {
       if (listening.ear || listening.refused) closeEar();
       return;
     }
+    const slot = listenSlot();
+    /* Nothing to place: an ear already open on this film stays open, so the
+     * minutes heard are there for whichever subtitle comes next - the
+     * automatic attach takes one off before it puts the next one up, and a
+     * reader swapping files should not wait two more blocks. One is not
+     * opened for a page with nothing attached. */
+    if (slot == null && !listening.ear) return;
     const video = state.video;
     if (listening.video !== video) {
       closeEar();
       listening.video = video;
+      if (slot == null) return;
     }
     if (!listening.ear) {
       if (listening.refused && (!listening.refused.retry || Date.now() < listening.retryAt)) return;
@@ -6391,11 +6400,20 @@
       listening.refused = null;
       trace("listenEar", { outcome: "open", state: opened.state, sampleRate: opened.sampleRate, fftSize: opened.fftSize });
     }
-    const track = state.tracks[slot];
-    const key = `${track.fileId}|${state.adDriftMs}`;
+    /* What is heard belongs to the film, not to the subtitle: kept across a
+     * change of file, started again for a new programme or after an advert,
+     * whose time moves every later line. */
+    const key = `${programme.mark}|${state.adDriftMs}`;
     if (listening.key !== key) {
       listening.hearing = L.createHearing();
       listening.key = key;
+      listening.decidedFor = null;
+    }
+    /* A subtitle arriving on a film already heard is placed at once, on what
+     * was heard before it came. */
+    if (slot != null && listening.decidedFor !== String(state.tracks[slot].fileId)) {
+      listening.decidedFor = String(state.tracks[slot].fileId);
+      if (listening.hearing.blockCount >= 2) decideHeard(slot);
     }
     /* What is heard has to be the film at the speed it was made. An advert is
      * not the film; a seek is a moment with no sound yet; a hidden tab ticks
@@ -6403,10 +6421,10 @@
      * has been measured at 1x only. */
     const rate = video.playbackRate || 1;
     if (video.paused || video.seeking || video.readyState < 3 || state.inAd || document.hidden || rate < 0.7 || rate > 1.5) return;
-    const level = listening.ear.read();
-    if (!level) return;
-    if (!listening.hearing.hear(streamNowMs(), level.bandDb, level.sideDb)) return;
-    decideHeard(slot);
+    const reading = listening.ear.read();
+    if (!reading) return;
+    if (!listening.hearing.hear(streamNowMs(), reading)) return;
+    if (slot != null) decideHeard(slot);
   }
 
   function decideHeard(slot) {

@@ -6,13 +6,15 @@
 //
 //   node bench/listen/features.mjs <media> <name> [audio index] [subtitle stream]
 //
-// Writes bench/listen/films/<name>.json and <name>.srt (gitignored: the
+// Writes bench/listen/films/<name>.json, <name>.f32 (listen.js's feature
+// vectors, FEATURES float32s a frame) and <name>.srt (gitignored: the
 // subtitle is the film's, and the levels are its sound). The audio index
 // counts audio streams (0:a:N); the subtitle is an absolute stream number
 // (0:N), because the first text stream is often a picture-based one.
 import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import "../../browser-extension/src/listen.js";
 
 const [media, name, aIndex = "0", sIndex] = process.argv.slice(2);
 if (!media || !name) { console.error("usage: features.mjs <media> <name> [audio index] [subtitle stream]"); process.exit(2); }
@@ -39,6 +41,18 @@ function fft(re, im) {
   }
 }
 const binHz = RATE / N;
+// The shipped feature function, fed the dB spectrum an AnalyserNode would give.
+const { createFeatures, FEATURES } = globalThis.__ssoListen;
+const features = createFeatures({ binHz, bins: N / 2 });
+const rich = [];
+function spectrumDb(buf) {
+  const re = new Float64Array(N), im = new Float64Array(N);
+  for (let i = 0; i < N; i++) re[i] = buf[i] * win[i];
+  fft(re, im);
+  const db = new Float32Array(N / 2);
+  for (let k = 0; k < N / 2; k++) db[k] = 10 * Math.log10(re[k] * re[k] + im[k] * im[k] + 1e-20);
+  return db;
+}
 function speechBand(buf) {
   const re = new Float64Array(N), im = new Float64Array(N);
   for (let i = 0; i < N; i++) re[i] = buf[i] * win[i];
@@ -62,13 +76,18 @@ ff.stdout.on("data", (chunk) => {
   while (queueM.length >= HOP) {
     mid.copyWithin(0, HOP); side.copyWithin(0, HOP);
     mid.set(queueM.splice(0, HOP), L - HOP); side.set(queueS.splice(0, HOP), L - HOP); filled += HOP;
-    if (filled < N) { frames.band.push(-120); frames.sideBand.push(-120); continue; }
+    if (filled < N) { frames.band.push(-120); frames.sideBand.push(-120); rich.push(new Float32Array(FEATURES)); continue; }
     frames.band.push(speechBand(mid.subarray(L - N)));
     frames.sideBand.push(speechBand(side.subarray(L - N)));
+    rich.push(features(spectrumDb(mid.subarray(L - N)), spectrumDb(side.subarray(L - N))));
   }
 });
 ff.stderr.on("data", (d) => process.stderr.write(d));
 ff.on("close", (code) => {
   fs.writeFileSync(path.join(OUT, `${name}.json`), JSON.stringify(frames));
+  // The feature vectors, frame after frame, FEATURES float32s each.
+  const flat = new Float32Array(rich.length * FEATURES);
+  rich.forEach((v, i) => flat.set(v, i * FEATURES));
+  fs.writeFileSync(path.join(OUT, `${name}.f32`), Buffer.from(flat.buffer));
   console.log(name, code, `${(frames.band.length * HOP_MS / 60000).toFixed(1)} min`);
 });

@@ -1,9 +1,10 @@
 // The extension's ear, replayed over films whose subtitle is timed to their
-// own picture: the shipped src/listen.js hears the levels features.mjs took
-// out of the film, the subtitle is displaced by a known amount, and what it
+// own picture: the shipped src/listen.js hears the feature vectors features.mjs
+// took out of the film, the subtitle is displaced by a known amount, and what it
 // applies is compared with that amount.
 //
-//   node bench/listen/replay.mjs [--minutes 20] [--every 5] [--truths ms,ms] [--slow %] [--no-rates] [--whole] [name...]
+//   node bench/listen/replay.mjs [--minutes 20] [--every 5] [--truths ms,ms] [--slow %] [--no-rates]
+//     [--block-s 120] [--agree 2] [--recent 4] [--start-only] [--whole] [name...]
 //
 // Default: every film in bench/listen/films, a listening of --minutes starting
 // at every --every minutes, the subtitle displaced by each of TRUTHS. --whole
@@ -16,16 +17,11 @@
 // msPerMinute}: the shift to add at minute m is offsetMs + msPerMinute * m. Such
 // a film is left out of the default table, which measures one shift, and is
 // measured when named.
-import fs from "node:fs";
-import path from "node:path";
-import { parseSrt } from "../../browser-extension/src/subtitles/srt.js";
-import "../../browser-extension/src/listen.js";
+import { loadFilm, filmNames } from "./film.mjs";
 import "../../browser-extension/src/align.js";
 
 const { createHearing, retiming } = globalThis.__ssoListen;
 const { RATES } = globalThis.__ssoAlign;
-const HERE = path.dirname(new URL(import.meta.url).pathname);
-const FILMS = path.join(HERE, "films");
 let TRUTHS = [-21350, 4000, 37200];
 const RIGHT_MS = 300;
 
@@ -36,20 +32,22 @@ const minutes = option("minutes", 20), every = option("every", 5);
 // --slow 0.1 makes the subtitle's clock run 0.1% slow as well as displaced:
 // a line said at t is written at t * (1 - 0.001) - displacement.
 const slow = option("slow", 0) / 100;
+// The hearing's own knobs, for sweeping them: --block-s 60 --agree 3 --recent 4.
+const hearingOptions = {};
+{ const b = option("block-s", 0); if (b) hearingOptions.blockFrames = Math.round(b * 1000 / 50); }
+{ const a = option("agree", 0); if (a) hearingOptions.agreeBlocks = a; }
+{ const r = option("recent", 0); if (r) hearingOptions.recentBlocks = r; }
+// --start-only: one listening per film and displacement, from the first frame,
+// which is what a film watched from its beginning gets.
+const startOnly = args.includes("--start-only") ? (args.splice(args.indexOf("--start-only"), 1), true) : false;
 const rates = !args.includes("--no-rates") || (args.splice(args.indexOf("--no-rates"), 1), false);
 const whole = args.includes("--whole") ? (args.splice(args.indexOf("--whole"), 1), true) : false;
-const names = args.length
-  ? args
-  : fs.readdirSync(FILMS)
-    .filter((f) => f.endsWith(".json") && !f.endsWith(".truth.json"))
-    .map((f) => f.slice(0, -5))
-    .filter((name) => !fs.existsSync(path.join(FILMS, `${name}.truth.json`)))
-    .sort();
+const names = filmNames(args);
 
 /* `belongs(ms)` is where the file's own lines belong at that moment of the
  * stream - nothing for a subtitle taken out of this very release. */
-function listen(F, cues, truth, fromMs, toMs, belongs = () => 0) {
-  const hop = F.hopMs, hearing = createHearing();
+function listen(film, truth, fromMs, toMs, belongs = () => 0) {
+  const hop = 50, hearing = createHearing(hearingOptions), cues = film.cues;
   // The lead's timing, as the extension holds it: a rate and an offset.
   let timing = { rate: 1, offsetMs: 0 };
   let first = null, applies = 0, rated = 0, rightMs = 0, nearMs = 0;
@@ -67,11 +65,11 @@ function listen(F, cues, truth, fromMs, toMs, belongs = () => 0) {
   };
   // How far the line said at `ms` is from being shown there.
   const errorAt = (ms) => shown(ms) - ms - belongs(ms);
-  for (let i = Math.round(fromMs / hop); i < Math.min(F.band.length, Math.round(toMs / hop)); i++) {
+  for (let i = Math.round(fromMs / hop); i < Math.min(film.frames, Math.round(toMs / hop)); i++) {
     const off = Math.abs(errorAt(i * hop));
     if (off <= RIGHT_MS) rightMs += hop;
     if (off <= 1000) nearMs += hop;
-    if (!hearing.hear(i * hop, F.band[i], F.sideBand[i])) continue;
+    if (!hearing.hear(i * hop, film.features(i))) continue;
     // The conversions as factors on the lead's present rate, as content.js asks.
     const factors = RATES.filter((rate) => rate !== 1).map((rate) => rate / timing.rate).filter((f) => Math.abs(f - 1) > 0.002);
     const d = hearing.decide(linesFor, { rates, factors, key: `${timing.rate}|${timing.offsetMs}` });
@@ -91,15 +89,11 @@ const q = (a, f) => { const s = [...a].sort((x, y) => x - y); return s.length ? 
 const total = { n: 0, right: 0, near: 0, wrong: 0, never: 0, firsts: [], extra: 0, rated: 0, wrongs: [] };
 console.log(whole ? "film            min  displaced   on screen within 300ms   within 1s   applies  rates  rate" : `film           runs  right(<=${RIGHT_MS})  <=500  wrong  never   first apply p50/p90 min  extra applies  rates`);
 for (const name of names) {
-  const F = JSON.parse(fs.readFileSync(path.join(FILMS, `${name}.json`), "utf8"));
-  const cues = parseSrt(fs.readFileSync(path.join(FILMS, `${name}.srt`), "utf8"));
-  const filmMs = F.band.length * F.hopMs;
-  const truthFile = path.join(FILMS, `${name}.truth.json`);
-  const line = fs.existsSync(truthFile) ? JSON.parse(fs.readFileSync(truthFile, "utf8")) : null;
+  const film = loadFilm(name), cues = film.cues, filmMs = film.filmMs, line = film.line;
   const belongs = line ? (ms) => line.offsetMs + line.msPerMinute * ms / 60000 : () => 0;
   if (whole) {
     for (const truth of TRUTHS) {
-      const r = listen(F, cues, truth, 0, filmMs, belongs);
+      const r = listen(film, truth, 0, filmMs, belongs);
       console.log(name.padEnd(14), (filmMs / 60000).toFixed(0).padStart(5), `${(truth / 1000).toFixed(2)}s`.padStart(10),
         `${(100 * r.rightMs / filmMs).toFixed(1)}%`.padStart(24), `${(100 * r.nearMs / filmMs).toFixed(1)}%`.padStart(11), String(r.applies).padStart(9),
         String(r.rated).padStart(6), r.rate.toFixed(5).padStart(8));
@@ -107,13 +101,14 @@ for (const name of names) {
     continue;
   }
   const f = { n: 0, right: 0, near: 0, wrong: 0, never: 0, firsts: [], extra: 0, rated: 0 };
-  for (let t0 = 0; t0 + minutes * 60000 <= filmMs; t0 += every * 60000) {
+  for (let t0 = 0; t0 + minutes * 60000 <= filmMs && !(startOnly && t0 > 0); t0 += every * 60000) {
     for (const truth of TRUTHS) {
-      const r = listen(F, cues, truth, t0, t0 + minutes * 60000, belongs);
+      const r = listen(film, truth, t0, t0 + minutes * 60000, belongs);
       f.n++;
       f.rated += r.rated;
       if (r.first == null) { if (Math.abs(r.err) <= RIGHT_MS) f.right++; else f.never++; continue; }
       f.firsts.push(r.first);
+      if (t0 === 0) (f.afterLine ??= []).push(r.first - Math.max(0, cues[0].startMs - truth));
       f.extra += r.applies - 1;
       if (Math.abs(r.err) <= RIGHT_MS) f.right++;
       else if (Math.abs(r.err) <= 500) f.near++;
@@ -121,6 +116,7 @@ for (const name of names) {
     }
   }
   for (const k of ["n", "right", "near", "wrong", "never", "extra", "rated"]) total[k] += f[k];
+  (total.afterLine ??= []).push(...(f.afterLine || []));
   total.firsts.push(...f.firsts);
   console.log(name.padEnd(14), String(f.n).padStart(5), String(f.right).padStart(11), String(f.near).padStart(6), String(f.wrong).padStart(6), String(f.never).padStart(6),
     `${(q(f.firsts, 0.5) / 60000).toFixed(1)}/${(q(f.firsts, 0.9) / 60000).toFixed(1)}`.padStart(25), String(f.extra).padStart(14), String(f.rated).padStart(6));
@@ -129,4 +125,6 @@ if (!whole) {
   console.log("all".padEnd(14), String(total.n).padStart(5), String(total.right).padStart(11), String(total.near).padStart(6), String(total.wrong).padStart(6), String(total.never).padStart(6),
     `${(q(total.firsts, 0.5) / 60000).toFixed(1)}/${(q(total.firsts, 0.9) / 60000).toFixed(1)}`.padStart(25), String(total.extra).padStart(14), String(total.rated).padStart(6));
   if (total.wrongs.length) console.log("wrong:", total.wrongs.join(" "));
+  // From the first frame: how long after the subtitle's first line was the first correction.
+  if (total.afterLine?.length) console.log(`from the start, first correction after the first line: p50 ${(q(total.afterLine, 0.5) / 60000).toFixed(1)} min, p90 ${(q(total.afterLine, 0.9) / 60000).toFixed(1)} min, over ${total.afterLine.length}`);
 }

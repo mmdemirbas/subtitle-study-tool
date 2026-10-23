@@ -3028,10 +3028,10 @@
       });
 
       /* Lines at irregular places, so no shift but the right one lines them all
-       * up, and a film that speaks DISPLACED ms after each of them. The speech
-       * moves the way syllables move: the band alternates by 15dB every 100ms
-       * while a line is spoken and sits flat 40dB below it otherwise. Spoken for
-       * exactly the line's length, so one shift is right and not a range.
+       * up, and a film that speaks DISPLACED ms after each of them. What the
+       * hearing is given is what the ear's detector would say of each frame:
+       * 0.9 while a line is spoken and 0.05 otherwise, for exactly the line's
+       * length, so one shift is right and not a range.
        * `speed` is a film whose clock runs that much faster than the file's;
        * `scenes` puts 15-35s of silence after every 40-70s of dialogue, which
        * is the structure a block still has when its lines drift 5s across it. */
@@ -3051,7 +3051,7 @@
         }
         const level = (ms) => {
           const on = lines.some((c) => ms >= c.start * speed + displacedMs && ms < c.end * speed + displacedMs);
-          return { bandDb: on ? (Math.floor(ms / 100) % 2 ? -30 : -45) : -70, sideDb: -100 };
+          return on ? 0.9 : 0.05;
         };
         return { lines, level };
       };
@@ -3065,8 +3065,8 @@
           let x = 3;
           const decisions = [];
           for (let ms = 70000; ms < 70000 + 3 * 400 * 50 * every; ms += 50 * every) {
-            const heard = noise ? { bandDb: -70 + ((x = (x * 16807) % 2147483647) % 40), sideDb: -100 } : level(ms);
-            if (hearing.hear(ms, heard.bandDb, heard.sideDb)) decisions.push(hearing.decide(spansOf(lines)));
+            const heard = noise ? ((x = (x * 16807) % 2147483647) % 100) / 100 : level(ms);
+            if (hearing.hear(ms, heard)) decisions.push(hearing.decide(spansOf(lines)));
           }
           return decisions;
         };
@@ -3104,6 +3104,10 @@
         /* Ten-second blocks instead of two-minute ones; the rule is the same. */
         L.createHearing = (options) => realHearing({ ...options, blockFrames: 200 });
         if (window.__ssoPanel) window.__ssoPanel.sayInPanel = (slot, text, options) => { said.push({ slot, text, action: options?.action }); return true; };
+        // Whatever ear an earlier case left open goes, so this one is the stub.
+        api.updateSettings({ listen: false });
+        await sleep(120);
+        api.updateSettings({ listen: true });
         const started = performance.now();
         Object.defineProperty(video, "currentTime", { get: () => 100 + (performance.now() - started) / 1000, set() {}, configurable: true });
         try {
@@ -3128,7 +3132,23 @@
           if (tracks[0].offsetMs !== 0 || tracks[1].offsetMs !== 1234)
             throw new Error(`Undo left the pair at ${tracks[0].offsetMs} and ${tracks[1].offsetMs}`);
           if (!api.status().listening.stopped) throw new Error("listening goes on for a file whose heard correction was undone");
+          /* What was heard belongs to the film: another file put up now is
+           * placed on it at once, not after two more blocks. */
+          // Alone, so the aligner has nothing to put it against.
+          api.detach(1);
+          await api.attach({ cues: lines, label: "EN · another", fileId: 7803, language: "en", slot: 0 });
+          const attachedAt = performance.now();
+          tracks = api.status().tracks;
+          for (let i = 0; i < 40 && Math.abs(tracks[0].offsetMs - 3000) > 300; i++) { await sleep(25); tracks = api.status().tracks; }
+          if (Math.abs(tracks[0].offsetMs - 3000) > 300)
+            throw new Error(`a file put up on a film already heard sat at ${tracks[0].offsetMs}ms ${Math.round(performance.now() - attachedAt)}ms later`);
         } finally {
+          /* Off and on again closes the ear, so neither the stub nor what it
+           * heard outlives this case: what is heard now belongs to the film,
+           * and the suite's film goes on. */
+          api.updateSettings({ listen: false });
+          await sleep(120);
+          api.updateSettings({ listen: true });
           L.openEar = realOpen;
           L.createHearing = realHearing;
           if (window.__ssoPanel) window.__ssoPanel.sayInPanel = realSay;
@@ -3157,8 +3177,7 @@
             .filter(([a, b]) => b > lo && a < hi);
           const taken = [];
           for (let ms = 60000; ms < 34 * 60000; ms += 50) {
-            const heard = level(ms);
-            if (!hearing.hear(ms, heard.bandDb, heard.sideDb)) continue;
+            if (!hearing.hear(ms, level(ms))) continue;
             const d = hearing.decide(linesFor);
             if (d.drift?.take) { taken.push(d.drift); timing = L.retiming(d.drift, timing.rate).apply(timing); }
             else if (d.apply != null) timing = { ...timing, offsetMs: timing.offsetMs + d.apply };
@@ -3184,8 +3203,7 @@
         const linesFor = (lo, hi) => lines.map((c) => [c.start, c.end]).filter(([a, b]) => b > lo && a < hi);
         let conversion = null;
         for (let ms = 60000; ms < 14 * 60000 && !conversion; ms += 50) {
-          const heard = level(ms);
-          if (!hearing.hear(ms, heard.bandDb, heard.sideDb)) continue;
+          if (!hearing.hear(ms, level(ms))) continue;
           const d = hearing.decide(linesFor, { factors });
           if (d.drift?.take) conversion = d.drift;
           else if (d.apply != null) throw new Error(`a 4% film had a plain shift applied: ${JSON.stringify(d)}`);
@@ -3205,7 +3223,7 @@
         const PAL = window.__ssoAlign.RATES[1];
         let readings = 0;
         let drift = null;
-        L.openEar = () => ({ state: "running", sampleRate: 48000, fftSize: 2048, read: () => ({ bandDb: -40, sideDb: -100 }), close() {} });
+        L.openEar = () => ({ state: "running", sampleRate: 48000, fftSize: 2048, read: () => 0.9, close() {} });
         L.createHearing = () => ({
           hear: () => ++readings % 5 === 0,
           decide: () => {
@@ -3216,6 +3234,9 @@
           spokenMs: 0,
         });
         if (window.__ssoPanel) window.__ssoPanel.sayInPanel = (slot, text, options) => { said.push({ slot, text, action: options?.action }); return true; };
+        api.updateSettings({ listen: false });
+        await sleep(120);
+        api.updateSettings({ listen: true });
         try {
           await api.attach({ cues: CUES, label: "EN · PAL", fileId: 7811, language: "en", slot: 0 });
           await api.attach({ cues: CUES, label: "TR · PAL", fileId: 7812, language: "tr", slot: 1 });
@@ -3241,6 +3262,12 @@
             throw new Error(`Undo left ${JSON.stringify(tracks.slice(0, 2).map((t) => [t.rate, t.offsetMs]))}`);
           if (!api.status().listening.stopped) throw new Error("listening goes on after its rate was undone");
         } finally {
+          /* Off and on again closes the ear, so neither the stub nor what it
+           * heard outlives this case: what is heard now belongs to the film,
+           * and the suite's film goes on. */
+          api.updateSettings({ listen: false });
+          await sleep(120);
+          api.updateSettings({ listen: true });
           L.openEar = realOpen;
           L.createHearing = realHearing;
           if (window.__ssoPanel) window.__ssoPanel.sayInPanel = realSay;

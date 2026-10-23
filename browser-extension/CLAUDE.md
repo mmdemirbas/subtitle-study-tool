@@ -481,11 +481,22 @@ follower back wherever the lead happened to be.
 ## The lead is heard, where the film can be
 
 `listen.js` hears the film and `content.js`'s listening section decides what to
-do with it. The ear is the speech band (300-3400Hz) of the middle of the
-stereo mix and of its sides, read off two `AnalyserNode`s every tick; a frame
-is speech when the band stands above a running floor, is centred, and moves at
-syllable rate. Every two minutes of heard film the lead's lines are placed on
-that speech. Five things are load-bearing:
+do with it. The ear reads the spectrum of the middle of the stereo mix and of
+its sides off two `AnalyserNode`s every tick, turns it into fifteen features
+(`createFeatures`: band levels above their floors, how centred and how tonal
+the sound is, a voice's pitch, spectral change, syllable-rate movement) and a
+logistic model turns those into a speech probability. Every minute of heard
+film the lead's lines are placed on that speech. Six things are load-bearing:
+
+- **The model is fitted, not written.** `SPEECH_MODEL` sits between
+  `/* model:begin */` and `/* model:end */` and `bench/listen/train.mjs --write`
+  is the only thing that should change it - fitted on films' own subtitles,
+  a frame inside a line being speech and one a second from any line not. Held
+  out of its own fit, each film with dialogue scores a frame AUC of 0.79 to
+  0.95, where the hand-tuned rule it replaced (band above floor, centred,
+  syllabic) scored 0.62 to 0.74. A change to `createFeatures` changes what the
+  numbers mean, so it needs `features.mjs` run again on every film and a refit;
+  `bench/listen/README.md` says how.
 
 - **`captureStream()`, never `createMediaElementSource`.** The second takes the
   element's sound away from the speakers. A capture is a copy, before the
@@ -496,8 +507,8 @@ that speech. Five things are load-bearing:
   `AudioContext` made in a frame that has had no gesture starts suspended, and
   the next press or key in that frame resumes it (`state` lines). The ear is
   opened on the film's own frame, which is where `state.video` is.
-- **Applied only when independent stretches agree**: the last two blocks each
-  within 200ms of the answer over the last four. One stretch is wrong often
+- **Applied only when independent stretches agree**: the last two one-minute
+  blocks each within 200ms of the answer over the last six. One stretch is wrong often
   enough - a song, rain - and the margin over the next-best shift does not
   separate right from wrong. Below 400ms nothing moves, because some files are
   timed about 350ms off their speech by their subtitler and moving them is the
@@ -510,7 +521,13 @@ that speech. Five things are load-bearing:
   on the toast, or a hand that takes back half of a heard correction within
   five minutes, stops it for that file. A subtitle the page carries is never
   listened to - it is timed to the picture by construction.
-- **It is a frame that has been judged, or nothing.** The syllable test reads
+- **What is heard belongs to the film, not to the subtitle.** The hearing is
+  kept across a change of file and started again only for a new programme or
+  a new advert drift, which moves every later line; a subtitle arriving on a
+  film already heard is placed on what was heard before it came, at once.
+  The automatic attach takes one file off before it puts the next up, and
+  until this a swap cost the reader two more minutes.
+- **It is a frame that has been judged, or nothing.** The syllable feature reads
   the last six frames, so the first five after any jump - a seek, a stall, a
   hidden tab's once-a-second tick - are not stored at all. Stored as silence,
   a hidden tab would record the whole film as quiet. Paused, seeking, in an
