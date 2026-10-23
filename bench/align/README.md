@@ -9,7 +9,14 @@ node bench/align/shapes.mjs     # what the truth IS, per pair
 node bench/align/run.mjs --same # the accuracy tables, in about a minute
 node bench/align/run.mjs        # the above plus discrimination, in about twenty
 node bench/align/regress.mjs    # does the candidate make any pair worse?
+node bench/align/joins.mjs      # what each inverse of an act plan puts on screen
 ```
+
+`joins.mjs` is about the other end of an act plan: not where the acts are, but
+which lines the overlay draws once it has them. It replays every plan applied in
+the running log (`subtitle-daemon/logs/`, also local) against its cached file.
+Run it before changing `filmClock` in `browser-extension/src/content.js`, and
+keep its copy of that function in step.
 
 No dependencies, no network. It reads `subtitle-daemon/cache/subtitles/` and
 `srt-viewer/subtitles/` directly; both are local and gitignored, so a fresh
