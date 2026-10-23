@@ -2,6 +2,11 @@
 /* Does the candidate make anything WORSE than what ships?
  *
  *   node bench/align/regress.mjs [--against starts] [--candidate split]
+ *   node bench/align/regress.mjs --before HEAD   # split now, against split at HEAD
+ *
+ * --before is the one to run on any change to align.js itself: it loads the
+ * file as it was at that revision beside the one in the working tree, so the
+ * question is "does my edit lose ground anywhere", not "does split beat starts".
  *
  * A better average is not an improvement if it is bought by breaking pairs
  * that already worked. The reader who was happy is the one who notices, and a
@@ -20,8 +25,12 @@
  * That is the useful thing about a regression list. It does not know which
  * side is at fault, so it makes you go and look.
  */
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { load, pairs, check, REPO } from "./corpus.mjs";
-import { METHODS, prepare, loadShipped } from "./methods.mjs";
+import { METHODS, prepare, loadShipped, splitOf } from "./methods.mjs";
 import { anchorsFor, shapeOf } from "./truth.mjs";
 
 const TIGHT_MS = 250;
@@ -37,12 +46,31 @@ const byName = (name) => {
   return found;
 };
 
+const BEFORE = argOf("--before", null);
+
+/* align.js at a revision, loaded beside the working tree's copy. The file sets
+ * globalThis.__ssoAlign and nothing else, so the earlier copy is captured and
+ * the global handed back before anything reads it. */
+async function alignAt(rev) {
+  const source = execFileSync("git", ["show", `${rev}:browser-extension/src/align.js`], { cwd: REPO });
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "align-")), "align.js");
+  fs.writeFileSync(file, source);
+  const now = globalThis.__ssoAlign;
+  await import(file);
+  const then = globalThis.__ssoAlign;
+  globalThis.__ssoAlign = now;
+  fs.rmSync(path.dirname(file), { recursive: true });
+  return then;
+}
+
 const files = load();
 check(files);
 await loadShipped(REPO);
 prepare(files);
 
-const base = byName(BASE), candidate = byName(CANDIDATE);
+const base = BEFORE ? splitOf(await alignAt(BEFORE), `split@${BEFORE}`.slice(0, 12)) : byName(BASE);
+const candidate = BEFORE ? byName("split") : byName(CANDIDATE);
+const BASE_NAME = base.name, CANDIDATE_NAME = candidate.name;
 const rows = [];
 for (const p of pairs(files)) {
   if (p.label === "different") continue;
@@ -69,10 +97,10 @@ const both = rows.filter((r) => r.base !== null && r.candidate !== null);
 const onlyBase = rows.filter((r) => r.base !== null && r.candidate === null);
 const onlyCandidate = rows.filter((r) => r.base === null && r.candidate !== null);
 
-console.log(`${CANDIDATE} against ${BASE}, over ${rows.length} pairs with a text-derived truth\n`);
+console.log(`${CANDIDATE_NAME} against ${BASE_NAME}, over ${rows.length} pairs with a text-derived truth\n`);
 console.log(`  both answered:        ${both.length}`);
-console.log(`  only ${BASE.padEnd(8)} answered: ${onlyBase.length}`);
-console.log(`  only ${CANDIDATE.padEnd(8)} answered: ${onlyCandidate.length}\n`);
+console.log(`  only ${BASE_NAME.padEnd(8)} answered: ${onlyBase.length}`);
+console.log(`  only ${CANDIDATE_NAME.padEnd(8)} answered: ${onlyCandidate.length}\n`);
 
 /* A pair moving by less than this is noise: one cue in a hundred lands the
  * other side of the tolerance because the two subtitlers typed a line at
@@ -88,7 +116,7 @@ const show = (list, title) => {
   if (!list.length) return;
   console.log(`${title}\n`);
   console.log(`  ${"pair".padEnd(20)} ${"film".padEnd(30)} ${"langs".padEnd(6)} ${"truth".padEnd(8)} ` +
-    `${BASE.padStart(8)} ${CANDIDATE.padStart(8)} ${"move".padStart(8)}`);
+    `${BASE_NAME.padStart(8)} ${CANDIDATE_NAME.padStart(8)} ${"move".padStart(8)}`);
   for (const r of list) {
     console.log(`  ${r.key.padEnd(20)} ${String(r.film).slice(0, 29).padEnd(30)} ${r.languages.padEnd(6)} ${r.kind.padEnd(8)} ` +
       `${`${(r.base * 100).toFixed(0)}%`.padStart(8)} ${`${(r.candidate * 100).toFixed(0)}%`.padStart(8)} ` +
@@ -103,7 +131,7 @@ show(better.sort((a, b) => (b.candidate - b.base) - (a.candidate - a.base)).slic
 
 const mid = (v) => { const s = [...v].sort((a, b) => a - b); return s.length ? s[s.length >> 1] : NaN; };
 console.log("BY KIND\n");
-console.log(`  ${"kind".padEnd(9)} ${"pairs".padStart(6)} ${`median ${BASE}`.padStart(16)} ${`median ${CANDIDATE}`.padStart(18)} ${"worse".padStart(7)}`);
+console.log(`  ${"kind".padEnd(9)} ${"pairs".padStart(6)} ${`median ${BASE_NAME}`.padStart(16)} ${`median ${CANDIDATE_NAME}`.padStart(18)} ${"worse".padStart(7)}`);
 for (const kind of ["flat", "linear", "stepped", "messy"]) {
   const group = both.filter((r) => r.kind === kind);
   if (!group.length) continue;

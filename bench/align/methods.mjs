@@ -296,11 +296,13 @@ export const anchors = {
  *
  * How it works, and every number in it, is in align.js beside the code.
  */
-export const split = {
-  name: "split",
+/* The same method on any loaded copy of align.js, so regress.mjs --before can
+ * put the shipped aligner against an earlier revision of itself. */
+export const splitOf = (api, name = "split") => ({
+  name,
   about: "align.js again, asked where each ACT lands rather than where the file does.",
   run(a, b) {
-    const answer = shipped.alignSteps(a.spans.map((s) => s[0]), b.spans.map((s) => s[0]));
+    const answer = (api ?? shipped).alignSteps(a.spans.map((s) => s[0]), b.spans.map((s) => s[0]));
     if (!answer.ok || !answer.steps) {
       return { at: null, scores: { confidence: answer.confidence, coverage: answer.coverage ?? 0, settled: 0, segments: 0 } };
     }
@@ -321,6 +323,7 @@ export const split = {
       verdict: answer.verdict,
     };
   },
-};
+});
+export const split = splitOf(null);
 
 export const METHODS = [starts, overlap, anchors, split];

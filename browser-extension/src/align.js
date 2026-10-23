@@ -568,6 +568,7 @@
   const STEP_MIN_SPAN_MS = 30000; // an act is at least this long
   const STEP_WORTH = 0.02;        // a break must buy this share of the film's cues
   const STEP_WORTH_CUES = 8;      // ... and never fewer than this many
+  const STEP_ACT_SHARE = 0.5;     // ... or this share of the shorter act's own cues
   const STEP_PENALTY_SIGMAS = 12; // how many times the noise a break must explain
   const STEP_RATE_WORTH_MS = 400; // a re-measured rate worth a second pass
 
@@ -623,6 +624,13 @@
    * rather than an exchange. Without these two rules the fit separates runs of
    * the 40ms frame grid - Sherlock's DVDRip pair came back as 105 pieces whose
    * levels ran 1376, 1418, 1376, 1418. */
+  /* Known limit: the span is measured between window centres, so an act that
+   * holds only one centre measures 0 and is merged here however far it stands
+   * from both sides. An act shorter than about one window (90s) holds one or
+   * two depending on where the grid falls. Letting a far-standing single
+   * window through was tried on 2026-10-23: it found such acts, and it also
+   * invented an opening act on The Americans S03E12, whose cue text says one
+   * shift - and the repair for that lost ground on ten other pairs. */
   function joinTrivial(pieces, values, timeAt) {
     let current = pieces;
     while (current.length > 1) {
@@ -715,18 +723,45 @@
    * error of the windows that suggested it. Cheapest first, recomputing after
    * each removal, because two breaks that each look worth keeping alone are
    * sometimes one break placed twice. Without this, four pairs the plain
-   * aligner already put 100 per cent right came back at 59 to 65. */
+   * aligner already put 100 per cent right came back at 59 to 65.
+   *
+   * "Against the whole film" alone is a bar that grows with the film and not
+   * with the act. Zodiac's director's cut has two inserts 67 seconds apart; the
+   * act between them was found by the windows, placed at 45:26, and dropped
+   * here, because the break bought 14 cues against a bar of 2% of 2,595 - 52
+   * cues no 67-second act could have. Those 14 were most of the act's own, and
+   * without it the Turkish lines ran 14 seconds early for a minute. So a break
+   * also earns itself by explaining most of the shorter act it separates.
+   *
+   * Only where the two levels are further apart than twice the tolerance, so
+   * that no cue can land under both and the gain is evidence for the act
+   * rather than a better fit inside it. Without that condition a slow drift -
+   * Die Hard's two English files, a second apart across the film - was
+   * answered with a 458ms step at 33 minutes instead of its rate, and lost 18
+   * points of the film inside 250ms. */
   function pruneActs(acts, a, b, map) {
     let current = acts;
+    const filmBar = Math.max(STEP_WORTH_CUES, a.length * STEP_WORTH);
+    const cuesIn = (act) => a.filter((x) => x >= act.fromMs && x < act.toMs).length;
+    /* The cheapest break that fails its bar goes first, by gain as before, so
+     * the order of removal - which decides what the survivors look like - only
+     * changes where a short act has earned itself. Ordering by the share of
+     * the bar instead took a different route through Die Hard's five pieces
+     * and ended on the same 458ms step. */
     while (current.length > 1) {
       const before = actMatches(current, a, b, map);
       let cheapest = -1;
       let cheapestGain = Infinity;
       for (let k = 1; k < current.length; k++) {
         const gain = before - actMatches(withoutAct(current, k), a, b, map);
+        const apart = Math.abs(current[k].level - current[k - 1].level) > 2 * STEP_TOL_MS;
+        const actBar = apart
+          ? Math.max(STEP_WORTH_CUES, Math.min(cuesIn(current[k - 1]), cuesIn(current[k])) * STEP_ACT_SHARE)
+          : Infinity;
+        if (gain >= Math.min(filmBar, actBar)) continue;
         if (gain < cheapestGain) { cheapestGain = gain; cheapest = k; }
       }
-      if (cheapestGain >= Math.max(STEP_WORTH_CUES, a.length * STEP_WORTH)) return current;
+      if (cheapest < 0) return current;
       current = withoutAct(current, cheapest);
     }
     return current;

@@ -354,7 +354,18 @@ touch, and the rest a minute or more from any join.
 version did not have it - it invented a second act on four pairs `align()`
 already put 100% right. `bench/align/regress.mjs` is the standing gate and exits
 non-zero on any pair that loses ground. Run it before touching any of the
-constants in the acts section of `align.js`.
+constants in the acts section of `align.js` - and as `--before HEAD` for any
+edit to `align.js` itself, which puts the working tree's aligner against the
+committed one pair by pair rather than against `align()`.
+
+**Short acts.** The pruning bar used to be 2% of the film's cues, which a
+67-second act cannot reach on a long film: Zodiac's director's cut lost the act
+between two inserts at 45:26 and the Turkish ran 14 seconds early there. A break
+whose two levels are more than twice the tolerance apart now also earns itself
+with half the cues of the shorter act it separates. One limit is left and
+written beside `joinTrivial`: an act holding a single window centre (shorter
+than about 90 seconds, depending on the grid) is merged before pruning sees it.
+Two attempts to lift it on 2026-10-23 each lost ground on the gate.
 
 **Before adding another gate, read `docs/reports/auto-sync-2026-08-16.md`** -
 how the truth is derived, how often each shape occurs, what every method scores,

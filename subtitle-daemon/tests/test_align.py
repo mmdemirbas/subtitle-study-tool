@@ -840,6 +840,65 @@ def test_a_staircase_is_walked_up_one_act_at_a_time(corpus) -> None:
     )
 
 
+def test_a_short_act_between_two_inserts_is_kept(corpus) -> None:
+    """Two inserts close together, which is what a director's cut does.
+
+    Zodiac's director's cut against a theatrical-cut subtitle: 14.3 seconds
+    inserted at 45:26 and another 16.1 at 46:33, so for 67 seconds the file
+    sits 14.3 seconds out and after that 30.4. The windows found that act and
+    pruning dropped it, because the bar was 2% of the film's cues - more than
+    such an act holds - and the Turkish lines ran 14 seconds early there.
+
+    100 seconds here rather than 67, because an act that holds only one window
+    centre is merged before pruning ever sees it (the known limit beside
+    joinTrivial), and whether a 67-second act holds one or two depends on
+    where the grid falls. The files it was reported on are the next test.
+    """
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    times = _longest(corpus)
+    if len(times) < 1500 or times[-1] < 5_000_000:
+        pytest.skip("no subtitle long enough for the film-wide bar to exceed a short act")
+    join = times[len(times) * 2 // 5]
+    steps = [(0, 0), (join, 14300), (join + 100_000, 30400)]
+    moved = _staircase(times, steps)
+    answer = _run_steps([("director's cut", times, moved)])["director's cut"]
+
+    assert answer["ok"], "a copy moved by two inserts was refused"
+    errors = [abs(got - want) for got, want, t in zip(answer["mapped"], moved, times) if join <= t < join + 100_000]
+    landed = sum(1 for e in errors if e <= 250)
+    assert landed >= len(errors) * 0.8, (
+        f"{landed} of the {len(errors)} lines in the 100-second act landed inside 250ms; "
+        f"acts came back as {answer['steps']}"
+    )
+
+
+ZODIAC = {"en": "3450605", "tr": ["926868", "3441190"]}
+
+
+def test_zodiacs_short_act_is_found_on_the_files_it_was_reported_on() -> None:
+    """The reported case itself, when its files are in the download cache.
+
+    The English file is timed to the director's cut and both Turkish ones to
+    the theatrical cut. Measured window by window on 2026-10-23, the Turkish
+    sits 14.3 seconds further out from 45:26 to 46:33 and 30.4 after; the
+    plan the extension applied had no act there.
+    """
+    if shutil.which("node") is None:
+        pytest.skip("node is not installed")
+    paths = [CACHE / f"{ZODIAC['en']}.srt"] + [CACHE / f"{t}.srt" for t in ZODIAC["tr"]]
+    if not all(p.exists() for p in paths):
+        pytest.skip("the Zodiac subtitles are not in this cache")
+    en = _starts(paths[0])
+    pairs = [(t, en, _starts(p)) for t, p in zip(ZODIAC["tr"], paths[1:])]
+    for name, answer in _run_steps(pairs).items():
+        assert answer["verdict"] == "apply", f"{name}: {answer['verdict']}"
+        found = [s for s in answer["steps"] if 2_700_000 <= s["fromMs"] <= 2_760_000]
+        assert found and abs(found[0]["offsetMs"] + 14_300) <= 300, (
+            f"{name}: no act at 45:26 about 14.3s out; acts were {answer['steps']}"
+        )
+
+
 def test_a_file_that_needs_one_shift_is_given_one_act(corpus) -> None:
     """The control, and the reason the rest of it is worth anything.
 
