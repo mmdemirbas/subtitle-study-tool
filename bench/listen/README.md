@@ -129,15 +129,24 @@ probability of 0.3 over a song is what the decision rule has to survive, and
 the listenings from each film's first frame, which begin on those openings,
 are the measurement that it does - none of the 30 applied a wrong shift.
 
-## What it cannot hear
+## What it cannot hear from the element
 
 Chrome refuses `captureStream()` for a video whose data comes from another
-origin without CORS - observed, "SecurityError: Failed to execute
-'captureStream' on 'HTMLMediaElement': Cannot capture from element with
-cross-origin data". Encrypted media is expected to be refused too, and has not
-been observed here yet; the first `listenEar` line from such a site will say
-what Chrome does. Every streaming service that sells films encrypts them;
-on those the page usually carries its own subtitles, timed to the picture,
-which is better than anything heard. A player that streams through Media
-Source Extensions (hls.js, dash.js, Shaka without DRM) fetches its own data
-and can be heard.
+origin without CORS ("SecurityError: Failed to execute 'captureStream' on
+'HTMLMediaElement': Cannot capture from element with cross-origin data") and
+for one with MediaKeys ("NotSupportedError: ... Stream capture not supported
+with EME"), both observed in Chrome; the second was Shaka playing Widevine,
+2026-10-23. A player that streams through Media Source Extensions without DRM
+(hls.js, dash.js, Shaka) fetches its own data and can be heard.
+
+Both are heard from the tab instead, after the reader presses the extension's
+button on it (`browser-extension/src/tab-ear.js`). Nothing here replays that
+path - the bench reads decoded films, not a browser - and what is known about
+it is from Chrome: the tab capture of the Widevine film read the same levels
+as `captureStream()` of the clear copy (300-3400Hz median -65.9dB against
+-67.4dB), and against the frames clip's known tone envelope the tab's sound
+reached its analyser 45ms and 70ms later than the element's copy reached the
+page's, in two runs. The extension takes 50ms off every tab reading for that.
+The offscreen document's timer fired every 57ms at the median (103ms at p90)
+rather than every 50ms, so about one frame in five is not heard and a block
+takes that much longer to fill.

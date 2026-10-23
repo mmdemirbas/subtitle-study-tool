@@ -3283,6 +3283,88 @@
         }
       });
 
+      check("a film that will not be heard from the page is heard from the tab, each reading on the film's clock", async () => {
+        /* What content.js does when captureStream() is refused - the worker's
+         * half is tests/worker.mjs. The readings arrive the way the offscreen
+         * document sends them: stamped with the wall clock when they were
+         * heard, 50ms behind the film as the capture is, and here a whole
+         * 600ms after that, which a reading stamped on arrival would turn into
+         * 600ms of wrong shift. */
+        const api = window.__ssoApi, L = window.__ssoListen;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const realOpen = L.openEar, realHearing = L.createHearing, realSay = window.__ssoPanel?.sayInPanel, realSend = chrome.runtime.sendMessage;
+        const wasClock = Object.getOwnPropertyDescriptor(video, "currentTime");
+        const said = [], asked = [];
+        const { lines, level } = heardFilm(3000);
+        L.openEar = () => ({ refused: "NotSupportedError: Failed to execute 'captureStream' on 'HTMLMediaElement': Stream capture not supported with EME", retry: false });
+        L.createHearing = (options) => realHearing({ ...options, blockFrames: 200 });
+        chrome.runtime.sendMessage = async (msg) => {
+          if (msg?.type !== "sso:tabEar") return realSend(msg);
+          asked.push(msg.op);
+          return { ok: false, invoke: true, shortcut: "⌘⇧K", reason: "Extension has not been invoked for the current page (see activeTab permission). Chrome pages cannot be captured." };
+        };
+        if (window.__ssoPanel) window.__ssoPanel.sayInPanel = (slot, text) => { said.push(text); return true; };
+        const deliver = (message) => { for (const fn of window.__listeners) fn(message, {}, () => {}); };
+        let pump = null;
+        api.updateSettings({ listen: false });
+        await sleep(120);
+        api.updateSettings({ listen: true });
+        const startedWall = Date.now();
+        Object.defineProperty(video, "currentTime", { get: () => 100 + (Date.now() - startedWall) / 1000, set() {}, configurable: true });
+        try {
+          await api.attach({ cues: lines, label: "EN · protected", fileId: 7821, language: "en", slot: 0 });
+          api.detach(1);
+          api.setOffset(0, { slot: 0, quiet: true, byHand: false });
+          for (let i = 0; i < 40 && api.status().listening.tabEar !== "wanted"; i++) await sleep(25);
+          if (api.status().listening.tabEar !== "wanted" || asked[0] !== "open")
+            throw new Error(`the worker was not asked for the tab: ${JSON.stringify({ asked, listening: api.status().listening })}`);
+          if (said.filter((text) => /will not let its film be heard/.test(text) && text.includes("⌘⇧K")).length !== 1)
+            throw new Error(`the reader was not told once what to press: ${JSON.stringify(said)}`);
+
+          // The reader presses the shortcut; the worker says the ear is open.
+          deliver({ type: "sso:tabEar", event: "open", ok: true, sampleRate: 48000, fftSize: 2048, state: "running" });
+          if (api.status().listening.ear !== "tab") throw new Error(`no tab ear after it opened: ${JSON.stringify(api.status().listening)}`);
+          let sentUpTo = Date.now();
+          pump = setInterval(() => {
+            const readings = [];
+            for (const until = Date.now() - 600; sentUpTo + 50 <= until; ) {
+              sentUpTo += 50;
+              // What the tab's ear heard at a stamp is the film 50ms before it.
+              readings.push([sentUpTo, level(100000 + (sentUpTo - 50 - startedWall))]);
+            }
+            if (readings.length) deliver({ type: "sso:tabEar", event: "readings", readings });
+          }, 250);
+          let tracks = api.status().tracks;
+          for (let i = 0; i < 400 && Math.abs(tracks[0].offsetMs) < 1000; i++) { await sleep(100); tracks = api.status().tracks; }
+          if (Math.abs(tracks[0].offsetMs - 3000) > 100) {
+            const { decision: d, heardMs } = api.status().listening;
+            throw new Error(`the lead is at ${tracks[0].offsetMs}ms after ${heardMs}ms heard from the tab, wanted 3000 within 100: ${JSON.stringify(d)}`);
+          }
+          clearInterval(pump);
+          deliver({ type: "sso:tabEar", event: "ended", reason: "the tab's sound ended" });
+          const after = api.status().listening;
+          if (after.ear !== null || after.tabEar !== "wanted") throw new Error(`an ended tab ear is not waiting for the next press: ${JSON.stringify(after)}`);
+        } finally {
+          clearInterval(pump);
+          api.updateSettings({ listen: false });
+          await sleep(120);
+          api.updateSettings({ listen: true });
+          L.openEar = realOpen;
+          L.createHearing = realHearing;
+          chrome.runtime.sendMessage = realSend;
+          if (window.__ssoPanel) window.__ssoPanel.sayInPanel = realSay;
+          Object.defineProperty(video, "currentTime", wasClock);
+          for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({ cues: CUES, label: slot ? "second" : "first", fileId: slot + 1, language: slot ? "tr" : "en", slot });
+            } else {
+              api.detach(slot);
+            }
+          }
+          await sleep(150);
+        }
+      });
+
       check("a subtitle the page carries is never listened to, nor anything while listening is off", async () => {
         const api = window.__ssoApi, L = window.__ssoListen;
         const wasAttached = api.status().tracks.map((t) => t.attached);

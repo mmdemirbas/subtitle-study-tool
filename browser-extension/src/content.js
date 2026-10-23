@@ -6336,6 +6336,13 @@
     last: null, // the last correction applied, for Undo and for being overruled
     decision: null,
     decidedFor: null, // the lead file the heard blocks were last put to
+    /* The tab's sound, where the element refused its own: "asking" the
+     * worker, "wanted" until the reader invokes the extension on this tab,
+     * "open" while the offscreen document hears it (tab-ear.js). */
+    tabEar: null,
+    told: null, // the video the reader was told what to press for
+    tabRefused: null, // the worker's last reason for not opening it
+    clock: [], // [wall ms, stream ms] at each steady tick, for the tab's readings
   };
   const LISTEN_RETRY_MS = 5000;
   /* A hand moving the lead back by half or more of a heard correction, this
@@ -6352,6 +6359,10 @@
 
   function closeEar() {
     listening.ear?.close();
+    if (listening.tabEar && !listening.ear?.remote) tellTabEar("close");
+    listening.tabEar = null;
+    listening.tabRefused = null;
+    listening.clock = [];
     listening.ear = null;
     listening.video = null;
     listening.refused = null;
@@ -6382,6 +6393,11 @@
       if (slot == null) return;
     }
     if (!listening.ear) {
+      /* Asked again after a refusal that was not "press something": the
+       * likeliest is a capture of this tab still closing - a new element, a
+       * re-injected script - which Chrome refuses as a stream already held. */
+      const askAgain = listening.tabEar === "refused" && Date.now() > listening.retryAt;
+      if (listening.refused && !listening.refused.retry && (!listening.tabEar || askAgain)) askTabEar(slot);
       if (listening.refused && (!listening.refused.retry || Date.now() < listening.retryAt)) return;
       /* Not before the film has played: a capture of an element with nothing
        * loaded has no audio track to hear. */
@@ -6420,11 +6436,142 @@
      * once a second, which is not enough to see a syllable; and the detector
      * has been measured at 1x only. */
     const rate = video.playbackRate || 1;
-    if (video.paused || video.seeking || video.readyState < 3 || state.inAd || document.hidden || rate < 0.7 || rate > 1.5) return;
+    const steady = !(video.paused || video.seeking || video.readyState < 3 || state.inAd || document.hidden || rate < 0.7 || rate > 1.5);
+    if (listening.ear.remote) {
+      hearTab(steady, slot, rate);
+      return;
+    }
+    if (!steady) return;
     const reading = listening.ear.read();
     if (!reading) return;
     if (!listening.hearing.hear(streamNowMs(), reading)) return;
     if (slot != null) decideHeard(slot);
+  }
+
+  /* The element would not let itself be heard - DRM, or a film from another
+   * origin - so the worker is asked for the tab's sound. Chrome gives it only
+   * after the reader has invoked the extension on the tab, so the first
+   * answer is usually "press something", which is said once per film. */
+  function askTabEar(slot) {
+    const video = listening.video;
+    const refusedBefore = listening.tabRefused;
+    listening.tabEar = "asking";
+    let asked;
+    try {
+      asked = chrome.runtime.sendMessage({ type: "sso:tabEar", op: "open" });
+    } catch {
+      // The extension was reloaded under this page: nothing to ask.
+      listening.tabEar = "refused";
+      listening.retryAt = Date.now() + LISTEN_RETRY_MS;
+      return;
+    }
+    asked.then(
+      (answer) => {
+        if (listening.video !== video || listening.tabEar !== "asking") return;
+        if (answer?.ok) return openTabEar(answer);
+        listening.tabEar = answer?.invoke ? "wanted" : "refused";
+        listening.retryAt = Date.now() + LISTEN_RETRY_MS;
+        listening.tabRefused = answer?.reason || null;
+        // Once per reason, so a refusal asked again every five seconds is one line.
+        if (answer?.invoke || listening.tabRefused !== refusedBefore) {
+          trace("listenEar", { outcome: answer?.invoke ? "tab-wanted" : "tab-refused", reason: answer?.reason, element: listening.refused?.reason });
+        }
+        if (!answer?.invoke || listening.told === video || slot == null) return;
+        listening.told = video;
+        /* Said once per film, and only with a subtitle to line up: a page
+         * that refuses its film's sound is every DRM site, and most of the
+         * time the page carries its own subtitles, which are never listened
+         * to anyway. */
+        const press = answer.shortcut ? `press ${answer.shortcut} once on this tab, or the extension's toolbar button,` : "press the extension's toolbar button once on this tab";
+        showToast(`This page will not let its film be heard, so the subtitle cannot be lined up by ear yet - ${press} and it will be heard from the tab.`, { slot });
+      },
+      () => {
+        if (listening.tabEar !== "asking") return;
+        listening.tabEar = "refused";
+        listening.retryAt = Date.now() + LISTEN_RETRY_MS;
+      },
+    );
+  }
+
+  function openTabEar(opened) {
+    listening.tabEar = "open";
+    listening.clock = [];
+    listening.ear = {
+      remote: true,
+      state: opened.state || "running",
+      sampleRate: opened.sampleRate,
+      fftSize: opened.fftSize,
+      queue: [],
+      close() {
+        tellTabEar("close");
+      },
+    };
+    trace("listenEar", { outcome: "tab-open", sampleRate: opened.sampleRate, fftSize: opened.fftSize, element: listening.refused?.reason });
+  }
+
+  function tellTabEar(op) {
+    try {
+      chrome.runtime.sendMessage({ type: "sso:tabEar", op }).catch(() => {});
+    } catch {
+      // Reloaded under the page; the capture ends with the offscreen document.
+    }
+  }
+
+  /* From the worker: the tab's ear opened on an invocation, a batch of what
+   * it heard, or its end. */
+  function onTabEar(message) {
+    if (message.event === "open") {
+      if (listening.tabEar === "wanted" && !listening.ear) openTabEar(message);
+      return;
+    }
+    if (!listening.ear?.remote) return;
+    if (message.event === "readings" && Array.isArray(message.readings)) {
+      listening.ear.queue.push(...message.readings);
+      // A tab that stopped ticking must not hold minutes of them.
+      if (listening.ear.queue.length > 400) listening.ear.queue.splice(0, listening.ear.queue.length - 400);
+    } else if (message.event === "ended") {
+      trace("listenEar", { outcome: "tab-ended", reason: message.reason });
+      listening.ear = null;
+      listening.clock = [];
+      // Wanted again: the next invocation opens it, and nothing here asks
+      // unprompted, which could take the tab back from another one.
+      listening.tabEar = "wanted";
+    }
+  }
+
+  /* The offscreen document stamps each reading with the wall clock, and it
+   * arrives a batch at a time, up to half a second later. So every steady
+   * tick writes down where the film was at that wall time, and a reading is
+   * put at the film moment of the tick before it plus the time since. A
+   * reading from before the film was last steady - a pause, a seek, an
+   * advert - has no such tick and is dropped.
+   *
+   * The tab's sound reaches the offscreen analyser later than the element's
+   * copy reaches the page's: against the frames clip's known tone envelope,
+   * 45ms and 70ms later in two runs (Chromium headless, 2026-10-23), where
+   * the element's copy was 5ms and 10ms early. Uncorrected, every heard shift
+   * from the tab would leave the subtitle that much late. */
+  const TAB_EAR_LATE_MS = 50;
+  function hearTab(steady, slot, rate) {
+    const ear = listening.ear;
+    const now = Date.now();
+    if (!steady) {
+      listening.clock = [];
+      ear.queue.length = 0;
+      return;
+    }
+    const clock = listening.clock;
+    clock.push([now, streamNowMs()]);
+    if (clock.length > 60) clock.splice(0, clock.length - 60);
+    let i = 0;
+    while (ear.queue.length && ear.queue[0][0] <= now) {
+      const [stampMs, p] = ear.queue.shift();
+      const wallMs = stampMs - TAB_EAR_LATE_MS;
+      while (i + 1 < clock.length && clock[i + 1][0] <= wallMs) i++;
+      if (clock[i][0] > wallMs || wallMs - clock[i][0] > 1000) continue;
+      const streamMs = clock[i][1] + (wallMs - clock[i][0]) * rate;
+      if (listening.hearing.hear(streamMs, p) && slot != null) decideHeard(slot);
+    }
   }
 
   function decideHeard(slot) {
@@ -6563,6 +6710,8 @@
       on: state.settings.listen !== false,
       slot,
       hearing: Boolean(listening.ear),
+      ear: listening.ear?.remote ? "tab" : listening.ear ? "element" : null,
+      tabEar: listening.tabEar,
       // What a shift has to come to before it is applied, now.
       minimumMs: slot != null && listening.handOn === String(state.tracks[slot].fileId) ? L?.AFTER_HAND_MIN_MS : L?.APPLY_MIN_MS,
       refused: listening.refused?.reason ?? null,
@@ -8553,6 +8702,10 @@
 
       case "sso:status":
         sendResponse(status());
+        return false;
+
+      case "sso:tabEar":
+        onTabEar(message);
         return false;
 
       case "sso:pageInfo":

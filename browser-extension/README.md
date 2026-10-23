@@ -420,6 +420,26 @@ What remains is the offset baked into the subtitle file itself, from being
 timed against a different release of the film. That is a constant, you set it
 once with <kbd>G</kbd> and <kbd>H</kbd>, and it is saved.
 
+### Lined up by ear
+
+The leading subtitle has nothing to be lined up against but the film, so the
+extension listens to it: where the film speaks, and where the subtitle's lines
+have to sit for most of them to fall on that speech. It moves the subtitle only
+when two consecutive minutes of film agree, says so with an **Undo**, and stops
+for a file you undo or correct back by hand. On ten films listened to from
+their start, the first correction came a median 2.1 minutes after the first
+line, and no listening applied a wrong one; a film's title music is heard as
+less likely speech than its dialogue, and was not taken for it.
+
+A page that will not let its film be heard - every site with DRM, and a film
+served from another origin - is heard from the tab instead. Chrome hands an
+extension a tab's sound only after you have pressed its toolbar button or one
+of its shortcuts on that tab, so the first time it asks; once per tab is
+enough, and a press made earlier counts. While it listens, Chrome takes the
+tab off the speakers and the extension plays its sound back, which puts the
+sound reaching the extension 45-70ms behind the element's own; how far behind
+the picture you hear it has not been measured.
+
 ### Timing that carries over
 
 A saved offset belongs to one file, and the next episode is a different file —
@@ -692,8 +712,10 @@ the host permission.
   lines of any subtitle it is asked to make, to Google.
 - **DRM-protected video** (Netflix, Prime Video, Disney+) works for the
   overlay: the DOM overlay draws over protected video, and `currentTime` is
-  readable. What will not work is future audio capture for live transcription,
-  since protected streams yield silence.
+  readable. Its sound cannot be captured from the element ("Stream capture not
+  supported with EME"), so listening takes the tab's sound instead, after a
+  press on that tab - the `tabCapture` and `offscreen` permissions are for
+  that and nothing else.
 - Subtitle text is inserted with `textContent`, never `innerHTML`, so subtitle
   markup cannot execute in the page.
 

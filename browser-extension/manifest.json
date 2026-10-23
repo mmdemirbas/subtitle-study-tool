@@ -19,7 +19,9 @@
     "webNavigation",
     "downloads",
     "downloads.ui",
-    "alarms"
+    "alarms",
+    "tabCapture",
+    "offscreen"
   ],
   "host_permissions": [
     "<all_urls>",

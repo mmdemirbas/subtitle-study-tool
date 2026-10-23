@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>a film the page will not let itself be heard</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #12161c; overflow: hidden; }
+  video { width: 100%; height: 100%; display: block; background: #1b2028; }
+</style>
+</head>
+<body>
+  <!-- The clip from the OTHER port, without CORS: it plays, and Chrome
+       refuses captureStream() on it ("Cannot capture from element with
+       cross-origin data"), which is the refusal an encrypted film gets too
+       and is answered the same way - from the tab. Not muted: the tab's
+       sound is what is heard, after the element's volume. -->
+  <video id="v" playsinline loop></video>
+  <script>
+    const port = new URLSearchParams(location.search).get("from");
+    document.getElementById("v").src = `http://127.0.0.1:${port}/tests/frames/clip.mp4`;
+  </script>
+</body>
+</html>

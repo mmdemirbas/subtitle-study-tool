@@ -517,12 +517,11 @@
    * element's sound away from the speakers and makes the extension responsible
    * for playing it. A capture is a copy, before the element's own volume, so a
    * muted film is heard as well as a loud one. Chrome refuses it for a video
-   * whose data is from another origin without CORS (observed: "Cannot capture
-   * from element with cross-origin data"), and is expected to for encrypted
-   * media, not yet observed; the caller records the error either way.
+   * whose data is from another origin without CORS ("Cannot capture from
+   * element with cross-origin data") and for one with MediaKeys ("Stream
+   * capture not supported with EME"), both observed; the caller asks the
+   * worker for the tab's sound instead (hearTab in offscreen.js).
    *
-   * The analyser mixes its input to mono, which for a stereo source is the
-   * middle, (L+R)/2; the side is L/2 - R/2 summed into a second analyser.
    * Measured in Chrome against a clip with tone bursts at known moments: each
    * onset was read between 20ms early and 98ms late on a 50ms poll, muted or
    * not.
@@ -545,7 +544,39 @@
     } catch (error) {
       return { refused: `${error?.name || "Error"}: ${error?.message || error}` };
     }
+    /* An AudioContext made before the frame has seen a gesture starts
+     * suspended; the next press or key in this frame lets it run. */
+    const resume = () => {
+      if (context.state === "suspended") context.resume().catch(() => {});
+    };
+    document.addEventListener("pointerdown", resume, true);
+    document.addEventListener("keydown", resume, true);
+    context.addEventListener("statechange", () => onState(context.state));
+    resume();
+    const ear = hearStream(stream, context);
+    return {
+      ...ear,
+      get state() { return context.state; },
+      close() {
+        document.removeEventListener("pointerdown", resume, true);
+        document.removeEventListener("keydown", resume, true);
+        ear.close();
+      },
+    };
+  }
+
+  /**
+   * The ear itself, on any stream: the element's copy, or the tab's sound in
+   * the offscreen document.
+   *
+   * The analyser mixes its input to mono, which for a stereo source is the
+   * middle, (L+R)/2; the side is L/2 - R/2 summed into a second analyser.
+   * `playBack` connects the stream to the speakers as well, which a tab
+   * capture needs: Chrome stops playing a captured tab to the reader.
+   */
+  function hearStream(stream, context, { playBack = false } = {}) {
     const source = context.createMediaStreamSource(stream);
+    if (playBack) source.connect(context.destination);
     const fftSize = context.sampleRate > 60000 ? 4096 : 2048;
     const middle = context.createAnalyser();
     const sides = context.createAnalyser();
@@ -576,17 +607,6 @@
     const midDb = new Float32Array(middle.frequencyBinCount);
     const sideDb = new Float32Array(sides.frequencyBinCount);
     const features = createFeatures({ binHz: context.sampleRate / fftSize, bins: middle.frequencyBinCount });
-
-    /* An AudioContext made before the frame has seen a gesture starts
-     * suspended; the next press or key in this frame lets it run. */
-    const resume = () => {
-      if (context.state === "suspended") context.resume().catch(() => {});
-    };
-    document.addEventListener("pointerdown", resume, true);
-    document.addEventListener("keydown", resume, true);
-    context.addEventListener("statechange", () => onState(context.state));
-    resume();
-
     return {
       get state() { return context.state; },
       sampleRate: context.sampleRate,
@@ -600,8 +620,6 @@
         return features(midDb, sideDb);
       },
       close() {
-        document.removeEventListener("pointerdown", resume, true);
-        document.removeEventListener("keydown", resume, true);
         for (const track of stream.getTracks()) track.stop();
         context.close().catch(() => {});
       },
@@ -609,7 +627,7 @@
   }
 
   globalThis.__ssoListen = {
-    bestShift, placeLines, createHearing, createFeatures, retiming, openEar, FEATURES,
+    bestShift, placeLines, createHearing, createFeatures, speechProbability, retiming, openEar, hearStream, FEATURES,
     HOP_MS, BLOCK_FRAMES, APPLY_MIN_MS, AFTER_HAND_MIN_MS,
   };
 })();

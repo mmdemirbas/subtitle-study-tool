@@ -25,6 +25,7 @@ import {
   translateStatus,
 } from "./daemon.js";
 import { readPageTrack } from "./subtitles/page.js";
+import { closeTabEar, openTabEar } from "./tab-ear.js";
 import { videoRelease } from "./subtitles/release.js";
 import { measure, toJson } from "./subtitles/srt.js";
 /* Every call that used to go straight to the daemon goes through the provider,
@@ -517,6 +518,33 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  /* The tab's sound, for the frame whose film refused its own capture
+   * (tab-ear.js says why). The readings and the end come from the offscreen
+   * document, which names the frame they are for. */
+  if (message?.type === "sso:tabEar") {
+    const tabId = sender?.tab?.id;
+    if (tabId == null) {
+      sendResponse({ ok: false, reason: "not from a tab" });
+      return false;
+    }
+    const work = message.op === "close" ? closeTabEar(tabId, "closed by the page").then(() => ({ ok: true })) : openTabEar(tabId, sender.frameId);
+    work.then(sendResponse, (error) => sendResponse({ ok: false, reason: describe(error) }));
+    return true;
+  }
+  // Only from an extension page - the offscreen document - never from a tab.
+  if ((message?.type === "sso:tabEarReadings" || message?.type === "sso:tabEarEnded") && !sender?.tab) {
+    const ended = message.type === "sso:tabEarEnded";
+    send(message.tabId, message.frameId, { type: "sso:tabEar", event: ended ? "ended" : "readings", readings: message.readings, reason: message.reason });
+    if (ended) trace.record("tabEar", { outcome: "ended", tabId: message.tabId, reason: message.reason });
+    if (ended && message.remaining === 0) chrome.offscreen.closeDocument().catch(() => {});
+    return false;
+  }
+  // Opening the popup is an invocation, which is what a tab's ear waits for.
+  if (message?.type === "sso:invoked" && !sender?.tab) {
+    if (message.tabId != null) earIfWanted(message.tabId).catch(() => {});
+    return false;
+  }
+
   // The popup's buttons run the same paths as the keyboard shortcuts, so the
   // match-quality gate and error handling cannot drift between the two.
   if (message?.type === "sso:command") {
@@ -754,6 +782,7 @@ async function runCommand(command) {
     trackCount: status?.trackCount ?? 0,
   });
   const frameId = status?.frameId ?? TOP_FRAME;
+  if (status?.listening?.tabEar === "wanted") openWantedEar(tab.id, frameId).catch(() => {});
   /* The panel opens where the controls are, which is not always where the
    * video is. Toasts deliberately stay in the video's frame: they only have to
    * be seen, and when a nested player goes fullscreen the top frame's document
@@ -1423,6 +1452,24 @@ async function ensureInjected(tabId) {
   }
   return inject(tabId);
 }
+
+/* An invocation on a tab whose film is waiting to be heard opens its ear,
+ * and tells the frame. */
+async function earIfWanted(tabId) {
+  const status = await tabStatus(tabId);
+  if (status?.listening?.tabEar === "wanted") await openWantedEar(tabId, status.frameId ?? TOP_FRAME);
+}
+
+async function openWantedEar(tabId, frameId) {
+  const opened = await openTabEar(tabId, frameId);
+  trace.record("tabEar", { outcome: opened?.ok ? "open" : "refused", tabId, frameId, reason: opened?.reason, state: opened?.state, settings: opened?.settings });
+  if (opened?.ok) await send(tabId, frameId, { type: "sso:tabEar", event: "open", ...opened });
+}
+
+/* A captured tab that navigates has no frame left to hear for. */
+chrome.webNavigation.onCommitted.addListener(({ tabId, frameId }) => {
+  if (frameId === TOP_FRAME) closeTabEar(tabId, "the tab navigated").catch(() => {});
+});
 
 async function send(tabId, frameId, message) {
   try {

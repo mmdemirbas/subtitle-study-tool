@@ -62,11 +62,17 @@ const ctx = await chromium.launchPersistentContext(profile, {
   channel: "chromium",
   headless: true,
   viewport: null,
-  /* --mute-audio: clip.mp4 carries a tone for the listening check, and a
-   * headless Chrome plays it through the machine's speakers otherwise - over
-   * whatever the person at the machine is listening to. The capture is taken
-   * before the output, so the check hears it all the same. */
-  args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--window-size=1400,860", "--mute-audio"],
+  /* --disable-audio-output: clip.mp4 carries a tone for the listening
+   * checks, and a headless Chrome plays it through the machine's speakers
+   * otherwise - over whatever the person at the machine is listening to. This
+   * opens no audio device at all (no CoreAudio assertion is held, checked in
+   * the DRM spike of 2026-10-23), where --mute-audio, which Playwright passes
+   * by default, zeroes the data before the point a tab capture reads it and
+   * would leave the tab's ear hearing silence. The element's capture is taken
+   * in the renderer, so it hears the tone under either.
+   * --enable-unsafe-extension-debugging lets CDP press the toolbar button. */
+  ignoreDefaultArgs: ["--mute-audio"],
+  args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--window-size=1400,860", "--disable-audio-output", "--enable-unsafe-extension-debugging"],
 });
 
 try {
@@ -909,6 +915,54 @@ try {
   t("and there is no second frame doing anything",
     seen.filter((f) => !f.absent).length === 1,
     `${seen.length} frame(s)`);
+
+  // ------------------------------------------------------ the tab's sound --
+  /* A film the page will not let itself be heard - DRM, or data from another
+   * origin, which is what this page has - is heard from the tab, once the
+   * reader has pressed the extension's button on it. Chrome hands a tab's
+   * sound only to an extension invoked there, so the press is CDP's
+   * Extensions.triggerAction, which opens the popup as a click would. */
+  await page.goto(`http://127.0.0.1:${TOP_PORT}/tests/frames/protected.html?from=${PLAYER_PORT}`, { waitUntil: "domcontentloaded" });
+  await page.mouse.click(400, 300);
+  await page.evaluate(() => document.getElementById("v").play()).catch(() => {});
+  await page.waitForFunction(() => document.getElementById("v").currentTime > 0.5, null, { timeout: 10000 }).catch(() => {});
+  const topSays = async () =>
+    sw.evaluate(async () => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      return chrome.tabs.sendMessage(tab.id, { type: "sso:status" }, { frameId: 0 });
+    });
+  await sw.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const cues = Array.from({ length: 90 }, (_, i) => ({ start: i * 1000, end: i * 1000 + 900, text: `line ${i}` }));
+    await chrome.tabs.sendMessage(tab.id, { type: "sso:attach", payload: { cues, label: "EN tone", fileId: 4242, language: "en", slot: 0 } }, { frameId: 0 });
+  });
+  const waiting = await until(async () => {
+    const said = (await topSays())?.listening;
+    return said?.tabEar === "wanted" ? said : null;
+  }, 10000);
+  t("a film that refuses its own capture waits for the reader to press the button",
+    Boolean(waiting) && /cross-origin/.test(waiting.refused || ""),
+    JSON.stringify(waiting ?? (await topSays())?.listening));
+
+  const browserCdp = await ctx.browser()?.newBrowserCDPSession?.().catch(() => null);
+  let pressed = "no browser CDP session";
+  if (browserCdp) {
+    const { targetInfos } = await browserCdp.send("Target.getTargets", { filter: [{ type: "tab" }] });
+    const tabTarget = targetInfos.find((info) => info.url.includes("protected.html"));
+    const extensionId = new URL(sw.url()).host;
+    pressed = await browserCdp
+      .send("Extensions.triggerAction", { id: extensionId, targetId: tabTarget?.targetId })
+      .then(() => "pressed", (error) => error.message.split("\n")[0]);
+  }
+  /* Heard, and heard as sound: under --mute-audio a tab capture is zeros, and
+   * the probabilities of silence would add up to a few percent of it. */
+  const fromTab = await until(async () => {
+    const said = (await topSays())?.listening;
+    return said?.ear === "tab" && said.heardMs > 3000 && said.spokenMs > said.heardMs * 0.2 ? said : null;
+  }, 15000);
+  t("after the press the film is heard from the tab",
+    Boolean(fromTab),
+    JSON.stringify({ pressed, listening: fromTab ?? (await topSays())?.listening }));
 } finally {
   await ctx.close();
   fs.rmSync(profile, { recursive: true, force: true });

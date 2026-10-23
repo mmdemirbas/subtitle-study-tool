@@ -9,7 +9,7 @@
  * registers are captured and then invoked, so what is under test is the same
  * dispatch the browser would perform.
  */
-const listeners = { message: [], removed: [], command: null, global: {} };
+const listeners = { message: [], removed: [], command: null, committed: [], global: {} };
 // Every file the log wrote, every batch it POSTed to the daemon, and switches
 // for making either fail - which is the interesting half.
 const written = [];
@@ -107,6 +107,14 @@ let pageFiles = {};
 let pingAlive = false;
 // A tab whose panel cannot be reached, which is when the worker flags the icon.
 let panelRefused = false;
+/* The tab's sound, as Chrome hands it out: only for a tab the reader has
+ * invoked the extension on (a test adds the tab where Chrome would grant it,
+ * at the command or the popup), and never twice for a tab already captured.
+ * The offscreen document is one per extension, and what it is asked is
+ * recorded and answered the way offscreen.js answers. */
+const invokedTabs = new Set();
+const capturedTabs = new Set();
+const offscreen = { open: false, created: [], asked: [], closed: 0 };
 
 globalThis.indexedDB = {
   open: () => {
@@ -141,9 +149,51 @@ globalThis.chrome = {
     onStartup: { addListener() {} },
     onMessage: { addListener: (fn) => listeners.message.push(fn) },
     lastError: null,
+    async getContexts({ contextTypes }) {
+      return offscreen.open && contextTypes.includes("OFFSCREEN_DOCUMENT") ? [{ contextType: "OFFSCREEN_DOCUMENT" }] : [];
+    },
+    /* From the worker, the only listener is the offscreen document; with none
+     * open, Chrome rejects. */
+    async sendMessage(message) {
+      if (!offscreen.open) throw new Error("Could not establish connection. Receiving end does not exist.");
+      offscreen.asked.push(message);
+      if (message.type === "earOpen") {
+        capturedTabs.add(message.tabId);
+        return { ok: true, sampleRate: 48000, fftSize: 2048, state: "running" };
+      }
+      if (message.type === "earAdopt") return { ok: capturedTabs.has(message.tabId) };
+      if (message.type === "earClose") {
+        capturedTabs.delete(message.tabId);
+        return { ok: true, remaining: capturedTabs.size };
+      }
+      return undefined;
+    },
+  },
+  tabCapture: {
+    async getMediaStreamId({ targetTabId }) {
+      if (!invokedTabs.has(targetTabId)) throw new Error("Extension has not been invoked for the current page (see activeTab permission). Chrome pages cannot be captured.");
+      if (capturedTabs.has(targetTabId)) throw new Error("Cannot capture a tab with an active stream.");
+      return `stream-${targetTabId}`;
+    },
+  },
+  offscreen: {
+    async createDocument(options) {
+      if (offscreen.open) throw new Error("Only a single offscreen document may be created.");
+      if (!options?.url || !options.reasons?.length || !options.justification) throw new Error("Invalid offscreen document parameters.");
+      offscreen.open = true;
+      offscreen.created.push(options);
+    },
+    async closeDocument() {
+      if (!offscreen.open) throw new Error("No current offscreen document.");
+      offscreen.open = false;
+      offscreen.closed++;
+    },
   },
   // Captured, not discarded: the command path is where the self-heal runs.
-  commands: { onCommand: { addListener: (fn) => { listeners.command = fn; } } },
+  commands: {
+    onCommand: { addListener: (fn) => { listeners.command = fn; } },
+    async getAll() { return [{ name: "toggle-panel", shortcut: "⌘⇧K" }]; },
+  },
   /* The log writes itself to disk, so the thing that writes it is stubbed the
    * way Chrome behaves: a promise, an id back, and a rejection when it cannot
    * write - which is the case the buffer must survive rather than discard. */
@@ -183,8 +233,8 @@ globalThis.chrome = {
     async get(id) { return { id, url: tabUrl }; },
     async create() { return {}; },
     async sendMessage(tabId, message) {
-      sentToTab.push({ tabId, type: message.type, message });
-      if (message.type === "sso:status") return { ...tabStatusReply };
+      sentToTab.push({ tabId, type: message.type, message, frameId: arguments[2]?.frameId });
+      if (message.type === "sso:status") return typeof tabStatusReply === "function" ? tabStatusReply(arguments[2]?.frameId) : { ...tabStatusReply };
       // Two frames describing the same page differently, which is the shape
       // pageContextForTab exists to reconcile. Set per case.
       if (message.type === "sso:pageInfo") return pageInfoReply(message, arguments[2]);
@@ -225,7 +275,10 @@ globalThis.chrome = {
       return [];
     },
   },
-  webNavigation: { async getAllFrames() { return frameList; } },
+  webNavigation: {
+    async getAllFrames() { return frameList; },
+    onCommitted: { addListener: (fn) => listeners.committed.push(fn) },
+  },
   /* The badge as Chrome keeps it: one global text, and per-tab texts that
    * outrank it. A tab's "" is a text like any other and hides the global one;
    * only null hands the tab back. A stub that let "" fall through would pass
@@ -2405,6 +2458,68 @@ Short stamp
   t("a word spelled with combining marks ranks as the word it is",
     spellings[decomposed] !== null && spellings[decomposed] === spellings["ışık"],
     `NFD=${spellings[decomposed]} NFC=${spellings["ışık"]}`);
+}
+
+/* The tab's sound, for a film the page will not let itself be heard. */
+{
+  const frame = { tab: TAB, frameId: 3 };
+  const earMessages = () => sentToTab.filter((m) => m.type === "sso:tabEar");
+  const before = await ask({ type: "sso:tabEar", op: "open" }, frame);
+  t("a frame asking for the tab's sound before any invocation is told to wait for a press, with the shortcut",
+    before?.ok === false && before.invoke === true && before.shortcut === "⌘⇧K" && !offscreen.open,
+    JSON.stringify({ before, offscreen }));
+
+  // The reader presses the panel's shortcut: Chrome grants the tab, then runs the command.
+  // The film is in frame 3; the top frame has none.
+  tabStatusReply = (frameId) => (frameId === 3 ? { ok: true, hasVideo: true, attached: true, listening: { tabEar: "wanted" } } : { ok: true, hasVideo: false });
+  frameList = [{ frameId: 0 }, { frameId: 3 }];
+  invokedTabs.add(1);
+  sentToTab.length = 0;
+  await listeners.command("toggle-panel");
+  await until(() => earMessages().some((m) => m.message.event === "open"));
+  const opened = offscreen.asked.find((m) => m.type === "earOpen");
+  const told = earMessages().find((m) => m.message.event === "open");
+  t("the next invocation opens it, in one offscreen document, for the frame with the film",
+    offscreen.created.length === 1 && offscreen.created[0].reasons.includes("USER_MEDIA") && opened?.streamId === "stream-1" && opened.frameId === 3 && told?.frameId === 3,
+    JSON.stringify({ created: offscreen.created, opened, told }));
+
+  sentToTab.length = 0;
+  await ask({ type: "sso:tabEarReadings", tabId: 1, frameId: 3, readings: [[1000, 0.8], [1050, 0.1]] }, { id: "offscreen" });
+  const relayed = earMessages()[0];
+  t("what it hears goes to that frame",
+    relayed?.frameId === 3 && relayed.message.event === "readings" && relayed.message.readings.length === 2,
+    JSON.stringify(relayed));
+  sentToTab.length = 0;
+  await ask({ type: "sso:tabEarReadings", tabId: 1, frameId: 3, readings: [[1000, 1]] }, frame);
+  t("and nothing a tab sends is relayed as if the offscreen document had heard it",
+    earMessages().length === 0, JSON.stringify(earMessages()));
+
+  /* A content script injected again asks again; Chrome would refuse a second
+   * stream for a captured tab, so the capture already held is handed over. */
+  const asked = offscreen.asked.length;
+  const again = await ask({ type: "sso:tabEar", op: "open" }, { tab: TAB, frameId: 4 });
+  t("a frame asking again is given the capture already held, not a second one",
+    again?.ok === true && offscreen.asked.slice(asked).map((m) => m.type).join() === "earAdopt" && offscreen.created.length === 1,
+    JSON.stringify({ again, asked: offscreen.asked.slice(asked) }));
+
+  for (const fn of listeners.committed) fn({ tabId: 1, frameId: 0 });
+  await until(() => offscreen.closed === 1);
+  t("a tab that navigates gives its sound back, and the document goes",
+    !capturedTabs.has(1) && offscreen.closed === 1 && !offscreen.open,
+    JSON.stringify({ capturedTabs: [...capturedTabs], offscreen }));
+
+  // Opening the popup is an invocation too.
+  sentToTab.length = 0;
+  await ask({ type: "sso:invoked", tabId: 1 }, { id: "popup" });
+  await until(() => earMessages().some((m) => m.message.event === "open"));
+  t("the popup opening opens a wanted ear",
+    capturedTabs.has(1) && offscreen.created.length === 2,
+    JSON.stringify({ capturedTabs: [...capturedTabs], created: offscreen.created.length }));
+
+  await ask({ type: "sso:tabEar", op: "close" }, frame);
+  tabStatusReply = { ok: true, hasVideo: true, attached: false };
+  frameList = [{ frameId: 0 }];
+  t("and a frame done with it closes it", !capturedTabs.has(1) && !offscreen.open, JSON.stringify({ offscreen }));
 }
 
 for (const r of results) console.log(r.ok ? "PASS" : "FAIL", "-", r.name, r.ok ? "" : `→ ${r.detail}`);

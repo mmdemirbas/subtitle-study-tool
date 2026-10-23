@@ -62,6 +62,8 @@ init().catch((error) => block(error?.message || "Something went wrong.", ""));
 async function init() {
   [session.tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!session.tab?.id) return block("No active tab.", "");
+  // The popup opening is an invocation: a film waiting to be heard can be now.
+  chrome.runtime.sendMessage({ type: "sso:invoked", tabId: session.tab.id }).catch(() => {});
 
   await renderShortcuts();
 

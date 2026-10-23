@@ -486,7 +486,7 @@ its sides off two `AnalyserNode`s every tick, turns it into fifteen features
 (`createFeatures`: band levels above their floors, how centred and how tonal
 the sound is, a voice's pitch, spectral change, syllable-rate movement) and a
 logistic model turns those into a speech probability. Every minute of heard
-film the lead's lines are placed on that speech. Six things are load-bearing:
+film the lead's lines are placed on that speech. Eight things are load-bearing:
 
 - **The model is fitted, not written.** `SPEECH_MODEL` sits between
   `/* model:begin */` and `/* model:end */` and `bench/listen/train.mjs --write`
@@ -501,12 +501,31 @@ film the lead's lines are placed on that speech. Six things are load-bearing:
 - **`captureStream()`, never `createMediaElementSource`.** The second takes the
   element's sound away from the speakers. A capture is a copy, before the
   element's volume, so a muted film is heard too. Chrome refuses it for a
-  video whose data is cross-origin without CORS (observed) and is expected to
-  for encrypted media (not yet observed); the refusal is a `listenEar` line
-  with Chrome's own sentence in `reason`. An
+  video whose data is cross-origin without CORS and for one with MediaKeys
+  ("Stream capture not supported with EME"), both observed; the refusal is a
+  `listenEar` line with Chrome's own sentence in `reason`, and the tab's sound
+  is asked for instead (next bullet). An
   `AudioContext` made in a frame that has had no gesture starts suspended, and
   the next press or key in that frame resumes it (`state` lines). The ear is
   opened on the film's own frame, which is where `state.video` is.
+- **Where the element refuses, the tab is heard - after a press.**
+  `src/tab-ear.js` in the worker asks `chrome.tabCapture.getMediaStreamId`,
+  which Chrome answers only for a tab the reader has invoked the extension on
+  (toolbar button, popup, any shortcut; "Extension has not been invoked for
+  the current page" otherwise), and `src/offscreen.html` turns the id into
+  the tab's sound, hears it with the same `hearStream` and sends speech
+  probabilities stamped with `Date.now()` to the film's frame, ten at a time.
+  The frame puts each on the film's clock through the wall time of its own
+  ticks (`hearTab`), less `TAB_EAR_LATE_MS`, the 45-70ms the capture
+  measured behind the element's copy. Nothing is remembered in the worker: a
+  refused frame says `tabEar: "wanted"` in its status and an invocation
+  (`runCommand`, `sso:invoked` from the popup) reads that. Chrome takes a
+  captured tab off the speakers, so the offscreen document plays it back -
+  not yet heard by anyone, because no test here may make a sound; the first
+  report of a film going silent after the press is this. One tab at a time;
+  a top-frame navigation gives the tab its sound back. `tests/frames/run.mjs`
+  runs the whole path under `--disable-audio-output`, never `--mute-audio`,
+  which zeroes a tab capture.
 - **Applied only when independent stretches agree**: the last two one-minute
   blocks each within 200ms of the answer over the last six. One stretch is wrong often
   enough - a song, rain - and the margin over the next-best shift does not
