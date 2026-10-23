@@ -94,6 +94,22 @@ def test_cuts_release_scene_metadata() -> None:
     assert result.year == 2015
 
 
+def test_a_scene_name_ends_its_title_at_the_last_year() -> None:
+    # Title.Year.Tags: an edition tag after the year is release, not title, and
+    # a title with a year in it keeps it. Both were wrong, searching "Zodiac DC"
+    # and "Blade Runner 2017" from the year 2049.
+    cases = {
+        "Zodiac.2007.DC.1080p.BluRay.x265-RARBG.mp4": ("Zodiac", 2007),
+        "Zodiac.2007.Directors.Cut.iNTERNAL.1080p.BluRay.x264-MHQ": ("Zodiac", 2007),
+        "Blade.Runner.2049.2017.1080p.BluRay.x264": ("Blade Runner 2049", 2017),
+        "2001.A.Space.Odyssey.1968.1080p.BluRay": ("2001 A Space Odyssey", 1968),
+        "Amelie.2001.UNRATED.1080p.BluRay": ("Amelie", 2001),
+    }
+    for raw, (query, year) in cases.items():
+        result = guess(raw)
+        assert (result.query, result.year) == (query, year), raw
+
+
 def test_keeps_single_period_in_title() -> None:
     # Only multiple dots mean "these are spaces".
     assert guess("Mr. Robot - Prime Video").query == "Mr. Robot"

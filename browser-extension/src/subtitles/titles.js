@@ -72,6 +72,7 @@ const YEAR_RANGE = "(?:19[0-9]{2}|20[0-4][0-9])";
 const YEAR_BRACKETED = new RegExp(`[([]\\s*(${YEAR_RANGE})\\s*[)\\]]`);
 // JavaScript has lookbehind, so Python's (?<=\.)...(?=\.) ports directly.
 const YEAR_DOTTED = new RegExp(`(?<=\\.)(${YEAR_RANGE})(?=\\.)`);
+const YEAR_DOTTED_ALL = new RegExp(YEAR_DOTTED.source, "g");
 
 const TRAILING_YEAR = new RegExp(`\\s(${YEAR_RANGE})$`);
 
@@ -176,10 +177,15 @@ export function guess(raw) {
   if (release) text = text.slice(0, release.index);
 
   for (const pattern of [YEAR_BRACKETED, YEAR_DOTTED]) {
-    const match = pattern.exec(text);
+    /* A scene name is Title.Year.Tags, so in one the LAST dotted year is the
+     * year and everything after it is the release. Taking the first and
+     * removing only it searched "Zodiac.2007.DC.1080p" as "Zodiac DC", and
+     * "Blade.Runner.2049.2017.1080p" as "Blade Runner 2017" from the year 2049. */
+    const match = pattern === YEAR_DOTTED ? [...text.matchAll(YEAR_DOTTED_ALL)].pop() : pattern.exec(text);
     if (match && (pattern === YEAR_BRACKETED || sceneRelease)) {
-      const candidate =
-        text.slice(0, match.index) + " " + text.slice(match.index + match[0].length);
+      const candidate = pattern === YEAR_DOTTED
+        ? text.slice(0, match.index)
+        : text.slice(0, match.index) + " " + text.slice(match.index + match[0].length);
       if (stripChars(candidate, " .-|:")) {
         year = Number(match[1]);
         text = candidate;

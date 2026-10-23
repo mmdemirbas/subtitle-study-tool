@@ -62,6 +62,14 @@ TITLE_CASES = [
     "Prime Video: Scarpetta - Season 1",
     "Stranger Things Season 4",
     "Season of the Witch",
+    # Scene names whose year is not where the title ends, or is not the only
+    # year: an edition tag between the year and the quality tokens leaked into
+    # the query, and a title holding a year lost it to the first match.
+    "Zodiac.2007.DC.1080p.BluRay.x265-RARBG.mp4",
+    "Zodiac.2007.Directors.Cut.iNTERNAL.1080p.BluRay.x264-MHQ",
+    "Blade.Runner.2049.2017.1080p.BluRay.x264",
+    "2001.A.Space.Odyssey.1968.1080p.BluRay",
+    "Amelie.2001.UNRATED.1080p.BluRay",
 ]
 
 # Search resolutions, which is the level the two copies actually diverged at.
@@ -72,6 +80,7 @@ SEARCH_CASES = [
     {"title": "", "query": "The Americans S02 E04", "season": 1, "episode": 9},
     {"title": "", "query": "Crime 101"},
     {"title": "Sicario.2015.1080p.BluRay.x264-SPARKS", "query": ""},
+    {"title": "Zodiac.2007.DC.1080p.BluRay.x265-RARBG.mp4", "query": ""},
     {"title": "Watch Mercy (2025) Online Free HD", "query": "", "year": 2026},
     {"title": "Prime Video: Crime 101", "query": "", "season": 3, "episode": 2},
     {"title": "", "query": "", "year": 2013},

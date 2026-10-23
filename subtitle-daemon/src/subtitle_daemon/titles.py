@@ -224,9 +224,21 @@ def guess(raw: str) -> TitleGuess:
         text = text[: release.start()]
 
     for pattern in (_YEAR_BRACKETED, _YEAR_DOTTED):
-        match = pattern.search(text)
+        # A scene name is Title.Year.Tags, so in one the LAST dotted year is
+        # the year and everything after it is the release. Taking the first and
+        # removing only it searched "Zodiac.2007.DC.1080p" as "Zodiac DC", and
+        # "Blade.Runner.2049.2017.1080p" as "Blade Runner 2017" from the year
+        # 2049.
+        if pattern is _YEAR_DOTTED:
+            found = list(pattern.finditer(text))
+            match = found[-1] if found else None
+        else:
+            match = pattern.search(text)
         if match and (pattern is _YEAR_BRACKETED or scene_release):
-            candidate = text[: match.start()] + " " + text[match.end() :]
+            if pattern is _YEAR_DOTTED:
+                candidate = text[: match.start()]
+            else:
+                candidate = text[: match.start()] + " " + text[match.end() :]
             if candidate.strip(" .-|:"):
                 year = int(match.group("year"))
                 text = candidate
