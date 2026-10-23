@@ -108,17 +108,18 @@ whole cost of a dual-language setup and is why it only happens when the second
 language matched the film as well as the first did. One language configured, or
 nothing good in the second: one subtitle, exactly as before.
 
-**After the first time, nothing.** Attaching subtitles on a site once switches
-that site on: from then on, when a new episode starts there, they are searched
-for and put up without being asked. Watching a series is then press play and
-watch — no shortcut, no panel, no re-syncing.
+**Nothing to do at all.** When a film or an episode starts, on any site, its
+subtitles are searched for and put up without being asked. Watching a series is
+press play and watch — no shortcut, no panel, no re-syncing.
 
-It is per site rather than everywhere, because everywhere means a news clip, a
-product tour and an embedded trailer each spending one of ten daily downloads on
-subtitles nobody wanted. A site you have watched something on with subtitles is
-a statement about how you watch there; a site you have never used this on is
-not. The settings window has the switch, named after the site it applies to, and
-turning it off there stays off — a later manual attach will not turn it back on.
+What keeps that from spending the day's downloads on things nobody wanted to
+subtitle: a video under ten minutes is never searched for, a match that is not
+confident is never downloaded, and a subtitle that runs well past the end of the
+video is not put up. On a site you have never used this on, a search that finds
+nothing says nothing, and the first subtitle it does put up says once that it
+will keep doing so. The settings window has the switch, named after the site it
+applies to, and turning it off there stays off — a later manual attach will not
+turn it back on.
 
 A new episode is recognised without a page load, which is what streaming sites
 do: the mark is the video's duration and the tab's title, taken together and

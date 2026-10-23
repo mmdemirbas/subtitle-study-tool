@@ -381,6 +381,67 @@ t("a search that finds one takes the last episode's off first",
   order.join(","));
 daemonAnswers = null;
 
+/* 4d. On by default. A site nobody has decided about puts the subtitle up by
+ * itself - asked for as "on by default, of course" - and, because nobody asked
+ * there, it says nothing on the way: no "Looking for subtitles…", no panel
+ * opened over a long video whose title matched nothing well. */
+{
+  const never = { tab: { id: 1, url: "https://never.example/watch/9" } };
+  const found = (lastEndMs) => (url) => {
+    if (url.endsWith("/health")) return { default_languages: ["en"] };
+    if (url.includes("/search")) {
+      return {
+        used: { query: "A Film" }, resolved: { type: "movie", imdb_id: "tt1" }, auto_attach_threshold: 0.75,
+        results: [{ file_id: 8, language: "en", release: "A.Film.1080p", movie_name: "A Film", match_score: 0.99, download_count: 10 }],
+      };
+    }
+    if (url.endsWith("/fetch")) return { cues: [{ start: 0, end: 1000, text: "hello" }, { start: lastEndMs - 1000, end: lastEndMs, text: "bye" }] };
+    return null;
+  };
+  tabStatusReply = { ok: true, hasVideo: true, attached: false, seconds: 6000 };
+  daemonAnswers = found(5400000);
+  sentToTab.length = 0;
+  await ask({ type: "sso:programme", mark: "6000|A Film" }, never);
+  const types = sentToTab.map((m) => m.type);
+  t("a site nobody decided about puts subtitles up by itself",
+    types.includes("sso:attach") && sites()["https://never.example"] === undefined,
+    `${types.join(",")} ${JSON.stringify(sites())}`);
+  t("and says nothing on the way", !toasts().some((m) => /Looking for subtitles/.test(m)), JSON.stringify(toasts()));
+
+  daemonAnswers = (url) => {
+    if (url.endsWith("/health")) return { default_languages: ["en"] };
+    if (url.includes("/search")) {
+      return { used: { query: "Some Talk" }, auto_attach_threshold: 0.75,
+        results: [{ file_id: 9, language: "en", release: "Other.Thing.2010", movie_name: "Other Thing", match_score: 0.3, download_count: 1 }] };
+    }
+    return null;
+  };
+  sentToTab.length = 0;
+  await ask({ type: "sso:programme", mark: "6000|Some Talk" }, never);
+  t("nor opens the panel there for a match too weak to take",
+    !sentToTab.some((m) => m.type === "sso:togglePanel" || m.type === "sso:attach") && toasts().length === 0,
+    `${sentToTab.map((m) => m.type).join(",")} ${JSON.stringify(toasts())}`);
+
+  /* A film's subtitle on a twenty-minute video about it is the shape a match
+   * by title takes on a site that is not a cinema. */
+  tabStatusReply = { ok: true, hasVideo: true, attached: false, seconds: 1200 };
+  daemonAnswers = found(6300000);
+  sentToTab.length = 0;
+  await ask({ type: "sso:command", command: "auto-attach" }, sender);
+  t("a subtitle running far past the end of the video is not put up",
+    !sentToTab.some((m) => m.type === "sso:attach") && toasts().some((m) => /Not put up: that subtitle runs 105 minutes, and this video 20/.test(m)),
+    `${sentToTab.map((m) => m.type).join(",")} ${JSON.stringify(toasts())}`);
+  tabStatusReply = { ok: true, hasVideo: true, attached: false, seconds: 9180 };
+  daemonAnswers = found(9180000 + 270000);
+  sentToTab.length = 0;
+  await ask({ type: "sso:command", command: "auto-attach" }, sender);
+  t("but a longer cut of the same film is",
+    sentToTab.some((m) => m.type === "sso:attach"),
+    `${sentToTab.map((m) => m.type).join(",")} ${JSON.stringify(toasts())}`);
+  daemonAnswers = null;
+  tabStatusReply = { ok: true, hasVideo: true, attached: true };
+}
+
 /* 4c. A resolved title is the guard. The uploader's file name is not.
  *
  * Reported as an episode that would not attach by itself. From the log on

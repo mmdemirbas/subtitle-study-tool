@@ -3356,8 +3356,8 @@
     const note = document.createElement("p");
     note.className = "sso-note";
     note.textContent =
-      "It switches itself on the first time you attach subtitles on a site, and never " +
-      "downloads anything that does not match what is playing.";
+      "On everywhere until you switch it off here. It never downloads anything that " +
+      "does not match what is playing, and says nothing on a site until it has found something.";
 
     wrap.append(el.autoSite.row, el.autoSiteWhere, note);
     return wrap;

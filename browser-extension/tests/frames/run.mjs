@@ -62,7 +62,11 @@ const ctx = await chromium.launchPersistentContext(profile, {
   channel: "chromium",
   headless: true,
   viewport: null,
-  args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--window-size=1400,860"],
+  /* --mute-audio: clip.mp4 carries a tone for the listening check, and a
+   * headless Chrome plays it through the machine's speakers otherwise - over
+   * whatever the person at the machine is listening to. The capture is taken
+   * before the output, so the check hears it all the same. */
+  args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, "--window-size=1400,860", "--mute-audio"],
 });
 
 try {

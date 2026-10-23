@@ -219,18 +219,28 @@ export function matchesPattern(pattern, url) {
 
 // --- sites that put subtitles on by themselves ------------------------------
 
-/* Per site, not everywhere.
+/* Everywhere, unless the reader turned it off on that site.
  *
- * "Everywhere" means a news clip, a product tour and an embedded trailer each
- * spending one of ten daily downloads on subtitles nobody wanted. A site you
- * have watched something on with subtitles is a statement about how you watch
- * there; a site you have never used this on is not, and guessing on its behalf
- * is the kind of help that has to be switched off.
+ * It was per site, switched on by the first attach there, so that a news clip,
+ * a product tour or an embedded trailer would not spend one of the day's five
+ * or ten downloads on subtitles nobody wanted. The cost was the one thing this
+ * extension is for: every new site needed a subtitle put up by hand before it
+ * would do it by itself. Asked for as "on by default, of course".
  *
- * Three states, not two. Absent means never decided, and the first attach on
- * the site decides it. `false` means the reader turned it off, and is why this
- * stores a value rather than deleting the key - deleting would let the next
- * manual attach turn it straight back on, which is a switch that does not work.
+ * What protected the allowance is still there, and it is where the protection
+ * belongs rather than in a switch per site: a programme under ten minutes is
+ * not searched (SHORT_PROGRAMME_S), a weak or ambiguous match is not
+ * downloaded (planFor), and a subtitle that runs well past the end of the
+ * video is not put up (attachOne). What a site that has never been decided
+ * costs on top is the noise, so there the automatic run is quiet: no "Looking
+ * for subtitles…", no panel opened for a match too weak to take, no message
+ * for finding nothing - only the subtitle, when one comes, announced once.
+ *
+ * Three states. Absent means never decided; `true` is a site the reader has
+ * put subtitles on, where a failure is worth saying; `false` means the reader
+ * turned it off, and is why this stores a value rather than deleting the key -
+ * deleting would let the next attach turn it straight back on, which is a
+ * switch that does not work.
  */
 const AUTO_SITES_KEY = "sso:autoSites";
 
@@ -248,9 +258,15 @@ async function autoSites() {
   return sites && typeof sites === "object" ? sites : {};
 }
 
-async function autoSiteEnabled(url) {
+async function autoSiteState(url) {
   const origin = originOf(url);
-  return Boolean(origin && (await autoSites())[origin] === true);
+  if (!origin) return "off";
+  const value = (await autoSites())[origin];
+  return value === false ? "off" : value === true ? "on" : "undecided";
+}
+
+async function autoSiteEnabled(url) {
+  return (await autoSiteState(url)) !== "off";
 }
 
 async function setAutoSite(url, enabled) {
@@ -297,7 +313,8 @@ async function onProgrammeChange(sender, mark, again = "") {
   if (handledProgramme.get(tab.id) === mark && !again) return { ok: false, reason: "already handled" };
   handledProgramme.set(tab.id, mark);
 
-  if (!(await autoSiteEnabled(tab.url))) return { ok: false, reason: "not this site" };
+  const site = await autoSiteState(tab.url);
+  if (site === "off") return { ok: false, reason: "off on this site" };
 
   /* No hasVideo gate here any more, and it is removed as a hazard rather than
    * as the bug.
@@ -326,7 +343,11 @@ async function onProgrammeChange(sender, mark, again = "") {
    * that finds nothing now costs nothing. The window where the old lines are
    * still up is the download, which is the same window the reader would spend
    * looking at an empty picture otherwise. */
-  await autoAttach(tab, frameId, status, { replacing: Boolean(status?.attached), automatic: true });
+  await autoAttach(tab, frameId, status, {
+    replacing: Boolean(status?.attached),
+    automatic: true,
+    quiet: site === "undecided",
+  });
   return { ok: true };
 }
 
@@ -1211,7 +1232,11 @@ async function noVideo(tab, frameId, automatic, when) {
   else await notify(tab.id, frameId, "No video playing on this page");
 }
 
-async function autoAttach(tab, frameId, status, { replacing = false, automatic = false } = {}) {
+async function autoAttach(tab, frameId, status, { replacing = false, automatic = false, quiet = false } = {}) {
+  /* On a site the reader has never decided about, a run that puts nothing up
+   * says nothing either; see AUTO_SITES_KEY. Written down instead. */
+  const say = (where, message) =>
+    quiet ? trace.record("autoAttach", { frameId: where, quiet: message }) : notify(tab.id, where, message);
   /* No film, and the page itself says none is on its way.
    *
    * Refused here rather than after the search, and not inside the try below:
@@ -1242,7 +1267,7 @@ async function autoAttach(tab, frameId, status, { replacing = false, automatic =
      * of it. By the time a download is back there is nearly always somewhere
      * to put it. */
     const film = waitForVideo(tab.id, status);
-    if (!short) await notify(tab.id, frameId, "Looking for subtitles…");
+    if (!short && !quiet) await notify(tab.id, frameId, "Looking for subtitles…");
 
     const plan = await planAutoAttach(tab, frameId, { short });
     // The whole decision, including the results it ranked, so "it picked the
@@ -1265,15 +1290,17 @@ async function autoAttach(tab, frameId, status, { replacing = false, automatic =
     status = ready;
 
     if (plan.decision === "error" || plan.decision === "nothing-found") {
-      await notify(tab.id, frameId, plan.reason);
+      await say(frameId, plan.reason);
       return;
     }
 
     // Both of these mean "a human has to choose", so both open the panel -
     // in the frame that draws it, which on a nested player is not this one.
+    // Not where nobody asked: a long video on a site never used for this is
+    // not a reason to open a window over it.
     if (plan.decision === "too-weak" || plan.decision === "unknown-episode") {
-      await send(tab.id, status?.chromeFrameId ?? frameId, { type: "sso:togglePanel" });
-      await notify(tab.id, frameId, plan.reason);
+      if (!quiet) await send(tab.id, status?.chromeFrameId ?? frameId, { type: "sso:togglePanel" });
+      await say(frameId, plan.reason);
       return;
     }
 
@@ -1297,7 +1324,8 @@ async function autoAttach(tab, frameId, status, { replacing = false, automatic =
      * one's luck. Reported as "sometimes it fails to put both of them
      * correctly". Each says for itself what went wrong; attachOne marks the
      * second so two failures do not read as one repeated. */
-    await attachOne(tab, frameId, best, found, 0);
+    const fit = { filmSeconds: status?.seconds, say };
+    await attachOne(tab, frameId, best, found, 0, fit);
 
     /* The second language, chosen by planAutoAttach above.
      *
@@ -1311,17 +1339,26 @@ async function autoAttach(tab, frameId, status, { replacing = false, automatic =
      * indistinguishable from the feature being broken. It says which language
      * it could not fill and why, so the next move is obvious. */
     if (second) {
-      await attachOne(tab, frameId, second, found, 1);
+      await attachOne(tab, frameId, second, found, 1, fit);
     } else if (secondReason) {
       await notify(tab.id, frameId, `Only ${best.language?.toUpperCase() || "one"}: ${secondReason}`);
     }
   } catch (error) {
-    await notify(tab.id, frameId, describe(error));
+    await say(frameId, describe(error));
   }
 }
 
+/* A subtitle whose lines run well past the end of the video is for something
+ * longer: a film's subtitle on a twenty-minute review of it, which is the
+ * shape a match by title takes on a site that is not a cinema. The bar leaves
+ * room for a longer cut of the same film - Zodiac's director's cut is four and
+ * a half minutes over its theatrical one - and is only asked where the video's
+ * length is believed at all. */
+const LONGER_THAN_FILM = (filmSeconds) => filmSeconds * 1.15 + 120;
+
 /** Download one result and put it on the named track. False if it did not land. */
-async function attachOne(tab, frameId, result, found, slot) {
+async function attachOne(tab, frameId, result, found, slot, { filmSeconds = null, say = null } = {}) {
+  const tell = say || ((where, message) => notify(tab.id, where, message));
   const subtitle = isPageFile(result.file_id)
     ? await fetchPageSubtitle(tab.id, frameId, result.file_id)
     : await fetchSubtitle(result.file_id, subtitleContext(result, found.resolved));
@@ -1333,13 +1370,18 @@ async function attachOne(tab, frameId, result, found, slot) {
      * is already on screen and the film is watchable. Saying "download failed"
      * with subtitles running would read as though nothing had worked. */
     const prefix = slot > 0 ? "Second subtitle: " : "";
-    await notify(
-      tab.id,
+    await tell(
       frameId,
       subtitle.quota_exceeded
         ? `${prefix}daily download limit reached - pick something already cached`
         : `${prefix}${subtitle.error}`,
     );
+    return false;
+  }
+  const lastS = Math.max(0, ...(subtitle.cues || []).map((cue) => cue.end || 0)) / 1000;
+  if (!isPageFile(result.file_id) && Number.isFinite(filmSeconds) && filmSeconds > 0 && lastS > LONGER_THAN_FILM(filmSeconds)) {
+    trace.record("autoAttach", { frameId, rejected: "longer than the video", fileId: result.file_id, lastS: Math.round(lastS), filmSeconds: Math.round(filmSeconds) });
+    await tell(frameId, `Not put up: that subtitle runs ${Math.round(lastS / 60)} minutes, and this video ${Math.round(filmSeconds / 60)}`);
     return false;
   }
 
