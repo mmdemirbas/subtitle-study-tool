@@ -70,6 +70,8 @@ bench/align/results.json
 # private recordings, and report artifacts that quote a film's subtitles line
 # by line. The history was rewritten to remove them; see CLAUDE.md.
 srt-viewer/subtitles/
+# A film's speech-band levels and the subtitle taken out of it, for bench/listen.
+bench/listen/films/
 docs/engine-bakeoff/*/
 docs/reports/llm-pretranslate-trial-2026-09-08/
 docs/reports/translate-bakeoff-2026-09-10/
