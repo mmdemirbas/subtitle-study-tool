@@ -6549,8 +6549,9 @@
    * The tab's sound reaches the offscreen analyser later than the element's
    * copy reaches the page's: against the frames clip's known tone envelope,
    * 45ms and 70ms later in two runs (Chromium headless, 2026-10-23), where
-   * the element's copy was 5ms and 10ms early. Uncorrected, every heard shift
-   * from the tab would leave the subtitle that much late. */
+   * the element's copy was 5ms late in one and 10ms early in the other.
+   * Uncorrected, every heard shift from the tab would leave the subtitle
+   * that much late. */
   const TAB_EAR_LATE_MS = 50;
   function hearTab(steady, slot, rate) {
     const ear = listening.ear;

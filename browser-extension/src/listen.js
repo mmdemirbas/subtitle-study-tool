@@ -25,8 +25,9 @@
  * 500ms, none further out, and 53 never applied - 33 of those on Flow, a film
  * without dialogue. Half had applied by the second minute, nine in ten by the
  * eighth. Listened to from the film's first frame, the first correction came
- * a median 2.1 minutes after the first line (6.0 at p90), against 4 minutes
- * before. Of 159 listenings to a file already right, one moved it - by 400ms,
+ * a median 2.1 minutes after the first line (6.0 at p90) and 27 of 30 were
+ * right; the rule of thumb on two-minute blocks took 4.0 (also 6.0 at p90)
+ * and never applied on 6 of the 30. Of 159 listenings to a file already right, one moved it - by 400ms,
  * on Goodfellas at its 107th minute, and back three minutes later.
  *
  * Two things about the answer are load-bearing:

@@ -73,7 +73,9 @@ The one that moved a right file was Goodfellas from its 105th minute: 400ms at
 the 107th, back at the 110th. From each film's first frame (`--start-only`,
 30 listenings) 27 applied the right shift, none a wrong one, and the first
 correction came a median 2.1 minutes after the first line, 6.0 at p90 - the
-three that never applied are Flow.
+three that never applied are Flow. The rule of thumb on two-minute blocks, run
+the same way (the detector of 533bff7 over the `.json` levels), was right on 21,
+never applied on 6 and took 4.0 minutes at the median, 6.0 at p90.
 
 The block length was chosen on those columns. Every length from 30 seconds to
 two minutes was run with two, three and four blocks agreeing: 30 seconds at
