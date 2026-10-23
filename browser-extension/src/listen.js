@@ -36,6 +36,14 @@
  *   refined within 600ms by the whole line, 722 of 914 two-minute blocks land
  *   within a second; by the whole line alone, 635.
  *
+ * A drift is answered with a rate, not with a correction every few minutes
+ * (driftOf, scaledAgreement, retiming). A subtitle also running 0.1% slow was
+ * kept within 300ms for 43% to 90% of each of the nine films with dialogue,
+ * against 0% to 29% with offsets alone; one made for 25 frames against 23.976
+ * was stretched to the right conversion on six of them and left alone on
+ * three; and on the 636 listenings to a subtitle with no drift, no rate was
+ * applied at all.
+ *
  * Pure arithmetic except openEar, which is the only part that touches the
  * page, so the rest runs under node against a film's own audio. */
 
@@ -59,6 +67,15 @@
    * insert, a cut, an advert the clock did not see. */
   const AFTER_HAND_MIN_MS = 2000;
   const MIN_LINES = 8;
+  /* A rate is a line through the blocks' answers, so it needs blocks and
+   * film: half an hour of them kept, at least eight on the line, twenty
+   * minutes apart from first to last, and a drift across them worth more
+   * than any one block's error. */
+  const HISTORY_BLOCKS = 15;
+  const RATE_MIN_BLOCKS = 8;
+  const RATE_MIN_SPAN_MS = 20 * 60000;
+  const RATE_FIT_MS = 300;
+  const RATE_WORTH_MS = 800;
 
   const FLOOR_FRAMES = 30000 / HOP_MS;
   const FLOOR_EVERY = 60;
@@ -181,7 +198,7 @@
       current.push(bin);
       if (current.length < blockFrames) return false;
       blocks.push(Int32Array.from(current));
-      if (blocks.length > RECENT_BLOCKS) blocks.shift();
+      if (blocks.length > HISTORY_BLOCKS) blocks.shift();
       current = [];
       return true;
     }
@@ -202,15 +219,137 @@
       return placeLines(speech, spans, { originMs: fromMs });
     }
 
-    function decide(linesFor, { minimumMs = APPLY_MIN_MS } = {}) {
-      if (blocks.length < 2) return { blocks: blocks.length, agreed: null, apply: null };
-      const last = shiftOf(blocks.slice(-1), linesFor);
-      const before = shiftOf(blocks.slice(-2, -1), linesFor);
-      const all = shiftOf(blocks, linesFor);
+    /* One block's answer, kept while the lines have not moved. The drift fit
+     * asks every kept block on every decision, and between two corrections
+     * fourteen of the fifteen are asking the same question again. */
+    const answers = new WeakMap();
+    let linesKey = null;
+    function blockShift(block, linesFor) {
+      const kept = answers.get(block);
+      if (linesKey != null && kept?.key === linesKey) return kept.got;
+      const got = shiftOf([block], linesFor);
+      answers.set(block, { key: linesKey, got });
+      return got;
+    }
+
+    const centreOf = (block) => {
+      const sorted = Int32Array.from(block).sort();
+      return sorted[sorted.length >> 1] * HOP_MS;
+    };
+
+    /* The line through every kept block's answer, when one runs through
+     * enough of them and a constant does not. Theil-Sen, so a block that heard
+     * a song instead of the dialogue does not tilt it, then least squares over
+     * the blocks within RATE_FIT_MS of it. Returns the drift as a fraction of
+     * the stream's clock and the shift it gives at `atMs`. */
+    function driftOf(linesFor, atMs) {
+      const points = [];
+      for (const block of blocks) {
+        const got = blockShift(block, linesFor);
+        if (got) points.push([centreOf(block), got.shiftMs]);
+      }
+      if (points.length < RATE_MIN_BLOCKS) return null;
+      const slopes = [];
+      for (let i = 0; i < points.length; i++) {
+        for (let j = i + 1; j < points.length; j++) {
+          const gap = points[j][0] - points[i][0];
+          if (Math.abs(gap) >= 4 * 60000) slopes.push((points[j][1] - points[i][1]) / gap);
+        }
+      }
+      if (!slopes.length) return null;
+      slopes.sort((a, b) => a - b);
+      let by = slopes[slopes.length >> 1];
+      const levels = points.map(([t, y]) => y - by * (t - atMs)).sort((a, b) => a - b);
+      let shiftMs = levels[levels.length >> 1];
+      let on = points.filter(([t, y]) => Math.abs(y - (shiftMs + by * (t - atMs))) <= RATE_FIT_MS);
+      if (on.length >= 2) {
+        const mt = on.reduce((sum, [t]) => sum + t, 0) / on.length;
+        const my = on.reduce((sum, [, y]) => sum + y, 0) / on.length;
+        const sxx = on.reduce((sum, [t]) => sum + (t - mt) ** 2, 0);
+        if (sxx > 0) {
+          by = on.reduce((sum, [t, y]) => sum + (t - mt) * (y - my), 0) / sxx;
+          shiftMs = my + by * (atMs - mt);
+          on = points.filter(([t, y]) => Math.abs(y - (shiftMs + by * (t - atMs))) <= RATE_FIT_MS);
+        }
+      }
+      const times = on.map(([t]) => t);
+      const spanMs = times.length ? Math.max(...times) - Math.min(...times) : 0;
+      const flat = [...points.map(([, y]) => y)].sort((a, b) => a - b)[points.length >> 1];
+      const onFlat = points.filter(([, y]) => Math.abs(y - flat) <= RATE_FIT_MS).length;
+      const found = {
+        by, shiftMs: Math.round(shiftMs), atMs, blocks: on.length, of: points.length, spanMs, flat: onFlat,
+      };
+      found.take = on.length >= RATE_MIN_BLOCKS && spanMs >= RATE_MIN_SPAN_MS
+        && Math.abs(by) * spanMs >= RATE_WORTH_MS && onFlat < on.length;
+      return found;
+    }
+
+    /* The constant rule: the last two blocks each within AGREE_MS of the
+     * answer over the recent ones. */
+    function agreement(linesFor) {
+      const last = blockShift(blocks.at(-1), linesFor);
+      const before = blockShift(blocks.at(-2), linesFor);
+      const all = shiftOf(blocks.slice(-RECENT_BLOCKS), linesFor);
       const agreed = last && before && all
         && Math.abs(last.shiftMs - all.shiftMs) <= AGREE_MS
         && Math.abs(before.shiftMs - all.shiftMs) <= AGREE_MS
         ? all.shiftMs : null;
+      return { last, before, all, agreed };
+    }
+
+    /* A subtitle made for another framerate runs 4% fast or slow: 2.5 seconds
+     * a minute, so no two blocks agree and no line can be fitted inside the
+     * search. Each conversion is tried instead - the lines stretched about
+     * the present by it - but only one the blocks' own answers already point
+     * at (their slope within a quarter of it), and only taken when each of the
+     * last four blocks agrees under it. Tried on every failure of the constant
+     * rule without those two conditions, it stretched 5 of 159 subtitles that
+     * were right, one of them by 18 seconds. */
+    function scaledAgreement(linesFor, factors, atMs) {
+      if (blocks.length < RECENT_BLOCKS) return null;
+      const recent = blocks.slice(-RECENT_BLOCKS);
+      const points = [];
+      for (const block of recent) {
+        const got = blockShift(block, linesFor);
+        if (got) points.push([centreOf(block), got.shiftMs]);
+      }
+      const slopes = [];
+      for (let i = 0; i < points.length; i++) {
+        for (let j = i + 1; j < points.length; j++) {
+          // Half a block of stream apart: a minute, as shipped.
+          const gap = points[j][0] - points[i][0];
+          if (Math.abs(gap) >= (blockFrames * HOP_MS) / 2) slopes.push((points[j][1] - points[i][1]) / gap);
+        }
+      }
+      if (slopes.length < 3) return null;
+      slopes.sort((a, b) => a - b);
+      const slope = slopes[slopes.length >> 1];
+      for (const factor of factors) {
+        if (Math.abs(slope - (factor - 1)) > Math.abs(factor - 1) / 4) continue;
+        const scaled = (lo, hi) =>
+          linesFor((lo - atMs) / factor + atMs - SEARCH_MS, (hi - atMs) / factor + atMs + SEARCH_MS)
+            .map(([a, b]) => [factor * (a - atMs) + atMs, factor * (b - atMs) + atMs]);
+        const all = shiftOf(recent, scaled);
+        if (!all) continue;
+        const each = recent.map((block) => shiftOf([block], scaled));
+        if (each.every((got) => got && Math.abs(got.shiftMs - all.shiftMs) <= AGREE_MS)) {
+          return { by: factor - 1, shiftMs: all.shiftMs, atMs, take: true, scaled: true, slope };
+        }
+      }
+      return null;
+    }
+
+    /* `rates` is false to keep to offsets; `factors` are the framerate
+     * conversions to try, as factors on the lead's present rate. `key` names
+     * where the lines are - anything that changes when the timing does - so
+     * a block's answer can be kept until it moves; without one nothing is. */
+    function decide(linesFor, { minimumMs = APPLY_MIN_MS, rates = true, factors = [], key = null } = {}) {
+      linesKey = key;
+      if (blocks.length < 2) return { blocks: blocks.length, agreed: null, apply: null, drift: null };
+      const atMs = lastBin * HOP_MS;
+      const { last, before, all, agreed } = agreement(linesFor);
+      let drift = rates && blocks.length >= RATE_MIN_BLOCKS ? driftOf(linesFor, atMs) : null;
+      if (rates && agreed == null && !drift?.take && factors.length) drift = scaledAgreement(linesFor, factors, atMs) ?? drift;
       return {
         blocks: blocks.length,
         lastMs: last?.shiftMs ?? null,
@@ -218,7 +357,8 @@
         allMs: all?.shiftMs ?? null,
         z: all ? Math.round(all.z * 10) / 10 : null,
         agreed,
-        apply: agreed != null && Math.abs(agreed) >= minimumMs ? agreed : null,
+        drift,
+        apply: drift?.take ? null : agreed != null && Math.abs(agreed) >= minimumMs ? agreed : null,
       };
     }
 
@@ -236,6 +376,31 @@
         return out;
       },
     };
+  }
+
+  /**
+   * A drift the blocks found, as what it does to one subtitle's timing.
+   *
+   * The stream position of a line is `file * rate + offset + adDrift`, and the
+   * blocks say that every line belongs `shiftMs + by * (s - atMs)` later than
+   * where it is at stream time s. So every position s goes to
+   * `(1 + by) * s + shiftMs - by * atMs`, which is a new rate and a new offset
+   * - the same transform for the lead and for every subtitle lined up against
+   * it, or they stop agreeing. When the lead's new rate lands within 0.03% of
+   * a framerate conversion, that ratio is taken instead and the drift with it:
+   * a known ratio is exact over the whole film, a fitted one only over the
+   * half hour it was fitted on.
+   */
+  function retiming(drift, leadRate = 1, rates = []) {
+    let factor = 1 + drift.by;
+    const named = rates.find((rate) => rate !== 1 && Math.abs(rate - leadRate * factor) <= 0.0003);
+    if (named) factor = named / leadRate;
+    const apply = ({ rate = 1, offsetMs = 0, steps = [] }, adDriftMs = 0) => ({
+      rate: rate * factor,
+      offsetMs: Math.round((offsetMs + adDriftMs) * factor - adDriftMs + drift.shiftMs - (factor - 1) * drift.atMs),
+      steps: steps.map((step) => ({ ...step, offsetMs: Math.round(step.offsetMs * factor) })),
+    });
+    return { factor, named: named ?? null, apply };
   }
 
   /**
@@ -339,7 +504,7 @@
   }
 
   globalThis.__ssoListen = {
-    bestShift, placeLines, createHearing, openEar,
+    bestShift, placeLines, createHearing, retiming, openEar,
     HOP_MS, BLOCK_FRAMES, APPLY_MIN_MS, AFTER_HAND_MIN_MS,
   };
 })();

@@ -520,16 +520,31 @@ that speech. Five things are load-bearing:
 A heard correction goes through `setOffset(..., { byHand: false, carry: true,
 how: "heard" })`: it carries the followers, is not remembered as the release's
 timing (the next episode will be heard), and is not a correction to the drift
-estimator. Every block writes a `listen` line (each block's answer, the
-answer over all four, whether they agreed, what was applied) and every applied
-correction a `listenApplied`, so whether it was right on a film nobody here
+estimator. A heard rate is `setRate` and `setOffset` on every attached
+subtitle, both `byHand: false`, and Undo puts back each one's rate, offset and
+acts. Every block writes a `listen` line (each block's answer, the answer over
+the recent four, whether they agreed, the drift fit) and every applied
+correction a `listenApplied` (`kind: "rate"` for a rate), so whether it was right on a film nobody here
 has can be read out of the running log: a `listenApplied` followed by
 `listenUndone` or `listenOverruled` is a wrong one.
 
-**A rate is not measured yet.** On a subtitle from a release 0.1% slower, the
-ear follows the drift in seven steps and keeps the lead within a second for 63%
-of the film and within 300ms for 6%. `bench/listen/README.md` has
-the numbers and how to re-run them.
+**A drift is a rate, and the ear measures it in two ways.** A subtitle from a
+release 0.1% slower moves 60ms a minute against the film, so no constant stays
+right; one made for 25 frames against 23.976 moves 2.5 seconds a minute, so no
+two blocks even agree. The first is a line through the last half hour of
+blocks (`driftOf`: at least eight blocks on it, twenty minutes apart, more
+drift across them than 800ms, and more of them on the line than on a
+constant). The second is each framerate conversion in `align.js`'s `RATES`,
+tried only when the constant rule has failed and the blocks' own answers
+already slope towards that conversion, and taken only when each of the last
+four blocks agrees under it. Without those two conditions it stretched 5 of
+159 subtitles that were right, one by 18 seconds. Either answer is applied by
+`retiming`, which maps every stream position through the same line - the
+lead's rate and offset, and every follower's rate, offset and act offsets,
+because a follower lined up against the lead stops agreeing with it otherwise
+- and snaps a fitted rate onto a named conversion within 0.03%. `bench/listen/`
+has what it does on a slow subtitle, a framerate conversion and a pair from two
+releases.
 
 ## The subtitles a page carries for itself
 

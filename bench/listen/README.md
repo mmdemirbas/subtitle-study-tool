@@ -26,7 +26,9 @@ often a picture-based one that cannot be read as text.
 `--minutes` (20), with the subtitle displaced by each of `--truths`. A run is
 right when what was applied by the end is within 300ms of the displacement, and
 "never" when nothing was applied and the subtitle was still more than 300ms
-out. `--whole` listens from the first frame to the last instead. A film with a
+out. `--whole` listens from the first frame to the last instead. `--slow 0.1` makes
+the subtitle's clock run 0.1% slow as well as displaced, and `--no-rates` keeps
+the ear to offsets, for the comparison. A film with a
 `<name>.truth.json` has a subtitle from another release and is measured only
 when named; the file gives where its lines belong as `offsetMs` plus
 `msPerMinute` for every minute in.
@@ -50,15 +52,28 @@ bias at -200ms where the other films with dialogue sit between -50 and +100. Blo
 placing a line by its first part and then by the whole lands 722 of 914
 two-minute blocks within a second; placing it by the whole alone, 635.
 
+None of those 636 listenings applied a rate: a constant shift is not a drift.
+
+A drift is. With the subtitle also running 0.1% slow (`--whole --truths 4000
+--slow 0.1`), heard from start to end, the nine films with dialogue were on
+screen within 300ms for 43.0% to 89.6% of their length, and within a second
+for 80.6% to 97.2%; every one was given 24 against 23.976 (1.001). With
+`--no-rates` the same nine were within 300ms for 0.0% to 28.9%. The two
+shortest, 32-minute episodes are the lowest, because a rate needs twenty
+minutes of blocks before it is fitted. Made for 25 frames against 23.976
+(`--slow 4.096`), six of the nine were stretched by exactly that conversion,
+after which 37.3% to 92.8% of each film was within 300ms; Love Actually, the
+first episode and Truman were left as they were, nothing applied - which is
+also what they would have had without a rate.
+
 `la-tigole` is one release of Love Actually against the subtitle of another,
 the case the ear exists for. Its `.truth.json` says where that subtitle
 belongs: a straight line through the blocks' answers from -22.9s, 59ms later
 every minute - the two releases differ by 0.098% in speed, which is 24 against
 23.976 frames a second. Heard from the first minute to the last
-(`--whole --truths 0 la-tigole`) the ear made seven corrections and kept the
-subtitle within a second for 62.8% of the film and within 300ms for 5.6%. It
-follows a drift in steps and does not measure a rate; that is the next thing
-to build.
+(`--whole --truths 0 la-tigole`) the ear fitted that rate, took it as 1.001,
+and kept the subtitle within 300ms for 79.2% of the film and within a second
+for 88.0%. With offsets alone it was 5.6% and 62.8%.
 
 ## What it cannot hear
 

@@ -6422,7 +6422,19 @@
       return spans;
     };
     const minimumMs = listening.handOn === fileId ? L.AFTER_HAND_MIN_MS : L.APPLY_MIN_MS;
-    const decision = listening.hearing.decide(linesFor, { minimumMs });
+    /* The framerate conversions, as factors on the rate the lead already has,
+     * and none on a lead cut into acts: a rate stretches every act about the
+     * present, which is a different plan from the one the aligner made. */
+    const rate = track.rate || 1;
+    const factors = (globalThis.__ssoAlign?.RATES || [])
+      .filter((named) => named !== 1)
+      .map((named) => named / rate)
+      .filter((factor) => Math.abs(factor - 1) > 0.002);
+    const rates = !track.steps?.length;
+    /* Everything the lines' places depend on; the cue count, because a
+     * subtitle being made swaps its lines in place as they arrive. */
+    const key = [track.cues.length, rate, track.offsetMs, state.adDriftMs, ...(track.steps || []).map((step) => `${step.fromMs}:${step.offsetMs}`)].join("|");
+    const decision = listening.hearing.decide(linesFor, { minimumMs, rates, factors, key });
     const stopped = listening.stopped.has(fileId);
     listening.decision = { ...decision, atMs: Math.round(streamNowMs()), stopped };
     trace("listen", {
@@ -6435,8 +6447,40 @@
       stopped,
       ...decision,
     });
-    if (decision.apply == null || stopped) return;
-    applyHeard(slot, decision.apply);
+    if (stopped) return;
+    if (decision.drift?.take) applyHeardRate(slot, decision.drift);
+    else if (decision.apply != null) applyHeard(slot, decision.apply);
+  }
+
+  /* A drift the blocks agree on, applied to every subtitle on screen alike:
+   * the lead because it is the one heard, the others because they were lined
+   * up against it and would stop agreeing with it otherwise. */
+  function applyHeardRate(slot, drift) {
+    const L = globalThis.__ssoListen;
+    const lead = state.tracks[slot];
+    const retimed = L.retiming(drift, lead.rate || 1, globalThis.__ssoAlign?.RATES || []);
+    const before = [];
+    state.tracks.forEach((track, index) => {
+      if (!track.cues.length) return;
+      before.push({ slot: index, fileId: String(track.fileId), rate: track.rate || 1, offsetMs: track.offsetMs, steps: track.steps || [] });
+      const next = retimed.apply({ rate: track.rate || 1, offsetMs: track.offsetMs, steps: track.steps || [] }, state.adDriftMs);
+      setRate(next.rate, { slot: index, quiet: true, byHand: false, how: "heard" });
+      setOffset(next.offsetMs, { slot: index, quiet: true, byHand: false, carry: false, how: "heard" });
+      if (track.steps?.length) setSteps(next.steps, { slot: index });
+    });
+    listening.last = { fileId: String(lead.fileId), slot, byMs: 0, atMs: Date.now(), handMs: 0, before };
+    trace("listenApplied", {
+      slot, fileId: lead.fileId, kind: "rate", factor: retimed.factor, named: retimed.named,
+      toRate: lead.rate, toMs: lead.offsetMs, blocks: drift.blocks, spanMs: drift.spanMs, scaled: Boolean(drift.scaled),
+    });
+    /* "Fast" as setRate says it: a rate above 1 is a file whose clock ran
+     * ahead of the film's. */
+    const percent = Math.abs((retimed.factor - 1) * 100);
+    const which = attachedTracks().length > 1 ? "Subtitles" : "Subtitle";
+    showToast(
+      `${which} ran ${percent < 0.1 ? percent.toFixed(2) : percent.toFixed(1)}% ${retimed.factor > 1 ? "fast" : "slow"} against the film's speech - now kept with it${retimed.named ? " · a framerate conversion" : ""}`,
+      { slot, action: { label: "Undo", onClick: undoHeard } },
+    );
   }
 
   function applyHeard(slot, byMs) {
@@ -6463,8 +6507,17 @@
     listening.last = null;
     listening.stopped.add(last.fileId);
     if (String(track?.fileId) !== last.fileId) return;
-    setOffset(track.offsetMs - last.byMs, { slot: last.slot, quiet: true, byHand: false, carry: true, how: "heard" });
-    trace("listenUndone", { slot: last.slot, fileId: track.fileId, byMs: last.byMs });
+    if (last.before) {
+      for (const was of last.before) {
+        if (String(state.tracks[was.slot]?.fileId) !== was.fileId) continue;
+        setRate(was.rate, { slot: was.slot, quiet: true, byHand: false, how: "heard" });
+        setOffset(was.offsetMs, { slot: was.slot, quiet: true, byHand: false, carry: false, how: "heard" });
+        if (was.steps.length) setSteps(was.steps, { slot: was.slot });
+      }
+    } else {
+      setOffset(track.offsetMs - last.byMs, { slot: last.slot, quiet: true, byHand: false, carry: true, how: "heard" });
+    }
+    trace("listenUndone", { slot: last.slot, fileId: track.fileId, byMs: last.byMs, rate: Boolean(last.before) });
     showToast("Put back - this subtitle will not be lined up by listening again", { slot: last.slot });
   }
 

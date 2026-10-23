@@ -3031,18 +3031,26 @@
        * up, and a film that speaks DISPLACED ms after each of them. The speech
        * moves the way syllables move: the band alternates by 15dB every 100ms
        * while a line is spoken and sits flat 40dB below it otherwise. Spoken for
-       * exactly the line's length, so one shift is right and not a range. */
-      const heardFilm = (displacedMs, { fromMs = 60000, toMs = 260000, seed = 7 } = {}) => {
+       * exactly the line's length, so one shift is right and not a range.
+       * `speed` is a film whose clock runs that much faster than the file's;
+       * `scenes` puts 15-35s of silence after every 40-70s of dialogue, which
+       * is the structure a block still has when its lines drift 5s across it. */
+      const heardFilm = (displacedMs, { fromMs = 60000, toMs = 260000, seed = 7, speed = 1, scenes = false } = {}) => {
         let x = seed;
         const rnd = () => (x = (x * 16807) % 2147483647) / 2147483647;
         const lines = [];
+        let sceneEnd = fromMs + 40000 + rnd() * 30000;
         for (let at = fromMs; at < toMs; ) {
           const len = 900 + rnd() * 1600;
           lines.push({ start: Math.round(at), end: Math.round(at + len), text: `heard line ${lines.length + 1}` });
           at += len + 300 + rnd() * 2500;
+          if (scenes && at > sceneEnd) {
+            at += 15000 + rnd() * 20000;
+            sceneEnd = at + 40000 + rnd() * 30000;
+          }
         }
         const level = (ms) => {
-          const on = lines.some((c) => ms >= c.start + displacedMs && ms < c.end + displacedMs);
+          const on = lines.some((c) => ms >= c.start * speed + displacedMs && ms < c.end * speed + displacedMs);
           return { bandDb: on ? (Math.floor(ms / 100) % 2 ? -30 : -45) : -70, sideDb: -100 };
         };
         return { lines, level };
@@ -3126,6 +3134,118 @@
           if (window.__ssoPanel) window.__ssoPanel.sayInPanel = realSay;
           Object.defineProperty(video, "currentTime", wasClock);
           for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({ cues: CUES, label: slot ? "second" : "first", fileId: slot + 1, language: slot ? "tr" : "en", slot });
+            } else {
+              api.detach(slot);
+            }
+          }
+          await sleep(150);
+        }
+      });
+
+      check("the ear fits a drift through half an hour of blocks, and finds none in a film that has none", async () => {
+        /* Two-minute blocks, as shipped: the fit needs eight of them twenty
+         * minutes apart, so this feeds 34 minutes of synthetic film at once. */
+        const L = window.__ssoListen;
+        const listenTo = (speed) => {
+          const { lines, level } = heardFilm(0, { fromMs: 0, toMs: 36 * 60000, speed });
+          const hearing = L.createHearing();
+          let timing = { rate: 1, offsetMs: 0 };
+          const linesFor = (lo, hi) => lines
+            .map((c) => [c.start * timing.rate + timing.offsetMs, c.end * timing.rate + timing.offsetMs])
+            .filter(([a, b]) => b > lo && a < hi);
+          const taken = [];
+          for (let ms = 60000; ms < 34 * 60000; ms += 50) {
+            const heard = level(ms);
+            if (!hearing.hear(ms, heard.bandDb, heard.sideDb)) continue;
+            const d = hearing.decide(linesFor);
+            if (d.drift?.take) { taken.push(d.drift); timing = L.retiming(d.drift, timing.rate).apply(timing); }
+            else if (d.apply != null) timing = { ...timing, offsetMs: timing.offsetMs + d.apply };
+          }
+          const wrongAt = (ms) => Math.abs((ms / speed) * timing.rate + timing.offsetMs - ms);
+          return { taken, timing, wrongMs: Math.round(wrongAt(34 * 60000)) };
+        };
+        const slow = listenTo(1.002);
+        if (slow.taken.length !== 1 || Math.abs(slow.taken[0].by - 0.002) > 0.0003)
+          throw new Error(`a 0.2% film gave ${JSON.stringify(slow.taken)}`);
+        if (slow.wrongMs > 300) throw new Error(`after the drift was taken the line was still ${slow.wrongMs}ms out`);
+        const still = listenTo(1);
+        if (still.taken.length || still.timing.rate !== 1) throw new Error(`a film with no drift was stretched: ${JSON.stringify(still.taken)}`);
+        const named = L.retiming({ by: 0.00098, shiftMs: 0, atMs: 0 }, 1, window.__ssoAlign.RATES);
+        if (named.factor !== window.__ssoAlign.RATES[5]) throw new Error(`0.098% was not taken as 24 against 23.976: ${named.factor}`);
+        /* 4.27% is 2.5 seconds a minute: no two blocks agree and no line fits
+         * inside the search, so it is found as a conversion the blocks lean
+         * towards, and only that one. */
+        const pal = window.__ssoAlign.RATES[1];
+        const factors = window.__ssoAlign.RATES.filter((rate) => rate !== 1);
+        const { lines, level } = heardFilm(0, { fromMs: 0, toMs: 20 * 60000, speed: pal, scenes: true });
+        const hearing = L.createHearing();
+        const linesFor = (lo, hi) => lines.map((c) => [c.start, c.end]).filter(([a, b]) => b > lo && a < hi);
+        let conversion = null;
+        for (let ms = 60000; ms < 14 * 60000 && !conversion; ms += 50) {
+          const heard = level(ms);
+          if (!hearing.hear(ms, heard.bandDb, heard.sideDb)) continue;
+          const d = hearing.decide(linesFor, { factors });
+          if (d.drift?.take) conversion = d.drift;
+          else if (d.apply != null) throw new Error(`a 4% film had a plain shift applied: ${JSON.stringify(d)}`);
+        }
+        if (!conversion?.scaled || Math.abs(conversion.by - (pal - 1)) > 1e-9) throw new Error(`a PAL subtitle gave ${JSON.stringify(conversion)}`);
+      });
+
+      check("a heard framerate conversion is applied to every subtitle alike, said, and undone", async () => {
+        /* The detector's side is the case above; this is what content.js does
+         * with its answer, so the hearing is scripted: every fifth reading
+         * closes a block, and the second block says the film runs 25 against
+         * 23.976 from here on. */
+        const api = window.__ssoApi, L = window.__ssoListen;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const realOpen = L.openEar, realHearing = L.createHearing, realSay = window.__ssoPanel?.sayInPanel;
+        const said = [];
+        const PAL = window.__ssoAlign.RATES[1];
+        let readings = 0;
+        let drift = null;
+        L.openEar = () => ({ state: "running", sampleRate: 48000, fftSize: 2048, read: () => ({ bandDb: -40, sideDb: -100 }), close() {} });
+        L.createHearing = () => ({
+          hear: () => ++readings % 5 === 0,
+          decide: () => {
+            drift = readings >= 10 && !drift ? { by: PAL - 1, shiftMs: 700, atMs: api.status().currentTime * 1000, take: true, blocks: 9, spanMs: 1500000 } : null;
+            return { blocks: 2, agreed: null, apply: null, drift };
+          },
+          heardMs: 0,
+          spokenMs: 0,
+        });
+        if (window.__ssoPanel) window.__ssoPanel.sayInPanel = (slot, text, options) => { said.push({ slot, text, action: options?.action }); return true; };
+        try {
+          await api.attach({ cues: CUES, label: "EN · PAL", fileId: 7811, language: "en", slot: 0 });
+          await api.attach({ cues: CUES, label: "TR · PAL", fileId: 7812, language: "tr", slot: 1 });
+          await sleep(300);
+          for (const slot of [0, 1]) { api.setRate(1, { slot, quiet: true, byHand: false }); api.setOffset(slot ? 500 : 0, { slot, quiet: true, byHand: false }); }
+          readings = 0;
+          drift = null;
+          let tracks = api.status().tracks;
+          for (let i = 0; i < 100 && tracks[0].rate === 1; i++) { await sleep(25); tracks = api.status().tracks; }
+          if (!drift) throw new Error("the scripted drift was never asked for");
+          const expected = L.retiming(drift, 1, window.__ssoAlign.RATES);
+          const lead = expected.apply({ rate: 1, offsetMs: 0 }, api.status().adDriftMs);
+          const other = expected.apply({ rate: 1, offsetMs: 500 }, api.status().adDriftMs);
+          if (tracks[0].rate !== PAL || tracks[0].offsetMs !== lead.offsetMs)
+            throw new Error(`the lead is at rate ${tracks[0].rate} offset ${tracks[0].offsetMs}, wanted ${PAL} and ${lead.offsetMs}`);
+          if (tracks[1].rate !== PAL || tracks[1].offsetMs !== other.offsetMs)
+            throw new Error(`the follower is at rate ${tracks[1].rate} offset ${tracks[1].offsetMs}, wanted ${PAL} and ${other.offsetMs}`);
+          const told = said.find((entry) => /ran 4\.3% fast against the film's speech - now kept with it · a framerate conversion/.test(entry.text));
+          if (!told || told.action?.label !== "Undo") throw new Error(`said ${JSON.stringify(said.map((e) => e.text))}`);
+          told.action.onClick();
+          tracks = api.status().tracks;
+          if (tracks[0].rate !== 1 || tracks[0].offsetMs !== 0 || tracks[1].rate !== 1 || tracks[1].offsetMs !== 500)
+            throw new Error(`Undo left ${JSON.stringify(tracks.slice(0, 2).map((t) => [t.rate, t.offsetMs]))}`);
+          if (!api.status().listening.stopped) throw new Error("listening goes on after its rate was undone");
+        } finally {
+          L.openEar = realOpen;
+          L.createHearing = realHearing;
+          if (window.__ssoPanel) window.__ssoPanel.sayInPanel = realSay;
+          for (const slot of [0, 1]) {
+            api.setRate(1, { slot, quiet: true, byHand: false });
             if (wasAttached[slot]) {
               await api.attach({ cues: CUES, label: slot ? "second" : "first", fileId: slot + 1, language: slot ? "tr" : "en", slot });
             } else {
