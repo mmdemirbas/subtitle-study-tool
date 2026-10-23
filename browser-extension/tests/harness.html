@@ -609,10 +609,21 @@
       /* The control for the two above: the rule has to admit a player that is
        * merely large, not only one that fills the window, or an article with a
        * video in it would lose the handle. This is the watch page's 32%. */
+      /* Polled to a deadline, with the pointer kept moving, rather than read
+       * once after 80ms. The negative cases above have to wait out a window -
+       * absence cannot be polled for - but this one is asking for something to
+       * happen, and a fixed wait made it fail on a busy machine: twice in five
+       * full runs at load averages of 7 to 11, and on every run where it was
+       * the first case, before the overlay had built its handle. */
       check("CC handle appears for a player that is large without filling the window", () =>
-        onFeedPage({ width: 0.7, height: 0.46, inLink: false }, (handle) => {
-          if (!handleShowing(handle))
-            throw new Error("a player covering a third of the window did not get the handle");
+        onFeedPage({ width: 0.7, height: 0.46, inLink: false }, async (handle, preview) => {
+          const deadline = performance.now() + 3000;
+          while (!handleShowing(shadowOf().querySelector(".sso-handle") || handle)) {
+            if (performance.now() > deadline)
+              throw new Error("a player covering a third of the window did not get the handle");
+            preview.dispatchEvent(new PointerEvent("pointermove", { bubbles: true }));
+            await sleep(50);
+          }
         }));
 
       check("CC handle keeps its size against the page's button reset", () => {

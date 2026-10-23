@@ -4203,6 +4203,8 @@
    * reached this line's end" is only one question in the clock they share. */
   let insideCue = null;
   let lastStreamMs = null;
+  // The stop that waits for the end itself; see the end of pauseAtLineEnd.
+  let lineEndTimer = null;
 
   /* A jump no amount of playing accounts for, so it was a seek - the line keys,
    * the scrubber, a chapter skip. Two seconds of film between two ticks is
@@ -4277,10 +4279,51 @@
           ? before
           : null;
 
-    if (!target || target === pausedAtCue) return;
-    pausedAtCue = target;
-    state.video.pause();
+    if (!target || target === pausedAtCue) {
+      clearTimeout(lineEndTimer);
+      lineEndTimer = null;
+      return;
+    }
 
+    /* At the end itself, not at the tick before it.
+     *
+     * The window above says the end will be crossed before the next tick, and
+     * pausing there stopped the film up to one step early - a step being
+     * however late the tick came. Measured under a load average near 11: 0.31s
+     * to 0.55s before the line ended at 4x, which is the last word of the line
+     * cut off, in the mode whose whole purpose is hearing the line out. A
+     * timer to the end is exact on a quiet machine, and on a busy one it is
+     * late rather than early, which the landing below already repairs.
+     *
+     * Rescheduled on every tick inside the window rather than once, and the
+     * line counted as stopped at only when the stop happens: a playhead that
+     * jumps inside the window - a seek, or the harness setting currentTime -
+     * moves the end's distance, and a timer set once and trusted waited out
+     * the old distance while the reader sat at the end of the line. */
+    const end = endOf(target);
+    const wait = (end - now) / (state.video.playbackRate || 1);
+    clearTimeout(lineEndTimer);
+    lineEndTimer = null;
+    if (wait <= 0) {
+      pausedAtCue = target;
+      stopAtLineEnd(end);
+      return;
+    }
+    lineEndTimer = setTimeout(() => {
+      lineEndTimer = null;
+      if (pausedAtCue === target || !state.settings.pauseAtLineEnd || !state.video || state.video.paused) return;
+      /* And only if the playhead is where the timer expected it. A seek or a
+       * new subtitle between the tick and the timer would otherwise stop the
+       * film wherever the reader had gone. */
+      const at = streamNowMs();
+      if (at < end - reach || at > end + SEEK_JUMP_MS) return;
+      pausedAtCue = target;
+      stopAtLineEnd(end);
+    }, wait);
+  }
+
+  function stopAtLineEnd(end) {
+    state.video.pause();
     /* Land inside the line, not just past it.
      *
      * Above 1x a single step can carry the playhead beyond the end, and the
@@ -4288,9 +4331,7 @@
      * a stopped film with no subtitle on it, which is the opposite of what
      * this mode is for. Put it back just inside. The move is one step at most,
      * which is 200ms of film even at 4x. */
-    if (now > endOf(target)) {
-      seekFilm(endOf(target) - LINE_END_MARGIN_MS, { how: "stop" });
-    }
+    if (streamNowMs() > end) seekFilm(end - LINE_END_MARGIN_MS, { how: "stop" });
   }
 
   /** The other direction: where a moment of this file lands in the stream. */
