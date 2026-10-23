@@ -3,15 +3,16 @@
 `README.md` is the user-facing install and feature guide. This file is the map
 you need before editing `src/`. Read the root `CLAUDE.md` for commit style.
 
-## The four content scripts, and what each owns
+## The five content scripts, and what each owns
 
-All four are injected into **every frame** (`all_frames: true`) and run in the
+All five are injected into **every frame** (`all_frames: true`) and run in the
 extension's isolated world. They talk to each other through globals on that
 isolated `window` — never through the DOM, and never reachable from the page.
 
 | File | Lines | Owns | Exposes |
 |---|---|---|---|
 | `align.js` | 1,051 | matching a subtitle's timing to the playing release | — |
+| `listen.js` | 342 | hearing where the film speaks, and where the lead's lines belong on it | — |
 | `content.js` | 8.9k | the video, the playback clock, the cue overlay, the CC handle, settings, keys, the frame roles, frame/fullscreen plumbing | `window.__ssoApi`, `__ssoTeardown` |
 | `panel.js` | 5.8k | the control panel window (search, attach, sync, settings) | `window.__ssoPanel`, `__ssoPanelTeardown` |
 | `study.js` | 3.3k | the word strips, the focus box, the deck, the lookup popup | `window.__ssoStudy`, `__ssoStudyTeardown` |
@@ -425,8 +426,9 @@ about.
 So the card's one button carries the verb and the reference decides the object.
 A follower is measured against the lead, and the aligner answers that. The lead,
 and a lone subtitle that leads nothing, is measured against the **picture**, and
-only the reader's ear can answer that - so it opens the by-ear screen and they
-pick the line they just heard. It is not a mode and not a setting;
+only an ear can answer that - so it opens the by-ear screen and they pick the
+line they just heard. Where the film can be heard, the extension's own ear has
+usually answered it already; see *The lead is heard, where the film can be*. It is not a mode and not a setting;
 `status.leadSlot` decides, in one place, and the label says which it is.
 
 Two things about the by-ear path are load-bearing:
@@ -460,8 +462,10 @@ a convenience, and the model is what stops it reading as a coupling bug:
 works out for itself - the aligner, a remembered release timing, the drift fix -
 passes `byHand: false`, and every one of those is a statement about ONE file, so
 carrying it would undo the relationship it was computed to establish. The snap
-is by hand and is excluded by name (`how === "snap"`). **A new caller of
-`setOffset` has to decide which kind it is**; the panel's `applyTiming` was the
+is by hand and is excluded by name (`how === "snap"`). A correction heard from
+the film is the one thing worked out here that carries: it passes
+`byHand: false, carry: true`, because it is a statement about the film. **A new
+caller of `setOffset` has to decide which kind it is**; the panel's `applyTiming` was the
 one that had to be corrected when this landed, because it applies an aligner
 answer and defaulted to by-hand.
 
@@ -473,6 +477,59 @@ nobody corrected and then offer to stretch it.
 Ordering matters when zeroing a pair: **the lead first**, because zeroing it
 carries the follower. Zeroing the follower first and the lead second puts the
 follower back wherever the lead happened to be.
+
+## The lead is heard, where the film can be
+
+`listen.js` hears the film and `content.js`'s listening section decides what to
+do with it. The ear is the speech band (300-3400Hz) of the middle of the
+stereo mix and of its sides, read off two `AnalyserNode`s every tick; a frame
+is speech when the band stands above a running floor, is centred, and moves at
+syllable rate. Every two minutes of heard film the lead's lines are placed on
+that speech. Five things are load-bearing:
+
+- **`captureStream()`, never `createMediaElementSource`.** The second takes the
+  element's sound away from the speakers. A capture is a copy, before the
+  element's volume, so a muted film is heard too. Chrome refuses it for a
+  video whose data is cross-origin without CORS (observed) and is expected to
+  for encrypted media (not yet observed); the refusal is a `listenEar` line
+  with Chrome's own sentence in `reason`. An
+  `AudioContext` made in a frame that has had no gesture starts suspended, and
+  the next press or key in that frame resumes it (`state` lines). The ear is
+  opened on the film's own frame, which is where `state.video` is.
+- **Applied only when independent stretches agree**: the last two blocks each
+  within 200ms of the answer over the last four. One stretch is wrong often
+  enough - a song, rain - and the margin over the next-best shift does not
+  separate right from wrong. Below 400ms nothing moves, because some files are
+  timed about 350ms off their speech by their subtitler and moving them is the
+  extension making a right file slightly wrong.
+- **Lines are placed by their first part, then refined by the whole.** A line
+  stays up after its speech has ended, and over its whole length that pulls the
+  answer early. `bench/listen/blocks.mjs` measures the two.
+- **The reader outranks it.** After a by-hand move of the lead only a jump of
+  two seconds is applied (an insert, a cut, an advert the clock missed). Undo
+  on the toast, or a hand that takes back half of a heard correction within
+  five minutes, stops it for that file. A subtitle the page carries is never
+  listened to - it is timed to the picture by construction.
+- **It is a frame that has been judged, or nothing.** The syllable test reads
+  the last six frames, so the first five after any jump - a seek, a stall, a
+  hidden tab's once-a-second tick - are not stored at all. Stored as silence,
+  a hidden tab would record the whole film as quiet. Paused, seeking, in an
+  advert, hidden, or at a speed outside 0.7-1.5, nothing is heard; it has been
+  measured at 1x only.
+
+A heard correction goes through `setOffset(..., { byHand: false, carry: true,
+how: "heard" })`: it carries the followers, is not remembered as the release's
+timing (the next episode will be heard), and is not a correction to the drift
+estimator. Every block writes a `listen` line (each block's answer, the
+answer over all four, whether they agreed, what was applied) and every applied
+correction a `listenApplied`, so whether it was right on a film nobody here
+has can be read out of the running log: a `listenApplied` followed by
+`listenUndone` or `listenOverruled` is a wrong one.
+
+**A rate is not measured yet.** On a subtitle from a release 0.1% slower, the
+ear follows the drift in seven steps and keeps the lead within a second for 63%
+of the film and within 300ms for 6%. `bench/listen/README.md` has
+the numbers and how to re-run them.
 
 ## The subtitles a page carries for itself
 

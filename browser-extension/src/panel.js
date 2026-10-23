@@ -4854,7 +4854,22 @@
     note.textContent =
       "Lines of the selected subtitle. With the keys on, T plays the line again and Y skips ahead.";
 
-    wrap.append(el.pauseAtLineEnd.row, note);
+    /* On by default, and here so it can be switched off: it moves the lead by
+     * itself, which a reader who prefers their lines early has every right
+     * to stop. */
+    el.listen = toggle_(
+      "Line up by listening to the film",
+      api.status().settings.listen !== false,
+      (on) => api.updateSettings({ listen: on }),
+    );
+    el.listen.row.title =
+      "Hear where the film is speaking and move the first subtitle onto it. Needs a few minutes of dialogue; nothing leaves this computer.";
+    const listenNote = document.createElement("p");
+    listenNote.className = "sso-note";
+    listenNote.textContent =
+      "The first subtitle, from a few minutes of dialogue. Not on sites whose video is protected; a subtitle the site carries is already in time.";
+
+    wrap.append(el.pauseAtLineEnd.row, note, el.listen.row, listenNote);
     return wrap;
   }
 
@@ -5536,6 +5551,7 @@
     if (!settingsWindow?.isOpen()) return;
 
     el.pauseAtLineEnd.input.checked = Boolean(settings.pauseAtLineEnd);
+    el.listen.input.checked = settings.listen !== false;
     /* Study can arrive after this window was built - the frame holding the cue
      * text loads it when a subtitle attaches - so the section is asked again on
      * every redraw rather than only at build time. */

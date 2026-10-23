@@ -390,7 +390,7 @@
        * is in the manifest (world: MAIN, document_start). It wraps fetch and
        * XMLHttpRequest transparently, so every other case runs through the
        * wrapped pair and would notice if they were not. */
-      for (const src of ["sites/primevideo", "sites/netflix", "sites/survey", "sites/streams", "sites/youtube", "align", "content", "panel", "study"]) {
+      for (const src of ["sites/primevideo", "sites/netflix", "sites/survey", "sites/streams", "sites/youtube", "align", "listen", "content", "panel", "study"]) {
         document.write(`<script src="../src/${src}.js?t=${Date.now()}"><\/script>`);
       }
     </script>
@@ -3023,6 +3023,172 @@
         } finally {
           window.__ssoApi.detach(1);
           video.currentTime = wasTime;
+          await sleep(150);
+        }
+      });
+
+      /* Lines at irregular places, so no shift but the right one lines them all
+       * up, and a film that speaks DISPLACED ms after each of them. The speech
+       * moves the way syllables move: the band alternates by 15dB every 100ms
+       * while a line is spoken and sits flat 40dB below it otherwise. Spoken for
+       * exactly the line's length, so one shift is right and not a range. */
+      const heardFilm = (displacedMs, { fromMs = 60000, toMs = 260000, seed = 7 } = {}) => {
+        let x = seed;
+        const rnd = () => (x = (x * 16807) % 2147483647) / 2147483647;
+        const lines = [];
+        for (let at = fromMs; at < toMs; ) {
+          const len = 900 + rnd() * 1600;
+          lines.push({ start: Math.round(at), end: Math.round(at + len), text: `heard line ${lines.length + 1}` });
+          at += len + 300 + rnd() * 2500;
+        }
+        const level = (ms) => {
+          const on = lines.some((c) => ms >= c.start + displacedMs && ms < c.end + displacedMs);
+          return { bandDb: on ? (Math.floor(ms / 100) % 2 ? -30 : -45) : -70, sideDb: -100 };
+        };
+        return { lines, level };
+      };
+
+      check("the ear applies a shift only when two blocks agree with the stretch they make up", async () => {
+        const L = window.__ssoListen;
+        const spansOf = (lines) => (lo, hi) => lines.filter((c) => c.end > lo && c.start < hi).map((c) => [c.start, c.end]);
+        const run = (displacedMs, { noise = false, every = 1 } = {}) => {
+          const { lines, level } = heardFilm(displacedMs);
+          const hearing = L.createHearing({ blockFrames: 400 });
+          let x = 3;
+          const decisions = [];
+          for (let ms = 70000; ms < 70000 + 3 * 400 * 50 * every; ms += 50 * every) {
+            const heard = noise ? { bandDb: -70 + ((x = (x * 16807) % 2147483647) % 40), sideDb: -100 } : level(ms);
+            if (hearing.hear(ms, heard.bandDb, heard.sideDb)) decisions.push(hearing.decide(spansOf(lines)));
+          }
+          return decisions;
+        };
+        const moved = run(3000);
+        if (moved[0].apply !== null) throw new Error(`one block decided: ${JSON.stringify(moved[0])}`);
+        const second = moved[1];
+        if (second.apply == null || Math.abs(second.apply - 3000) > 150)
+          throw new Error(`two agreeing blocks applied ${second.apply}, wanted about 3000: ${JSON.stringify(second)}`);
+        const still = run(250)[1];
+        if (still.agreed == null || Math.abs(still.agreed - 250) > 150 || still.apply !== null)
+          throw new Error(`a subtitle 250ms out was moved, or not heard: ${JSON.stringify(still)}`);
+        const noise = run(3000, { noise: true });
+        if (noise.some((d) => d.apply != null)) throw new Error(`noise was applied: ${JSON.stringify(noise)}`);
+        /* A tab that ticks once a second hears one frame in twenty. Each is
+         * after a jump, so none can be judged - and none may be stored as
+         * silence, or a hidden tab would record the whole film as quiet. */
+        if (run(3000, { every: 20 }).length) throw new Error("frames after every jump were counted as heard");
+      });
+
+      check("listening moves the lead onto the film's speech, carries the other, and Undo puts both back for good", async () => {
+        const api = window.__ssoApi, L = window.__ssoListen;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const realOpen = L.openEar, realHearing = L.createHearing, realSay = window.__ssoPanel?.sayInPanel;
+        const wasClock = Object.getOwnPropertyDescriptor(video, "currentTime");
+        const said = [];
+        const { lines, level } = heardFilm(3000);
+        let opened = 0;
+        /* The film moment a real ear hears is the stream's clock less any
+         * advert time, which is what the lines are placed against too. */
+        L.openEar = () => {
+          opened++;
+          const filmMs = () => { const now = api.status(); return now.currentTime * 1000 - (now.adDriftMs || 0); };
+          return { state: "running", sampleRate: 48000, fftSize: 2048, read: () => level(filmMs()), close() {} };
+        };
+        /* Ten-second blocks instead of two-minute ones; the rule is the same. */
+        L.createHearing = (options) => realHearing({ ...options, blockFrames: 200 });
+        if (window.__ssoPanel) window.__ssoPanel.sayInPanel = (slot, text, options) => { said.push({ slot, text, action: options?.action }); return true; };
+        const started = performance.now();
+        Object.defineProperty(video, "currentTime", { get: () => 100 + (performance.now() - started) / 1000, set() {}, configurable: true });
+        try {
+          await api.attach({ cues: lines, label: "EN · heard", fileId: 7801, language: "en", slot: 0 });
+          await api.attach({ cues: lines.map((c) => ({ ...c, text: `tr ${c.text}` })), label: "TR · heard", fileId: 7802, language: "tr", slot: 1 });
+          await sleep(300);
+          api.setOffset(0, { slot: 0, quiet: true, byHand: false });
+          api.setOffset(1234, { slot: 1, quiet: true, byHand: false });
+          let tracks = api.status().tracks;
+          for (let i = 0; i < 400 && Math.abs(tracks[0].offsetMs) < 1000; i++) { await sleep(100); tracks = api.status().tracks; }
+          if (!opened) throw new Error("the ear was never opened");
+          if (Math.abs(tracks[0].offsetMs - 3000) > 300) {
+            const { decision: d, heardMs, minimumMs } = api.status().listening;
+            throw new Error(`the lead is at ${tracks[0].offsetMs}ms after ${heardMs}ms heard, wanted about 3000; blocks said ${d?.lastMs}/${d?.beforeMs}/${d?.allMs}, agreed ${d?.agreed}, bar ${minimumMs}, ad ${api.status().adDriftMs}, clock ${api.status().currentTime}`);
+          }
+          if (tracks[1].offsetMs - 1234 !== tracks[0].offsetMs)
+            throw new Error(`the follower moved ${tracks[1].offsetMs - 1234}ms where the lead moved ${tracks[0].offsetMs}ms`);
+          const told = said.find((entry) => /to where the film is speaking/.test(entry.text));
+          if (!told || told.action?.label !== "Undo") throw new Error(`said ${JSON.stringify(said.map((e) => e.text))}`);
+          told.action.onClick();
+          tracks = api.status().tracks;
+          if (tracks[0].offsetMs !== 0 || tracks[1].offsetMs !== 1234)
+            throw new Error(`Undo left the pair at ${tracks[0].offsetMs} and ${tracks[1].offsetMs}`);
+          if (!api.status().listening.stopped) throw new Error("listening goes on for a file whose heard correction was undone");
+        } finally {
+          L.openEar = realOpen;
+          L.createHearing = realHearing;
+          if (window.__ssoPanel) window.__ssoPanel.sayInPanel = realSay;
+          Object.defineProperty(video, "currentTime", wasClock);
+          for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({ cues: CUES, label: slot ? "second" : "first", fileId: slot + 1, language: slot ? "tr" : "en", slot });
+            } else {
+              api.detach(slot);
+            }
+          }
+          await sleep(150);
+        }
+      });
+
+      check("a subtitle the page carries is never listened to, nor anything while listening is off", async () => {
+        const api = window.__ssoApi, L = window.__ssoListen;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const realOpen = L.openEar;
+        let opened = 0;
+        L.openEar = () => { opened++; return { refused: "stub", retry: false }; };
+        try {
+          api.detach(1);
+          await api.attach({ cues: CUES, label: "EN · the page's", fileId: "page:tt77:en:subtitle", language: "en", slot: 0 });
+          await sleep(300);
+          if (opened || api.status().listening.slot !== null) throw new Error(`listened to a page track: ${JSON.stringify(api.status().listening)}`);
+          api.updateSettings({ listen: false });
+          await api.attach({ cues: CUES, label: "EN · download", fileId: 7803, language: "en", slot: 0 });
+          await sleep(300);
+          if (opened) throw new Error("opened an ear with listening switched off");
+          api.updateSettings({ listen: true });
+          for (let i = 0; i < 40 && !opened; i++) await sleep(25);
+          if (!opened) throw new Error("switching listening back on did not open the ear");
+        } finally {
+          L.openEar = realOpen;
+          api.updateSettings({ listen: true });
+          for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({ cues: CUES, label: slot ? "second" : "first", fileId: slot + 1, language: slot ? "tr" : "en", slot });
+            } else {
+              api.detach(slot);
+            }
+          }
+          await sleep(150);
+        }
+      });
+
+      check("after the reader corrects the lead by hand, only a jump of two seconds is applied by listening", async () => {
+        /* A lead nobody has touched yet: the bar is per file, and the suite's
+         * usual lead has been nudged by hand by a dozen cases before this. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        try {
+          await api.attach({ cues: CUES, label: "EN · untouched", fileId: 7804, language: "en", slot: 0 });
+          const lead = api.status().listening.slot;
+          if (lead !== 0) throw new Error(`listening is on slot ${lead}, not the lead`);
+          const before = api.status().listening.minimumMs;
+          api.nudge(250, { slot: 0, quiet: true });
+          const after = api.status().listening.minimumMs;
+          if (before !== 400 || after !== 2000) throw new Error(`the bar went from ${before} to ${after}`);
+        } finally {
+          for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({ cues: CUES, label: slot ? "second" : "first", fileId: slot + 1, language: slot ? "tr" : "en", slot });
+            } else {
+              api.detach(slot);
+            }
+          }
           await sleep(150);
         }
       });

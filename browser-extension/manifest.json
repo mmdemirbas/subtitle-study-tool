@@ -57,6 +57,7 @@
       ],
       "js": [
         "src/align.js",
+        "src/listen.js",
         "src/content.js",
         "src/panel.js",
         "src/study.js"

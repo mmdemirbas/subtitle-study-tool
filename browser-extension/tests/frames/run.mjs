@@ -374,6 +374,31 @@ try {
     }),
   );
 
+  /* --- listening, from the isolated world, to a real element ---------------
+   *
+   * The harness fakes the ear; this is the one place the real one runs: the
+   * content script in the film's cross-origin frame captures the element it
+   * found, and an AudioContext made there waits for a gesture in that frame.
+   * clip.mp4 carries a 700Hz tone in syllable-rate bursts for exactly this. */
+  // The nested frames each fill the one above them, so a corner of the outer
+  // iframe is a corner of the player's document.
+  const playerBox = await page.evaluate(() => {
+    const box = document.querySelector("iframe#player").getBoundingClientRect();
+    return { x: box.left + 12, y: box.top + 12 };
+  });
+  await page.mouse.click(playerBox.x, playerBox.y);
+  const heard = await until(async () => {
+    const said = (await playerSays())?.listening;
+    return said?.hearing && said.heardMs > 2000 && said.spokenMs > 0 ? said : null;
+  }, 10000);
+  /* The trace is detail only: with a daemon listening on this machine the
+   * worker hands its lines over and holds none, so whether they are still
+   * here says nothing about the ear. */
+  const earTrace = (await traceLog()).filter((entry) => entry.kind === "listenEar");
+  t("the film in the cross-origin frame is heard, after a press in that frame",
+    Boolean(heard),
+    JSON.stringify({ listening: heard ?? (await playerSays())?.listening, ear: earTrace.map((e) => e.outcome + (e.reason ? `: ${e.reason}` : e.state ? `: ${e.state}` : "")) }));
+
   /* --- the two ways this arrangement goes stale ---------------------------- */
 
   /* Reloading the extension replaces the top frame's script under an open tab,
@@ -384,7 +409,7 @@ try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     await chrome.scripting.executeScript({
       target: { tabId: tab.id, frameIds: [0] },
-      files: ["src/align.js", "src/content.js", "src/panel.js", "src/study.js"],
+      files: ["src/align.js", "src/listen.js", "src/content.js", "src/panel.js", "src/study.js"],
     });
   });
   const returned = await until(async () => {

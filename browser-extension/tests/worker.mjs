@@ -131,7 +131,7 @@ globalThis.chrome = {
     getManifest: () => ({
       version: "test",
       content_scripts: [
-        { js: ["src/align.js", "src/content.js"], matches: ["<all_urls>"] },
+        { js: ["src/align.js", "src/listen.js", "src/content.js"], matches: ["<all_urls>"] },
         // The page-world ear, as the real manifest declares it.
         { js: ["src/sites/primevideo.js"], matches: ["https://*.primevideo.com/*"], run_at: "document_start", world: "MAIN" },
       ],

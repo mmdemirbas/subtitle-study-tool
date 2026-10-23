@@ -377,6 +377,11 @@
      * not what anybody wants by accident. On, the pause happens once per line -
      * pressing play carries on to the end of the next one. */
     pauseAtLineEnd: false,
+    /* Line the leading subtitle up with the film's speech, heard from the
+     * video itself. On, because the alternative is the reader doing it by ear
+     * on every film; read as `!== false`, so an installation that predates it
+     * has it. See listen.js. */
+    listen: true,
     /* The key the layout produces, not the key the keyboard has under it.
      *
      * These were KeyboardEvent.code - BracketLeft, KeyP - which names the
@@ -4087,6 +4092,7 @@
      * exit: the next episode is worth warming whether or not this one has
      * subtitles on it. */
     noticeUpNext();
+    listenTick();
     if (!state.visible || !anyAttached()) {
       // "Nothing is showing", not "redraw" - otherwise this clears the text on
       // every tick forever.
@@ -5647,23 +5653,33 @@
 
   function setOffset(
     ms,
-    { quiet = false, slot = state.keyTrack, byHand = true, how = "set", note = true, fromMs } = {},
+    {
+      quiet = false, slot = state.keyTrack, byHand = true, how = "set", note = true, fromMs,
+      /* Whether a move of the lead carries the others. By hand it does; the
+       * one thing worked out here that also does is a correction heard from
+       * the film, because it says where the FILM's dialogue is, which is what
+       * the lead's offset means. */
+      carry = byHand && how !== "snap",
+    } = {},
   ) {
     const track = state.tracks[slot];
     /* `fromMs` is where the GESTURE started, for the one caller whose gesture is
      * longer than one call: the map drag has already moved the offset sixty
      * times by the point it commits, so the value it is replacing is its own. */
     const wasOffsetMs = Number.isFinite(fromMs) ? Math.round(fromMs) : track.offsetMs;
-    /* Only a correction the reader aimed at the film carries the others.
+    /* Only a correction aimed at the film carries the others.
      *
      * `byHand` is already false for everything the extension works out for
      * itself - the aligner, a remembered timing, the drift fix - and every one
      * of those is a statement about ONE file, so carrying them would undo the
      * very relationship they were computed to establish. The snap is by hand
      * and is the same kind of thing: it moves a subtitle onto the other one,
-     * which is meaningless to do to the whole pair at once. */
-    const carries = byHand && how !== "snap" && slot === leadSlot();
+     * which is meaningless to do to the whole pair at once. A correction heard
+     * from the film is the one exception the other way: worked out here, and
+     * about the film, so it passes `carry` (see applyHeard). */
+    const carries = carry && slot === leadSlot();
     const moved = Math.round(ms) - track.offsetMs;
+    if (byHand) noteHandForListening(slot, moved);
     track.offsetMs = Math.round(ms);
     track.activeIndexes = NEEDS_REDRAW; // force a re-render at the new offset
     if (carries) carryFollowers(slot, moved, byHand);
@@ -6295,6 +6311,195 @@
     setRate(drift.rate, { slot });
     setOffset(offsetMs, { slot, quiet: true, byHand: false });
     return drift;
+  }
+
+  // --- listening ----------------------------------------------------------
+
+  /* Where the film's dialogue is, heard rather than read. listen.js says what
+   * is heard and how sure it has to be; this decides which subtitle it is
+   * about, when to ask, and whom to tell.
+   *
+   * The lead, and a lone subtitle that leads nothing - the same subtitle the
+   * card's Line up sends to the by-ear screen, for the same reason: nothing
+   * but the film knows where it belongs. Never a subtitle the page carries,
+   * which is timed to this picture by construction (and is, on every site
+   * that has one so far, behind DRM that refuses the capture anyway). */
+  const listening = {
+    ear: null, // what openEar returned, while it is open
+    video: null, // the element it was opened on
+    refused: null, // why it could not open on that element
+    retryAt: 0,
+    hearing: null, // what has been heard, for one video, one lead, one ad drift
+    key: "",
+    handOn: null, // the lead file the reader has corrected by hand
+    stopped: new Set(), // lead files the reader took a heard correction back on
+    last: null, // the last correction applied, for Undo and for being overruled
+    decision: null,
+  };
+  const LISTEN_RETRY_MS = 5000;
+  /* A hand moving the lead back by half or more of a heard correction, this
+   * soon after it, is the reader saying it was wrong. */
+  const LISTEN_OVERRULED_MS = 5 * 60000;
+
+  function listenSlot() {
+    const slot = leadSlot() ?? state.tracks.findIndex((track) => track.cues.length > 0);
+    if (slot == null || slot < 0) return null;
+    const fileId = state.tracks[slot].fileId;
+    if (typeof fileId === "string" && fileId.startsWith("page:")) return null;
+    return slot;
+  }
+
+  function closeEar() {
+    listening.ear?.close();
+    listening.ear = null;
+    listening.video = null;
+    listening.refused = null;
+    listening.hearing = null;
+    listening.key = "";
+  }
+
+  /* Once per tick, in the frame that has the film. Cheap when there is nothing
+   * to do; while it hears, two analyser reads and a sum over 140 bins. */
+  function listenTick() {
+    const L = globalThis.__ssoListen;
+    const slot = listenSlot();
+    if (!L || state.settings.listen === false || slot == null || !state.video) {
+      if (listening.ear || listening.refused) closeEar();
+      return;
+    }
+    const video = state.video;
+    if (listening.video !== video) {
+      closeEar();
+      listening.video = video;
+    }
+    if (!listening.ear) {
+      if (listening.refused && (!listening.refused.retry || Date.now() < listening.retryAt)) return;
+      /* Not before the film has played: a capture of an element with nothing
+       * loaded has no audio track to hear. */
+      if (video.paused || video.readyState < 3) return;
+      const opened = L.openEar(video, {
+        onState: (to) => trace("listenEar", { outcome: "state", state: to }),
+      });
+      if (opened.refused) {
+        const first = listening.refused?.reason !== opened.refused;
+        listening.refused = { reason: opened.refused, retry: Boolean(opened.retry) };
+        listening.retryAt = Date.now() + LISTEN_RETRY_MS;
+        if (first) trace("listenEar", { outcome: "refused", reason: opened.refused });
+        return;
+      }
+      listening.ear = opened;
+      listening.refused = null;
+      trace("listenEar", { outcome: "open", state: opened.state, sampleRate: opened.sampleRate, fftSize: opened.fftSize });
+    }
+    const track = state.tracks[slot];
+    const key = `${track.fileId}|${state.adDriftMs}`;
+    if (listening.key !== key) {
+      listening.hearing = L.createHearing();
+      listening.key = key;
+    }
+    /* What is heard has to be the film at the speed it was made. An advert is
+     * not the film; a seek is a moment with no sound yet; a hidden tab ticks
+     * once a second, which is not enough to see a syllable; and the detector
+     * has been measured at 1x only. */
+    const rate = video.playbackRate || 1;
+    if (video.paused || video.seeking || video.readyState < 3 || state.inAd || document.hidden || rate < 0.7 || rate > 1.5) return;
+    const level = listening.ear.read();
+    if (!level) return;
+    if (!listening.hearing.hear(streamNowMs(), level.bandDb, level.sideDb)) return;
+    decideHeard(slot);
+  }
+
+  function decideHeard(slot) {
+    const L = globalThis.__ssoListen;
+    const track = state.tracks[slot];
+    const fileId = String(track.fileId);
+    const linesFor = (fromMs, toMs) => {
+      const spans = [];
+      for (const cue of track.cues) {
+        const [start, end] = lineStreamSpan(track, cue);
+        if (end > fromMs && start < toMs) spans.push([start, end]);
+      }
+      return spans;
+    };
+    const minimumMs = listening.handOn === fileId ? L.AFTER_HAND_MIN_MS : L.APPLY_MIN_MS;
+    const decision = listening.hearing.decide(linesFor, { minimumMs });
+    const stopped = listening.stopped.has(fileId);
+    listening.decision = { ...decision, atMs: Math.round(streamNowMs()), stopped };
+    trace("listen", {
+      slot,
+      fileId: track.fileId,
+      streamMs: Math.round(streamNowMs()),
+      heardMs: listening.hearing.heardMs,
+      spokenMs: listening.hearing.spokenMs,
+      minimumMs,
+      stopped,
+      ...decision,
+    });
+    if (decision.apply == null || stopped) return;
+    applyHeard(slot, decision.apply);
+  }
+
+  function applyHeard(slot, byMs) {
+    const track = state.tracks[slot];
+    const fromMs = track.offsetMs;
+    const carries = slot === leadSlot();
+    setOffset(fromMs + byMs, { slot, quiet: true, byHand: false, carry: true, how: "heard" });
+    listening.last = { fileId: String(track.fileId), slot, byMs, atMs: Date.now(), handMs: 0 };
+    trace("listenApplied", { slot, fileId: track.fileId, fromMs, toMs: track.offsetMs, byMs, carried: carries });
+    const which = attachedTracks().length > 1 ? `Subtitle ${slot + 1}` : "Subtitles";
+    const seconds = (Math.abs(byMs) / 1000).toFixed(1);
+    showToast(
+      `${which} ${byMs > 0 ? "held back" : "brought forward"} ${seconds}s, to where the film is speaking${carries ? " · the other moved with it" : ""}`,
+      { slot, action: { label: "Undo", onClick: undoHeard } },
+    );
+  }
+
+  /* Back to where it was, and no more of it for this file: a reader who
+   * undoes a heard correction has heard something the listener did not. */
+  function undoHeard() {
+    const last = listening.last;
+    if (!last) return;
+    const track = state.tracks[last.slot];
+    listening.last = null;
+    listening.stopped.add(last.fileId);
+    if (String(track?.fileId) !== last.fileId) return;
+    setOffset(track.offsetMs - last.byMs, { slot: last.slot, quiet: true, byHand: false, carry: true, how: "heard" });
+    trace("listenUndone", { slot: last.slot, fileId: track.fileId, byMs: last.byMs });
+    showToast("Put back - this subtitle will not be lined up by listening again", { slot: last.slot });
+  }
+
+  /* Every by-hand move, from setOffset. After one, the reader's ear is the
+   * truth for anything finer than AFTER_HAND_MIN_MS on this file; and a hand
+   * that takes back half or more of a heard correction soon after it has
+   * overruled it, the same as Undo. */
+  function noteHandForListening(slot, movedMs) {
+    if (!movedMs || slot !== listenSlot()) return;
+    const fileId = String(state.tracks[slot].fileId);
+    listening.handOn = fileId;
+    const last = listening.last;
+    if (!last || last.fileId !== fileId || Date.now() - last.atMs > LISTEN_OVERRULED_MS) return;
+    last.handMs += movedMs;
+    if (Math.sign(last.handMs) !== -Math.sign(last.byMs) || Math.abs(last.handMs) < Math.abs(last.byMs) / 2) return;
+    listening.stopped.add(fileId);
+    listening.last = null;
+    trace("listenOverruled", { slot, fileId: state.tracks[slot].fileId, byMs: last.byMs, handMs: last.handMs });
+  }
+
+  function listeningSummary() {
+    const slot = listenSlot();
+    const L = globalThis.__ssoListen;
+    return {
+      on: state.settings.listen !== false,
+      slot,
+      hearing: Boolean(listening.ear),
+      // What a shift has to come to before it is applied, now.
+      minimumMs: slot != null && listening.handOn === String(state.tracks[slot].fileId) ? L?.AFTER_HAND_MIN_MS : L?.APPLY_MIN_MS,
+      refused: listening.refused?.reason ?? null,
+      heardMs: listening.hearing?.heardMs ?? 0,
+      spokenMs: listening.hearing?.spokenMs ?? 0,
+      stopped: slot != null && listening.stopped.has(String(state.tracks[slot].fileId)),
+      decision: listening.decision,
+    };
   }
 
   function formatOffset(ms) {
@@ -7557,6 +7762,8 @@
       own: pageSubtitleSummary(),
       // A subtitle being made for this tab, if one is. See startTranslation.
       translation: translationSummary(),
+      // Whether the film is being listened to, and what it last said.
+      listening: listeningSummary(),
     };
   }
 
@@ -8973,6 +9180,7 @@
 
   window.__ssoTeardown = () => {
     flushOffsets();
+    closeEar();
     window.removeEventListener("pagehide", onPageHide);
     clearInterval(ticker);
     ticker = null;
