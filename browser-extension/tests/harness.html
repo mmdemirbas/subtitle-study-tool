@@ -3297,7 +3297,13 @@
         const said = [], asked = [];
         const { lines, level } = heardFilm(3000);
         L.openEar = () => ({ refused: "NotSupportedError: Failed to execute 'captureStream' on 'HTMLMediaElement': Stream capture not supported with EME", retry: false });
-        L.createHearing = (options) => realHearing({ ...options, blockFrames: 200 });
+        /* Twenty-second blocks, not the ten the case above gets by with: a
+         * block of this film holds four or five lines, and over ten seconds a
+         * shift of -34.9s fitted them as well as the right one in one run in
+         * three - which window the blocks fell on depended on how long the
+         * case took to get here. Every reading was on its right moment in
+         * those runs (921 of 921). */
+        L.createHearing = (options) => realHearing({ ...options, blockFrames: 400 });
         chrome.runtime.sendMessage = async (msg) => {
           if (msg?.type !== "sso:tabEar") return realSend(msg);
           asked.push(msg.op);
@@ -3321,7 +3327,10 @@
           if (said.filter((text) => /will not let its film be heard/.test(text) && text.includes("⌘⇧K")).length !== 1)
             throw new Error(`the reader was not told once what to press: ${JSON.stringify(said)}`);
 
-          // The reader presses the shortcut; the worker says the ear is open.
+          // The reader presses the shortcut; the worker says the ear is open,
+          // with the film at 100s, so the blocks fall on the same stretches every run.
+          const openedWall = Date.now();
+          Object.defineProperty(video, "currentTime", { get: () => 100 + (Date.now() - openedWall) / 1000, set() {}, configurable: true });
           deliver({ type: "sso:tabEar", event: "open", ok: true, sampleRate: 48000, fftSize: 2048, state: "running" });
           if (api.status().listening.ear !== "tab") throw new Error(`no tab ear after it opened: ${JSON.stringify(api.status().listening)}`);
           let sentUpTo = Date.now();
@@ -3330,12 +3339,12 @@
             for (const until = Date.now() - 600; sentUpTo + 50 <= until; ) {
               sentUpTo += 50;
               // What the tab's ear heard at a stamp is the film 50ms before it.
-              readings.push([sentUpTo, level(100000 + (sentUpTo - 50 - startedWall))]);
+              readings.push([sentUpTo, level(100000 + (sentUpTo - 50 - openedWall))]);
             }
             if (readings.length) deliver({ type: "sso:tabEar", event: "readings", readings });
           }, 250);
           let tracks = api.status().tracks;
-          for (let i = 0; i < 400 && Math.abs(tracks[0].offsetMs) < 1000; i++) { await sleep(100); tracks = api.status().tracks; }
+          for (let i = 0; i < 700 && Math.abs(tracks[0].offsetMs) < 1000; i++) { await sleep(100); tracks = api.status().tracks; }
           if (Math.abs(tracks[0].offsetMs - 3000) > 100) {
             const { decision: d, heardMs } = api.status().listening;
             throw new Error(`the lead is at ${tracks[0].offsetMs}ms after ${heardMs}ms heard from the tab, wanted 3000 within 100: ${JSON.stringify(d)}`);
