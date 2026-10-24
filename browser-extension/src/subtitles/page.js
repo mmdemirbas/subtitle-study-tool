@@ -163,7 +163,12 @@ async function readTrack(track) {
   if (!text.trim()) {
     /* YouTube answers 200 and nothing to a timedtext request without the
      * player's proof-of-origin token; see src/sites/youtube.js. */
-    // The same answer for every programme on the site; see sayForSite in background.js.
+    /* With the player's token on the URL, turning the captions on is not the
+     * answer: 14 of the 134 empty files in the log to 2026-10-25 were asked
+     * for with one, and why YouTube refused those is not known yet. Without
+     * it, the answer is the same for every programme on the site; see
+     * sayForSite in background.js. */
+    if (/[?&]pot=/.test(track.url)) throw new Error("YouTube sent an empty caption file even with the player's own token - pick a subtitle in the panel instead");
     throw Object.assign(new Error("The page sent an empty file - turn the player's own captions on once, then try again"), { sameForSite: true });
   }
   return { cues: readText(text, format), note };

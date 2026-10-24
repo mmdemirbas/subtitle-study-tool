@@ -2,7 +2,7 @@
  *
  * The offscreen document used to read two AnalyserNodes on a 50ms timer, and
  * a hidden document's timer is not a clock: measured in the tab-ear spike,
- * its ticks came 10 to 130ms apart, median 57, p90 102. Replayed over three
+ * its ticks came 4 to 126ms apart, median 57, p90 102. Replayed over three
  * episodes, that left 27% of the frames unheard and judged the rest on gaps
  * the detector was not fitted on, and the first correction came a median 4.1
  * minutes in against 2.0 on even frames. Here every hop of samples, exactly,

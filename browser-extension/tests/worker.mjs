@@ -2267,10 +2267,18 @@ Short stamp
   const empty = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:x:en:subtitle" } }, sender);
   t("an empty answer says what to do about it rather than 'no lines'",
     /turn the player's own captions on/.test(empty?.error || ""), JSON.stringify(empty));
+  /* Asked for with the player's token, the captions are already on, and
+   * telling the reader to turn them on is wrong: 14 of the 134 in the log. */
+  pageFiles = { "https://www.youtube.com/api/timedtext?v=x&fmt=vtt&pot=abc&potc=1&c=WEB": "" };
+  pageSubtitlesReply = () => ({ site: "YouTube", titleId: "x", tracks: [{ ...track("en", "subtitle", "https://www.youtube.com/api/timedtext?v=x&fmt=vtt&pot=abc&potc=1&c=WEB"), id: "page:x:en:subtitle", format: "vtt" }] });
+  const refused = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:x:en:subtitle" } }, sender);
+  t("an empty answer to a request that carried the token does not tell the reader to turn captions on",
+    /even with the player's own token/.test(refused?.error || "") && !/turn the player's own captions on/.test(refused?.error || "") && !refused?.sameForSite,
+    JSON.stringify(refused));
 
   /* Said once a session for the site, to the runs nobody pressed for: in six
    * weeks of the log YouTube showed that message 134 times, one for nearly
-   * every video, and the token never came after any of them. */
+   * every video, and for 118 of them no token came before or after. */
   {
     const was = { tabUrl, tabStatusReply, sites: store["sso:autoSites"] };
     tabUrl = "https://www.youtube.com/watch?v=x";

@@ -1408,11 +1408,12 @@ async function runAutoAttach(tab, frameId, status, { replacing = false, automati
   /* What a site does to every programme is said to an automatic run once a
    * browser session for that site, and written down after. Read out of the
    * log on 2026-10-25: since 2026-09-15 YouTube had shown "The page sent an
-   * empty file" 134 times, one for nearly every video, and not one was
-   * followed within two minutes by the player's own caption request that
-   * would have carried the token - the reader keeps the player's captions
-   * off, and was told so on every video. A short programme never searched is
-   * the same kind of thing. A press is a question, and is always answered. */
+   * empty file" 134 times, one for nearly every video, and for 118 of them
+   * the page's list had no token before the message or in the two minutes
+   * after - the reader keeps the player's captions off, and was told so on
+   * every video. A short programme never searched is the same kind of thing.
+   * A file refused with the token is not (see readPageTrack), and is said
+   * every time. A press is a question, and is always answered. */
   const sayForSite = async (where, message, tell = say) => {
     if (automatic && !(await firstThisSession(originOf(tab.url), message))) {
       trace.record("autoAttach", { frameId: where, toldThisSession: message });

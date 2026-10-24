@@ -521,9 +521,9 @@ film the lead's lines are placed on that speech. Eight things are load-bearing:
   to the film's frame, ten at a time. The windows are cut on the audio
   thread (`src/ear-tap.js`, an AudioWorklet) and read by `analyserDb`, which
   a harness case holds to an AnalyserNode's own reading - not by the
-  analysers on a timer, because a hidden document's 50ms timer fired 10 to
-  130ms apart and the frames suite heard 55% of the film through it; on the
-  audio clock they are 49.8ms apart at the median, never more than 54.6, and
+  analysers on a timer, because a hidden document's 50ms timer fired 4 to
+  126ms apart and the frames suite heard 55% of the film through it; on the
+  audio clock they are 49.8ms apart at the median, never more than 55.6, and
   none is missed. The
   timer is left only for a context with no worklet (`cadence` in the status
   and the `tab-open` line says which ran). The frame puts each on the film's
@@ -828,13 +828,16 @@ something the worker's plain GET did not send. A tabii `pageFetch` refusing
 - **What a site does to every programme is said once a session.** YouTube
   answers a caption request without the player's token with an empty file,
   and a reader who keeps the player's captions off was told so on nearly
-  every video - 134 times between 2026-09-15 and 2026-10-24, not one followed
-  within two minutes by the player's own request that would have carried
-  the token. An automatic run says such a failure (`sameForSite` on the
+  every video - 134 times between 2026-09-15 and 2026-10-24, and for 118 of
+  them the page's list had no token before the message or in the two
+  minutes after. An automatic run says such a failure (`sameForSite` on the
   fetch's answer) and a short programme's unsearched second language once a
   browser session per site (`firstThisSession`, in `chrome.storage.session`
   because the worker sleeps between videos) and traces `toldThisSession`
-  after. A press always says it.
+  after. A press always says it. The other 14 were asked for WITH the token
+  and still came back empty; those are told apart ("even with the player's
+  own token"), said every time, and why YouTube refuses them is open - the
+  zihin node on YouTube's proof-of-origin token carries the counts.
 
 **`inject()` re-injects the ears too.** The content scripts go into every
 frame from `content_scripts[0]`; every further entry with `world: "MAIN"` goes
