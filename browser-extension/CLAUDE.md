@@ -833,6 +833,44 @@ ignored because the stamps are already on the title's clock - beside
 `segmentUrls`, the HLS media-playlist reader (the master playlist is read in
 the page's world by the streams ear, which cannot import).
 
+## What the reader chose comes back, and a run gives way to it
+
+Reported on The Matrix on the catalogue app, 2026-10-24, as four bugs at
+once, and the running log showed each: on every reload the plan put up the
+page's English and a Turkish file named
+"The.Matrix.Revolutions.2003.REMASTERED..." that OpenSubtitles files under
+The Matrix (1999); the reader put the same Turkish file back by hand 13
+times that day, and the plan put the Revolutions one up 14; a run started
+at 11:56:31 landed at 11:57:14, a second after the reader had chosen, and
+replaced the choice - three times, because each press of the shortcut while
+it waited had started another run. Four rules came out
+of it, each with a worker case and a harness case that fail on the old code:
+
+- **A release that names another film is ranked last** (`namesAnotherFilm`
+  in `daemon.js`). A year more than one off the film's, or - with no year - a
+  scene name that starts with the film's title and goes on with more words.
+  Not for a series, whose releases carry the show's first year. Over the 50
+  results the search gave for tt0133093 it flags exactly the two Revolutions
+  files. The pick is refused only when nothing else is left in that language.
+- **A choice made by hand is what the next playing gets** (`CHOSEN_KEY` in
+  `background.js`). `attach` reports every attach as `sso:attached` with
+  `byHand`; the worker keys by-hand choices by `programmeKey` - the IMDb id, or
+  title with year, plus season and episode - and `planAutoAttach` starts from
+  them, with no search when every language has one. A page track is used only
+  while the page still offers it; a download needs only its id.
+- **A run gives way to the reader.** Every attach and detach a run sends
+  carries `automatic: { startedAt }`, wall time; `attach` refuses it for a slot
+  filled by hand since, or after a programme change since (`chosenAt`,
+  `programme.changedAt`), and `detach` leaves such a slot. One run per tab
+  (`autoRuns`): a press while one works says "Still looking".
+- **Both files are fetched at once**, the lead goes up first when both are
+  in hand and holds the other back `LEAD_FIRST_MS` at most. A page's own file
+  arriving after a download is never moved: the download is lined up against
+  it instead (`fromPage` in `attach`).
+
+The forty seconds themselves were the catalogue app extracting its embedded
+track with ffmpeg on every request; it keeps them now (movies c3d4227).
+
 ## A subtitle being made is one subtitle, attached under its final id
 
 The daemon makes a whole-file translation as a job (`translate_jobs.py`; the

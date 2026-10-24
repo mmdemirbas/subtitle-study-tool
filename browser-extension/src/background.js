@@ -12,6 +12,7 @@ import {
   forEpisode,
   gloss as glossWords,
   isPageFile,
+  namesAnotherFilm,
   pageContextForTab,
   pageResults,
   pickBest,
@@ -25,6 +26,7 @@ import {
   translateStatus,
 } from "./daemon.js";
 import { readPageTrack } from "./subtitles/page.js";
+import { tokens } from "./subtitles/matching.js";
 import { closeTabEar, openTabEar } from "./tab-ear.js";
 import { videoRelease } from "./subtitles/release.js";
 import { measure, toJson } from "./subtitles/srt.js";
@@ -232,7 +234,7 @@ export function matchesPattern(pattern, url) {
  * belongs rather than in a switch per site: a programme under ten minutes is
  * not searched (SHORT_PROGRAMME_S), a weak or ambiguous match is not
  * downloaded (planFor), and a subtitle that runs well past the end of the
- * video is not put up (attachOne). What a site that has never been decided
+ * video is not put up (putUp). What a site that has never been decided
  * costs on top is the noise, so there the automatic run is quiet: no "Looking
  * for subtitles…", no panel opened for a match too weak to take, no message
  * for finding nothing - only the subtitle, when one comes, announced once.
@@ -277,6 +279,75 @@ async function setAutoSite(url, enabled) {
   sites[origin] = Boolean(enabled);
   await chrome.storage.local.set({ [AUTO_SITES_KEY]: sites });
   return { origin, enabled: Boolean(enabled), decided: true };
+}
+
+/* What the reader chose for a programme, by language.
+ *
+ * Reported on The Matrix, 2026-10-24: "I already set the right subtitles;
+ * not using the same ones next time is a bug." Every refresh ran the plan
+ * again, the plan picked again, and the reader put the same Turkish file back
+ * by hand 13 times in one day. A choice made by hand is the best
+ * evidence there is of which file fits this video - better than any ranking -
+ * so the next plan for the same programme starts from it: the same file, at
+ * the timing it was saved with, and no search at all when every language has
+ * one. Keyed by what the programme IS (programmeKey), so a different episode
+ * or a different film is never given it. */
+const CHOSEN_KEY = "sso:chosen";
+const CHOSEN_MAX = 300;
+let chosenTurn = Promise.resolve();
+
+export function programmeKey(context) {
+  if (!context) return null;
+  const episode = context.season != null || context.episode != null ? `:s${context.season ?? ""}e${context.episode ?? ""}` : "";
+  if (context.imdbId) return `imdb:${String(context.imdbId).toLowerCase()}${episode}`;
+  const name = tokens(context.title || "").join(" ");
+  // A bare title with neither a year nor an episode names too many things.
+  if (!name || (context.year == null && !episode)) return null;
+  return `title:${name}:${context.year ?? ""}${episode}`;
+}
+
+async function rememberChoice(sender, { fileId, language, label }) {
+  const tab = sender?.tab;
+  if (!tab?.id || fileId == null || !language) return;
+  const key = programmeKey(await pageContextForTab(tab, sender.frameId));
+  if (!key) return;
+  const release = String(label || "").replace(/^[^·]*·\s*/, "");
+  /* In turn, because two attaches a second apart - a pair - would otherwise
+   * each read the map, add their language and write it back, and the second
+   * write would drop the first's language. */
+  chosenTurn = chosenTurn.then(async () => {
+    const all = (await chrome.storage.local.get(CHOSEN_KEY))[CHOSEN_KEY] || {};
+    const entry = all[key] || { files: {} };
+    entry.files = { ...entry.files, [language]: { fileId, release } };
+    entry.at = Date.now();
+    all[key] = entry;
+    const keys = Object.keys(all);
+    if (keys.length > CHOSEN_MAX) {
+      for (const old of keys.sort((a, b) => all[a].at - all[b].at).slice(0, keys.length - CHOSEN_MAX)) delete all[old];
+    }
+    await chrome.storage.local.set({ [CHOSEN_KEY]: all });
+    trace.record("chosen", { key, language, fileId, release });
+  }).catch((error) => trace.record("chosen", { key, error: describe(error) }));
+  await chosenTurn;
+}
+
+async function chosenFor(context) {
+  const key = programmeKey(context);
+  if (!key) return null;
+  return (await chrome.storage.local.get(CHOSEN_KEY))[CHOSEN_KEY]?.[key]?.files || null;
+}
+
+/* A remembered choice as a result the attach path can take: the page's own
+ * track if the page still offers it, the search's own row for a download if
+ * the search returned it, and otherwise a row made from what was remembered -
+ * a download needs only its id to be fetched. */
+function chosenResult(choice, language, { own = [], results = [], title = "" } = {}) {
+  if (!choice) return null;
+  if (isPageFile(choice.fileId)) return own.find((result) => result.file_id === choice.fileId) || null;
+  return results.find((result) => result.file_id === choice.fileId) || {
+    file_id: choice.fileId, language, release: choice.release || "", movie_name: title,
+    identified: true, match_score: 1, chosen: true,
+  };
 }
 
 /** The first attach on a site decides it, and says so once. */
@@ -481,6 +552,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
    * different questions: one says this site is used this way, the other says
    * what is playing has changed. */
   if (message?.type === "sso:attached") {
+    if (message.byHand) rememberChoice(sender, message).catch(() => {});
     rememberSite(sender).then(sendResponse, () => sendResponse({ ok: false }));
     return true;
   }
@@ -902,17 +974,40 @@ async function planAutoAttach(tab, frameId, { short = false } = {}) {
     context,
     own: own.map((result) => result.file_id),
   };
+
+  /* What the reader chose for this programme before, first; see CHOSEN_KEY.
+   * With a file for every language there is nothing to search for. */
+  const chosen = await chosenFor(context);
+  if (chosen) {
+    plan.chosen = Object.fromEntries(Object.entries(chosen).map(([language, choice]) => [language, choice.fileId]));
+    const picks = languages.slice(0, 2).map((language) => chosenResult(chosen[language], language, { own, title }));
+    if (picks.length && picks.every(Boolean)) {
+      return {
+        ...plan, decision: "attach", reason: "", query: title, threshold: 0,
+        found: { results: own, used: { query: title } },
+        best: picks[0], second: picks[1] || null, secondReason: "",
+      };
+    }
+  }
+  const withChosen = (made) => {
+    if (!chosen || made.decision !== "attach") return made;
+    const results = made.found?.results || [];
+    const pick = (language, fallback) => chosenResult(chosen[language], language, { own, results, title }) || fallback;
+    const best = pick(languages[0], made.best);
+    const second = languages[1] ? pick(languages[1], made.second) : made.second;
+    return { ...made, best, second, secondReason: second ? "" : made.secondReason };
+  };
   const notSearched = "not searched for - the programme is shorter than ten minutes";
   if (ownBest) {
     const { result: ownSecond, reason } = pickSecondLanguage({
       results: own, languages, taken: ownBest.language, used: {}, resolved: true, threshold: 0, query: title,
     });
     if (ownSecond || languages.length < 2 || short) {
-      return {
+      return withChosen({
         ...plan, decision: "attach", reason: "", query: title, threshold: 0,
         found: { results: own, used: { query: title } }, best: ownBest, second: ownSecond,
         secondReason: ownSecond ? reason : short ? notSearched : reason,
-      };
+      });
     }
   }
   if (short) {
@@ -923,20 +1018,21 @@ async function planAutoAttach(tab, frameId, { short = false } = {}) {
   }
 
   const searched = await planFor({ title, year, season, episode, imdbId, altTitles, languages, context });
-  if (!ownBest) return searched;
+  if (!ownBest) return withChosen({ ...searched, own: plan.own, chosen: plan.chosen });
   if (searched.decision !== "attach") {
-    return {
+    return withChosen({
       ...plan, ...searched, decision: "attach", reason: "",
       best: ownBest, second: null, secondReason: `for the other language, ${searched.reason}`,
-    };
+    });
   }
   const { result: second, reason: secondReason } = pickSecondLanguage({
     results: searched.found.results, languages, taken: ownBest.language,
     used: searched.found.used, resolved: Boolean(searched.found.resolved?.imdb_id),
     threshold: searched.threshold, query: searched.query,
     video: searched.video, first: ownBest,
+    film: filmOf(searched.found, { title, year, altTitles, season, episode }),
   });
-  return { ...plan, ...searched, decision: "attach", reason: "", best: ownBest, second, secondReason };
+  return withChosen({ ...plan, ...searched, decision: "attach", reason: "", best: ownBest, second, secondReason });
 }
 
 /* One of the page's own tracks, fetched and read.
@@ -1028,11 +1124,17 @@ async function planFor({
    * theatrical cut for a director's-cut video" is only answerable from the log
    * if the log says what the video was. */
   const video = videoRelease(context, { host: context?.host });
-  const best = pickBest(forThis.length ? forThis : found.results, languages, { video, threshold });
+  // What the film is, for refusing a file whose release names another; see namesAnotherFilm.
+  const film = filmOf(found, { title, year, altTitles, season, episode });
+  const best = pickBest(forThis.length ? forThis : found.results, languages, { video, threshold, film });
   Object.assign(plan, { query, threshold, best, video });
 
   if (!best) {
     return { ...plan, decision: "nothing-found", reason: `No subtitles found for "${query}"` };
+  }
+  const another = namesAnotherFilm(best.release, film);
+  if (another) {
+    return { ...plan, best: null, decision: "too-weak", reason: `The only ${best.language?.toUpperCase()} subtitle found is named for ${another} - pick one in the panel` };
   }
 
   /* A series whose episode nobody could name is not a confident match, whatever
@@ -1142,9 +1244,21 @@ async function planFor({
     query,
     video,
     first: best,
+    film,
   });
 
   return { ...plan, second, secondReason, decision: "attach", reason: "" };
+}
+
+/* The film a search is for: what it resolved to, else what the page said. */
+function filmOf(found, { title, year, altTitles = [], season = null, episode = null }) {
+  return {
+    title: found?.resolved?.title || title || "",
+    year: found?.resolved?.year ?? year ?? null,
+    altTitles,
+    season: found?.used?.season ?? season,
+    episode: found?.used?.episode ?? episode,
+  };
 }
 
 /* --- the next episode, before anybody asks for it ---------------------------
@@ -1261,7 +1375,33 @@ async function noVideo(tab, frameId, automatic, when) {
   else await notify(tab.id, frameId, "No video playing on this page");
 }
 
-async function autoAttach(tab, frameId, status, { replacing = false, automatic = false, quiet = false } = {}) {
+/* One run per tab at a time.
+ *
+ * A press of the shortcut while a run for this tab is still working - the
+ * page's own file being made, a download - is the reader asking where it is,
+ * not asking for a second run. Reported on The Matrix, 2026-10-24: three
+ * presses in 26 seconds, three runs, and all three landed in the same second,
+ * each saying "Subtitle on" twice. A new programme does get a run of its own;
+ * the frame refuses whatever the older one still sends (see attach in
+ * content.js). */
+const autoRuns = new Map(); // tabId -> { startedAt }
+
+async function autoAttach(tab, frameId, status, options = {}) {
+  if (autoRuns.has(tab.id) && !options.replacing) {
+    if (!options.automatic) await notify(tab.id, frameId, "Still looking - the search already started has not finished");
+    return;
+  }
+  // Wall time, because the frame compares it with its own.
+  const run = { startedAt: Date.now() };
+  autoRuns.set(tab.id, run);
+  try {
+    await runAutoAttach(tab, frameId, status, options, run);
+  } finally {
+    if (autoRuns.get(tab.id) === run) autoRuns.delete(tab.id);
+  }
+}
+
+async function runAutoAttach(tab, frameId, status, { replacing = false, automatic = false, quiet = false } = {}, run) {
   /* On a site the reader has never decided about, a run that puts nothing up
    * says nothing either; see AUTO_SITES_KEY. Written down instead. */
   const say = (where, message) =>
@@ -1343,7 +1483,7 @@ async function autoAttach(tab, frameId, status, { replacing = false, automatic =
      * single language would otherwise leave the other slot holding the last
      * episode. The content script stashes what it takes off for half a minute,
      * so the panel still offers it back. */
-    if (replacing) await send(tab.id, frameId, { type: "sso:detach" });
+    if (replacing) await send(tab.id, frameId, { type: "sso:detach", automatic: run });
 
     /* The second is tried whatever the first did.
      *
@@ -1351,10 +1491,21 @@ async function autoAttach(tab, frameId, status, { replacing = false, automatic =
      * second one is a different file - often a different language, sometimes
      * already in the cache - so there was no reason for it to share the first
      * one's luck. Reported as "sometimes it fails to put both of them
-     * correctly". Each says for itself what went wrong; attachOne marks the
+     * correctly". Each says for itself what went wrong; putUp marks the
      * second so two failures do not read as one repeated. */
-    const fit = { filmSeconds: status?.seconds, say };
-    await attachOne(tab, frameId, best, found, 0, fit);
+    const fit = { filmSeconds: status?.seconds, say, run };
+    /* Both files are fetched at once, and each goes up when it is in hand.
+     *
+     * One after the other, the second language waited for the first even
+     * when the first was the slow one: the catalogue app made its own English
+     * file in forty seconds while the Turkish one was already on disk, and
+     * the reader looked at no subtitles at all for the forty. The lead still
+     * goes first when both are ready, so the follower is lined up against it;
+     * a lead still on its way holds the other back for LEAD_FIRST_MS at most,
+     * and arriving later it is the reference anyway (attach in content.js). */
+    const leadFile = fetchFor(tab, frameId, best, found);
+    const otherFile = second ? fetchFor(tab, frameId, second, found) : null;
+    const leadUp = leadFile.then((subtitle) => putUp(tab, frameId, best, subtitle, 0, fit));
 
     /* The second language, chosen by planAutoAttach above.
      *
@@ -1368,10 +1519,13 @@ async function autoAttach(tab, frameId, status, { replacing = false, automatic =
      * indistinguishable from the feature being broken. It says which language
      * it could not fill and why, so the next move is obvious. */
     if (second) {
-      await attachOne(tab, frameId, second, found, 1, fit);
+      const subtitle = await otherFile;
+      await Promise.race([leadUp, new Promise((resolve) => setTimeout(resolve, LEAD_FIRST_MS))]);
+      await putUp(tab, frameId, second, subtitle, 1, fit);
     } else if (secondReason) {
       await notify(tab.id, frameId, `Only ${best.language?.toUpperCase() || "one"}: ${secondReason}`);
     }
+    await leadUp;
   } catch (error) {
     await say(frameId, describe(error));
   }
@@ -1385,15 +1539,27 @@ async function autoAttach(tab, frameId, status, { replacing = false, automatic =
  * length is believed at all. */
 const LONGER_THAN_FILM = (filmSeconds) => filmSeconds * 1.15 + 120;
 
-/** Download one result and put it on the named track. False if it did not land. */
-async function attachOne(tab, frameId, result, found, slot, { filmSeconds = null, say = null } = {}) {
+const LEAD_FIRST_MS = 1500;
+
+/* One result's file: the page's own, or a download. A failure is an answer
+ * with `error`, never a throw, because two of these run side by side. */
+async function fetchFor(tab, frameId, result, found) {
+  try {
+    const subtitle = isPageFile(result.file_id)
+      ? await fetchPageSubtitle(tab.id, frameId, result.file_id)
+      : await fetchSubtitle(result.file_id, subtitleContext(result, found?.resolved));
+    // What the day's allowance is down to, which is what decides whether the
+    // next episode may be fetched before it is asked for. See warmNext.
+    noteAllowance(subtitle);
+    return subtitle;
+  } catch (error) {
+    return { error: describe(error) };
+  }
+}
+
+/** Put one fetched file on the named track. False if it did not land. */
+async function putUp(tab, frameId, result, subtitle, slot, { filmSeconds = null, say = null, run = null } = {}) {
   const tell = say || ((where, message) => notify(tab.id, where, message));
-  const subtitle = isPageFile(result.file_id)
-    ? await fetchPageSubtitle(tab.id, frameId, result.file_id)
-    : await fetchSubtitle(result.file_id, subtitleContext(result, found.resolved));
-  // What the day's allowance is down to, which is what decides whether the
-  // next episode may be fetched before it is asked for. See warmNext.
-  noteAllowance(subtitle);
   if (subtitle.error) {
     /* A failure on the second subtitle is a note, not an error: the first one
      * is already on screen and the film is watchable. Saying "download failed"
@@ -1414,14 +1580,16 @@ async function attachOne(tab, frameId, result, found, slot, { filmSeconds = null
     return false;
   }
 
-  await attachToTab(tab.id, {
+  const put = await attachToTab(tab.id, {
     cues: subtitle.cues,
     label: `${result.language.toUpperCase()} · ${result.release || result.movie_name}`,
     fileId: result.file_id,
     language: result.language,
     slot,
+    automatic: run,
   });
-  return true;
+  // The reader chose for this slot while the run worked; the frame wrote down why.
+  return !put?.refused;
 }
 
 // --- helpers ----------------------------------------------------------------

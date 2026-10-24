@@ -420,6 +420,16 @@ What remains is the offset baked into the subtitle file itself, from being
 timed against a different release of the film. That is a constant, you set it
 once with <kbd>G</kbd> and <kbd>H</kbd>, and it is saved.
 
+### The subtitle you chose comes back
+
+A subtitle you pick by hand for a film or an episode is what that film or
+episode gets the next time it plays - the same file, at the timing it was
+saved with, and without searching again. An automatic search that is still
+working when you pick never replaces your pick, and pressing the shortcut
+again while it works does not start a second one. A file whose release name
+says it is another film - "The.Matrix.Revolutions.2003" filed under The
+Matrix (1999) - is the last choice, not the first.
+
 ### Lined up by ear
 
 The leading subtitle has nothing to be lined up against but the film, so the

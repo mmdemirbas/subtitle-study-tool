@@ -4996,7 +4996,9 @@
    * and subtitles at the moment it changes. */
   const settleFor = (mark) => (mark.startsWith(ANNOUNCED_PREFIX) ? 0 : PROGRAMME_SETTLE_MS);
 
-  let programme = { mark: "", since: 0, told: "", toldSeconds: null };
+  /* `changedAt` is wall time, because what reads it is an automatic attach
+   * whose run started in the worker: see attach. */
+  let programme = { mark: "", since: 0, told: "", toldSeconds: null, changedAt: 0 };
   /* The mark once it has stopped moving, which is what "a different programme"
    * means to anything outside this file.
    *
@@ -5036,7 +5038,10 @@
       if (programme.mark) dropOwn("programme");
       // And the document's own list is read again now, not up to a second on.
       domScanAt = 0;
-      programme = { mark, since: performance.now(), told: programme.told, toldSeconds: programme.toldSeconds };
+      programme = {
+        mark, since: performance.now(), told: programme.told, toldSeconds: programme.toldSeconds,
+        changedAt: programme.mark ? Date.now() : programme.changedAt,
+      };
       /* An inferred mark is given the window to stop moving. An announced one
        * is acted on in the turn it arrived in: returning here unconditionally
        * cost a whole tick even where the wait is zero, and the tick during an
@@ -7318,8 +7323,25 @@
 
   // --- attach / visibility --------------------------------------------------
 
-  async function attach({ cues, label, fileId, language, slot = PRIMARY }) {
+  async function attach({ cues, label, fileId, language, slot = PRIMARY, automatic = null }) {
     const index = clamp(Number(slot) || 0, 0, TRACK_COUNT - 1);
+    /* An automatic attach is the end of a run that started a while ago - a
+     * search, a download, a page's own file that took forty seconds to be
+     * made - and the reader may have chosen in between. Reported on The
+     * Matrix: the reader put a subtitle up at 11:57:13 and the run they had
+     * started at 11:56:31 put the page's own and a wrong Turkish one over it
+     * at 11:57:14, three times over. So a run gives way to anything chosen by
+     * hand after it started, and to a programme that changed after it did. */
+    if (automatic) {
+      const since = Number(automatic.startedAt) || 0;
+      const refused = chosenAt[index] > since ? "chosen by hand since" : programme.changedAt > since ? "another programme since" : "";
+      if (refused) {
+        trace("attach", { slot: index, fileId: fileId ?? null, label: label || "", refused });
+        return { ok: false, refused, slot: index };
+      }
+    } else {
+      chosenAt[index] = Date.now();
+    }
     const track = state.tracks[index];
     const wasAlone = attachedTracks().length <= 1;
     // Something new in this slot means the removed one is not coming back.
@@ -7416,7 +7438,10 @@
      * hand on a page whose mark had not been reported yet would be followed by
      * the worker attaching over the top of it a second later. */
     programme.told = programmeMark() || programme.told;
-    sendToWorker({ type: "sso:attached" });
+    /* With what was chosen, so the worker can put the same file up the next
+     * time this programme plays rather than searching again; see
+     * rememberChoice. Only a choice made by hand is one. */
+    sendToWorker({ type: "sso:attached", fileId: track.fileId, language: track.language, label: track.label, byHand: !automatic });
     // Show the handle on attach, so it is discoverable without knowing that
     // moving the mouse summons it.
     revealHandle();
@@ -7437,7 +7462,24 @@
      * Only when the reader has not already timed this file by hand. A saved
      * offset is an answer they gave, and overwriting it would be this deciding
      * it knows better. */
-    const aligned = track.offsetMs === 0 && track.rate === 1 ? await autoAlign(index) : null;
+    /* A subtitle the page carries is timed to this picture by construction,
+     * so it is never the one moved. Arriving after a downloaded one - the
+     * page's own file can be the slower of the two by tens of seconds - it is
+     * the reference and the other is lined up against it, if nothing has
+     * timed the other yet. Before this the one already on screen was always
+     * the reference, and the page's file was moved to agree with a download. */
+    const fromPage = (candidate) => typeof candidate?.fileId === "string" && candidate.fileId.startsWith("page:");
+    const other = state.tracks.findIndex((candidate, at) => at !== index && candidate.cues.length > 0);
+    let aligned = null;
+    let followed = null;
+    if (track.offsetMs === 0 && track.rate === 1) {
+      if (fromPage(track) && other >= 0 && !fromPage(state.tracks[other])) {
+        const follower = state.tracks[other];
+        if (follower.offsetMs === 0 && follower.rate === 1 && !follower.steps?.length) followed = await autoAlign(other, { against: index });
+      } else {
+        aligned = await autoAlign(index);
+      }
+    }
 
     /* Nothing measured and nothing saved, so fall back to what this release
      * needed last time.
@@ -7454,7 +7496,8 @@
     }
 
     const said = `Subtitle ${index + 1} on - ${track.cues.length} lines` +
-      `${track.label ? ` · ${track.label}` : ""}`;
+      `${track.label ? ` · ${track.label}` : ""}` +
+      `${followed?.applied && state.tracks[other].offsetMs ? `, subtitle ${other + 1} lined up with it · ${describeOffset(state.tracks[other].offsetMs)}` : ""}`;
     /* Undoing a carried timing is itself an answer - this release does not need
      * the correction after all - so it goes back through the by-hand path and
      * the next episode starts clean. */
@@ -7571,6 +7614,8 @@
    * two seconds after a click, which is when the mistake is noticed. */
   let removed = null;
   let removedTimer = null;
+  // When each slot was last filled by hand, wall time; see attach.
+  const chosenAt = new Array(TRACK_COUNT).fill(0);
   /* How long the way back stays offered. Longer than the toast, because the
    * panel keeps offering it after the toast has gone; short enough that this
    * stays an undo. Past this it would be a wastebasket, which needs somewhere
@@ -7756,9 +7801,14 @@
   }
 
   /** Drop one track, or every track when no slot is named. */
-  function detach(slot) {
+  function detach(slot, { automatic = null } = {}) {
+    /* A run taking the last programme's subtitles off leaves what the reader
+     * chose since it started, for the same reason attach does. */
+    const since = Number(automatic?.startedAt) || 0;
+    const kept = automatic ? state.tracks.map((_, index) => index).filter((index) => chosenAt[index] > since) : [];
     trace("detach", {
       slot: slot ?? null,
+      kept,
       tracks: state.tracks.map((track, index) => ({
         slot: index,
         label: track.label,
@@ -7767,7 +7817,7 @@
       })),
     });
     lastStepMs = null;
-    const slots = slot == null ? state.tracks.map((_, index) => index) : [Number(slot)];
+    const slots = (slot == null ? state.tracks.map((_, index) => index) : [Number(slot)]).filter((index) => !kept.includes(index));
     for (const index of slots) {
       const track = state.tracks[index];
       if (!track) continue;
@@ -8735,7 +8785,7 @@
         return true;
 
       case "sso:detach":
-        sendResponse(detach(message.slot));
+        sendResponse(detach(message.slot, { automatic: message.automatic }));
         return false;
 
       case "sso:setVisible":

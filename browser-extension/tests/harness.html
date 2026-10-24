@@ -12341,6 +12341,78 @@
         await sleep(150);
       });
 
+      check("a subtitle the page carries is never moved to agree with a download, which is lined up against it instead", async () => {
+        /* The order a slow page file produces: the download is already up
+         * when the page's own arrives. Before, the one on screen was always the
+         * reference, so the page's file - timed to this picture by
+         * construction - was moved to agree with the download. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const wasGeometry = api.status().settings.tracks.map((t) => ({ ...t }));
+        const long = speech(600, 61).map((start) => ({ start, end: start + 1800, text: "line" }));
+        const late = long.map((cue) => ({ start: cue.start + 5000, end: cue.end + 5000, text: cue.text }));
+        try {
+          api.detach(0);
+          await api.attach({ cues: late, label: "TR · a download", fileId: 42501, language: "tr", slot: 1 });
+          await sleep(150);
+          await api.attach({ cues: long, label: "EN · the page's own", fileId: "page:tt0133093:eng:harness", language: "en", slot: 0 });
+          await sleep(250);
+          const [lead, follower] = api.status().tracks;
+          if (lead.offsetMs !== 0) throw new Error(`the page's own subtitle was moved by ${lead.offsetMs}ms`);
+          if (Math.abs(follower.offsetMs + 5000) > 250) throw new Error(`the download sits at ${follower.offsetMs}ms, want about -5000`);
+        } finally {
+          for (const slot of [0, 1]) {
+            api.setOffset(0, { slot, quiet: true, byHand: false });
+            if (wasAttached[slot]) {
+              await api.attach({ cues: CUES, label: slot ? "second" : "first", fileId: slot + 1, language: slot ? "tr" : "en", slot });
+            } else {
+              api.detach(slot);
+            }
+          }
+          api.updateSettings({ tracks: wasGeometry });
+          await sleep(150);
+        }
+      });
+
+      check("a subtitle chosen by hand while an automatic run worked is left where the reader put it", async () => {
+        /* The worker's half is tests/worker.mjs; this is the frame refusing
+         * what a run sends after the reader chose, and telling the worker which
+         * attaches were choices. */
+        const api = window.__ssoApi;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        const ask = (message) => new Promise((resolve) => {
+          let kept = false;
+          for (const fn of window.__listeners) if (fn(message, {}, resolve) === true) kept = true;
+          if (!kept) resolve(undefined);
+        });
+        const run = { startedAt: Date.now() - 50 };
+        try {
+          window.__sent.length = 0;
+          await api.attach({ cues: CUES, label: "TR · chosen", fileId: 42511, language: "tr", slot: 1 });
+          const refused = await ask({ type: "sso:attach", payload: { cues: CUES, label: "TR · the run's", fileId: 42512, language: "tr", slot: 1, automatic: run } });
+          if (!refused?.refused || api.status().tracks[1].fileId !== 42511)
+            throw new Error(`a run that began before the choice replaced it: ${JSON.stringify(refused)}, slot 2 holds ${api.status().tracks[1].fileId}`);
+          const later = await ask({ type: "sso:attach", payload: { cues: CUES, label: "TR · a later run's", fileId: 42513, language: "tr", slot: 1, automatic: { startedAt: Date.now() } } });
+          if (!later?.ok || api.status().tracks[1].fileId !== 42513) throw new Error(`a run that began after the choice was refused: ${JSON.stringify(later)}`);
+          const choices = window.__sent.filter((m) => m.type === "sso:attached").map((m) => [m.fileId, m.byHand]);
+          if (JSON.stringify(choices) !== JSON.stringify([[42511, true], [42513, false]]))
+            throw new Error(`the worker was told ${JSON.stringify(choices)}`);
+          // And a run taking the last programme off leaves the reader's choice.
+          await api.attach({ cues: CUES, label: "TR · chosen again", fileId: 42511, language: "tr", slot: 1 });
+          await ask({ type: "sso:detach", automatic: run });
+          if (!api.status().tracks[1].attached) throw new Error("a run's detach took off what the reader had chosen since");
+        } finally {
+          for (const slot of [0, 1]) {
+            if (wasAttached[slot]) {
+              await api.attach({ cues: CUES, label: slot ? "second" : "first", fileId: slot + 1, language: slot ? "tr" : "en", slot });
+            } else {
+              api.detach(slot);
+            }
+          }
+          await sleep(150);
+        }
+      });
+
       /* Pairing a spoken line with the other subtitle, when a sign is held
        * across the dialogue under it.
        *

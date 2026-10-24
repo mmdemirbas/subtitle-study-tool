@@ -49,7 +49,7 @@ globalThis.fetch = async (url, options) => {
     return { ok: true, status: 200, json: async () => ({ ok: true, file: "logs/today.jsonl" }) };
   }
   if (daemonAnswers) {
-    const answer = daemonAnswers(String(url), options?.method || "GET");
+    const answer = daemonAnswers(String(url), options?.method || "GET", options?.body);
     if (answer) return { ok: true, status: 200, json: async () => answer };
   }
   if (Object.hasOwn(pageFiles, String(url))) {
@@ -2520,6 +2520,110 @@ Short stamp
   tabStatusReply = { ok: true, hasVideo: true, attached: false };
   frameList = [{ frameId: 0 }];
   t("and a frame done with it closes it", !capturedTabs.has(1) && !offscreen.open, JSON.stringify({ offscreen }));
+}
+
+/* The Matrix (1999) on the catalogue app, 2026-10-24. The release names are
+ * the ones OpenSubtitles returned for tt0133093 that evening, all filed under
+ * 1999 and all "identified". */
+{
+  const matrixPage = {
+    ok: true,
+    candidates: [{ source: "json-ld", text: "The Matrix", episode: null }],
+    announced: { title: "The Matrix", year: 1999, imdb: "tt0133093", kind: "movie", season: null, episode: null, altTitles: [] },
+  };
+  const row = (file_id, language, release, download_count) => ({
+    file_id, language, release, download_count, movie_name: "The Matrix", year: 1999,
+    match_score: 1, identified: true, cached: true, season: null, episode: null,
+  });
+  const results = [
+    row(4872729, "en", "The Matrix (1999) (2160p BluRay x265 10bit HDR Tigole) [QXR]", 17785),
+    row(5037419, "tr", "The.Matrix.Revolutions.2003.REMASTERED.1080p.BluRay.X264-AMIABLE", 847),
+    row(4482723, "tr", "The.Matrix.AC3.XviD.FoGMeDiM", 651),
+    row(4485713, "tr", "The.Matrix.Revolutions.AC3.XviD", 351),
+  ];
+  let searches = 0;
+  const slowFetch = {};
+  const matrix = (url, method, body) => {
+    if (url.endsWith("/health")) return { default_languages: ["en", "tr"] };
+    if (url.includes("/search")) {
+      searches += 1;
+      return {
+        used: { query: "The Matrix", languages: ["en", "tr"] }, auto_attach_threshold: 0.75,
+        resolved: { title: "the matrix", year: 1999, imdb_id: "0133093", type: "movie" }, results,
+      };
+    }
+    if (url.endsWith("/fetch")) {
+      const id = JSON.parse(body || "{}").file_id;
+      const answer = { cues: [{ start: 1000, end: 2000, text: `a line of ${id}` }] };
+      return slowFetch[id] ? new Promise((resolve) => setTimeout(() => resolve(answer), slowFetch[id])) : answer;
+    }
+    return null;
+  };
+  const attaches = () => sentToTab.filter((m) => m.type === "sso:attach").map((m) => m.message.payload);
+  const play = async (mark) => {
+    pageInfoReply = () => matrixPage;
+    daemonAnswers = matrix;
+    // The probe from the case before may still be holding "not there".
+    await ask({ type: "sso:daemon", op: "daemonCheck" }, sender);
+    tabStatusReply = { ok: true, hasVideo: true, attached: false };
+    frameList = [{ frameId: 0 }];
+    sentToTab.length = 0;
+    await ask({ type: "sso:programme", mark }, sender);
+    return attaches();
+  };
+
+  let put = await play("matrix-1|8178");
+  t("a Turkish file named for The Matrix Revolutions is not put up on The Matrix, though it is filed under it",
+    put.some((p) => p.slot === 1 && p.fileId === 4482723) && !put.some((p) => [5037419, 4485713].includes(p.fileId)),
+    JSON.stringify(put.map((p) => [p.slot, p.fileId])));
+  t("and what a run puts up says when the run began, so a choice made since can stand",
+    put.length === 2 && put.every((p) => Number.isFinite(p.automatic?.startedAt)),
+    JSON.stringify(put.map((p) => p.automatic)));
+
+  // The reader puts another Turkish file up by hand, and then the English one.
+  const frame0 = { tab: TAB, frameId: 0 };
+  await ask({ type: "sso:attached", fileId: 9999001, language: "tr", label: "TR · The Matrix - 1 (1080p)", byHand: true }, frame0);
+  await ask({ type: "sso:attached", fileId: 4872729, language: "en", label: "EN · The Matrix (1999) (2160p BluRay x265 10bit HDR Tigole) [QXR]", byHand: true }, frame0);
+  await until(() => store["sso:chosen"]?.["imdb:tt0133093"]?.files?.en);
+  const before = searches;
+  put = await play("matrix-2|8178");
+  t("a file chosen by hand is what the next playing of that film is given, without a search",
+    put.some((p) => p.slot === 1 && p.fileId === 9999001 && /The Matrix - 1/.test(p.label)) &&
+      put.some((p) => p.slot === 0 && p.fileId === 4872729) && searches === before,
+    JSON.stringify({ put: put.map((p) => [p.slot, p.fileId, p.label]), searched: searches - before, chosen: store["sso:chosen"] }));
+  // An automatic attach is not a choice.
+  await ask({ type: "sso:attached", fileId: 5037419, language: "tr", label: "TR · x", byHand: false }, frame0);
+  t("and an automatic one is not remembered as a choice",
+    store["sso:chosen"]?.["imdb:tt0133093"]?.files?.tr?.fileId === 9999001,
+    JSON.stringify(store["sso:chosen"]));
+  delete store["sso:chosen"];
+
+  /* A slow page track: the English file takes 2.5s and the Turkish one none.
+   * The Turkish goes up first, LEAD_FIRST_MS after it was in hand. */
+  slowFetch[4872729] = 2500;
+  put = await play("matrix-3|8178");
+  t("a slow first file holds the second back for a moment at most",
+    put[0]?.slot === 1 && put[1]?.slot === 0,
+    JSON.stringify(put.map((p) => [p.slot, p.fileId])));
+
+  /* Two presses of the shortcut while the first run is still waiting on a
+   * file: one run, and the second press is answered. */
+  pageInfoReply = () => matrixPage;
+  daemonAnswers = matrix;
+  await ask({ type: "sso:daemon", op: "daemonCheck" }, sender);
+  tabStatusReply = { ok: true, hasVideo: true, attached: false };
+  sentToTab.length = 0;
+  const first = listeners.command("auto-attach");
+  await until(() => toasts().includes("Looking for subtitles…"));
+  await listeners.command("auto-attach");
+  await first;
+  t("a second press while a run is working starts no second run, and says so",
+    attaches().filter((p) => p.slot === 0).length === 1 && toasts().some((m) => /Still looking/.test(m)),
+    JSON.stringify({ attaches: attaches().map((p) => [p.slot, p.fileId]), said: toasts() }));
+  delete slowFetch[4872729];
+  daemonAnswers = null;
+  pageInfoReply = () => ({ ok: true });
+  tabStatusReply = { ok: true, hasVideo: true, attached: false };
 }
 
 for (const r of results) console.log(r.ok ? "PASS" : "FAIL", "-", r.name, r.ok ? "" : `→ ${r.detail}`);

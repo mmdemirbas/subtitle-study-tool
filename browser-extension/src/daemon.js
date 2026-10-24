@@ -7,7 +7,9 @@
  * one place that decides which side answers.
  */
 
-import { describeRelease, releaseAffinity } from "./subtitles/release.js";
+import { describeRelease, looksLikeRelease, releaseAffinity } from "./subtitles/release.js";
+import { guess } from "./subtitles/titles.js";
+import { tokens } from "./subtitles/matching.js";
 
 /* Where the daemon listens, named once for the whole extension.
  *
@@ -331,17 +333,19 @@ function options(frameId) {
 }
 
 /** Push cues into the content script, trying every frame until one takes them. */
-export async function attachToTab(tabId, { cues, label, fileId, language, slot = 0 }) {
+export async function attachToTab(tabId, { cues, label, fileId, language, slot = 0, automatic = null }) {
   let lastReason = "no frame on this page has a playable video";
 
   for (const frameId of await frameIds(tabId)) {
     try {
       const result = await chrome.tabs.sendMessage(
         tabId,
-        { type: "sso:attach", payload: { cues, label, fileId, language, slot } },
+        { type: "sso:attach", payload: { cues, label, fileId, language, slot, automatic } },
         options(frameId),
       );
-      if (result?.ok) return result;
+      /* The frame with the film said no because the reader chose since the
+       * run began: an answer, not a frame to try the next one after. */
+      if (result?.ok || result?.refused) return result;
       if (result?.reason) lastReason = result.reason;
     } catch {
       // Frame has no content script (chrome:// pages, cross-origin edge cases).
@@ -696,7 +700,58 @@ export function pageResult(own, track) {
  * minutes and then two minutes out by the end. Without either option this is
  * the ranking it always was.
  */
-export function pickBest(results, languages, { video = null, threshold = null } = {}) {
+/* Words a release name puts after the title that do not make it another
+ * film: an edition, a part number of this one, a quality word. */
+const NOT_ANOTHER_TITLE = new Set([
+  "1", "i", "hd", "extended", "remastered", "unrated", "uncut", "directors", "director", "cut",
+  "theatrical", "imax", "special", "edition", "final", "proper", "repack", "limited", "internal", "dc", "se",
+]);
+
+/**
+ * The film a release name says it is, when that is not the film being
+ * watched - or null.
+ *
+ * OpenSubtitles files a subtitle under the title its uploader chose, and the
+ * search trusts that filing: an id search hands back everything filed under
+ * the id, all of it "identified". Reported on The Matrix (1999), tt0133093,
+ * 2026-10-24: the Turkish file the plan put up on every refresh was
+ * "The.Matrix.Revolutions.2003.REMASTERED.1080p.BluRay.X264-AMIABLE", filed
+ * under 1999, and it won because its release shared "BluRay" with the video.
+ * Lined up against the page's own English subtitle the night before, it
+ * matched 13.7% of its lines (a right pair matches 76% to 90%).
+ *
+ * Two readings, and only where the name says enough. A year more than one
+ * off the film's is another film - a release names the year of what it is.
+ * With no year, a name that is a scene release and starts with the film's
+ * title (or another of its titles) and goes on with more words is a sequel
+ * named the way sequels are: "The.Matrix.Revolutions.AC3.XviD". A name that
+ * does not start with the title says nothing either way, and neither does a
+ * name with a year that agrees - "Dune Part One 2021" is Dune (2021). `film`
+ * is { title, year, altTitles, season, episode }.
+ */
+export function namesAnotherFilm(release, film) {
+  if (!release || !film?.title) return null;
+  const said = guess(release);
+  if (!said?.query) return null;
+  /* Not for a series: its releases name the year the show began
+   * ("The.Americans.2013.S03E13") where the page names the episode's, and
+   * which episode it is has a rule of its own (forEpisode). */
+  if (said.season != null || said.episode != null || film.season != null || film.episode != null) return null;
+  if (said.year && film.year) return Math.abs(said.year - film.year) > 1 ? `${said.query} (${said.year})` : null;
+  if (said.year || !looksLikeRelease(release)) return null;
+  const named = tokens(said.query);
+  let another = null;
+  for (const title of [film.title, ...(film.altTitles || [])]) {
+    const own = tokens(title);
+    if (!own.length || own.some((word, index) => named[index] !== word)) continue;
+    const more = named.slice(own.length).filter((word) => !NOT_ANOTHER_TITLE.has(word) && !looksLikeRelease(word));
+    if (!more.length) return null;
+    another ??= said.query;
+  }
+  return another;
+}
+
+export function pickBest(results, languages, { video = null, threshold = null, film = null } = {}) {
   if (!results?.length) return null;
 
   const languageRank = (result) => {
@@ -708,9 +763,15 @@ export function pickBest(results, languages, { video = null, threshold = null } 
     ? releaseAffinity(video, describeRelease(result.release, { title: result.movie_name }))
     : 0]));
 
+  // Last within its language, so any file that is this film wins; see namesAnotherFilm.
+  const elsewhere = new Map(results.map((result) => [result, film ? Boolean(namesAnotherFilm(result.release, film)) : false]));
+
   return [...results].sort((a, b) => {
     const byLanguage = languageRank(a) - languageRank(b);
     if (byLanguage !== 0) return byLanguage;
+
+    const byFilm = Number(elsewhere.get(a)) - Number(elsewhere.get(b));
+    if (byFilm !== 0) return byFilm;
 
     const byThis = Number(isThis(b)) - Number(isThis(a));
     if (byThis !== 0) return byThis;
@@ -800,7 +861,7 @@ export function forEpisode(results, used) {
   });
 }
 
-export function pickSecondLanguage({ results, languages, taken, used, resolved, threshold, query, video = null, first = null }) {
+export function pickSecondLanguage({ results, languages, taken, used, resolved, threshold, query, video = null, first = null, film = null }) {
   const against = pairRelease(video, first);
   const others = (languages || []).filter((language) => language !== taken);
   if (!others.length) return { result: null, reason: "" };
@@ -814,8 +875,14 @@ export function pickSecondLanguage({ results, languages, taken, used, resolved, 
       reason = `every ${language.toUpperCase()} subtitle found is for another episode`;
       continue;
     }
-    const pick = pickBest(usable, [language], { video: against, threshold: resolved ? null : threshold });
+    const pick = pickBest(usable, [language], { video: against, threshold: resolved ? null : threshold, film });
     if (!pick) continue;
+    // Ranked last, so it is the pick only when nothing else is left.
+    const another = namesAnotherFilm(pick.release, film);
+    if (another) {
+      reason = `the only ${language.toUpperCase()} subtitle found is named for ${another}`;
+      continue;
+    }
     if (resolved || (pick.match_score ?? 0) >= threshold) return { result: pick, reason: "" };
     reason = `no ${language.toUpperCase()} subtitle matched ${JSON.stringify(query)} well enough`;
   }
