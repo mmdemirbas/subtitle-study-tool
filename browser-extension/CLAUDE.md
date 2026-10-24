@@ -825,6 +825,16 @@ something the worker's plain GET did not send. A tabii `pageFetch` refusing
   told, and when that grows past the bar or stops being believable it tells
   the worker once more with `again: "grew"`, which is the one thing that
   gets a mark past `handledProgramme`.
+- **What a site does to every programme is said once a session.** YouTube
+  answers a caption request without the player's token with an empty file,
+  and a reader who keeps the player's captions off was told so on nearly
+  every video - 134 times between 2026-09-15 and 2026-10-24, not one followed
+  within two minutes by the player's own request that would have carried
+  the token. An automatic run says such a failure (`sameForSite` on the
+  fetch's answer) and a short programme's unsearched second language once a
+  browser session per site (`firstThisSession`, in `chrome.storage.session`
+  because the worker sleeps between videos) and traces `toldThisSession`
+  after. A press always says it.
 
 **`inject()` re-injects the ears too.** The content scripts go into every
 frame from `content_scripts[0]`; every further entry with `world: "MAIN"` goes

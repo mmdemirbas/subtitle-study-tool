@@ -997,7 +997,6 @@ async function planAutoAttach(tab, frameId, { short = false } = {}) {
     const second = languages[1] ? pick(languages[1], made.second) : made.second;
     return { ...made, best, second, secondReason: second ? "" : made.secondReason };
   };
-  const notSearched = "not searched for - the programme is shorter than ten minutes";
   if (ownBest) {
     const { result: ownSecond, reason } = pickSecondLanguage({
       results: own, languages, taken: ownBest.language, used: {}, resolved: true, threshold: 0, query: title,
@@ -1006,13 +1005,13 @@ async function planAutoAttach(tab, frameId, { short = false } = {}) {
       return withChosen({
         ...plan, decision: "attach", reason: "", query: title, threshold: 0,
         found: { results: own, used: { query: title } }, best: ownBest, second: ownSecond,
-        secondReason: ownSecond ? reason : short ? notSearched : reason,
+        secondReason: ownSecond ? reason : short ? NOT_SEARCHED_SHORT : reason,
       });
     }
   }
   if (short) {
     return {
-      ...plan, decision: "short", reason: notSearched, query: title, threshold: 0,
+      ...plan, decision: "short", reason: NOT_SEARCHED_SHORT, query: title, threshold: 0,
       found: { results: own, used: { query: title } }, best: null, second: null, secondReason: "",
     };
   }
@@ -1050,7 +1049,7 @@ async function fetchPageSubtitle(tabId, frameId, fileId) {
     read = await readPageTrack(track);
   } catch (error) {
     trace.record("pageFetch", { fileId, format: track.format || "ttml", error: String(error?.message || error) });
-    return { error: String(error?.message || error) };
+    return { error: String(error?.message || error), sameForSite: Boolean(error?.sameForSite) };
   }
   const rendered = toJson(read.cues);
   trace.record("pageFetch", { fileId, ...read.note, cueCount: rendered.length });
@@ -1406,6 +1405,21 @@ async function runAutoAttach(tab, frameId, status, { replacing = false, automati
    * says nothing either; see AUTO_SITES_KEY. Written down instead. */
   const say = (where, message) =>
     quiet ? trace.record("autoAttach", { frameId: where, quiet: message }) : notify(tab.id, where, message);
+  /* What a site does to every programme is said to an automatic run once a
+   * browser session for that site, and written down after. Read out of the
+   * log on 2026-10-25: since 2026-09-15 YouTube had shown "The page sent an
+   * empty file" 134 times, one for nearly every video, and not one was
+   * followed within two minutes by the player's own caption request that
+   * would have carried the token - the reader keeps the player's captions
+   * off, and was told so on every video. A short programme never searched is
+   * the same kind of thing. A press is a question, and is always answered. */
+  const sayForSite = async (where, message, tell = say) => {
+    if (automatic && !(await firstThisSession(originOf(tab.url), message))) {
+      trace.record("autoAttach", { frameId: where, toldThisSession: message });
+      return;
+    }
+    await tell(where, message);
+  };
   /* No film, and the page itself says none is on its way.
    *
    * Refused here rather than after the search, and not inside the try below:
@@ -1493,7 +1507,7 @@ async function runAutoAttach(tab, frameId, status, { replacing = false, automati
      * one's luck. Reported as "sometimes it fails to put both of them
      * correctly". Each says for itself what went wrong; putUp marks the
      * second so two failures do not read as one repeated. */
-    const fit = { filmSeconds: status?.seconds, say, run };
+    const fit = { filmSeconds: status?.seconds, say, sayForSite, run };
     /* Both files are fetched at once, and each goes up when it is in hand.
      *
      * One after the other, the second language waited for the first even
@@ -1523,7 +1537,9 @@ async function runAutoAttach(tab, frameId, status, { replacing = false, automati
       await Promise.race([leadUp, new Promise((resolve) => setTimeout(resolve, LEAD_FIRST_MS))]);
       await putUp(tab, frameId, second, subtitle, 1, fit);
     } else if (secondReason) {
-      await notify(tab.id, frameId, `Only ${best.language?.toUpperCase() || "one"}: ${secondReason}`);
+      const only = `Only ${best.language?.toUpperCase() || "one"}: ${secondReason}`;
+      const tell = (where, message) => notify(tab.id, where, message);
+      await (secondReason === NOT_SEARCHED_SHORT ? sayForSite(frameId, only, tell) : tell(frameId, only));
     }
     await leadUp;
   } catch (error) {
@@ -1540,6 +1556,28 @@ async function runAutoAttach(tab, frameId, status, { replacing = false, automati
 const LONGER_THAN_FILM = (filmSeconds) => filmSeconds * 1.15 + 120;
 
 const LEAD_FIRST_MS = 1500;
+
+const NOT_SEARCHED_SHORT = "not searched for - the programme is shorter than ten minutes";
+
+/* Said once a browser session per site; see sayForSite in runAutoAttach.
+ * Session storage, because the worker sleeps between videos and a set held
+ * in memory would be forgotten every time it did. */
+const TOLD_KEY = "sso:toldThisSession";
+let toldTurn = Promise.resolve();
+
+function firstThisSession(origin, message) {
+  const turn = toldTurn.then(async () => {
+    const key = `${origin} ${message}`;
+    const told = (await chrome.storage.session.get(TOLD_KEY))[TOLD_KEY] || {};
+    if (told[key]) return false;
+    told[key] = Date.now();
+    await chrome.storage.session.set({ [TOLD_KEY]: told });
+    return true;
+  });
+  toldTurn = turn.catch(() => {});
+  // Storage that cannot be read is no reason to keep a failure quiet.
+  return turn.catch(() => true);
+}
 
 /* One result's file: the page's own, or a download. A failure is an answer
  * with `error`, never a throw, because two of these run side by side. */
@@ -1558,14 +1596,14 @@ async function fetchFor(tab, frameId, result, found) {
 }
 
 /** Put one fetched file on the named track. False if it did not land. */
-async function putUp(tab, frameId, result, subtitle, slot, { filmSeconds = null, say = null, run = null } = {}) {
+async function putUp(tab, frameId, result, subtitle, slot, { filmSeconds = null, say = null, sayForSite = null, run = null } = {}) {
   const tell = say || ((where, message) => notify(tab.id, where, message));
   if (subtitle.error) {
     /* A failure on the second subtitle is a note, not an error: the first one
      * is already on screen and the film is watchable. Saying "download failed"
      * with subtitles running would read as though nothing had worked. */
     const prefix = slot > 0 ? "Second subtitle: " : "";
-    await tell(
+    await (subtitle.sameForSite && sayForSite ? sayForSite : tell)(
       frameId,
       subtitle.quota_exceeded
         ? `${prefix}daily download limit reached - pick something already cached`

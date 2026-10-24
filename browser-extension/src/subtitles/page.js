@@ -163,7 +163,8 @@ async function readTrack(track) {
   if (!text.trim()) {
     /* YouTube answers 200 and nothing to a timedtext request without the
      * player's proof-of-origin token; see src/sites/youtube.js. */
-    throw new Error("The page sent an empty file - turn the player's own captions on once, then try again");
+    // The same answer for every programme on the site; see sayForSite in background.js.
+    throw Object.assign(new Error("The page sent an empty file - turn the player's own captions on once, then try again"), { sameForSite: true });
   }
   return { cues: readText(text, format), note };
 }

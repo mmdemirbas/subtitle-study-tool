@@ -90,6 +90,7 @@ let frameList = [{ frameId: 0 }];
 // Where the one tab is. The page-world ear goes in only on the hosts it is for.
 let tabUrl = "https://example.tv/watch/1";
 const store = {};
+const sessionStore = {};
 const sentToTab = [];
 // Every scripting call the worker made, so a test can assert the injection
 // happened rather than only that nothing threw.
@@ -225,6 +226,17 @@ globalThis.chrome = {
        * trace.clear()'s list removed nothing, and the log's cases started
        * empty only because the flush before each clear had already sent it. */
       async remove(key) { for (const k of [key].flat()) delete store[k]; },
+    },
+    /* Cleared with the browser, which these cases never close. Copies in and
+     * out, as Chrome's does, so a caller cannot change what is stored by
+     * changing what it read. */
+    session: {
+      async get(key) {
+        const keys = key == null ? Object.keys(sessionStore) : [key].flat();
+        return structuredClone(Object.fromEntries(keys.filter((k) => k in sessionStore).map((k) => [k, sessionStore[k]])));
+      },
+      async set(obj) { Object.assign(sessionStore, structuredClone(obj)); },
+      async remove(key) { for (const k of [key].flat()) delete sessionStore[k]; },
     },
   },
   tabs: {
@@ -2255,6 +2267,58 @@ Short stamp
   const empty = await ask({ type: "sso:daemon", op: "fetch", args: { fileId: "page:x:en:subtitle" } }, sender);
   t("an empty answer says what to do about it rather than 'no lines'",
     /turn the player's own captions on/.test(empty?.error || ""), JSON.stringify(empty));
+
+  /* Said once a session for the site, to the runs nobody pressed for: in six
+   * weeks of the log YouTube showed that message 134 times, one for nearly
+   * every video, and the token never came after any of them. */
+  {
+    const was = { tabUrl, tabStatusReply, sites: store["sso:autoSites"] };
+    tabUrl = "https://www.youtube.com/watch?v=x";
+    store["sso:autoSites"] = { "https://www.youtube.com": true };
+    tabStatusReply = { ok: true, hasVideo: true, attached: false, seconds: 1500 };
+    pageFiles = { "https://www.youtube.com/api/timedtext?v=x&fmt=vtt": "", "https://www.youtube.com/api/timedtext?v=x&lang=tr&fmt=vtt": "" };
+    pageSubtitlesReply = () => ({ site: "YouTube", titleId: "x", tracks: [
+      { ...track("en", "subtitle", "https://www.youtube.com/api/timedtext?v=x&fmt=vtt"), id: "page:x:en:subtitle", format: "vtt" },
+      { ...track("tr", "subtitle", "https://www.youtube.com/api/timedtext?v=x&lang=tr&fmt=vtt"), id: "page:x:tr:subtitle", format: "vtt" },
+    ] });
+    const empties = () => toasts().filter((m) => /empty file/.test(m));
+    const watching = { tab: { ...TAB, url: tabUrl } };
+    sentToTab.length = 0;
+    await ask({ type: "sso:programme", mark: "1500|Video one" }, watching);
+    const first = empties();
+    sentToTab.length = 0;
+    await ask({ type: "sso:programme", mark: "1500|Video two" }, watching);
+    const second = empties();
+    sentToTab.length = 0;
+    await ask({ type: "sso:command", command: "auto-attach" }, watching);
+    const pressed = empties();
+    const log = await import("../src/trace.js");
+    const quietly = (await log.entries()).filter((e) => e.kind === "autoAttach" && /empty file/.test(e.toldThisSession || ""));
+    t("a site's empty caption file is said to the first automatic run of the session, and written down after",
+      first.length === 2 && second.length === 0 && quietly.length >= 2,
+      JSON.stringify({ first, second, quietly: quietly.length }));
+    t("and a press is told again", pressed.length === 2, JSON.stringify(pressed));
+    // A short video's other language is never searched for: the same note for every one.
+    tabStatusReply = { ok: true, hasVideo: true, attached: false, seconds: 300 };
+    pageFiles = { "https://www.youtube.com/api/timedtext?v=x&fmt=vtt": "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n" };
+    pageSubtitlesReply = () => ({ site: "YouTube", titleId: "x", tracks: [
+      { ...track("en", "subtitle", "https://www.youtube.com/api/timedtext?v=x&fmt=vtt"), id: "page:x:en:subtitle", format: "vtt" },
+    ] });
+    const notSearched = () => toasts().filter((m) => /not searched for/.test(m));
+    sentToTab.length = 0;
+    await ask({ type: "sso:programme", mark: "300|Short one" }, watching);
+    const shortFirst = notSearched();
+    sentToTab.length = 0;
+    await ask({ type: "sso:programme", mark: "300|Short two" }, watching);
+    const shortSecond = notSearched();
+    const upSecond = sentToTab.some((m) => m.type === "sso:attach");
+    t("and a short video's unsearched language is noted once, while its own track still goes up every time",
+      shortFirst.length === 1 && shortSecond.length === 0 && upSecond, JSON.stringify({ shortFirst, shortSecond, upSecond }));
+    tabUrl = was.tabUrl;
+    tabStatusReply = was.tabStatusReply;
+    store["sso:autoSites"] = was.sites;
+    pageSubtitlesReply = () => null;
+  }
 
   /* A <track> the document carries, the standard way. The catalogue app's
    * URL has no extension, so the bytes say which of the three it is; and its
