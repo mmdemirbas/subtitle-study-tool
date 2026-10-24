@@ -871,6 +871,15 @@ of it, each with a worker case and a harness case that fail on the old code:
 The forty seconds themselves were the catalogue app extracting its embedded
 track with ffmpeg on every request; it keeps them now (movies c3d4227).
 
+**The page's own file follows the page.** The catalogue app writes a new
+`<track>` for every stream it starts, cut to where that stream begins - 1163
+English lines on the first play, 790 after the last reload - and the copy
+attached was whichever cut was current when it was fetched. `refreshPageTracks`
+reads an attached page track again when its URL or shift changes and swaps the
+lines in place, offset and all; the lines of the earlier cut that a later one
+dropped are kept when the two copies agree word for word where both have lines
+(`withEarlierLines`), and a copy that agrees nowhere replaces the old one whole.
+
 ## A subtitle being made is one subtitle, attached under its final id
 
 The daemon makes a whole-file translation as a job (`translate_jobs.py`; the

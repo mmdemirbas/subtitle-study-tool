@@ -5365,6 +5365,82 @@
         }
       });
 
+      /* Measured on The Matrix in the catalogue app, 2026-10-24: its player
+       * restarts the stream at an offset on every seek and resume and writes a
+       * new <track> for it, cut to where the stream begins - 1163 English lines
+       * on the first play, 790 after the last reload - and the copy attached
+       * was whichever cut was current when it was fetched. */
+      check("a page's own subtitle is read again when the page replaces its <track>, and keeps the lines a later cut no longer has", async () => {
+        const api = window.__ssoApi;
+        const titleId = location.pathname.split("/").filter(Boolean).pop();
+        const fileId = `page:${titleId}:de:subtitle`;
+        const wasAttached = api.status().tracks.map((t) => t.attached);
+        // The film's lines, every 5s from 10s, two seconds each; a cut drops what
+        // ends before it and clips the line it falls in, as the app's shiftVtt does.
+        const film = Array.from({ length: 40 }, (_, i) => ({ start: 10000 + i * 5000, end: 12000 + i * 5000, text: `Zeile ${i}` }));
+        const cutAt = (ms) => film.filter((cue) => cue.end > ms).map((cue) => ({ ...cue, start: Math.max(cue.start, ms) }));
+        const asked = [];
+        let answer = null;
+        window.__stubDaemon = { fetch: (args) => { asked.push(args.fileId); return answer; } };
+        const track = document.createElement("track");
+        track.setAttribute("kind", "subtitles");
+        track.setAttribute("srclang", "de");
+        /* The URL alone, as the app's carries the shift. Its
+         * data-sso-time-offset moves with it, but on this page, which states
+         * no programme, the offset moves the length the programme is known
+         * by, and that is a new programme here and not on the app. */
+        const play = (seconds) => track.setAttribute("src", `../tests/fixtures/youtube/api/timedtext?shift=${seconds}`);
+        const until = async (test, what) => {
+          for (let i = 0; i < 120 && !test(); i++) await sleep(25);
+          if (!test()) throw new Error(what());
+        };
+        const slot = () => api.status().tracks[0];
+        const starts = () => api.cueTimes(0);
+        try {
+          play(101);
+          video.append(track);
+          await until(() => api.status().own?.tracks?.some((t) => t.id === fileId), () => `never listed: ${JSON.stringify(api.status().own)}`);
+          // What a reload at 101s attaches: the cut from there, 22 lines.
+          await api.attach({ cues: cutAt(101000), label: "DE · the page's own", fileId, language: "de", slot: 0 });
+          api.setOffset(300, { slot: 0, quiet: true });
+
+          // Back to 51s: the new cut has more, and all of it is the film's.
+          answer = { cues: cutAt(51000) };
+          play(51);
+          await until(() => starts().length === 32, () => `after going back to 51s subtitle 1 has ${starts().length} lines, want 32; fetched ${JSON.stringify(asked)}`);
+          if (asked.join() !== fileId) throw new Error(`fetched ${JSON.stringify(asked)}`);
+          if (starts()[0] !== 51000) throw new Error(`the first line starts at ${starts()[0]}, want 51000`);
+          if (slot().offsetMs !== 300 || slot().fileId !== fileId) throw new Error(`the slot changed under the new lines: ${JSON.stringify(slot())}`);
+
+          // On to 151s: the new cut has 12 lines and the 21 before it are kept,
+          // with the line it clipped whole.
+          answer = { cues: cutAt(151000) };
+          play(151);
+          await until(() => asked.length === 2, () => `going on to 151s fetched nothing: ${JSON.stringify(asked)}`);
+          await sleep(200);
+          const merged = starts();
+          if (merged.length !== 32 || merged[0] !== 51000) throw new Error(`after going on to 151s subtitle 1 has ${merged.length} lines from ${merged[0]}, want the 32 from 51000 the two cuts make together`);
+          if (!merged.includes(150000) || merged.includes(151000)) throw new Error(`the line the cut clipped is ${merged.includes(151000) ? "the clipped copy" : "missing"}`);
+
+          // A different file under the same id replaces the old one whole.
+          answer = { cues: [{ start: 160000, end: 162000, text: "Etwas anderes" }, { start: 170000, end: 172000, text: "Noch etwas" }] };
+          play(152);
+          await until(() => starts().length === 2, () => `a different file was merged into the old one: ${starts().length} lines`);
+
+          // The same source again is not fetched again.
+          const fetches = asked.length;
+          await sleep(1300);
+          if (asked.length !== fetches) throw new Error(`fetched again with nothing changed: ${JSON.stringify(asked)}`);
+        } finally {
+          window.__stubDaemon = null;
+          track.remove();
+          api.setOffset(0, { slot: 0, quiet: true, byHand: false });
+          if (wasAttached[0]) await api.attach({ cues: CUES, label: "first", fileId: 1, language: "en", slot: 0 });
+          else api.detach(0);
+          await sleep(1100);
+        }
+      });
+
       check("cues a player hands to the browser's own text track are read off it, whatever it fetched them as", async () => {
         const own = () => window.__ssoApi.status().own;
         const titleId = location.pathname.split("/").filter(Boolean).pop();

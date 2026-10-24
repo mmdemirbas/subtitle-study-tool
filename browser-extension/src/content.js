@@ -1555,7 +1555,71 @@
         shape: ["dom", ...new Set(raw.map((track) => track.format))],
       });
     }
+    refreshPageTracks();
     notify();
+  }
+
+  /* Where an attached page track's lines came from: its URL. Null for a track
+   * the page no longer lists. Not the shift: it is read at every fetch, and a
+   * shift that moved under an unchanged URL would read the same cut again and
+   * put it at the new shift. */
+  function pageSourceOf(fileId) {
+    return ownTracks({ withUrls: true })?.tracks?.find((candidate) => candidate.id === fileId)?.url ?? null;
+  }
+
+  /* A page's own file that the page has since replaced is read again.
+   *
+   * A player that restarts its stream at an offset - the catalogue app on
+   * every seek and every resume - writes a new <track> for the new stream,
+   * cut and shifted to where it starts. Measured on The Matrix, 2026-10-24:
+   * the English the page offered had 1163 lines on the first play and 790
+   * after the last reload, the lines before the resume point gone, and the
+   * copy attached was whichever cut was current when it was fetched - so
+   * going back past where the stream began left no English at all. When an
+   * attached page track's source changes its lines are fetched again and
+   * swapped in place; the offset and everything else about the slot stay. */
+  function refreshPageTracks() {
+    state.tracks.forEach((track, index) => {
+      if (typeof track.fileId !== "string" || !track.fileId.startsWith("page:") || !track.cues.length) return;
+      const source = pageSourceOf(track.fileId);
+      if (!source || source === track.pageSource) return;
+      const was = track.pageSource;
+      track.pageSource = source;
+      if (!was) return;
+      const fileId = track.fileId;
+      daemonCall("fetch", { fileId }).then((answer) => {
+        if (track !== state.tracks[index] || track.fileId !== fileId || track.pageSource !== source) return;
+        if (!answer?.cues?.length) {
+          trace("pageRefresh", { slot: index, fileId, error: answer?.error || answer?.transportError || "no lines" });
+          return;
+        }
+        const cues = withEarlierLines(track.cues, answer.cues) ?? answer.cues;
+        trace("pageRefresh", { slot: index, fileId, from: track.cues.length, fetched: answer.cues.length, to: cues.length });
+        track.cues = cues;
+        track.activeIndexes = NEEDS_REDRAW;
+        spansCache.delete(index);
+        lastStepMs = null;
+        // Same id and often the same count, which is all the mirror's key reads.
+        mirrorSignature = "";
+        notify();
+      });
+    });
+  }
+
+  /* A cut that starts later drops every line before where its stream began,
+   * and the map, Again and the study strips still want those. They are kept
+   * when the two copies are one file - one of the first few lines of either
+   * is in the other at the same moment, word for word - and null is the
+   * answer otherwise, a different file, which replaces the old one whole.
+   * The first few rather than the first: the line being spoken where a stream
+   * starts is clipped to that point, so its start is the cut's, not the film's,
+   * and the old copy's whole line is kept in its place. */
+  function withEarlierLines(old, fresh) {
+    const within = (some, all) => some.slice(0, 3).some((cue) => all.some((was) => Math.abs(was.start - cue.start) <= 100 && was.text === cue.text));
+    if (!within(fresh, old) && !within(old, fresh)) return null;
+    const kept = old.filter((was) => was.start < fresh[0].start);
+    const clipped = (cue) => kept.some((was) => was.text === cue.text && Math.abs(was.end - cue.end) <= 100);
+    return [...kept, ...fresh.filter((cue) => !clipped(cue))];
   }
 
   /* Both lists as one, the ear's first. `withUrls` is for the worker about to
@@ -7359,6 +7423,8 @@
     track.label = label || "";
     track.fileId = fileId ?? null;
     track.language = language || "";
+    // See refreshPageTracks: the cut of the page's file these lines are.
+    track.pageSource = typeof fileId === "string" && fileId.startsWith("page:") ? pageSourceOf(fileId) : null;
     const timing = await loadOffset(track.fileId);
     track.offsetMs = timing.offsetMs;
     track.rate = timing.rate;
