@@ -513,11 +513,21 @@ film the lead's lines are placed on that speech. Eight things are load-bearing:
   which Chrome answers only for a tab the reader has invoked the extension on
   (toolbar button, popup, any shortcut; "Extension has not been invoked for
   the current page" otherwise), and `src/offscreen.html` turns the id into
-  the tab's sound, hears it with the same `hearStream` and sends speech
-  probabilities stamped with `Date.now()` to the film's frame, ten at a time.
-  The frame puts each on the film's clock through the wall time of its own
-  ticks (`hearTab`), less `TAB_EAR_LATE_MS`, the 45-70ms the capture
-  measured behind the element's copy. Nothing is remembered in the worker: a
+  the tab's sound and sends speech probabilities stamped with the wall time
+  to the film's frame, ten at a time. The windows are cut on the audio
+  thread (`src/ear-tap.js`, an AudioWorklet) and read by `analyserDb`, which
+  a harness case holds to an AnalyserNode's own reading - not by the
+  analysers on a timer, because a hidden document's 50ms timer fired 10 to
+  130ms apart and the frames suite heard 55% of the film through it; on the
+  audio clock they are 49.8ms apart at the median, never more than 54.6, and
+  none is missed. The
+  timer is left only for a context with no worklet (`cadence` in the status
+  and the `tab-open` line says which ran). The frame puts each on the film's
+  clock through the wall time of its own ticks (`hearTab`), less
+  `TAB_EAR_LATE_MS`: the capture measured 45 to 80ms behind the element's
+  copy, and in two runs of eight 35 to 40ms ahead of it - the capture's own
+  spread, since a stamp taken on arrival and one taken at the render agree
+  to 5ms. Nothing is remembered in the worker: a
   refused frame says `tabEar: "wanted"` in its status and an invocation
   (`runCommand`, `sso:invoked` from the popup) reads that. Chrome takes a
   captured tab off the speakers, so the offscreen document plays it back -

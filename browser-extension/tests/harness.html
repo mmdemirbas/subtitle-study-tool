@@ -3056,6 +3056,45 @@
         return { lines, level };
       };
 
+      /* The tab's sound is cut into windows on the audio thread (ear-tap.js)
+       * and read by analyserDb, where the element's is read by two
+       * AnalyserNodes; the detector was fitted on one reading, so the two
+       * have to be the same reading. */
+      check("a window cut on the audio clock reads exactly as an AnalyserNode reads it", async () => {
+        const L = window.__ssoListen;
+        const rate = 48000, size = 2048, at = 24064; // a whole number of 128-frame quanta
+        const offline = new OfflineAudioContext(1, rate, rate);
+        const buffer = offline.createBuffer(1, rate, rate);
+        const samples = buffer.getChannelData(0);
+        let seed = 7;
+        const noise = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648 - 0.5);
+        for (let i = 0; i < rate; i++) samples[i] = 0.3 * Math.sin((2 * Math.PI * 440 * i) / rate) + 0.1 * Math.sin((2 * Math.PI * 2210 * i) / rate) + 0.02 * noise();
+        const source = offline.createBufferSource();
+        source.buffer = buffer;
+        const analyser = offline.createAnalyser();
+        analyser.fftSize = size;
+        analyser.smoothingTimeConstant = 0;
+        source.connect(analyser);
+        analyser.connect(offline.destination);
+        const fromAnalyser = new Float32Array(size / 2);
+        offline.suspend(at / rate).then(() => {
+          analyser.getFloatFrequencyData(fromAnalyser);
+          offline.resume();
+        });
+        source.start();
+        await offline.startRendering();
+        const ours = L.analyserDb(size)(samples.subarray(at - size, at));
+        let worst = 0, worstAt = -1;
+        for (let k = 1; k < size / 2; k++) {
+          if (fromAnalyser[k] < -100) continue; // float noise far below anything heard
+          const off = Math.abs(fromAnalyser[k] - ours[k]);
+          if (off > worst) { worst = off; worstAt = k; }
+        }
+        if (!(worst < 0.05)) throw new Error(`bin ${worstAt} reads ${ours[worstAt]?.toFixed(2)} dB here and ${fromAnalyser[worstAt]?.toFixed(2)} dB from the analyser`);
+        const peak = fromAnalyser.indexOf(Math.max(...fromAnalyser));
+        if (Math.abs(peak * rate / size - 440) > rate / size) throw new Error(`the analyser's peak is at ${peak * rate / size}Hz, not 440`);
+      });
+
       check("the ear applies a shift only when two blocks agree with the stretch they make up", async () => {
         const L = window.__ssoListen;
         const spansOf = (lines) => (lo, hi) => lines.filter((c) => c.end > lo && c.start < hi).map((c) => [c.start, c.end]);

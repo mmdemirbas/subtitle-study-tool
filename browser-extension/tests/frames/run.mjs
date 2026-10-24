@@ -963,6 +963,21 @@ try {
   t("after the press the film is heard from the tab",
     Boolean(fromTab),
     JSON.stringify({ pressed, listening: fromTab ?? (await topSays())?.listening }));
+  /* On the audio clock, every hop of it. The 50ms timer this replaced fires
+   * 10 to 130ms apart in a hidden document, and left about a quarter of the
+   * film unheard. Six seconds of a looping clip at 1x should be six seconds
+   * heard. */
+  let cadence = null;
+  if (fromTab) {
+    const before = (await topSays())?.listening;
+    const fromMs = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    const after = (await topSays())?.listening;
+    cadence = { cadence: after?.cadence, share: Math.round((1000 * (after.heardMs - before.heardMs)) / (Date.now() - fromMs)) / 1000 };
+  }
+  t("the tab is heard on the audio clock, every frame of it",
+    cadence?.cadence === "audio" && cadence.share > 0.9,
+    JSON.stringify(cadence));
 } finally {
   await ctx.close();
   fs.rmSync(profile, { recursive: true, force: true });

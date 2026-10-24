@@ -6570,12 +6570,13 @@
       state: opened.state || "running",
       sampleRate: opened.sampleRate,
       fftSize: opened.fftSize,
+      cadence: opened.cadence || null,
       queue: [],
       close() {
         tellTabEar("close");
       },
     };
-    trace("listenEar", { outcome: "tab-open", sampleRate: opened.sampleRate, fftSize: opened.fftSize, element: listening.refused?.reason });
+    trace("listenEar", { outcome: "tab-open", sampleRate: opened.sampleRate, fftSize: opened.fftSize, cadence: opened.cadence, element: listening.refused?.reason });
   }
 
   function tellTabEar(op) {
@@ -6782,6 +6783,8 @@
       hearing: Boolean(listening.ear),
       ear: listening.ear?.remote ? "tab" : listening.ear ? "element" : null,
       tabEar: listening.tabEar,
+      // How the tab's readings are timed: "audio" for every hop, "timer" where the worklet could not load.
+      cadence: listening.ear?.remote ? listening.ear.cadence : null,
       // What a shift has to come to before it is applied, now.
       minimumMs: slot != null && listening.handOn === String(state.tracks[slot].fileId) ? L?.AFTER_HAND_MIN_MS : L?.APPLY_MIN_MS,
       refused: listening.refused?.reason ?? null,

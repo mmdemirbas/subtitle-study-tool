@@ -116,6 +116,23 @@
     }
   }
 
+  /* What an AnalyserNode's getFloatFrequencyData gives for these samples at
+   * smoothing 0, as Chrome computes it: Blackman-windowed, |X| / N, in dB. For
+   * windows cut on the audio clock (ear-tap.js), so they read exactly as the
+   * analysers' do. */
+  function analyserDb(size) {
+    const blackman = Float64Array.from({ length: size }, (_, i) => 0.42 - 0.5 * Math.cos((2 * Math.PI * i) / size) + 0.08 * Math.cos((4 * Math.PI * i) / size));
+    const re = new Float64Array(size), im = new Float64Array(size);
+    const scaleDb = 20 * Math.log10(size);
+    return (samples) => {
+      for (let i = 0; i < size; i++) { re[i] = samples[i] * blackman[i]; im[i] = 0; }
+      fft(re, im);
+      const db = new Float32Array(size / 2);
+      for (let k = 0; k < size / 2; k++) db[k] = 10 * Math.log10(re[k] * re[k] + im[k] * im[k]) - scaleDb;
+      return db;
+    };
+  }
+
   const FEATURE_BANDS = [[60, 150], [150, 300], [300, 500], [500, 800], [800, 1300], [1300, 2000], [2000, 3400], [3400, 6000]];
   const FEATURES = FEATURE_BANDS.length + 7;
 
@@ -640,7 +657,7 @@
   }
 
   globalThis.__ssoListen = {
-    bestShift, placeLines, createHearing, createFeatures, speechProbability, retiming, openEar, hearStream, FEATURES,
+    bestShift, placeLines, createHearing, createFeatures, speechProbability, retiming, openEar, hearStream, analyserDb, FEATURES,
     HOP_MS, BLOCK_FRAMES, APPLY_MIN_MS, AFTER_HAND_MIN_MS,
   };
 })();

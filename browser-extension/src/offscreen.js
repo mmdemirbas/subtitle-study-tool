@@ -53,16 +53,56 @@
     const [track] = stream.getAudioTracks();
     const context = new AudioContext();
     const ear = L.hearStream(stream, context, { playBack: true });
-    const held = { frameId, ear, batch: [], timer: 0 };
-    held.timer = setInterval(() => {
-      const reading = ear.read();
-      if (reading == null) return;
-      held.batch.push([Date.now(), L.speechProbability(reading)]);
+    const held = { frameId, ear, batch: [], timer: 0, tap: null };
+    const heard = (stampMs, reading) => {
+      held.batch.push([stampMs, L.speechProbability(reading)]);
       if (held.batch.length >= BATCH) flush(tabId, held);
-    }, L.HOP_MS);
+    };
+    held.tap = await tapWindows(stream, context, ear.fftSize, heard).catch(() => null);
+    // The timer, only where the audio thread cannot be asked.
+    if (!held.tap) {
+      held.timer = setInterval(() => {
+        const reading = ear.read();
+        if (reading != null) heard(Date.now(), reading);
+      }, L.HOP_MS);
+    }
     track?.addEventListener("ended", () => close(tabId, "the tab's sound ended"));
     ears.set(tabId, held);
-    return { ok: true, sampleRate: ear.sampleRate, fftSize: ear.fftSize, state: context.state, settings: track?.getSettings?.() };
+    return {
+      ok: true, sampleRate: ear.sampleRate, fftSize: ear.fftSize, state: context.state, settings: track?.getSettings?.(),
+      cadence: held.tap ? "audio" : "timer",
+    };
+  }
+
+  /* Every hop of the tab's sound, on the audio clock: see ear-tap.js. Each
+   * window is stamped with the wall time it was rendered at, which is the
+   * moment an analyser read then would have shown it - what the frame's
+   * TAB_EAR_LATE_MS was measured against - however late the message comes. */
+  async function tapWindows(stream, context, size, heard) {
+    await context.audioWorklet.addModule("ear-tap.js");
+    const source = context.createMediaStreamSource(stream);
+    // Two channels by the speakers rule, as hearStream mixes for its analysers.
+    const tap = new AudioWorkletNode(context, "sso-ear-tap", {
+      numberOfInputs: 1,
+      numberOfOutputs: 0,
+      channelCount: 2,
+      channelCountMode: "explicit",
+      channelInterpretation: "speakers",
+      processorOptions: { size, hop: Math.round((context.sampleRate * L.HOP_MS) / 1000) },
+    });
+    source.connect(tap);
+    const features = L.createFeatures({ binHz: context.sampleRate / size, bins: size / 2 });
+    const spectrum = L.analyserDb(size);
+    tap.port.onmessage = ({ data }) => {
+      const ageMs = Math.max(0, context.currentTime * 1000 - data.endMs);
+      heard(Date.now() - ageMs, features(spectrum(data.mid), spectrum(data.side)));
+    };
+    return {
+      stop() {
+        tap.port.onmessage = null;
+        source.disconnect();
+      },
+    };
   }
 
   function flush(tabId, held) {
@@ -78,6 +118,7 @@
     if (!held) return;
     ears.delete(tabId);
     clearInterval(held.timer);
+    held.tap?.stop();
     held.ear.close();
     const remaining = ears.size + (replacing ? 1 : 0);
     chrome.runtime.sendMessage({ type: "sso:tabEarEnded", tabId, frameId: held.frameId, reason, remaining }).catch(() => {});

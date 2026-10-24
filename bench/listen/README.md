@@ -153,6 +153,11 @@ as `captureStream()` of the clear copy (300-3400Hz median -65.9dB against
 -67.4dB), and against the frames clip's known tone envelope the tab's sound
 reached its analyser 45ms and 70ms later than the element's copy reached the
 page's, in two runs. The extension takes 50ms off every tab reading for that.
-The offscreen document's timer fired every 57ms at the median (103ms at p90)
-rather than every 50ms, so about one frame in five is not heard and a block
-takes that much longer to fill.
+The offscreen document first read its analysers on a timer, which fired 10 to
+130ms apart (median 57, p90 102); replayed over the three episodes with the
+features read at those gaps, 72.9% of the frames were heard, every answer was
+still right, and the first correction came a median 4.1 minutes in against
+2.0. The windows are now cut on the audio thread (`ear-tap.js`): 600 readings
+in every 30 seconds of six runs, 49.8ms apart at the median, and the capture
+60 to 80ms behind the element's copy in four of them and 35 to 40ms ahead in
+two.
