@@ -490,11 +490,15 @@ film the lead's lines are placed on that speech. Eight things are load-bearing:
 
 - **The model is fitted, not written.** `SPEECH_MODEL` sits between
   `/* model:begin */` and `/* model:end */` and `bench/listen/train.mjs --write`
-  is the only thing that should change it - fitted on films' own subtitles,
-  a frame inside a line being speech and one a second from any line not. Held
-  out of its own fit, each film with dialogue scores a frame AUC of 0.79 to
-  0.95, where the hand-tuned rule it replaced (band above floor, centred,
-  syllabic) scored 0.62 to 0.74. A change to `createFeatures` changes what the
+  is the only thing that should change it - fitted on the films
+  `bench/listen/training.txt` names, a frame inside a line being speech and
+  one a second from any line not, and a line that only describes a sound
+  ("[door opens]") being neither. Held out of its own fit, each fitted film
+  with dialogue scores a frame AUC of 0.80 to 0.96, and the eleven films kept
+  as tests 0.83 to 0.90, where the hand-tuned rule it replaced (band above
+  floor, centred, syllabic) scored 0.62 to 0.74. Fitting on the tests too
+  was measured and was worse on one film, so a film added to the bench is a
+  test until a refit with it is measured. A change to `createFeatures` changes what the
   numbers mean, so it needs `features.mjs` run again on every film and a refit;
   `bench/listen/README.md` says how.
 

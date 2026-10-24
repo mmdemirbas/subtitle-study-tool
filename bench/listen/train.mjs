@@ -9,6 +9,7 @@
 // --write replaces what is between the model markers in
 // browser-extension/src/listen.js. Films with a .truth.json are left out: their
 // subtitle is another release's, so its lines are not where this film speaks.
+// training.txt names the films fitted on; the rest are measured, as tests.
 import fs from "node:fs";
 import path from "node:path";
 import { parseSrt } from "../../browser-extension/src/subtitles/srt.js";
@@ -24,7 +25,21 @@ const names = fs.readdirSync(FILMS)
   .map((f) => f.slice(0, -4))
   .filter((name) => !fs.existsSync(path.join(FILMS, `${name}.truth.json`)))
   .sort();
+/* The films the model is fitted on, one name a line; every other film is
+ * a test of it and only measured. Without the list, every film is fitted. */
+const LIST = path.join(HERE, "training.txt");
+const fitted = fs.existsSync(LIST)
+  ? fs.readFileSync(LIST, "utf8").split("\n").map((line) => line.trim()).filter((name) => name && names.includes(name))
+  : names;
 const D = FEATURES, P = 2 * D + 1, HOP = 50, AWAY_MS = 1000, EVERY = 5;
+
+/* A line that only describes a sound - "[door opens]", "(footsteps
+ * walking)", "♪♪ [ Synthesized Pop ]" - marks a sound and not a voice. Its
+ * frames are left out of both classes, and it is not a line when deciding
+ * what is a second from any line. Read as speech, it taught the detector
+ * that Flow's 255 lines of wings and paws were a voice, and so were 19% of
+ * one episode's footsteps and doors. Sung words are words and stay. */
+const soundOnly = (text) => !/[\p{L}\p{N}]/u.test(text.replace(/<[^>]*>/g, "").replace(/\[[^\]]*\]/g, "").replace(/\([^)]*\)/g, ""));
 
 const films = {};
 for (const name of names) {
@@ -32,15 +47,18 @@ for (const name of names) {
   const X = new Float32Array(buf.buffer, buf.byteOffset, buf.length / 4);
   const n = X.length / D;
   const cues = parseSrt(fs.readFileSync(path.join(FILMS, `${name}.srt`), "utf8"));
-  const inside = new Uint8Array(n);
-  for (const c of cues) for (let i = Math.max(0, Math.floor(c.startMs / HOP)); i < Math.min(n, Math.ceil(c.endMs / HOP)); i++) inside[i] = 1;
+  const inside = new Uint8Array(n), sound = new Uint8Array(n);
+  for (const c of cues) {
+    const marks = soundOnly(c.text) ? sound : inside;
+    for (let i = Math.max(0, Math.floor(c.startMs / HOP)); i < Math.min(n, Math.ceil(c.endMs / HOP)); i++) marks[i] = 1;
+  }
   const dist = new Float64Array(n);
   let last = -1e9;
   for (let i = 0; i < n; i++) { if (inside[i]) last = i; dist[i] = i - last; }
   last = 1e9;
   for (let i = n - 1; i >= 0; i--) { if (inside[i]) last = i; dist[i] = Math.min(dist[i], last - i); }
   const label = new Int8Array(n).fill(-1);
-  for (let i = 10; i < n; i++) label[i] = inside[i] ? 1 : dist[i] * HOP >= AWAY_MS ? 0 : -1;
+  for (let i = 10; i < n; i++) label[i] = inside[i] ? 1 : sound[i] ? -1 : dist[i] * HOP >= AWAY_MS ? 0 : -1;
   films[name] = { X, n, cues, label };
 }
 
@@ -107,19 +125,21 @@ function auc(scores, labels) {
 }
 
 if (write) {
-  const model = fit(names);
+  const model = fit(fitted);
   const source = fs.readFileSync(LISTEN, "utf8");
   const begin = "/* model:begin */", end = "/* model:end */";
   const a = source.indexOf(begin), b = source.indexOf(end);
   if (a < 0 || b < a) throw new Error("no model markers in listen.js");
-  const literal = `${begin} ${JSON.stringify({ trainedOn: names, ...model })} ${end}`;
+  const literal = `${begin} ${JSON.stringify({ trainedOn: fitted, ...model })} ${end}`;
   fs.writeFileSync(LISTEN, source.slice(0, a) + literal + source.slice(b + end.length));
-  console.log(`wrote a model trained on ${names.length} films into listen.js`);
+  console.log(`wrote a model trained on ${fitted.length} films into listen.js`);
 } else {
   const TRUTH = 4000;
   console.log("film (held out)   frame AUC   60s windows within 300ms");
+  const shipped = fitted.length < names.length ? fit(fitted) : null;
   for (const held of names) {
-    const model = fit(names.filter((name) => name !== held));
+    // A fitted film is held out of its own fit; a test film meets the model as it ships.
+    const model = fitted.includes(held) ? fit(fitted.filter((name) => name !== held)) : shipped;
     const { X, n, cues, label } = films[held];
     const p = probabilities(model, X, n);
     const s = [], l = [];
@@ -132,6 +152,7 @@ if (write) {
       m++;
       if (got && Math.abs(got.shiftMs - TRUTH) <= 300) ok++;
     }
-    console.log(held.padEnd(17), auc(s, l).toFixed(3).padStart(9), `${ok}/${m} (${((100 * ok) / m).toFixed(0)}%)`.padStart(20));
+    const score = l.includes(1) ? auc(s, l).toFixed(3) : "-";
+    console.log(held.padEnd(17), score.padStart(9), `${ok}/${m} (${((100 * ok) / m).toFixed(0)}%)`.padStart(20), fitted.includes(held) ? "" : "  test");
   }
 }
