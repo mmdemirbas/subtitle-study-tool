@@ -573,7 +573,9 @@ drift across them than 800ms, and more of them on the line than on a
 constant). The second is each framerate conversion in `align.js`'s `RATES`,
 tried only when the constant rule has failed and the blocks' own answers
 already slope towards that conversion, and taken only when each of the last
-four blocks agrees under it. Without those two conditions it stretched 5 of
+four two-minute stretches agrees under it - two minutes whatever the block,
+because one-minute blocks found five of nine 25-frame subtitles where these
+find seven. Without those two conditions it stretched 5 of
 159 subtitles that were right, one by 18 seconds. Either answer is applied by
 `retiming`, which maps every stream position through the same line - the
 lead's rate and offset, and every follower's rate, offset and act offsets,

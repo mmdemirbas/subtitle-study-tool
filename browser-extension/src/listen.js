@@ -85,6 +85,9 @@
   const RATE_MIN_SPAN_MS = 20 * 60000;
   const RATE_FIT_MS = 300;
   const RATE_WORTH_MS = 800;
+  // A framerate conversion is judged on four two-minute stretches; see scaledAgreement.
+  const SCALED_STRETCH_MS = 120000;
+  const SCALED_STRETCHES = 4;
 
   const FLOOR_FRAMES = 30000 / HOP_MS;
   const FLOOR_EVERY = 60;
@@ -409,23 +412,32 @@
      * search. Each conversion is tried instead - the lines stretched about
      * the present by it - but only one the blocks' own answers already point
      * at (their slope within a quarter of it), and only taken when each of the
-     * last four blocks agrees under it. Tried on every failure of the constant
-     * rule without those two conditions, it stretched 5 of 159 subtitles that
-     * were right, one of them by 18 seconds. */
+     * last four stretches agrees under it. Tried on every failure of the
+     * constant rule without those two conditions, it stretched 5 of 159
+     * subtitles that were right, one of them by 18 seconds.
+     *
+     * The stretches are two minutes of heard film whatever the block is, which
+     * is what this was measured on. Read off one-minute blocks, six of them
+     * each agreeing, it found five of nine 25-frame subtitles where two-minute
+     * blocks had found seven: a minute holds too few lines to place a file
+     * running 2.5 seconds a minute off, and six of them have to agree. */
     function scaledAgreement(linesFor, factors, atMs) {
-      if (blocks.length < recentBlocks) return null;
-      const recent = blocks.slice(-recentBlocks);
+      const per = Math.max(1, Math.round(SCALED_STRETCH_MS / (blockFrames * HOP_MS)));
+      if (blocks.length < per * SCALED_STRETCHES) return null;
+      const recent = blocks.slice(-per * SCALED_STRETCHES);
+      const stretches = [];
+      for (let i = 0; i < recent.length; i += per) stretches.push(recent.slice(i, i + per));
       const points = [];
-      for (const block of recent) {
-        const got = blockShift(block, linesFor);
-        if (got) points.push([centreOf(block), got.shiftMs]);
+      for (const stretch of stretches) {
+        const got = per === 1 ? blockShift(stretch[0], linesFor) : shiftOf(stretch, linesFor);
+        if (got) points.push([centreOf(stretch.flatMap((block) => [...block])), got.shiftMs]);
       }
       const slopes = [];
       for (let i = 0; i < points.length; i++) {
         for (let j = i + 1; j < points.length; j++) {
-          // Half a block of stream apart: a minute, as shipped.
+          // Half a stretch of stream apart: a minute.
           const gap = points[j][0] - points[i][0];
-          if (Math.abs(gap) >= (blockFrames * HOP_MS) / 2) slopes.push((points[j][1] - points[i][1]) / gap);
+          if (Math.abs(gap) >= SCALED_STRETCH_MS / 2) slopes.push((points[j][1] - points[i][1]) / gap);
         }
       }
       if (slopes.length < 3) return null;
@@ -438,7 +450,7 @@
             .map(([a, b]) => [factor * (a - atMs) + atMs, factor * (b - atMs) + atMs]);
         const all = shiftOf(recent, scaled);
         if (!all) continue;
-        const each = recent.map((block) => shiftOf([block], scaled));
+        const each = stretches.map((stretch) => shiftOf(stretch, scaled));
         if (each.every((got) => got && Math.abs(got.shiftMs - all.shiftMs) <= AGREE_MS)) {
           return { by: factor - 1, shiftMs: all.shiftMs, atMs, take: true, scaled: true, slope };
         }

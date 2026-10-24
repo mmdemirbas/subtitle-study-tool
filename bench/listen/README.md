@@ -91,11 +91,15 @@ rule of thumb gave 722 and 635.
 A drift (`--whole --truths 4000 --slow 0.1`): the nine films with dialogue were
 on screen within 300ms for 61.3% to 94.3% of their length, within a second for
 81.2% to 98.1%, every one given 24 against 23.976 (1.001). Made for 25 frames
-against 23.976 (`--slow 4.096`): five of the nine were stretched by exactly
-that conversion, after which 54.0% to 93.1% of each film was within 300ms; Love
-Actually, Matrix, the first episode and Truman were left as they were, nothing
-applied. With two-minute blocks it was seven of nine, and that is the one
-column the shorter block loses on.
+against 23.976 (`--slow 4.096`): seven of the nine were stretched by exactly
+that conversion, after which 63.0% to 94.5% of each film was within 300ms; Love
+Actually and Matrix were left as they were, nothing applied. The other way
+round, made for 23.976 and played at 25 (`--slow -4.271`), eight of nine, 67.9%
+to 94.7%, Love Actually left. A conversion is judged on four two-minute
+stretches whatever the block length. Read off the one-minute blocks
+themselves, six of them each agreeing, it was five of nine both ways - the one
+column the shorter block had lost on - and every other table here is the same
+to the line under both.
 
 `la-tigole` is one release of Love Actually against the subtitle of another,
 the case the ear exists for. Its `.truth.json` says where that subtitle
