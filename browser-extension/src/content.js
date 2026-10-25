@@ -6473,6 +6473,8 @@
       if (video.paused || video.readyState < 3) return;
       const opened = L.openEar(video, {
         onState: (to) => trace("listenEar", { outcome: "state", state: to }),
+        // The page gave the element a new source; see follow in hearStream.
+        onFollow: () => trace("listenEar", { outcome: "followed", streamMs: Math.round(streamNowMs()) }),
       });
       if (opened.refused) {
         const first = listening.refused?.reason !== opened.refused;

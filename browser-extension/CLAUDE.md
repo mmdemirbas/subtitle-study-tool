@@ -511,7 +511,15 @@ film the lead's lines are placed on that speech. Eight things are load-bearing:
   is asked for instead (next bullet). An
   `AudioContext` made in a frame that has had no gesture starts suspended, and
   the next press or key in that frame resumes it (`state` lines). The ear is
-  opened on the film's own frame, which is where `state.video` is.
+  opened on the film's own frame, which is where `state.video` is. **A capture
+  outlives its element's source, and its audio track does not**: when a page
+  gives the element a new `src` - the catalogue app on every seek, resume and
+  next film - Chrome adds a new audio track to the captured stream and leaves
+  the old one in it, still `live` and silent. A source node keeps the track it
+  was made with, so `hearStream` follows the last one added and stops the old
+  (`listenEar` line `followed`). Without that the ear heard silence for the
+  rest of an evening on the Matrix films, 2026-10-25, and `tests/frames`
+  checks it with a real `src` swap.
 - **Where the element refuses, the tab is heard - after a press.**
   `src/tab-ear.js` in the worker asks `chrome.tabCapture.getMediaStreamId`,
   which Chrome answers only for a tab the reader has invoked the extension on
@@ -545,7 +553,13 @@ film the lead's lines are placed on that speech. Eight things are load-bearing:
   enough - a song, rain - and the margin over the next-best shift does not
   separate right from wrong. Below 400ms nothing moves, because some files are
   timed about 350ms off their speech by their subtitler and moving them is the
-  extension making a right file slightly wrong.
+  extension making a right file slightly wrong. **And a stretch that heard less
+  than a second of speech has no answer** (`bestShift`): over silence every
+  shift scores the same, the largest of equal scores is the first searched,
+  -60.6 seconds once refined, and every silent block gives that same answer,
+  so they agree. That was applied seven times on 2026-10-25, to both
+  subtitles at once since a heard correction carries. Over the 21 bench films
+  the guard changes no table at all.
 - **Lines are placed by their first part, then refined by the whole.** A line
   stays up after its speech has ended, and over its whole length that pulls the
   answer early. `bench/listen/blocks.mjs` measures the two.

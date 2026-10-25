@@ -1,0 +1,39 @@
+<!doctype html><meta charset="utf-8"><title>capture spike</title>
+<video id="v" src="/tests/frames/clip.mp4" muted playsinline loop></video>
+<script>
+const v = document.getElementById("v");
+window.R = { events: [] };
+const log = (what, extra = {}) => R.events.push({ t: Math.round(performance.now()), what, ...extra });
+v.play().then(() => {
+  const stream = v.captureStream();
+  R.stream = stream;
+  const describe = () => stream.getAudioTracks().map((t) => `${t.id.slice(0, 8)}:${t.readyState}:${t.muted ? "muted" : "unmuted"}:${t.enabled ? "on" : "off"}`);
+  R.describe = describe;
+  R.newest = null;
+  stream.addEventListener("addtrack", (e) => { log("addtrack", { kind: e.track.kind, id: e.track.id.slice(0, 8), tracks: describe() }); if (e.track.kind === "audio" && R.started) R.newest = level(e.track); });
+  stream.addEventListener("removetrack", (e) => log("removetrack", { kind: e.track.kind, id: e.track.id.slice(0, 8), tracks: describe() }));
+  for (const t of stream.getAudioTracks()) {
+    t.addEventListener("ended", () => log("ended", { id: t.id.slice(0, 8) }));
+    t.addEventListener("mute", () => log("mute", { id: t.id.slice(0, 8) }));
+    t.addEventListener("unmute", () => log("unmute", { id: t.id.slice(0, 8) }));
+  }
+  log("captured", { tracks: describe() });
+  setTimeout(() => { R.started = true; }, 500);
+  // Level of the first track and of whatever the stream holds now.
+  const ctx = new AudioContext();
+  R.ctx = ctx;
+  const level = (track) => { const s = ctx.createMediaStreamSource(new MediaStream([track])); const a = ctx.createAnalyser(); a.fftSize = 2048; s.connect(a); const buf = new Float32Array(2048); return () => { a.getFloatTimeDomainData(buf); let m = 0; for (const x of buf) m = Math.max(m, Math.abs(x)); return m; }; };
+  const firstTrack = stream.getAudioTracks()[0];
+  const firstLevel = level(firstTrack);
+  const wholeSource = ctx.createMediaStreamSource(stream); const wa = ctx.createAnalyser(); wa.fftSize = 2048; wholeSource.connect(wa); const wb = new Float32Array(2048);
+  const wholeLevel = () => { wa.getFloatTimeDomainData(wb); let m = 0; for (const x of wb) m = Math.max(m, Math.abs(x)); return m; };
+  R.samples = [];
+  setInterval(() => {
+    const now = stream.getAudioTracks();
+    R.samples.push({ t: Math.round(performance.now()), first: +firstLevel().toFixed(3), whole: +wholeLevel().toFixed(3), newest: R.newest ? +R.newest().toFixed(3) : null, tracks: describe() });
+  }, 250);
+});
+v.addEventListener("emptied", () => log("emptied"));
+v.addEventListener("loadstart", () => log("loadstart"));
+v.addEventListener("playing", () => log("playing"));
+</script>

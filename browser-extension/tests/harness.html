@@ -3125,6 +3125,31 @@
         if (run(3000, { every: 20 }).length) throw new Error("frames after every jump were counted as heard");
       });
 
+      /* Reported on the Matrix films, 2026-10-25: both subtitles jumped a
+       * minute while they were right, again and again. The ear was reading a
+       * capture track the page had left behind, so it heard silence; every
+       * shift scored the same, the largest of equal scores was the first one
+       * searched, -60.6 seconds once refined, and each silent block agreed
+       * with the last. */
+      check("an ear that hears silence answers nothing, rather than the edge of its search", async () => {
+        const L = window.__ssoListen;
+        const { lines } = heardFilm(0);
+        const spans = (lo, hi) => lines.filter((c) => c.end > lo && c.start < hi).map((c) => [c.start, c.end]);
+        for (const quiet of [0, 1e-9]) {
+          const hearing = L.createHearing({ blockFrames: 400 });
+          const decisions = [];
+          for (let ms = 70000; ms < 70000 + 4 * 400 * 50; ms += 50) if (hearing.hear(ms, quiet)) decisions.push(hearing.decide(spans));
+          const said = decisions.filter((d) => d.apply != null || d.agreed != null || d.lastMs != null);
+          if (decisions.length < 3 || said.length) throw new Error(`silence at ${quiet} answered: ${JSON.stringify(said[0] ?? decisions)}`);
+        }
+        // And a stretch with speech in it is still placed.
+        const { level } = heardFilm(3000);
+        const hearing = L.createHearing({ blockFrames: 400 });
+        let last = null;
+        for (let ms = 70000; ms < 70000 + 3 * 400 * 50; ms += 50) if (hearing.hear(ms, level(ms))) last = hearing.decide(spans);
+        if (last?.apply == null || Math.abs(last.apply - 3000) > 150) throw new Error(`speech was not placed: ${JSON.stringify(last)}`);
+      });
+
       check("listening moves the lead onto the film's speech, carries the other, and Undo puts both back for good", async () => {
         const api = window.__ssoApi, L = window.__ssoListen;
         const wasAttached = api.status().tracks.map((t) => t.attached);

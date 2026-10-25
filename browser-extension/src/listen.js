@@ -76,6 +76,8 @@
    * insert, a cut, an advert the clock did not see. */
   const AFTER_HAND_MIN_MS = 2000;
   const MIN_LINES = 8;
+  // A second of speech, in frames: see bestShift.
+  const MIN_SPOKEN_FRAMES = 1000 / HOP_MS;
   /* A rate is a line through the blocks' answers, so it needs blocks and
    * film: half an hour of them kept, at least eight on the line, twenty
    * minutes apart from first to last, and a drift across them worth more
@@ -226,7 +228,13 @@
     const n = speech.length;
     let heard = 0, said = 0;
     for (const v of speech) if (v >= 0) { heard++; said += v; }
-    if (heard < 200) return null;
+    /* Speech is what lines are placed on, so a stretch that heard none has
+     * no answer: every shift scores the same, and the largest of equal
+     * scores is the first one searched - -60.6 seconds once refined, which
+     * is what a silent capture applied to the Matrix films, again and again,
+     * each silent block agreeing with the last. A second of speech in the
+     * whole stretch is the least that can say where anything goes. */
+    if (heard < 200 || said < MIN_SPOKEN_FRAMES) return null;
     const mean = said / heard;
     const prefix = new Float64Array(n + 1);
     for (let i = 0; i < n; i++) prefix[i + 1] = prefix[i] + (speech[i] < 0 ? 0 : speech[i] - mean);
@@ -243,8 +251,10 @@
     for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
     let sum = 0, sq = 0;
     for (const v of scores) { sum += v; sq += v * v; }
-    const m = sum / scores.length, sd = Math.sqrt(Math.max(1e-9, sq / scores.length - m * m));
-    return { shiftMs: (best - steps) * hopMs, z: (scores[best] - m) / sd };
+    const m = sum / scores.length, variance = sq / scores.length - m * m;
+    // No shift better than any other: no answer, rather than the first.
+    if (!(variance > 1e-12)) return null;
+    return { shiftMs: (best - steps) * hopMs, z: (scores[best] - m) / Math.sqrt(variance) };
   }
 
   /* Placed by the first part of each line, then refined by the whole of it. */
@@ -556,7 +566,7 @@
    * onset was read between 20ms early and 98ms late on a 50ms poll, muted or
    * not.
    */
-  function openEar(video, { onState = () => {} } = {}) {
+  function openEar(video, { onState = () => {}, onFollow = () => {} } = {}) {
     let stream;
     try {
       const capture = video.captureStream || video.mozCaptureStream;
@@ -583,7 +593,7 @@
     document.addEventListener("keydown", resume, true);
     context.addEventListener("statechange", () => onState(context.state));
     resume();
-    const ear = hearStream(stream, context);
+    const ear = hearStream(stream, context, { onFollow });
     return {
       ...ear,
       get state() { return context.state; },
@@ -604,9 +614,7 @@
    * `playBack` connects the stream to the speakers as well, which a tab
    * capture needs: Chrome stops playing a captured tab to the reader.
    */
-  function hearStream(stream, context, { playBack = false } = {}) {
-    const source = context.createMediaStreamSource(stream);
-    if (playBack) source.connect(context.destination);
+  function hearStream(stream, context, { playBack = false, onFollow = () => {} } = {}) {
     const fftSize = context.sampleRate > 60000 ? 4096 : 2048;
     const middle = context.createAnalyser();
     const sides = context.createAnalyser();
@@ -626,13 +634,48 @@
     const right = context.createGain();
     left.gain.value = 0.5;
     right.gain.value = -0.5;
-    source.connect(stereo);
     stereo.connect(middle);
     stereo.connect(split);
     split.connect(left, 0);
     split.connect(right, 1);
     left.connect(sides);
     right.connect(sides);
+
+    /* The audio track the capture added last, followed.
+     *
+     * When a player gives the element a new source - the catalogue app does
+     * on every seek and every resume, and for the next film - Chrome adds a
+     * new audio track to the captured stream and leaves the old one in it,
+     * still saying "live" and silent from then on. A source node reads the
+     * track it was made with, whether made from the track or the whole
+     * stream; both read 0 after the switch while the new track read 0.015 to
+     * 0.143 (tools/capture-track, 2026-10-25). Reported on the Matrix films,
+     * 2026-10-25, as both subtitles jumping a minute while they were right:
+     * the log shows the speech heard stopping dead at a stream restart while
+     * the minutes heard went on growing, from 359.5 seconds of speech at
+     * 600 heard to the same 359.5 at 1800, and a fresh film on the same tab
+     * heard as 0.0015 seconds of speech in two minutes. Every silent block
+     * then scored every shift the same and answered with the edge of the
+     * search, -60.6 seconds, and they agreed. The old track is stopped, so a
+     * night of seeking does not keep a stream of silent copies; while no
+     * track is live nothing is read, so a gap is not stored as a quiet film. */
+    let source = null;
+    let heardTrack = null;
+    const follow = (track) => {
+      if (!track || track === heardTrack || track.readyState !== "live") return;
+      const first = !heardTrack;
+      source?.disconnect();
+      heardTrack?.stop();
+      heardTrack = track;
+      source = context.createMediaStreamSource(new MediaStream([track]));
+      if (playBack) source.connect(context.destination);
+      source.connect(stereo);
+      if (!first) onFollow(track);
+    };
+    const newest = () => stream.getAudioTracks().filter((track) => track.readyState === "live").at(-1);
+    const added = (event) => { if (event.track.kind === "audio") follow(event.track); };
+    stream.addEventListener("addtrack", added);
+    follow(newest());
 
     const midDb = new Float32Array(middle.frequencyBinCount);
     const sideDb = new Float32Array(sides.frequencyBinCount);
@@ -645,11 +688,14 @@
        * not running and the analysers read silence. */
       read() {
         if (context.state !== "running") return null;
+        if (heardTrack?.readyState !== "live") follow(newest());
+        if (heardTrack?.readyState !== "live") return null;
         middle.getFloatFrequencyData(midDb);
         sides.getFloatFrequencyData(sideDb);
         return features(midDb, sideDb);
       },
       close() {
+        stream.removeEventListener("addtrack", added);
         for (const track of stream.getTracks()) track.stop();
         context.close().catch(() => {});
       },

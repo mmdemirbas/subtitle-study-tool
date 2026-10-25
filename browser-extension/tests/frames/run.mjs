@@ -409,6 +409,30 @@ try {
     Boolean(heard),
     JSON.stringify({ listening: heard ?? (await playerSays())?.listening, ear: earTrace.map((e) => e.outcome + (e.reason ? `: ${e.reason}` : e.state ? `: ${e.state}` : "")) }));
 
+  /* A player that gives the element a new source - the catalogue app on every
+   * seek, every resume and every next film - ends the capture's audio track
+   * and adds another. Reported on the Matrix films, 2026-10-25: the ear went
+   * on reading the ended track, heard silence for the rest of the evening,
+   * and moved both subtitles by a minute that were right. */
+  let followed = null;
+  if (heard) {
+    const film = page.frames().find((f) => f.url().includes("player.html"));
+    await film.evaluate(() => {
+      const video = document.getElementById("v");
+      video.src = "clip.mp4?restarted";
+      return video.play().catch(() => {});
+    });
+    // Past the switch itself, then six seconds of what is heard after it.
+    await until(async () => ((await playerSays())?.listening?.heardMs ?? 0) > heard.heardMs + 3000 || null, 10000);
+    const before = (await playerSays())?.listening;
+    await new Promise((resolve) => setTimeout(resolve, 6000));
+    const after = (await playerSays())?.listening;
+    followed = { heardMs: after.heardMs - before.heardMs, spokenMs: Math.round(after.spokenMs - before.spokenMs) };
+  }
+  t("after the page gives the film a new source, the ear hears the new one",
+    followed && followed.heardMs > 3000 && followed.spokenMs > followed.heardMs * 0.2,
+    JSON.stringify(followed));
+
   /* --- the two ways this arrangement goes stale ---------------------------- */
 
   /* Reloading the extension replaces the top frame's script under an open tab,
