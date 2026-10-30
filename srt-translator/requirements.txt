@@ -1,4 +1,4 @@
-requests==2.32.3
+requests==2.33.0
 tqdm==4.66.4
 
 # Fix urllib3 version to <2
