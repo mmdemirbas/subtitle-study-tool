@@ -10,6 +10,17 @@ cd "$(dirname "$0")"
 
 op_dev() { exec subtitle-daemon/run.sh "$@"; }
 
+# The daemon for every day, as one process. `dev` goes through `uv run`, which
+# stays resident as the daemon's parent for as long as it runs; the daemon has
+# no runtime dependencies, so the environment's own python is all it needs, and
+# without one (a fresh clone) the system's.
+op_serve() {
+	cd subtitle-daemon
+	local python=python3
+	if [[ -x .venv/bin/python ]]; then python=.venv/bin/python; fi
+	PYTHONPATH=src exec "$python" -m subtitle_daemon "$@"
+}
+
 op_dev_viewer() {
 	cd srt-viewer
 	exec ./run-http-server-here.sh

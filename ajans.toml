@@ -11,6 +11,14 @@ lifecycle = "service"
 port = 8794
 health = { path = "/health" }
 
+[operations.serve]
+summary = "The subtitle daemon kept up by the board, on 127.0.0.1:8794: the daemon in one process, without uv"
+intent = "run"
+lifecycle = "service"
+autostart = true
+port = 8794
+health = { path = "/health" }
+
 [operations."dev viewer"]
 summary = "Serve srt-viewer/ on 127.0.0.1:8795, so the viewer can read the subtitles beside it"
 lifecycle = "service"
