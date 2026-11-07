@@ -32,7 +32,22 @@ const toBase64 = (bytes) => {
   return btoa(binary);
 };
 
-const fromBase64 = (text) => Uint8Array.from(atob(text), (char) => char.charCodeAt(0));
+/* The browser's own decoder where there is one, and otherwise atob with a
+ * plain loop - never Uint8Array.from with a function called per character.
+ *
+ * That one pulled the daemon's store into a fresh profile at the cost of the
+ * whole extension: 5.4s of the worker's 8.3s busy while one YouTube page
+ * loaded, 2026-11-07, 481 subtitles of 32MB, and the "4s of CPU when the
+ * extension starts" the cost survey of the same day measured was this. On 120
+ * of those files under node: 420ms that way, 16ms with the loop, 2ms native,
+ * bytes identical. */
+const fromBase64 = (text) => {
+  if (typeof Uint8Array.fromBase64 === "function") return Uint8Array.fromBase64(text);
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+};
 
 /**
  * Copy anything either side is missing. Returns what moved.
