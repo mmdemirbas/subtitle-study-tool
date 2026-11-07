@@ -8271,7 +8271,20 @@
    * On the ordinary page, where the video is in the top frame, `role` stays
    * "solo" and not a line of this runs.
    */
-  let claimedSubject = null; // video frame: what was last reported, so it is said once
+  /* Video frame: what was last reported, so it is said once. It starts as "no
+   * film here", which is what nearly every frame on the web has to say, so a
+   * frame says nothing until it has one.
+   *
+   * It started as null, and then every frame of every page reported "no film"
+   * on its first tick: an advert, a consent box, a comment widget. Each report
+   * is a message, and a message starts a stopped worker - measured 2026-11-07
+   * in headless Brave, a page with two plain frames started it for 0.05s of
+   * CPU and a 75MB process, where the same page without frames started
+   * nothing. What the report could still do is clear a claim this frame's
+   * previous document made; the top frame already gives the controls back
+   * after MIRROR_SILENCE_MS without that document's pushes, and the worker's
+   * routing entry is overwritten by the next claim. */
+  let claimedSubject = false;
 
   /* Tell the worker whether this frame holds the film, and take the answer.
    *
