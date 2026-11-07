@@ -1039,8 +1039,13 @@ def serve(config: Config) -> None:
             "Create one at https://www.opensubtitles.com/en/consumers and put it in "
             "subtitle-daemon/config.local.json"
         )
+    # No poll interval. The default wakes the process twice a second to ask
+    # whether shutdown() was called, and nothing here ever calls it: Ctrl-C
+    # arrives as KeyboardInterrupt and the board's SIGTERM ends the process.
+    # The daemon runs for weeks with nothing to do, and those wakeups were all
+    # it did between requests.
     try:
-        server.serve_forever()
+        server.serve_forever(poll_interval=None)
     except KeyboardInterrupt:
         logger.info("shutting down")
     finally:
