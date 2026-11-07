@@ -37,6 +37,29 @@ async function offscreenOpen() {
   }
 }
 
+/* A captured tab that navigates has no frame left to hear for, so its ear
+ * closes. Listened for only while the offscreen document is open.
+ *
+ * It used to be a listener for the life of the extension, and a navigation
+ * listener is a reason for the browser to start a stopped worker: every page
+ * the reader opened, in any tab, started this one to find no ear open.
+ * Measured 2026-11-07 in headless Brave: a start for each of three plain
+ * pages, 0.07s of CPU and an 80-110MB process each time. While the document
+ * is open its readings keep the worker running, so the listener is there when
+ * it is needed; a worker that starts with the document already open (stopped
+ * between two readings) puts it back on its way up, below. */
+function onCommitted({ tabId, frameId }) {
+  if (frameId === 0) closeTabEar(tabId, "the tab navigated").catch(() => {});
+}
+
+function hearNavigations(open) {
+  const listening = chrome.webNavigation.onCommitted.hasListener(onCommitted);
+  if (open && !listening) chrome.webNavigation.onCommitted.addListener(onCommitted);
+  if (!open && listening) chrome.webNavigation.onCommitted.removeListener(onCommitted);
+}
+
+offscreenOpen().then(hearNavigations);
+
 async function ensureOffscreen() {
   if (await offscreenOpen()) return;
   creating ??= chrome.offscreen
@@ -53,12 +76,14 @@ async function ensureOffscreen() {
       creating = null;
     });
   await creating;
+  hearNavigations(true);
 }
 
 /* Open the tab's ear for the frame that has the film, or say why not.
  * `invoke: true` means the reader has to press something first. */
 export async function openTabEar(tabId, frameId) {
   if (await offscreenOpen()) {
+    hearNavigations(true);
     const adopted = await chrome.runtime.sendMessage({ target: "offscreen", type: "earAdopt", tabId, frameId }).catch(() => null);
     if (adopted?.ok) return adopted;
   }
@@ -80,7 +105,13 @@ export async function openTabEar(tabId, frameId) {
 export async function closeTabEar(tabId, reason) {
   if (!(await offscreenOpen())) return;
   const answer = await chrome.runtime.sendMessage({ target: "offscreen", type: "earClose", tabId, reason }).catch(() => null);
-  if (answer?.remaining === 0) await chrome.offscreen.closeDocument().catch(() => {});
+  if (answer?.remaining === 0) await closeOffscreen();
+}
+
+/** The document goes, and with it the reason to hear about navigations. */
+export async function closeOffscreen() {
+  hearNavigations(false);
+  await chrome.offscreen.closeDocument().catch(() => {});
 }
 
 /* What to tell the reader to press: the panel's shortcut as they have it

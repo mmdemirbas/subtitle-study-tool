@@ -27,7 +27,7 @@ import {
 } from "./daemon.js";
 import { readPageTrack } from "./subtitles/page.js";
 import { tokens } from "./subtitles/matching.js";
-import { closeTabEar, openTabEar } from "./tab-ear.js";
+import { closeOffscreen, closeTabEar, openTabEar } from "./tab-ear.js";
 import { videoRelease } from "./subtitles/release.js";
 import { measure, toJson } from "./subtitles/srt.js";
 /* Every call that used to go straight to the daemon goes through the provider,
@@ -372,9 +372,18 @@ async function rememberSite(sender) {
 }
 
 /* One attempt per programme per tab. Every frame of the page reports the
- * change, and the tick that reports it runs twenty times a second. */
+ * change, and the tick that reports it runs twenty times a second.
+ *
+ * Nothing removes a closed tab's entry, and nothing has to. This map and the
+ * other two kept by tab - videoFrames and warmedFor - live as long as the
+ * worker, which is minutes, and a tab id is never given out twice in a
+ * browser session, so an entry left behind is never read again. Each had a
+ * chrome.tabs.onRemoved listener deleting it, and a listener is a reason for
+ * the browser to start a stopped worker: closing any tab, anywhere, started
+ * this one to delete from a map that a fresh worker holds empty. Measured
+ * 2026-11-07 in headless Brave: 0.06s of CPU and a 110MB process for each
+ * closed tab, for nothing. */
 const handledProgramme = new Map();
-chrome.tabs.onRemoved.addListener((tabId) => handledProgramme.delete(tabId));
 
 async function onProgrammeChange(sender, mark, again = "") {
   const tab = sender?.tab;
@@ -443,9 +452,7 @@ async function onProgrammeChange(sender, mark, again = "") {
  * On the ordinary page, where the video is in the top frame, none of this runs
  * and nothing changes.
  */
-const videoFrames = new Map(); // tabId -> the frame holding the video, when it is not the top one
-
-chrome.tabs.onRemoved.addListener((tabId) => videoFrames.delete(tabId));
+const videoFrames = new Map(); // tabId -> the frame holding the video, when it is not the top one; see handledProgramme for why a closed tab stays
 
 /* A frame saying whether it holds the film - and being told what that makes it.
  *
@@ -608,7 +615,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const ended = message.type === "sso:tabEarEnded";
     send(message.tabId, message.frameId, { type: "sso:tabEar", event: ended ? "ended" : "readings", readings: message.readings, reason: message.reason });
     if (ended) trace.record("tabEar", { outcome: "ended", tabId: message.tabId, reason: message.reason });
-    if (ended && message.remaining === 0) chrome.offscreen.closeDocument().catch(() => {});
+    if (ended && message.remaining === 0) closeOffscreen().catch(() => {});
     return false;
   }
   // Opening the popup is an invocation, which is what a tab's ear waits for.
@@ -1299,8 +1306,6 @@ function noteAllowance(response) {
   if (Number.isFinite(left)) allowanceLeft = left;
 }
 
-chrome.tabs.onRemoved.addListener((tabId) => warmedFor.delete(tabId));
-
 async function warmNext(tabId, next, committed) {
   if (!tabId || !next?.title) return;
   /* Keyed by depth as well as by programme: warming the search and then
@@ -1673,10 +1678,6 @@ async function openWantedEar(tabId, frameId) {
   if (opened?.ok) await send(tabId, frameId, { type: "sso:tabEar", event: "open", ...opened });
 }
 
-/* A captured tab that navigates has no frame left to hear for. */
-chrome.webNavigation.onCommitted.addListener(({ tabId, frameId }) => {
-  if (frameId === TOP_FRAME) closeTabEar(tabId, "the tab navigated").catch(() => {});
-});
 
 async function send(tabId, frameId, message) {
   try {

@@ -289,7 +289,13 @@ globalThis.chrome = {
   },
   webNavigation: {
     async getAllFrames() { return frameList; },
-    onCommitted: { addListener: (fn) => listeners.committed.push(fn) },
+    /* Added and removed as Chrome does, because whether a listener is there at
+     * all is what decides if the browser starts a stopped worker. */
+    onCommitted: {
+      addListener: (fn) => listeners.committed.push(fn),
+      removeListener: (fn) => listeners.committed.splice(listeners.committed.indexOf(fn) >>> 0, 1),
+      hasListener: (fn) => listeners.committed.includes(fn),
+    },
   },
   /* The badge as Chrome keeps it: one global text, and per-tab texts that
    * outrank it. A tab's "" is a text like any other and hides the global one;
@@ -2536,6 +2542,12 @@ Short stamp
 {
   const frame = { tab: TAB, frameId: 3 };
   const earMessages = () => sentToTab.filter((m) => m.type === "sso:tabEar");
+  /* Every listener here is a reason for the browser to start a stopped worker:
+   * one on navigations started it for every page the reader opened, and one on
+   * closed tabs for every tab closed, in any window, with no ear open. */
+  t("with no ear open the worker listens for neither navigations nor closed tabs",
+    listeners.committed.length === 0 && listeners.removed.length === 0,
+    JSON.stringify({ committed: listeners.committed.length, removed: listeners.removed.length }));
   const before = await ask({ type: "sso:tabEar", op: "open" }, frame);
   t("a frame asking for the tab's sound before any invocation is told to wait for a press, with the shortcut",
     before?.ok === false && before.invoke === true && before.shortcut === "⌘⇧K" && !offscreen.open,
@@ -2554,6 +2566,7 @@ Short stamp
   t("the next invocation opens it, in one offscreen document, for the frame with the film",
     offscreen.created.length === 1 && offscreen.created[0].reasons.includes("USER_MEDIA") && opened?.streamId === "stream-1" && opened.frameId === 3 && told?.frameId === 3,
     JSON.stringify({ created: offscreen.created, opened, told }));
+  t("and from then on the worker hears the tab's navigations", listeners.committed.length === 1, String(listeners.committed.length));
 
   sentToTab.length = 0;
   await ask({ type: "sso:tabEarReadings", tabId: 1, frameId: 3, readings: [[1000, 0.8], [1050, 0.1]] }, { id: "offscreen" });
@@ -2574,11 +2587,12 @@ Short stamp
     again?.ok === true && offscreen.asked.slice(asked).map((m) => m.type).join() === "earAdopt" && offscreen.created.length === 1,
     JSON.stringify({ again, asked: offscreen.asked.slice(asked) }));
 
-  for (const fn of listeners.committed) fn({ tabId: 1, frameId: 0 });
+  for (const fn of [...listeners.committed]) fn({ tabId: 1, frameId: 0 });
   await until(() => offscreen.closed === 1);
   t("a tab that navigates gives its sound back, and the document goes",
     !capturedTabs.has(1) && offscreen.closed === 1 && !offscreen.open,
     JSON.stringify({ capturedTabs: [...capturedTabs], offscreen }));
+  t("and with it the listener for navigations", listeners.committed.length === 0, String(listeners.committed.length));
 
   // Opening the popup is an invocation too.
   sentToTab.length = 0;
@@ -2591,7 +2605,9 @@ Short stamp
   await ask({ type: "sso:tabEar", op: "close" }, frame);
   tabStatusReply = { ok: true, hasVideo: true, attached: false };
   frameList = [{ frameId: 0 }];
-  t("and a frame done with it closes it", !capturedTabs.has(1) && !offscreen.open, JSON.stringify({ offscreen }));
+  t("and a frame done with it closes it, listening for navigations no more",
+    !capturedTabs.has(1) && !offscreen.open && listeners.committed.length === 0,
+    JSON.stringify({ offscreen, committed: listeners.committed.length }));
 }
 
 /* The Matrix (1999) on the catalogue app, 2026-10-24. The release names are
