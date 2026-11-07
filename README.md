@@ -61,7 +61,9 @@ in `vendor/` and `models/`, both gitignored and both restored by
   in [its README](browser-extension/README.md#install).
 - **The daemon** (optional, see the table above): `./ctl setup daemon` once,
   put the API key in `subtitle-daemon/config.local.json`, then `./ctl dev`. It
-  listens on `127.0.0.1:8794`, and `./ctl status` asks it how it is.
+  listens on `127.0.0.1:8794`, and `./ctl status` asks it how it is. To keep it
+  up every day, `./ctl serve` runs it as one process, without `uv run` staying
+  behind it; the ajans board starts that one by itself.
 - **The viewer:** open `srt-viewer/srt-viewer.html` in a browser and give it
   the two files in `srt-viewer/samples/`, or `./ctl dev viewer` to serve it
   with the subtitles beside it.
